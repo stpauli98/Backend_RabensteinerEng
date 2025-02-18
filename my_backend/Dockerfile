@@ -4,17 +4,16 @@ FROM python:3.9-slim
 # Postavi radni direktorijum
 WORKDIR /app
 
-# Kopiraj requirements.txt
-COPY my_backend/requirements.txt .
+# Kopiraj requirements.txt pre nego što kopiraš sve fajlove
+COPY requirements.txt .
 
-# Kreiraj virtualno okruženje unutar kontejnera
-RUN python -m venv venv
+# Kreiraj i aktiviraj virtualno okruženje u kontejneru
+RUN python -m venv venv && . venv/bin/activate && pip install --no-cache-dir -r requirements.txt
 
-# Aktiviraj venv i instaliraj dependencije
-RUN . venv/bin/activate && pip install --no-cache-dir -r requirements.txt
+# Sada kopiraj sav kod iz backend foldera, ali `venv/` neće biti kopiran jer je u .dockerignore
+COPY . .
 
-# Kopiraj ostatak koda u kontejner
-COPY my_backend/ .
+# Postavi defaultnu komandu za pokretanje aplikacije (prilagodi ako je tvoj main fajl drugačiji)
+CMD ["venv/bin/python", "firstProcessing.py"]
 
-# Definiši komandu za pokretanje aplikacije
-CMD [".venv/bin/python", "load_row_data.py"]
+
