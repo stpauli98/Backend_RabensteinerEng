@@ -9,15 +9,12 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import pandas as pd
-import pytz
 
 # Konfiguracija aplikacije i logginga
 app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-API_PREFIX = '/api/loadRowData'
 
 # Globalni rječnik za privremene fajlove (nije thread-safe – za produkciju koristiti sigurniji pristup)
 temp_files = {}
@@ -32,17 +29,6 @@ SUPPORTED_DATE_FORMATS = [
     '%d/%m/%Y %H:%M:%S'
 ]
 
-@app.route('/')
-def home():
-    return jsonify({
-        'message': 'Welcome to Load Row Data API',
-        'version': '1.0',
-        'endpoints': [
-            f'{API_PREFIX}/upload',
-            f'{API_PREFIX}/prepare-save',
-            f'{API_PREFIX}/download/<file_id>'
-        ]
-    })
 
 def detect_delimiter(file_content, sample_lines=3):
     """
@@ -297,8 +283,3 @@ def download_file(file_id):
                 del temp_files[file_id]
             except Exception as ex:
                 logger.error(f"Error cleaning up temp file: {ex}")
-
-if __name__ == "__main__":
-    logger.info("Starting Flask server on Port 5001...")
-    ssl_context = ('cert.pem', 'key.pem')
-    app.run(debug=True, host='0.0.0.0', port=5001, ssl_context=ssl_context)

@@ -41,30 +41,41 @@ CORS(app, resources={
     }
 })
 
-# Define API prefix for firstProcessing routes
-API_PREFIX = '/api/firstProcessing'
+# Define API prefix for load_row_data routes
+API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 
-@app.route(f'{API_PREFIX}/upload_chunk', methods=['POST'])
+# Define API prefix for firstProcessing routes
+API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
+
+#LoadRowData
+
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload', methods=['POST'])
+def load_data_endpoint():
+    return load_row_data.upload_data(request)
+
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/download/<file_id>', methods=['GET'])
+def download_data_endpoint(file_id):
+    return load_row_data.download_file(file_id)
+
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/prepare-save', methods=['POST'])
+def prepare_save_endpoint():
+    return load_row_data.prepare_save(request)
+
+
+#FirstProcessing
+
+@app.route(f'{API_PREFIX_FIRST_PROCESSING}/upload_chunk', methods=['POST'])
 def upload_chunk_endpoint():
     return firstProcessing.upload_chunk(request)
 
-@app.route(f'{API_PREFIX}/prepare-save', methods=['POST'])
+@app.route(f'{API_PREFIX_FIRST_PROCESSING}/prepare-save', methods=['POST'])
 def prepare_save_endpoint():
     return firstProcessing.prepare_save(request)
 
-@app.route(f'{API_PREFIX}/download/<file_id>', methods=['GET'])
+@app.route(f'{API_PREFIX_FIRST_PROCESSING}/download/<file_id>', methods=['GET'])
 def download_file_endpoint(file_id):
     return firstProcessing.download_file(file_id, request)
 
-@app.route('/load-data', methods=['POST'])
-def load_data_endpoint():
-    try:
-        data = request.get_json()
-        # Add your data loading logic here using load_row_data.py functions
-        result = load_row_data.load_data()
-        return jsonify({"status": "success", "data": result})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
