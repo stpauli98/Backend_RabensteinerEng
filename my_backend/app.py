@@ -14,8 +14,6 @@ def index():
         'version': '1.0.0'
     })
 
-FormDataParser.max_form_memory_size = 200 * 1024 * 1024  # 200MB
-
 CORS(app, resources={
     r"/*": {
         "origins": [
