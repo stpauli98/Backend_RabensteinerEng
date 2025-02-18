@@ -18,31 +18,20 @@ def index():
         'version': '1.0.0'
     })
 
+# Configure CORS with more permissive settings
 CORS(app, resources={
     r"/*": {
         "origins": [
             "https://rabensteinerengineering.onrender.com",
             "https://backend-rabensteinereng.onrender.com",
-            "https://localhost:3000",
-            "http://localhost:3000"  # Za lokalni development
+            "http://localhost:3000",
+            "https://localhost:3000"
         ],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": [
-            "Content-Type",
-            "Accept",
-            "Authorization",
-            "X-Requested-With",
-            "Content-Length",
-            "Content-Range",
-            "X-Content-Type-Options"
-        ],
-        "expose_headers": [
-            "Content-Length",
-            "Content-Range",
-            "Content-Encoding"
-        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        "allow_headers": "*",
+        "expose_headers": "*",
         "supports_credentials": True,
-        "max_age": 1728000  # 20 days
+        "max_age": 600  # 10 minutes
     }
 })
 
