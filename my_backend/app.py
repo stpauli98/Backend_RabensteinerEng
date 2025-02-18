@@ -6,6 +6,10 @@ import load_row_data
 app = Flask(__name__)
 CORS(app)
 
+# API configuration
+API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
+API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
+
 @app.route('/')
 def index():
     return jsonify({

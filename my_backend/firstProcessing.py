@@ -49,7 +49,8 @@ logger = logging.getLogger(__name__)
 
 
 # Define API prefix
-API_PREFIX = '/api/firstProcessing'
+
+API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
 
 # Folder za privremeno spremanje chunkova
 UPLOAD_FOLDER = "chunk_uploads"

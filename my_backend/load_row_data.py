@@ -16,6 +16,9 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# API configuration
+API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
+
 # Globalni rječnik za privremene fajlove (nije thread-safe – za produkciju koristiti sigurniji pristup)
 temp_files = {}
 
