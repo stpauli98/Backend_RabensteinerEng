@@ -1,19 +1,20 @@
+# Koristi laganu verziju Python-a
 FROM python:3.9-slim
 
+# Postavi radni direktorijum
 WORKDIR /app
 
 # Kopiraj requirements.txt
 COPY my_backend/requirements.txt .
 
+# Kreiraj virtualno okruženje unutar kontejnera
+RUN python -m venv venv
 
-# Instaliraj dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Aktiviraj venv i instaliraj dependencije
+RUN . venv/bin/activate && pip install --no-cache-dir -r requirements.txt
 
-# Kopiraj sve fajlove iz trenutnog direktorijuma u container
-COPY . .
+# Kopiraj ostatak koda u kontejner
+COPY my_backend/ .
 
-# Expose port 5001
-EXPOSE 5001
-
-# Pokreni aplikaciju
-CMD ["python", "firstProcessing.py"]
+# Definiši komandu za pokretanje aplikacije
+CMD [".venv/bin/python", "load_row_data.py"]
