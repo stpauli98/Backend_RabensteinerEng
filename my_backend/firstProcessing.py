@@ -46,45 +46,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
 
-@app.route('/')
-def index():
-    return jsonify({
-        'status': 'online',
-        'message': 'Backend service is running',
-        'version': '1.0.0'
-    })
-
-
-FormDataParser.max_form_memory_size = 200 * 1024 * 1024  # 200MB
-
-CORS(app, resources={
-    r"/*": {
-        "origins": [
-            "https://rabensteinerengineering.onrender.com",
-            "https://localhost:3000",
-            "http://localhost:3000"  # Za lokalni development
-        ],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": [
-            "Content-Type",
-            "Accept",
-            "Authorization",
-            "X-Requested-With",
-            "Content-Length",
-            "Content-Range",
-            "X-Content-Type-Options"
-        ],
-        "expose_headers": [
-            "Content-Length",
-            "Content-Range",
-            "Content-Encoding"
-        ],
-        "supports_credentials": True,
-        "max_age": 1728000  # 20 days
-    }
-})
 
 # Define API prefix
 API_PREFIX = '/api/firstProcessing'
