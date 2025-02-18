@@ -18,7 +18,6 @@ def index():
         'version': '1.0.0'
     })
 
-# Configure CORS
 CORS(app, resources={
     r"/*": {
         "origins": [
@@ -47,17 +46,11 @@ CORS(app, resources={
     }
 })
 
-# Define API prefix for load_row_data routes
-API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
-
-# Define API prefix for firstProcessing routes
-API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
-
 #LoadRowData
 
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload', methods=['POST'])
 def load_row_data_upload_endpoint():
-    return load_row_data.upload_data(request)
+    return load_row_data.upload_files()
 
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/download/<file_id>', methods=['GET'])
 def load_row_data_download_endpoint(file_id):
