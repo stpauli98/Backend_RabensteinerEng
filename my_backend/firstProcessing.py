@@ -56,11 +56,7 @@ def index():
         'version': '1.0.0'
     })
 
-# Povećaj limit za request body i multipart podatke
-app.config.update(
-    MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # 200MB ukupno
-    MAX_CONTENT_PATH=200 * 1024 * 1024,      # 200MB za fajlove
-)
+
 FormDataParser.max_form_memory_size = 200 * 1024 * 1024  # 200MB
 
 CORS(app, resources={
@@ -471,7 +467,5 @@ def download_file(file_id):
             except Exception as ex:
                 logger.error(f"Error cleaning up temp file: {ex}")
 
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8080, debug=True)
 
 
