@@ -464,7 +464,6 @@ def download_file(file_id):
                 logger.error(f"Error cleaning up temp file: {ex}")
 
 if __name__ == '__main__':
-    ssl_context = ('cert.pem', 'key.pem')
-    port = int(os.environ.get('PORT', 8080))
-    app.run(debug=True, host='0.0.0.0', port=port, ssl_context=ssl_context)
+    app.run(host="0.0.0.0", port=8080, debug=True)
+
 
