@@ -232,8 +232,7 @@ def upload_files():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 400
 
-@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/prepare-save', methods=['POST'])
-def prepare_save():
+def prepare_save(request):
     try:
         data = request.json
         if not data or 'data' not in data:
