@@ -48,6 +48,14 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+@app.route('/')
+def index():
+    return jsonify({
+        'status': 'online',
+        'message': 'Backend service is running',
+        'version': '1.0.0'
+    })
+
 # Povećaj limit za request body i multipart podatke
 app.config.update(
     MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # 200MB ukupno
