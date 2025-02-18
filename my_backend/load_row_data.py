@@ -108,7 +108,7 @@ def convert_to_utc(df, date_column, timezone='UTC'):
         logger.error(f"Error converting to UTC: {e}")
         raise
 
-@app.route(f'{API_PREFIX}/upload', methods=['POST'])
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload', methods=['POST'])
 def upload_files():
     try:
         if 'file' not in request.files:
@@ -232,7 +232,7 @@ def upload_files():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 400
 
-@app.route(f'{API_PREFIX}/prepare-save', methods=['POST'])
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/prepare-save', methods=['POST'])
 def prepare_save():
     try:
         data = request.json
@@ -259,7 +259,7 @@ def prepare_save():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-@app.route(f'{API_PREFIX}/download/<file_id>', methods=['GET'])
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     try:
         if file_id not in temp_files:
