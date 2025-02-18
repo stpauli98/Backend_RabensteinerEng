@@ -73,7 +73,7 @@ def upload_chunk_endpoint():
     return firstProcessing.upload_chunk(request)
 
 @app.route(f'{API_PREFIX_FIRST_PROCESSING}/prepare-save', methods=['POST'])
-def prepare_save_endpoint():
+def first_processing_prepare_save_endpoint():
     return firstProcessing.prepare_save(request)
 
 @app.route(f'{API_PREFIX_FIRST_PROCESSING}/download/<file_id>', methods=['GET'])
