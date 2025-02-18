@@ -13,9 +13,8 @@ RUN python -m venv venv && . venv/bin/activate && pip install --no-cache-dir -r 
 # Sada kopiraj sav kod iz backend foldera, ali `venv/` neće biti kopiran jer je u .dockerignore
 COPY my_backend/ .
 
-# Postavi defaultnu komandu za pokretanje aplikacije (prilagodi ako je tvoj main fajl drugačiji)
 
 # Postavi defaultnu komandu za pokretanje aplikacije (prilagodi ako je tvoj main fajl drugačiji)
-CMD ["venv/bin/python", "firstProcessing.py"]
+CMD ["venv/bin/python", "app.py"]
 
 
