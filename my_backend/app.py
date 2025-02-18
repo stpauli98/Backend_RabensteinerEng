@@ -43,15 +43,20 @@ CORS(app, resources={
     }
 })
 
-@app.route('/process-csv', methods=['POST'])
-def process_csv_endpoint():
-    try:
-        data = request.get_json()
-        # Add your processing logic here using firstProcessing.py functions
-        result = firstProcessing.process_csv()
-        return jsonify({"status": "success", "data": result})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+# Define API prefix for firstProcessing routes
+API_PREFIX = '/api/firstProcessing'
+
+@app.route(f'{API_PREFIX}/upload_chunk', methods=['POST'])
+def upload_chunk_endpoint():
+    return firstProcessing.upload_chunk(request)
+
+@app.route(f'{API_PREFIX}/prepare-save', methods=['POST'])
+def prepare_save_endpoint():
+    return firstProcessing.prepare_save(request)
+
+@app.route(f'{API_PREFIX}/download/<file_id>', methods=['GET'])
+def download_file_endpoint(file_id):
+    return firstProcessing.download_file(file_id, request)
 
 @app.route('/load-data', methods=['POST'])
 def load_data_endpoint():

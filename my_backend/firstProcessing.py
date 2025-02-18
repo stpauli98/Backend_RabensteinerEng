@@ -175,8 +175,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         logger.error(error_msg)
         return jsonify({"error": str(e)}), 400
 
-@app.route(f'{API_PREFIX}/upload_chunk', methods=['POST'])
-def upload_chunk():
+def upload_chunk(request):
     """
     Endpoint za prihvat pojedinačnih chunkova.
     Očekivani parametri (form data):
@@ -374,8 +373,7 @@ def upload_chunk():
             "traceback": traceback.format_exc()
         }), 400
 
-@app.route(f'{API_PREFIX}/prepare-save', methods=['POST'])
-def prepare_save():
+def prepare_save(request):
     try:
         data = request.json
         if not data or 'data' not in data:
@@ -401,8 +399,7 @@ def prepare_save():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-@app.route(f'{API_PREFIX}/download/<file_id>', methods=['GET'])
-def download_file(file_id):
+def download_file(file_id, request):
     try:
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404
