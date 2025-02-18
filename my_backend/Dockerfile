@@ -3,7 +3,8 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # Kopiraj requirements.txt
-COPY requirements.txt .
+COPY my_backend/requirements.txt .
+
 
 # Instaliraj dependencies
 RUN pip install --no-cache-dir -r requirements.txt
