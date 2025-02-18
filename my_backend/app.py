@@ -54,22 +54,22 @@ API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
 #LoadRowData
 
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload', methods=['POST'])
-def load_data_endpoint():
+def load_row_data_upload_endpoint():
     return load_row_data.upload_data(request)
 
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/download/<file_id>', methods=['GET'])
-def download_data_endpoint(file_id):
+def load_row_data_download_endpoint(file_id):
     return load_row_data.download_file(file_id)
 
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/prepare-save', methods=['POST'])
-def prepare_save_endpoint():
+def load_row_data_prepare_save_endpoint():
     return load_row_data.prepare_save(request)
 
 
 #FirstProcessing
 
 @app.route(f'{API_PREFIX_FIRST_PROCESSING}/upload_chunk', methods=['POST'])
-def upload_chunk_endpoint():
+def first_processing_upload_chunk_endpoint():
     return firstProcessing.upload_chunk(request)
 
 @app.route(f'{API_PREFIX_FIRST_PROCESSING}/prepare-save', methods=['POST'])
@@ -77,7 +77,7 @@ def first_processing_prepare_save_endpoint():
     return firstProcessing.prepare_save(request)
 
 @app.route(f'{API_PREFIX_FIRST_PROCESSING}/download/<file_id>', methods=['GET'])
-def download_file_endpoint(file_id):
+def first_processing_download_file_endpoint(file_id):
     return firstProcessing.download_file(file_id, request)
 
 
