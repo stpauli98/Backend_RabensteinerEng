@@ -18,10 +18,12 @@ def index():
         'version': '1.0.0'
     })
 
+# Configure CORS
 CORS(app, resources={
     r"/*": {
         "origins": [
             "https://rabensteinerengineering.onrender.com",
+            "https://backend-rabensteinereng.onrender.com",
             "https://localhost:3000",
             "http://localhost:3000"  # Za lokalni development
         ],
