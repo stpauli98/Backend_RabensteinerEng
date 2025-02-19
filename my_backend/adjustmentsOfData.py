@@ -65,14 +65,18 @@ def analyse_data(request):
     try:
         global stored_data, info_df
         logger.info("=== Starting file analysis ===")
-        logger.info(f"Request files: {request.files}")
-        logger.info(f"Request form: {request.form}")
+        logger.info(f"Content-Type: {request.content_type}")
+        logger.info(f"Files: {request.files}")
+        logger.info(f"Form: {request.form}")
         
-        if 'files[]' not in request.files:
-            logger.error("No files found in request")
+        # Get the file from request
+        if not request.files:
+            logger.error("No files in request")
             return jsonify({"error": "No files provided"}), 400
             
-        files = request.files.getlist('files[]')
+        files = request.files.getlist('files[]') if 'files[]' in request.files else [request.files['file']]
+        logger.info(f"Processing {len(files)} files")
+        
         all_file_info = []
         processed_data = []
         
@@ -83,24 +87,19 @@ def analyse_data(request):
                     try:
                         file_content = file.read().decode('utf-8')
                         file.seek(0)  # Reset file pointer
+                        logger.info(f"Successfully read file: {file.filename}")
                     except UnicodeDecodeError as e:
-                        print(f"Error decoding file {file.filename}: {str(e)}")
+                        logger.error(f"Error decoding file {file.filename}: {str(e)}")
                         return jsonify({"error": f"Could not decode file {file.filename}. Make sure it's a valid UTF-8 encoded CSV file."}), 400
                     
                     # Detect delimiter from content
                     delimiter = detect_delimiter(file_content)
-                    print(f"Detected delimiter: {repr(delimiter)} for file {file.filename}")
-                    print(f"First few lines of file:\n{file_content[:200]}")  # Print first few lines for debugging
+                    logger.info(f"Detected delimiter: {repr(delimiter)} for file {file.filename}")
+                    logger.debug(f"First few lines:\n{file_content[:200]}")
                     
                     # Read CSV with detected delimiter
                     df = pd.read_csv(StringIO(file_content), delimiter=delimiter)
-                    print(f"\nLoaded file {file.filename}")
-                    print(f"Columns: {df.columns.tolist()}")
-                    
-                    # Convert UTC column to datetime
-                    df['UTC'] = pd.to_datetime(df['UTC'])
-                    
-                    print(f"Sample data:\n{df.head()}")
+                    logger.info(f"Loaded file {file.filename} with columns: {df.columns.tolist()}")
                     
                     # Find time column
                     time_col = get_time_column(df)
@@ -110,6 +109,10 @@ def analyse_data(request):
                     # If time column is not 'UTC', rename it
                     if time_col != 'UTC':
                         df = df.rename(columns={time_col: 'UTC'})
+                    
+                    # Convert UTC column to datetime
+                    df['UTC'] = pd.to_datetime(df['UTC'])
+                    logger.info(f"Processed {len(df)} rows from {file.filename}")
                     
                     print(f"Sample data:\n{df.head()}")
                     
@@ -177,10 +180,11 @@ def analyse_data(request):
                     processed_data.append(df_records)
                     
                 except Exception as e:
-                    print(f"Error processing file {file.filename}: {str(e)}")
-                    traceback.print_exc()
+                    logger.error(f"Error processing file {file.filename}: {str(e)}")
+                    logger.error(traceback.format_exc())
                     return jsonify({"error": f"Error processing file {file.filename}: {str(e)}"}), 400
             else:
+                logger.error(f"Invalid file format for {file.filename}")
                 return jsonify({"error": f"Invalid file format for {file.filename}"}), 400
         
         # Update global info_df - append new info to existing
@@ -195,17 +199,19 @@ def analyse_data(request):
                 # Append new info
                 info_df = pd.concat([info_df, new_info_df], ignore_index=True)
         
-        return jsonify({
+        response_data = {
             'success': True,
             'data': {
                 'info_df': all_file_info,
                 'dataframe': processed_data[0] if processed_data else []
             }
-        })
+        }
+        logger.info(f"Sending response with {len(all_file_info)} files processed")
+        return jsonify(response_data)
         
     except Exception as e:
-        print(f"Error in analyse_data: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"Error in analyse_data: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 400
 
 def process_data_detailed(df, filename, start_time=None, end_time=None, time_step=None, offset=None, method='mean'):
