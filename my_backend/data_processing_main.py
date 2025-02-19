@@ -3,6 +3,17 @@ from datetime import datetime as dat
 from io import StringIO
 import numpy as np
 from flask import request, jsonify
+import tempfile
+import csv
+import traceback
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Dictionary to store temporary files
+temp_files = {}
 
 def zweite_bearbeitung():
     try:
