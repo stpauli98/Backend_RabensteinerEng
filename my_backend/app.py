@@ -3,6 +3,7 @@ from flask_cors import CORS
 import firstProcessing
 import load_row_data
 import data_processing_main
+from data_processing_main import zweite_bearbeitung, prepare_save, download_file
 
 app = Flask(__name__)
 CORS(app)
@@ -74,15 +75,15 @@ def health_check():
 
 @app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/zweite-bearbeitung', methods=['POST'])
 def data_processing_main_zweite_bearbeitung_endpoint():
-    return data_processing_main.zweite_bearbeitung()
+    return zweite_bearbeitung()
 
 @app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/prepare-save', methods=['POST'])
 def data_processing_main_prepare_save_endpoint():
-    return data_processing_main.prepare_save(request)
+    return prepare_save(request)
 
 @app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/download/<file_id>', methods=['GET'])
 def data_processing_main_download_file_endpoint(file_id):
-    return data_processing_main.download_file(file_id, request)
+    return download_file(file_id, request)
 
 
 

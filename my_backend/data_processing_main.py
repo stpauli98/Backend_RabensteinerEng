@@ -2,10 +2,8 @@ import pandas as pd
 from datetime import datetime as dat
 from io import StringIO
 import numpy as np
+from flask import request, jsonify
 
-API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
-
-@app.route(API_PREFIX_DATA_PROCESSING_MAIN + '/zweite-bearbeitung', methods=['POST'])
 def zweite_bearbeitung():
     try:
         # Dobijanje podataka iz zahtjeva
