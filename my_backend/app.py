@@ -4,6 +4,7 @@ import firstProcessing
 import load_row_data
 import data_processing_main
 import adjustmentsOfData
+import cloud
 
 app = Flask(__name__)
 CORS(app)
@@ -13,6 +14,7 @@ API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
 API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
 API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfDataMain'
+API_PREFIX_CLOUD = '/api/cloud'
 
 @app.route('/')
 def index():
@@ -103,6 +105,26 @@ def adjustments_of_data_prepare_save_endpoint():
 @app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
 def adjustments_of_data_download_file_endpoint(file_id):
     return adjustmentsOfData.download_file(file_id, request)
+
+#Cloud
+
+@app.route(f'{API_PREFIX_CLOUD}/clouddata', methods=['POST'])
+def cloud_clouddata_endpoint():
+    return cloud.clouddata(request)
+
+@app.route(f'{API_PREFIX_CLOUD}/interpolate', methods=['POST'])
+def cloud_interpolate_endpoint():
+    return cloud.interpolate(request) 
+
+@app.route(f'{API_PREFIX_CLOUD}/prepare-save', methods=['POST'])
+def cloud_prepare_save_endpoint():
+    return cloud.prepare_save(request)
+
+@app.route(f'{API_PREFIX_CLOUD}/download/<file_id>', methods=['GET'])
+def cloud_download_file_endpoint(file_id):
+    return cloud.download_file(file_id, request)
+
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
