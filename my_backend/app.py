@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firstProcessing
 import load_row_data
+import data_processing_main
 
 app = Flask(__name__)
 CORS(app)
@@ -81,7 +82,7 @@ def data_processing_main_prepare_save_endpoint():
 
 @app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/download/<file_id>', methods=['GET'])
 def data_processing_main_download_file_endpoint(file_id):
-    return data_processing_main.download_file(file_id)
+    return data_processing_main.download_file(file_id, request)
 
 
 
