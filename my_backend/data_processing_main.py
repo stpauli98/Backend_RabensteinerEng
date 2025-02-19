@@ -5,7 +5,7 @@ import numpy as np
 
 API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
 
-@app.route('/api/dataProcessingMain/zweite-bearbeitung', methods=['POST'])
+@app.route(API_PREFIX_DATA_PROCESSING_MAIN + '/zweite-bearbeitung', methods=['POST'])
 def zweite_bearbeitung():
     try:
         # Dobijanje podataka iz zahtjeva
@@ -355,3 +355,55 @@ def zweite_bearbeitung():
         print(f"FEHLER: {e}")
         return jsonify({'error': str(e)}), 400  
                   
+def prepare_save(request):
+    try:
+        data = request.json
+        if not data or 'data' not in data:
+            return jsonify({"error": "No data received"}), 400
+        save_data = data['data']
+        if not save_data:
+            return jsonify({"error": "Empty data"}), 400
+
+        # Kreiraj privremeni fajl i zapiši CSV podatke
+        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
+        writer = csv.writer(temp_file, delimiter=';')
+        for row in save_data:
+            writer.writerow(row)
+        temp_file.close()
+
+        # Generiši jedinstveni ID na osnovu trenutnog vremena
+        file_id = dat.now().strftime('%Y%m%d_%H%M%S')
+        temp_files[file_id] = temp_file.name
+
+        return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
+    except Exception as e:
+        logger.error(f"Error in prepare_save: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+def download_file(file_id, request):
+    try:
+        if file_id not in temp_files:
+            return jsonify({"error": "File not found"}), 404
+        file_path = temp_files[file_id]
+        if not os.path.exists(file_path):
+            return jsonify({"error": "File not found"}), 404
+
+        download_name = f"data_{file_id}.csv"
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype='text/csv'
+        )
+    except Exception as e:
+        logger.error(f"Error in download_file: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        # Pokušaj očistiti privremeni fajl
+        if file_id in temp_files:
+            try:
+                os.unlink(temp_files[file_id])
+                del temp_files[file_id]
+            except Exception as ex:
+                logger.error(f"Error cleaning up temp file: {ex}")

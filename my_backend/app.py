@@ -9,6 +9,7 @@ CORS(app)
 # API configuration
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
+API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
 
 @app.route('/')
 def index():
@@ -49,7 +50,6 @@ def load_row_data_download_endpoint(file_id):
 def load_row_data_prepare_save_endpoint():
     return load_row_data.prepare_save(request)
 
-
 #FirstProcessing
 
 @app.route(f'{API_PREFIX_FIRST_PROCESSING}/upload_chunk', methods=['POST'])
@@ -68,6 +68,22 @@ def first_processing_download_file_endpoint(file_id):
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy"}), 200
+
+#DataProcessingMain
+
+@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/zweite-bearbeitung', methods=['POST'])
+def data_processing_main_zweite_bearbeitung_endpoint():
+    return data_processing_main.zweite_bearbeitung()
+
+@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/prepare-save', methods=['POST'])
+def data_processing_main_prepare_save_endpoint():
+    return data_processing_main.prepare_save(request)
+
+@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/download/<file_id>', methods=['GET'])
+def data_processing_main_download_file_endpoint(file_id):
+    return data_processing_main.download_file(file_id)
+
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
