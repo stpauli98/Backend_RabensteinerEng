@@ -1,9 +1,6 @@
 import os
 import pandas as pd
 import numpy as np
-import datetime
-import copy
-import statistics
 import json
 import gzip
 import traceback
@@ -46,10 +43,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-
 # Define API prefix
-
 API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
 
 # Folder za privremeno spremanje chunkova
