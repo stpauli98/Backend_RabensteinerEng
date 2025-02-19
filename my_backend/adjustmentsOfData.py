@@ -61,16 +61,15 @@ def get_time_column(df):
                 return col
     return None
 
-@app.route('/analysedata', methods=['POST'])
-def analyse_data():
+def analyse_data(request):
     try:
         global stored_data, info_df
-        print("\n=== Starting file analysis ===")
-        print(f"Request files: {request.files}")
-        print(f"Request form: {request.form}")
+        logger.info("=== Starting file analysis ===")
+        logger.info(f"Request files: {request.files}")
+        logger.info(f"Request form: {request.form}")
         
         if 'files[]' not in request.files:
-            print("Error: No files found in request")
+            logger.error("No files found in request")
             return jsonify({"error": "No files provided"}), 400
             
         files = request.files.getlist('files[]')
@@ -341,22 +340,21 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
             }
             records.append(record)
             
-        print(f"\nConverted {len(records)} records")
+        logger.info(f"Converted {len(records)} records")
         if records:
-            print(f"Sample record: {records[0]}")
+            logger.info(f"Sample record: {records[0]}")
             
         return records, info_record
         
     except Exception as e:
-        print(f"Error in process_data_detailed: {str(e)}")
+        logger.error(f"Error in process_data_detailed: {str(e)}")
         traceback.print_exc()
         raise
 
-@app.route('/adjustdata', methods=['POST'])
-def adjust_data():
+def adjust_data(request):
     try:
         global stored_data, info_df
-        print("\n=== Starting data adjustment ===")
+        logger.info("=== Starting data adjustment ===")
         
         data = request.json
         if not data:
