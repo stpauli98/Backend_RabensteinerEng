@@ -12,7 +12,7 @@ CORS(app)
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
 API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
-API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
+API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfDataMain'
 
 @app.route('/')
 def index():
