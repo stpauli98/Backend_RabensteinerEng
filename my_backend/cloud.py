@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
-from datetime import datetime as dat
+from datetime import datetime
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import base64
@@ -10,6 +10,17 @@ from io import StringIO, BytesIO
 import json
 import os
 import sys
+import tempfile
+import csv
+import traceback
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Dictionary to store temporary files
+temp_files = {}
 
 
 def calculate_bounds(predictions, tolerance_type, tol_cnt, tol_dep): 
@@ -513,23 +524,38 @@ def interpolate(request):
 
 def prepare_save(request):
     try:
+        logger.info("Received prepare_save request")
         data = request.json
         if not data or 'data' not in data:
+            logger.error("No data received in request")
             return jsonify({"error": "No data received"}), 400
+            
         save_data = data['data']
         if not save_data:
+            logger.error("Empty data received")
             return jsonify({"error": "Empty data"}), 400
 
-        # Kreiraj privremeni fajl i zapiši CSV podatke
+        logger.info(f"Processing {len(save_data)} rows of data")
+
+        # Create temporary file and write CSV data
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
-        for row in save_data:
-            writer.writerow(row)
+        
+        try:
+            for row in save_data:
+                writer.writerow(row)
+        except Exception as e:
+            logger.error(f"Error writing to CSV: {str(e)}")
+            os.unlink(temp_file.name)  # Clean up the file
+            raise
+            
         temp_file.close()
+        logger.info(f"Successfully wrote data to temporary file: {temp_file.name}")
 
-        # Generiši jedinstveni ID na osnovu trenutnog vremena
+        # Generate unique ID based on current time
         file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
+        logger.info(f"Generated file ID: {file_id}")
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
@@ -538,7 +564,17 @@ def prepare_save(request):
         return jsonify({"error": str(e)}), 500
 
 def download_file(file_id, request):
+    """Download a previously prepared file.
+    
+    Args:
+        file_id (str): The unique identifier for the file
+        request: The Flask request object
+    
+    Returns:
+        Flask response with the file or error message
+    """
     try:
+        logger.info(f"Received download request for file ID: {file_id}")
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404
         file_path = temp_files[file_id]
