@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import math
 import sys
-import datetime as dat
+from datetime import datetime
 import statistics
 import tempfile
 import os
@@ -696,7 +696,7 @@ def prepare_save(request):
         temp_file.close()
 
         # Generiši jedinstveni ID na osnovu trenutnog vremena
-        file_id = dat.now().strftime('%Y%m%d_%H%M%S')
+        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
