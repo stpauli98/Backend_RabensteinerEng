@@ -7,13 +7,25 @@ from flask import request, jsonify
 def zweite_bearbeitung():
     try:
         # Dobijanje podataka iz zahtjeva
+        if 'file' not in request.form:
+            return jsonify({"error": "No file data received"}), 400
+            
         file_content = request.form.get('file')
+        if not file_content:
+            return jsonify({"error": "Empty file content"}), 400
+            
+        # Split content into lines
+        content_lines = file_content.splitlines()
+        
         EL0 = request.form.get('radioValueNull')
         ELNN = request.form.get('radioValueNotNull')
-        EQ_MAX = float(request.form.get('eqMax'))
-        CHG_MAX = float(request.form.get('chgMax'))
-        LG_MAX = float(request.form.get('lgMax'))
-        GAP_MAX = float(request.form.get('gapMax'))
+        try:
+            EQ_MAX = float(request.form.get('eqMax'))
+            CHG_MAX = float(request.form.get('chgMax'))
+            LG_MAX = float(request.form.get('lgMax'))
+            GAP_MAX = float(request.form.get('gapMax'))
+        except (TypeError, ValueError) as e:
+            return jsonify({"error": f"Invalid numeric value in parameters: {str(e)}"}), 400
 
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
