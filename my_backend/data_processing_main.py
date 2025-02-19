@@ -18,15 +18,45 @@ temp_files = {}
 
 def zweite_bearbeitung(request):
     try:
-        # Dobijanje podataka iz zahtjeva
-        if 'file' not in request.form:
-            return jsonify({"error": "No file data received"}), 400
-            
-        file_content = request.form.get('file')
-        if not file_content:
+        # Log request information
+        logger.info(f"Request method: {request.method}")
+        logger.info(f"Content type: {request.content_type}")
+        logger.info(f"Files: {request.files}")
+        logger.info(f"Form data: {request.form}")
+
+        # Check if file is in request.files
+        if 'file' not in request.files:
+            logger.error("No file in request.files")
+            return jsonify({"error": "No file uploaded"}), 400
+
+        file = request.files['file']
+        logger.info(f"Received file: {file.filename}")
+
+        # Read file content
+        file_content = file.stream.read().decode('utf-8')
+        logger.info(f"File content preview: {file_content[:200]}...")
+
+        if not file_content.strip():
+            logger.error("Empty file content")
             return jsonify({"error": "Empty file content"}), 400
-            
-        # Split content into lines
+
+        # Get parameters from form data
+        try:
+            EQ_MAX = float(request.form.get('eqMax', '0'))
+            CHG_MAX = float(request.form.get('chgMax', '0'))
+            LG_MAX = float(request.form.get('lgMax', '0'))
+            GAP_MAX = float(request.form.get('gapMax', '0'))
+            EL0 = request.form.get('radioValueNull')
+            ELNN = request.form.get('radioValueNotNull')
+        except (TypeError, ValueError) as e:
+            logger.error(f"Parameter conversion error: {e}")
+            return jsonify({"error": f"Invalid parameter value: {str(e)}"}), 400
+
+        logger.info(f"Parameters: EQ_MAX={EQ_MAX}, CHG_MAX={CHG_MAX}, LG_MAX={LG_MAX}, GAP_MAX={GAP_MAX}")
+        logger.info(f"Radio buttons: EL0={EL0}, ELNN={ELNN}")
+
+        EL0 = 1 if EL0 == "ja" else 0
+        ELNN = 1 if ELNN == "ja" else 0
         content_lines = file_content.splitlines()
         
         EL0 = request.form.get('radioValueNull')
