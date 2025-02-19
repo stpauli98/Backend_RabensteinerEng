@@ -5,60 +5,68 @@ import numpy as np
 from flask import request, jsonify
 import tempfile
 import csv
-import traceback
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import os
 
 # Dictionary to store temporary files
 temp_files = {}
 
+API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
+
+@app.route(API_PREFIX_DATA_PROCESSING_MAIN + '/zweite-bearbeitung', methods=['POST'])
 def zweite_bearbeitung():
     try:
-        # Dobijanje podataka iz zahtjeva
+        # Check if file is present in request
         if 'file' not in request.form:
-            return jsonify({"error": "No file data received"}), 400
-            
+            print("No file in request.form")
+            return jsonify({"error": "Keine Datei empfangen"}), 400
+
+        # Get file content
         file_content = request.form.get('file')
         if not file_content:
-            return jsonify({"error": "Empty file content"}), 400
-            
-        # Split content into lines
-        content_lines = file_content.splitlines()
-        
-        EL0 = request.form.get('radioValueNull')
-        ELNN = request.form.get('radioValueNotNull')
+            print("Empty file content")
+            return jsonify({"error": "Leere Datei empfangen"}), 400
+
+        # Get and validate parameters
         try:
-            EQ_MAX = float(request.form.get('eqMax'))
-            CHG_MAX = float(request.form.get('chgMax'))
-            LG_MAX = float(request.form.get('lgMax'))
-            GAP_MAX = float(request.form.get('gapMax'))
-        except (TypeError, ValueError) as e:
-            return jsonify({"error": f"Invalid numeric value in parameters: {str(e)}"}), 400
+            EQ_MAX = float(request.form.get('eqMax', '0'))
+            CHG_MAX = float(request.form.get('chgMax', '0'))
+            LG_MAX = float(request.form.get('lgMax', '0'))
+            GAP_MAX = float(request.form.get('gapMax', '0'))
+        except ValueError as e:
+            print(f"Parameter conversion error: {str(e)}")
+            return jsonify({"error": "Ungültige numerische Parameter"}), 400
+
+        # Get radio button values
+        EL0 = request.form.get('radioValueNull', 'nein')
+        ELNN = request.form.get('radioValueNotNull', 'nein')
 
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
 
+        print(f"Parameters received:")
         print(f"EL0: {EL0}")
         print(f"ELNN: {ELNN}")
+        print(f"EQ_MAX: {EQ_MAX}")
+        print(f"CHG_MAX: {CHG_MAX}")
+        print(f"LG_MAX: {LG_MAX}")
+        print(f"GAP_MAX: {GAP_MAX}")
 
 
         ##############################################################################
         # DATEN LADEN #################################################################
         ##############################################################################
 
+        # Split content into lines and remove empty lines
+        content_lines = [line.strip() for line in file_content.splitlines() if line.strip()]
+        
         if not content_lines:
-            return jsonify({"error": "No data received"}), 400
+            print("No data lines found")
+            return jsonify({"error": "Keine Daten in der Datei gefunden"}), 400
 
         # Detect the delimiter by checking the first line
-        first_line = content_lines[0].strip()
+        first_line = content_lines[0]
         print(f"First line: '{first_line}'")
-        
-        if not first_line:
-            return jsonify({"error": "Empty first line"}), 400
-            
+
         # Try to detect delimiter
         if ';' in first_line:
             delimiter = ';'
@@ -66,33 +74,46 @@ def zweite_bearbeitung():
             delimiter = ','
         else:
             print("No valid delimiter found in first line")
-            return jsonify({"error": "No valid delimiter (comma or semicolon) found in data"}), 400
+            return jsonify({"error": "Kein gültiges Trennzeichen (Komma oder Semikolon) in den Daten gefunden"}), 400
         
         try:
-            # Try to read the CSV data
-            df = pd.read_csv(StringIO(file_content), delimiter=delimiter, header=0)
-            
-            # Basic validation
-            if df.empty:
-                return jsonify({"error": "No data found in file"}), 400
-            
-            if len(df.columns) < 2:
-                print(f"Error: Not enough columns. Found only: {len(df.columns)}")
-                return jsonify({"error": f"Data must have at least 2 columns, but found only {len(df.columns)}"}), 400
+            try:
+                # Try to read the CSV data
+                df = pd.read_csv(StringIO(file_content), delimiter=delimiter, header=0)
                 
-            # Get column names
-            time_column = df.columns[0]
-            data_column = df.columns[1]
-            
-            # Convert data column to numeric, handling both . and , as decimal separators
-            df[data_column] = pd.to_numeric(df[data_column].astype(str).str.replace(',', '.'), errors='coerce')
-            
-            # Check if conversion was successful
-            if df[data_column].isna().all():
-                return jsonify({"error": "Could not convert any values to numeric format"}), 400
+                # Basic validation
+                if df.empty:
+                    return jsonify({"error": "Keine Daten in der Datei gefunden"}), 400
                 
-            print("\nAfter numeric conversion:")
-            print(df.head())
+                if len(df.columns) < 2:
+                    print(f"Error: Not enough columns. Found only: {len(df.columns)}")
+                    return jsonify({"error": f"Datei muss mindestens 2 Spalten haben, aber nur {len(df.columns)} gefunden"}), 400
+                    
+                # Get column names
+                time_column = df.columns[0]
+                data_column = df.columns[1]
+                
+                print(f"\nColumns detected:")
+                print(f"Time column: {time_column}")
+                print(f"Data column: {data_column}")
+                
+                # Convert data column to numeric, handling both . and , as decimal separators
+                df[data_column] = pd.to_numeric(df[data_column].astype(str).str.replace(',', '.'), errors='coerce')
+                
+                # Check if conversion was successful
+                if df[data_column].isna().all():
+                    return jsonify({"error": "Konnte keine Werte in numerisches Format konvertieren"}), 400
+                    
+                print("\nAfter numeric conversion:")
+                print(df.head())
+                
+                # Return processed data
+                processed_data = df.to_dict('records')
+                return jsonify({"data": processed_data, "message": "Daten erfolgreich verarbeitet"}), 200
+                
+            except pd.errors.ParserError as e:
+                print(f"CSV parsing error: {str(e)}")
+                return jsonify({"error": "Fehler beim Parsen der CSV-Datei"}), 400
             
         except Exception as e:
             print(f"Error processing data: {str(e)}")
@@ -378,52 +399,29 @@ def zweite_bearbeitung():
                   
 def prepare_save(request):
     try:
-        logger.info("Starting prepare_save function")
-        logger.info(f"Request content type: {request.content_type}")
-        
-        if not request.is_json:
-            logger.error("Request is not JSON")
-            return jsonify({"error": "Request must be JSON"}), 400
-            
         data = request.json
-        logger.info(f"Received data: {data}")
-        
         if not data or 'data' not in data:
-            logger.error("No data field in request JSON")
             return jsonify({"error": "No data received"}), 400
-            
         save_data = data['data']
         if not save_data:
-            logger.error("Empty data array")
             return jsonify({"error": "Empty data"}), 400
-            
-        logger.info(f"Processing {len(save_data)} rows of data")
 
         # Kreiraj privremeni fajl i zapiši CSV podatke
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
-        
-        try:
-            for row in save_data:
-                writer.writerow(row)
-        except Exception as e:
-            logger.error(f"Error writing to CSV: {str(e)}")
-            temp_file.close()
-            return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
-            
+        for row in save_data:
+            writer.writerow(row)
         temp_file.close()
-        logger.info(f"Successfully wrote data to temporary file: {temp_file.name}")
 
         # Generiši jedinstveni ID na osnovu trenutnog vremena
         file_id = dat.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
-        logger.info(f"Generated file ID: {file_id}")
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
         logger.error(f"Error in prepare_save: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
+        return jsonify({"error": str(e)}), 500
 
 def download_file(file_id, request):
     try:
