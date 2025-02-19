@@ -3,6 +3,7 @@ from flask_cors import CORS
 import firstProcessing
 import load_row_data
 import data_processing_main
+import adjustmentsOfData
 
 app = Flask(__name__)
 CORS(app)
@@ -11,6 +12,7 @@ CORS(app)
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
 API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
+API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
 
 @app.route('/')
 def index():
@@ -84,7 +86,23 @@ def data_processing_main_prepare_save_endpoint():
 def data_processing_main_download_file_endpoint(file_id):
     return data_processing_main.download_file(file_id, request)
 
+#AdjustmentsOfData
 
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/analysedata', methods=['POST'])
+def adjustments_of_data_analysedata_endpoint():
+    return adjustmentsOfData.analyse_data(request)
+
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjustdata', methods=['POST'])
+def adjustments_of_data_adjustdata_endpoint():
+    return adjustmentsOfData.adjust_data(request)
+
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/prepare-save', methods=['POST'])
+def adjustments_of_data_prepare_save_endpoint():
+    return adjustmentsOfData.prepare_save(request)
+
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
+def adjustments_of_data_download_file_endpoint(file_id):
+    return adjustmentsOfData.download_file(file_id, request)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
