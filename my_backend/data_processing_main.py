@@ -378,29 +378,52 @@ def zweite_bearbeitung():
                   
 def prepare_save(request):
     try:
+        logger.info("Starting prepare_save function")
+        logger.info(f"Request content type: {request.content_type}")
+        
+        if not request.is_json:
+            logger.error("Request is not JSON")
+            return jsonify({"error": "Request must be JSON"}), 400
+            
         data = request.json
+        logger.info(f"Received data: {data}")
+        
         if not data or 'data' not in data:
+            logger.error("No data field in request JSON")
             return jsonify({"error": "No data received"}), 400
+            
         save_data = data['data']
         if not save_data:
+            logger.error("Empty data array")
             return jsonify({"error": "Empty data"}), 400
+            
+        logger.info(f"Processing {len(save_data)} rows of data")
 
         # Kreiraj privremeni fajl i zapiši CSV podatke
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
-        for row in save_data:
-            writer.writerow(row)
+        
+        try:
+            for row in save_data:
+                writer.writerow(row)
+        except Exception as e:
+            logger.error(f"Error writing to CSV: {str(e)}")
+            temp_file.close()
+            return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
+            
         temp_file.close()
+        logger.info(f"Successfully wrote data to temporary file: {temp_file.name}")
 
         # Generiši jedinstveni ID na osnovu trenutnog vremena
         file_id = dat.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
+        logger.info(f"Generated file ID: {file_id}")
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
         logger.error(f"Error in prepare_save: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
 
 def download_file(file_id, request):
     try:
