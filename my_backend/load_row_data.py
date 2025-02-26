@@ -52,18 +52,36 @@ def clean_file_content(file_content, delimiter):
     return "\n".join(cleaned_lines)
 
 def parse_datetime_column(df, datetime_col, custom_format=None):
+    """
+    Pokušava parsirati datetime kolonu pomoću custom formata (ako je zadan),
+    automatski ili prema listi podržanih formata.
+    Vraca tuple: (success: bool, parsed_dates: Series ili None, error_message: str ili None)
+    """
+    def clean_time(time_str):
+        if not isinstance(time_str, str):
+            return time_str
+        # Očisti vrijeme od nevažećih znakova, zadrži samo brojeve i separatore
+        cleaned = ''
+        for c in time_str:
+            if c.isdigit() or c in ':-. ':
+                cleaned += c
+        return cleaned
+
+    # Očisti podatke prije parsiranja
+    df = df.copy()
+    df[datetime_col] = df[datetime_col].apply(clean_time)
+
     if custom_format:
         try:
-            parsed_dates = pd.to_datetime(df[datetime_col], format=custom_format)
-            if parsed_dates.notna().all():
+            parsed_dates = pd.to_datetime(df[datetime_col], format=custom_format, errors='coerce')
+            if parsed_dates.notna().any():
                 return True, parsed_dates, None
         except Exception as e:
             logger.error(f"Error parsing datetime with custom format: {e}")
-            return False, None, str(e)
 
     try:
-        parsed_dates = pd.to_datetime(df[datetime_col])
-        if parsed_dates.notna().all():
+        parsed_dates = pd.to_datetime(df[datetime_col], errors='coerce')
+        if parsed_dates.notna().any():
             return True, parsed_dates, None
     except Exception as e:
         logger.error(f"Auto parsing of datetime failed: {e}")
@@ -71,20 +89,19 @@ def parse_datetime_column(df, datetime_col, custom_format=None):
     # Pokušaj svih podržanih formata
     for fmt in SUPPORTED_DATE_FORMATS:
         try:
-            parsed_dates = pd.to_datetime(df[datetime_col], format=fmt)
-            if parsed_dates.notna().all():
+            parsed_dates = pd.to_datetime(df[datetime_col], format=fmt, errors='coerce')
+            if parsed_dates.notna().any():
                 return True, parsed_dates, None
         except Exception:
             continue
 
-    # Ako nijedan format ne odgovara
-    error_msg = (
-        f"Unrecognized datetime format in column '{datetime_col}'. "
-        f"Detected example: '{df[datetime_col].iloc[0]}'.\n"
-        f"Please use one of the supported formats: {', '.join(SUPPORTED_DATE_FORMATS)} "
-        f"or provide a custom format."
+    # Ako nijedan format ne odgovara, vrati NaT za sve vrijednosti
+    parsed_dates = pd.Series([pd.NaT] * len(df), index=df.index)
+    warning_msg = (
+        f"Could not parse some datetime values in column '{datetime_col}'. "
+        f"Invalid dates will be marked as NaT (Not a Time). Example value: '{df[datetime_col].iloc[0]}'"
     )
-    return False, None, error_msg
+    return True, parsed_dates, warning_msg
 
 def convert_to_utc(df, date_column, timezone='UTC'):
     """
