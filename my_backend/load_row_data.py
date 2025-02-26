@@ -189,23 +189,58 @@ def upload_files():
         # Parsiranje datuma i/ili vremena
         if has_separate_date_time and date_column and time_column:
             try:
-                combined = all_data_df[date_column].astype(str) + " " + all_data_df[time_column].astype(str)
+                # Očisti vrijeme od nevažećih znakova
+                def clean_time(time_str):
+                    if not isinstance(time_str, str):
+                        return time_str
+                    # Zadrži samo brojeve i dozvoljene separatore
+                    cleaned = ''.join(c for c in str(time_str) if c.isdigit() or c in ':.,')
+                    # Osiguraj da imamo samo jednu decimalnu točku
+                    parts = cleaned.split(':')
+                    if len(parts) > 1:
+                        seconds_parts = parts[-1].replace('.', ',').split(',', 1)
+                        if len(seconds_parts) > 1:
+                            parts[-1] = seconds_parts[0] + '.' + seconds_parts[1]
+                        cleaned = ':'.join(parts)
+                    return cleaned
+
+                # Očisti i kombinuj datum i vrijeme
+                cleaned_time = all_data_df[time_column].apply(clean_time)
+                combined = all_data_df[date_column].astype(str) + " " + cleaned_time
+
                 if custom_date_format:
-                    # Custom format očekuje oblik "date_format time_format"
-                    parts = custom_date_format.split(" ", 1)
-                    fmt = parts[0] + " " + (parts[1] if len(parts) > 1 else "%H:%M:%S")
-                    success, parsed_dates, err = parse_datetime_column(
-                        pd.DataFrame({'combined': combined}), 'combined', custom_format=fmt
-                    )
-                    if not success:
+                    try:
+                        # Koristi custom format za parsiranje
+                        all_data_df['datetime'] = pd.to_datetime(combined, format=custom_date_format, errors='coerce')
+                        if all_data_df['datetime'].isna().all():
+                            return jsonify({
+                                "error": f"Could not parse any dates with format '{custom_date_format}'. Example value: {combined.iloc[0]}",
+                                "needs_custom_format": True,
+                                "supported_formats": SUPPORTED_DATE_FORMATS
+                            }), 400
+                    except Exception as e:
                         return jsonify({
-                            "error": f"Error parsing datetime with custom format: {err}",
+                            "error": f"Error parsing with format '{custom_date_format}': {str(e)}. Example value: {combined.iloc[0]}",
                             "needs_custom_format": True,
                             "supported_formats": SUPPORTED_DATE_FORMATS
                         }), 400
-                    all_data_df['datetime'] = parsed_dates
                 else:
-                    all_data_df['datetime'] = pd.to_datetime(combined)
+                    try:
+                        all_data_df['datetime'] = pd.to_datetime(combined, errors='coerce')
+                        if all_data_df['datetime'].isna().all():
+                            return jsonify({
+                                "error": "Could not automatically parse dates. Please provide a custom format.",
+                                "needs_custom_format": True,
+                                "supported_formats": SUPPORTED_DATE_FORMATS,
+                                "example_value": combined.iloc[0] if not combined.empty else ""
+                            }), 400
+                    except Exception:
+                        return jsonify({
+                            "error": "Could not parse dates. Please provide a custom format.",
+                            "needs_custom_format": True,
+                            "supported_formats": SUPPORTED_DATE_FORMATS,
+                            "example_value": combined.iloc[0] if not combined.empty else ""
+                        }), 400
             except Exception as e:
                 return jsonify({
                     "error": f"Error combining date and time: {str(e)}",
