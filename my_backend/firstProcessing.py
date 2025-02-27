@@ -79,11 +79,17 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         time_min_raw = df['UTC'].iloc[0]
         time_max_raw = df['UTC'].iloc[-1]
         
-        # Izračunaj početno vreme sa offsetom
         # Prvo resetujemo sekunde i mikrosekunde
         time_min = time_min_raw.replace(second=0, microsecond=0)
-        # Zatim dodajemo pun offset u minutama
-        time_min = time_min + pd.Timedelta(minutes=offset)
+        
+        # Izračunaj početno vreme sa offsetom
+        # Prvo dodajemo offset
+        time_with_offset = time_min + pd.Timedelta(minutes=offset)
+        
+        # Zaokružujemo na najbliži interval koji je višestruk od tss
+        minutes_since_hour = time_with_offset.minute
+        adjusted_minutes = ((minutes_since_hour + tss - 1) // tss) * tss
+        time_min = time_with_offset.replace(minute=adjusted_minutes)
         
         # Kreiraj novi DataFrame sa željenim vremenskim intervalima
         time_range = pd.date_range(
