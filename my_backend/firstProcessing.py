@@ -159,9 +159,6 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
                     tolerance=pd.Timedelta(minutes=tss/2)
                 )
             else:  # nearest (mean)
-                # Prvo resample originalnih podataka na željeni interval
-                df.set_index('UTC', inplace=True)
-                
                 # Kreiraj time range koji počinje od offset vremena
                 time_range = pd.date_range(
                     start=time_min,
@@ -178,7 +175,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
                     # Nađi najbliže vrednosti u intervalu od tss/2 minuta pre i posle tačke
                     interval_start = t - pd.Timedelta(minutes=tss/2)
                     interval_end = t + pd.Timedelta(minutes=tss/2)
-                    mask = (df.index >= interval_start) & (df.index <= interval_end)
+                    mask = (df['UTC'] >= interval_start) & (df['UTC'] <= interval_end)
                     interval_values = df[mask][value_col_name]
                     values.append(interval_values.mean() if not interval_values.empty else None)
                 
