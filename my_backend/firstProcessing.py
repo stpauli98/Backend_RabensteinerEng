@@ -88,7 +88,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         
         # Zaokružujemo na najbliži interval koji je višestruk od tss
         minutes_since_hour = time_with_offset.minute
-        adjusted_minutes = ((minutes_since_hour + tss - 1) // tss) * tss
+        adjusted_minutes = int(((minutes_since_hour + tss - 1) // tss) * tss)
         time_min = time_with_offset.replace(minute=adjusted_minutes)
         
         # Kreiraj novi DataFrame sa željenim vremenskim intervalima
