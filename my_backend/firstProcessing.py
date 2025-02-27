@@ -159,8 +159,13 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
                     tolerance=pd.Timedelta(minutes=tss/2)
                 )
             else:  # nearest (mean)
-                # Postavi UTC kao index za originalne podatke
-                df.set_index('UTC', inplace=True)
+                # Proveri da li je UTC već index
+                if df.index.name != 'UTC':
+                    if 'UTC' in df.columns:
+                        df.set_index('UTC', inplace=True)
+                    else:
+                        # Ako je UTC već index ali nije imenovan
+                        df.index.name = 'UTC'
                 
                 # Kreiraj resampler sa offset vremenom kao početkom
                 resampled = df[value_col_name].resample(
