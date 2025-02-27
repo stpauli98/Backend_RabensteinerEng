@@ -210,6 +210,15 @@ def upload_files():
 
                 if custom_date_format:
                     try:
+                        # Ako format sadrži mikrosekundu (%f), proširi decimalne brojeve na 6 znamenki
+                        if '%f' in custom_date_format:
+                            def extend_microseconds(x):
+                                parts = x.split('.')
+                                if len(parts) > 1:
+                                    return parts[0] + '.' + parts[1].ljust(6, '0')
+                                return x
+                            combined = combined.apply(extend_microseconds)
+                        
                         # Koristi custom format za parsiranje
                         all_data_df['datetime'] = pd.to_datetime(combined, format=custom_date_format, errors='coerce')
                         if all_data_df['datetime'].isna().all():
