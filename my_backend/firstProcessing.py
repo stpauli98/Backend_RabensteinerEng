@@ -83,7 +83,9 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         time_min_base = time_min_raw.replace(second=0, microsecond=0)
         
         # Dodajemo offset za početno vreme
-        time_min = time_min_base + pd.Timedelta(minutes=offset)
+        logger.info(f"Applying offset of {offset} minutes to {time_min_base}")
+        time_min = time_min_base + pd.Timedelta(minutes=int(offset))  # Osiguraj da je offset int
+        logger.info(f"Resulting start time: {time_min}")
         
         # Kreiraj novi DataFrame sa željenim vremenskim intervalima
         time_range = pd.date_range(
@@ -307,7 +309,8 @@ def upload_chunk(request):
             else:
                 # Direktan upload
                 tss = float(temp_data.get('tss', 0))
-                offset = float(temp_data.get('offset', 0))
+                offset = int(float(temp_data.get('offset', 0)))  # Konvertuj u int
+                logger.info(f"Parsed offset value: {offset}")
                 mode_input = temp_data.get('mode', '')
                 intrpl_max = float(temp_data.get('intrplMax', 60))
                 file_content = temp_data.get('fileContent')
