@@ -79,64 +79,76 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         time_min_raw = df['UTC'].iloc[0]
         time_max_raw = df['UTC'].iloc[-1]
         
-        # Resetujemo sekunde i mikrosekunde i dodajemo offset
-        time_min = time_min_raw.replace(second=0, microsecond=0) + pd.Timedelta(minutes=offset)
+        # Resetujemo sekunde i mikrosekunde
+        time_min_base = time_min_raw.replace(second=0, microsecond=0)
         
-        # Kreiraj novi DataFrame sa željenim vremenskim intervalima počevši tačno od offset vremena
+        # Dodajemo offset za početno vreme
+        time_min = time_min_base + pd.Timedelta(minutes=offset)
+        
+        # Kreiraj novi DataFrame sa željenim vremenskim intervalima
         time_range = pd.date_range(
             start=time_min,
             end=time_max_raw,
             freq=f'{int(tss)}min'
         )
+        
+        # Kreiraj DataFrame sa željenim vremenima
         df_resampled = pd.DataFrame({'UTC': time_range})
         
-        # Postavi UTC kao index za efikasnije operacije
-        df.set_index('UTC', inplace=True)
-        
         if mode_input == "mean":
-            # Koristi resample za računanje proseka
+            # Prvo resample originalnih podataka na željeni interval
+            df.set_index('UTC', inplace=True)
             resampled = df[value_col_name].resample(
                 rule=f'{int(tss)}min',
-                origin=time_min,
+                origin=time_min,  # Koristi offset vreme kao početak
                 closed='right',
                 label='right'
             ).mean()
+            
+            # Spoji sa željenim vremenima
             df_resampled = pd.DataFrame({'UTC': resampled.index, value_col_name: resampled.values})
             
         elif mode_input == "intrpl":
-            # Koristi merge_asof i interpolate za interpolaciju
+            # Postavi UTC kao index za originalne podatke
+            df.set_index('UTC', inplace=True)
+            
+            # Koristi merge_asof za interpolaciju sa tačnim vremenima
             df_resampled = pd.merge_asof(
-                df_resampled, df.reset_index(),
+                df_resampled,
+                df.reset_index(),
                 left_on='UTC',
                 right_on='UTC',
                 direction='nearest',
                 tolerance=pd.Timedelta(minutes=intrpl_max)
             )
-            # Postavi UTC kao index za vremensku interpolaciju
+            
+            # Interpolacija vrednosti
             df_resampled.set_index('UTC', inplace=True)
-            # Primeni linearnu interpolaciju gde je moguće
             df_resampled[value_col_name] = df_resampled[value_col_name].interpolate(
                 method='time',
-                limit=int(intrpl_max * 60 / tss)  # Konvertuj minute u broj intervala
+                limit=int(intrpl_max * 60 / tss)
             )
-            # Resetuj index da bi UTC bio kolona
             df_resampled.reset_index(inplace=True)
             
         elif mode_input in ["nearest", "nearest (mean)"]:
+            # Postavi UTC kao index za originalne podatke
+            df.set_index('UTC', inplace=True)
+            
             if mode_input == "nearest":
-                # Koristi merge_asof za najbliže vrednosti
+                # Koristi merge_asof za najbliže vrednosti sa tačnim vremenima
                 df_resampled = pd.merge_asof(
-                    df_resampled, df.reset_index(),
+                    df_resampled,
+                    df.reset_index(),
                     left_on='UTC',
                     right_on='UTC',
                     direction='nearest',
                     tolerance=pd.Timedelta(minutes=tss/2)
                 )
             else:  # nearest (mean)
-                # Za svaki interval, nađi prosek najbližih vrednosti
+                # Resample sa tačnim vremenom početka
                 resampled = df[value_col_name].resample(
                     rule=f'{int(tss)}min',
-                    origin=time_min,
+                    origin=time_min,  # Koristi offset vreme kao početak
                     closed='right',
                     label='right'
                 ).mean()
