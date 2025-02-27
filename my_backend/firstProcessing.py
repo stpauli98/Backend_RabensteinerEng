@@ -100,15 +100,27 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         if mode_input == "mean":
             # Prvo resample originalnih podataka na željeni interval
             df.set_index('UTC', inplace=True)
-            resampled = df[value_col_name].resample(
-                rule=f'{int(tss)}min',
-                origin=time_min,  # Koristi offset vreme kao početak
-                closed='right',
-                label='right'
-            ).mean()
             
-            # Spoji sa željenim vremenima
-            df_resampled = pd.DataFrame({'UTC': resampled.index, value_col_name: resampled.values})
+            # Kreiraj time range koji počinje od offset vremena
+            time_range = pd.date_range(
+                start=time_min,
+                end=time_max_raw,
+                freq=f'{int(tss)}min'
+            )
+            
+            # Kreiraj novi DataFrame sa željenim vremenskim intervalima
+            df_resampled = pd.DataFrame({'UTC': time_range})
+            
+            # Za svaki interval, izračunaj prosek vrednosti koje pripadaju tom intervalu
+            values = []
+            for t in time_range:
+                interval_start = t - pd.Timedelta(minutes=tss)
+                interval_end = t
+                mask = (df.index > interval_start) & (df.index <= interval_end)
+                interval_values = df[mask][value_col_name]
+                values.append(interval_values.mean() if not interval_values.empty else None)
+            
+            df_resampled[value_col_name] = values
             
         elif mode_input == "intrpl":
             # Postavi UTC kao index za originalne podatke
@@ -147,14 +159,30 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
                     tolerance=pd.Timedelta(minutes=tss/2)
                 )
             else:  # nearest (mean)
-                # Resample sa tačnim vremenom početka
-                resampled = df[value_col_name].resample(
-                    rule=f'{int(tss)}min',
-                    origin=time_min,  # Koristi offset vreme kao početak
-                    closed='right',
-                    label='right'
-                ).mean()
-                df_resampled = pd.DataFrame({'UTC': resampled.index, value_col_name: resampled.values})
+                # Prvo resample originalnih podataka na željeni interval
+                df.set_index('UTC', inplace=True)
+                
+                # Kreiraj time range koji počinje od offset vremena
+                time_range = pd.date_range(
+                    start=time_min,
+                    end=time_max_raw,
+                    freq=f'{int(tss)}min'
+                )
+                
+                # Kreiraj novi DataFrame sa željenim vremenskim intervalima
+                df_resampled = pd.DataFrame({'UTC': time_range})
+                
+                # Za svaki interval, nađi najbliže vrednosti i izračunaj njihov prosek
+                values = []
+                for t in time_range:
+                    # Nađi najbliže vrednosti u intervalu od tss/2 minuta pre i posle tačke
+                    interval_start = t - pd.Timedelta(minutes=tss/2)
+                    interval_end = t + pd.Timedelta(minutes=tss/2)
+                    mask = (df.index >= interval_start) & (df.index <= interval_end)
+                    interval_values = df[mask][value_col_name]
+                    values.append(interval_values.mean() if not interval_values.empty else None)
+                
+                df_resampled[value_col_name] = values
         
         # Konvertuj rezultate u JSON format sa specificnim formatom vremena
         result = df_resampled.apply(
