@@ -140,11 +140,11 @@ def analyse_data(request):
                         if col != 'UTC':
                             measurement_col = col
                             break
-                            
+
                     if measurement_col:
                         print(f"\nMeasurement column: {measurement_col}")
                         print(f"Measurement stats:\n{df[measurement_col].describe()}")
-                        
+
                         # Izračunaj offset iz podataka
                         first_time = df['UTC'].iloc[0]
                         offset = first_time.minute % time_step if time_step else 0.0
