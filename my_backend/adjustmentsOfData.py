@@ -145,13 +145,17 @@ def analyse_data(request):
                         print(f"\nMeasurement column: {measurement_col}")
                         print(f"Measurement stats:\n{df[measurement_col].describe()}")
                         
+                        # Izračunaj offset iz podataka
+                        first_time = df['UTC'].iloc[0]
+                        offset = first_time.minute % time_step if time_step else 0.0
+                        
                         file_info = {
                             'Name der Datei': str(file.filename),
                             'Name der Messreihe': str(measurement_col),
                             'Startzeit (UTC)': df['UTC'].iloc[0].strftime(UTC_fmt) if 'UTC' in df.columns else None,
                             'Endzeit (UTC)': df['UTC'].iloc[-1].strftime(UTC_fmt) if 'UTC' in df.columns else None,
                             'Zeitschrittweite [min]': float(time_step) if time_step is not None else None,
-                            'Offset [min]': 0.0,
+                            'Offset [min]': float(offset),
                             'Anzahl der Datenpunkte': int(len(df)),
                             'Anzahl der numerischen Datenpunkte': int(df[measurement_col].count()),
                             'Anteil an numerischen Datenpunkten': float(df[measurement_col].count() / len(df) * 100)
