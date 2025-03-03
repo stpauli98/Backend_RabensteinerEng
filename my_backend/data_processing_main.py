@@ -7,37 +7,25 @@ import tempfile
 import csv
 import os
 import traceback
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Dictionary to store temporary files
 temp_files = {}
+# Format for UTC dates
+UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
 def zweite_bearbeitung(request):
     try:
-        # Log request information
-        logger.info(f"Request method: {request.method}")
-        logger.info(f"Content type: {request.content_type}")
-        logger.info(f"Files: {request.files}")
-        logger.info(f"Form data: {request.form}")
 
         # Check if file is in request.files
         if 'file' not in request.files:
-            logger.error("No file in request.files")
             return jsonify({"error": "No file uploaded"}), 400
 
         file = request.files['file']
-        logger.info(f"Received file: {file.filename}")
 
         # Read file content
-        file_content = file.stream.read().decode('utf-8')
-        logger.info(f"File content preview: {file_content[:200]}...")
+        file_content = file.stream.read().decode('utf-8')   
 
         if not file_content.strip():
-            logger.error("Empty file content")
             return jsonify({"error": "Empty file content"}), 400
 
         # Get parameters from form data
@@ -49,11 +37,7 @@ def zweite_bearbeitung(request):
             EL0 = request.form.get('radioValueNull')
             ELNN = request.form.get('radioValueNotNull')
         except (TypeError, ValueError) as e:
-            logger.error(f"Parameter conversion error: {e}")
             return jsonify({"error": f"Invalid parameter value: {str(e)}"}), 400
-
-        logger.info(f"Parameters: EQ_MAX={EQ_MAX}, CHG_MAX={CHG_MAX}, LG_MAX={LG_MAX}, GAP_MAX={GAP_MAX}")
-        logger.info(f"Radio buttons: EL0={EL0}, ELNN={ELNN}")
 
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
@@ -72,9 +56,6 @@ def zweite_bearbeitung(request):
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
 
-        print(f"EL0: {EL0}")
-        print(f"ELNN: {ELNN}")
-
 
         ##############################################################################
         # DATEN LADEN #################################################################
@@ -85,7 +66,6 @@ def zweite_bearbeitung(request):
 
         # Detect the delimiter by checking the first line
         first_line = content_lines[0].strip()
-        print(f"First line: '{first_line}'")
         
         if not first_line:
             return jsonify({"error": "Empty first line"}), 400
@@ -96,7 +76,6 @@ def zweite_bearbeitung(request):
         elif ',' in first_line:
             delimiter = ','
         else:
-            print("No valid delimiter found in first line")
             return jsonify({"error": "No valid delimiter (comma or semicolon) found in data"}), 400
         
         try:
@@ -108,7 +87,6 @@ def zweite_bearbeitung(request):
                 return jsonify({"error": "No data found in file"}), 400
             
             if len(df.columns) < 2:
-                print(f"Error: Not enough columns. Found only: {len(df.columns)}")
                 return jsonify({"error": f"Data must have at least 2 columns, but found only {len(df.columns)}"}), 400
                 
             # Get column names
@@ -121,23 +99,17 @@ def zweite_bearbeitung(request):
             # Check if conversion was successful
             if df[data_column].isna().all():
                 return jsonify({"error": "Could not convert any values to numeric format"}), 400
-                
-            print("\nAfter numeric conversion:")
-            print(df.head())
-            
+          
         except Exception as e:
-            print(f"Error processing data: {str(e)}")
             return jsonify({"error": f"Error processing data: {str(e)}"}), 400
 
-        UTC_fmt = "%Y-%m-%d %H:%M:%S"
+       
 
         ##############################################################################
         # ELIMINIERUNG VON MESSAUSFÄLLEN (GLEICHBLEIBENDE MESSWERTE) ##################
         ##############################################################################
 
         if "EQ_MAX" in locals():
-            print("\nPočinjem EQ_MAX obradu...")
-            print(f"EQ_MAX vrednost: {EQ_MAX}")
             
             # Status des Identifikationsrahmens (frm...frame)
             frm = 0
@@ -190,31 +162,23 @@ def zweite_bearbeitung(request):
                     if frm_width >= EQ_MAX:
                         for i_frm in range (idx_strt, idx_end+1):
                             df.at[i_frm, data_column] = np.nan
-                            
-        print("\nNakon EQ_MAX obrade:")
-        print(df.head())
 
         ##############################################################################
         # ELIMINIERUNG VON NULLWERTEN #################################################
         ##############################################################################
 
         if EL0 == 1:
-            print("\nPočinjem EL0 obradu...")
             
             # Durchlauf des gesamten Datenrahmens
             for i in range (0, len(df)):  
                 if df.iloc[i][data_column] == 0:
                     df.at[i, data_column] = np.nan
 
-        print("\nNakon EL0 obrade:")
-        print(df.head())
-
         ##############################################################################
         # ELIMINIERUNG VON NICHT NUMERISCHEN WERTEN ###################################
         ##############################################################################
 
         if ELNN == 1:
-            print("\nPočinjem ELNN obradu...")
             
             # Durchlauf des gesamten Datenrahmens
             for i in range (0, len(df)):  
@@ -226,20 +190,13 @@ def zweite_bearbeitung(request):
                         df.at[i, data_column] = np.nan
                 except (ValueError, TypeError):
                     # Ako konverzija ne uspije, postavi na NaN
-                    df.at[i, data_column] = np.nan      
-
-            print("\nNakon ELNN obrade:")
-            print(df.head())
+                    df.at[i, data_column] = np.nan     
 
         ##############################################################################
         # ELIMINIERUNG VON AUSREISSERN ################################################
         ##############################################################################
 
         if "CHG_MAX" and "LG_MAX" in locals():
-            print("\nPočinjem CHG_MAX i LG_MAX obradu...")
-            print(f"CHG_MAX vrednost: {CHG_MAX}")
-            print(f"LG_MAX vrednost: {LG_MAX}")
-        
             # Status des Identifikationsrahmens (frm...frame)
             frm = 0
             """
@@ -308,17 +265,12 @@ def zweite_bearbeitung(request):
                                     dat.strptime(df.iloc[idx_strt][time_column], \
                                                     UTC_fmt)).total_seconds()/60 > LG_MAX:
                         frm = 0
-                            
-        print("\nNakon CHG_MAX i LG_MAX obrade:")
-        print(df.head())
 
         ##############################################################################
         # SCHLIESSEN VON MESSLÜCKEN ###################################################
         ##############################################################################
 
         if "GAP_MAX" in locals():
-            print("\nPočinjem GAP_MAX obradu...")
-            print(f"GAP_MAX vrednost: {GAP_MAX}")
 
             # Status des Identifikationsrahmens (frm...frame)
             frm = 0
@@ -378,58 +330,36 @@ def zweite_bearbeitung(request):
 
                     # Ende des Datensatzes ist erreicht und Identifikationsrahmen ist offen
 
-        print("\nNakon GAP_MAX obrade:")
-        print(df.head())
-
         # Na kraju funkcije, prije except bloka:
         # Konvertujemo DataFrame u format pogodan za JSON
         # Prvo zamijenimo np.nan sa None da bi se moglo serijalizovati u JSON
         df = df.replace({np.nan: None})
-        
-        print("\nRezultati obrade:")
-        print("----------------")
-        print(f"Broj redova nakon obrade: {len(df)}")
-        print(f"Kolone: {df.columns.tolist()}")
-        print("\nPrvih 5 redova:")
-        print(df.head())
         
         processed_data = {
             'data': df.to_dict('records'),  # Konvertuje DataFrame u listu dictionary-ja
             'message': 'Daten wurden erfolgreich verarbeitet'
         }
         
-        print("\nPrvi red processed_data:")
-        print(processed_data['data'][0] if processed_data['data'] else "Nema podataka")
-        
         return jsonify(processed_data)
 
     except Exception as e:
-        print(f"FEHLER: {e}")
         return jsonify({'error': str(e)}), 400  
                   
 def prepare_save(request):
     try:
-        logger.info("Starting prepare_save function")
-        logger.info(f"Request content type: {request.content_type}")
         
         if not request.is_json:
-            logger.error("Request is not JSON")
             return jsonify({"error": "Request must be JSON"}), 400
             
         data = request.json
-        logger.info(f"Received data: {data}")
         
         if not data or 'data' not in data:
-            logger.error("No data field in request JSON")
             return jsonify({"error": "No data received"}), 400
             
         save_data = data['data']
         if not save_data:
-            logger.error("Empty data array")
             return jsonify({"error": "Empty data"}), 400
             
-        logger.info(f"Processing {len(save_data)} rows of data")
-
         # Kreiraj privremeni fajl i zapiši CSV podatke
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
@@ -438,22 +368,16 @@ def prepare_save(request):
             for row in save_data:
                 writer.writerow(row)
         except Exception as e:
-            logger.error(f"Error writing to CSV: {str(e)}")
-            temp_file.close()
             return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
             
         temp_file.close()
-        logger.info(f"Successfully wrote data to temporary file: {temp_file.name}")
-
+        
         # Generiši jedinstveni ID na osnovu trenutnog vremena
-        file_id = dat.now().strftime('%Y%m%d_%H%M%S')
+        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
-        logger.info(f"Generated file ID: {file_id}")
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        logger.error(f"Error in prepare_save: {str(e)}")
-        logger.error(traceback.format_exc())
         return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
 
 def download_file(file_id, request):
@@ -472,7 +396,6 @@ def download_file(file_id, request):
             mimetype='text/csv'
         )
     except Exception as e:
-        logger.error(f"Error in download_file: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
         # Pokušaj očistiti privremeni fajl
@@ -481,7 +404,7 @@ def download_file(file_id, request):
                 os.unlink(temp_files[file_id])
                 del temp_files[file_id]
             except Exception as ex:
-                logger.error(f"Error cleaning up temp file: {ex}")
+                return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
                   
 def prepare_save(request):
     try:
@@ -505,8 +428,6 @@ def prepare_save(request):
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        logger.error(f"Error in prepare_save: {str(e)}")
-        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 def download_file(file_id, request):
@@ -525,7 +446,6 @@ def download_file(file_id, request):
             mimetype='text/csv'
         )
     except Exception as e:
-        logger.error(f"Error in download_file: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
         # Pokušaj očistiti privremeni fajl
@@ -534,4 +454,4 @@ def download_file(file_id, request):
                 os.unlink(temp_files[file_id])
                 del temp_files[file_id]
             except Exception as ex:
-                logger.error(f"Error cleaning up temp file: {ex}")
+                return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
