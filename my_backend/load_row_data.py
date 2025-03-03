@@ -4,6 +4,7 @@ import traceback
 import logging
 import json
 import csv
+import time
 from io import StringIO
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file
@@ -19,8 +20,20 @@ logger = logging.getLogger(__name__)
 # API configuration
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 
-# Globalni rječnik za privremene fajlove (nije thread-safe – za produkciju koristiti sigurniji pristup)
+# Globalni rječnici za privremene fajlove i chunk-ove
 temp_files = {}
+chunk_storage = {}
+
+# Vrijeme nakon kojeg se brišu stari uploadi (30 minuta)
+UPLOAD_EXPIRY_TIME = 30 * 60  # sekundi
+
+def cleanup_old_uploads():
+    """Briše stare uploade koji nisu završeni"""
+    current_time = time.time()
+    for upload_id in list(chunk_storage.keys()):
+        upload_info = chunk_storage[upload_id]
+        if current_time - upload_info.get('last_activity', 0) > UPLOAD_EXPIRY_TIME:
+            del chunk_storage[upload_id]
 
 # Lista podržanih formata datuma
 SUPPORTED_DATE_FORMATS = [
@@ -31,8 +44,6 @@ SUPPORTED_DATE_FORMATS = [
     '%Y/%m/%d %H:%M:%S',
     '%d/%m/%Y %H:%M:%S'
 ]
-
-
 def detect_delimiter(file_content, sample_lines=3):
     """
     Detektira delimiter na osnovu prvih nekoliko linija sadržaja fajla.
@@ -124,6 +135,233 @@ def convert_to_utc(df, date_column, timezone='UTC'):
     except Exception as e:
         logger.error(f"Error converting to UTC: {e}")
         raise
+
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload-chunk', methods=['POST'])
+def upload_chunk():
+    try:
+        # Provjeri da li su svi potrebni parametri prisutni
+        if 'fileChunk' not in request.files:
+            return jsonify({"error": "No file chunk provided"}), 400
+            
+        upload_id = request.form.get('uploadId')
+        chunk_index = request.form.get('chunkIndex')
+        total_chunks = request.form.get('totalChunks')
+        
+        if not all([upload_id, chunk_index, total_chunks]):
+            return jsonify({"error": "Missing required parameters"}), 400
+            
+        chunk_index = int(chunk_index)
+        total_chunks = int(total_chunks)
+        
+        # Očisti stare uploade
+        cleanup_old_uploads()
+        
+        # Inicijaliziraj storage za ovaj upload ako ne postoji
+        if upload_id not in chunk_storage:
+            chunk_storage[upload_id] = {
+                'chunks': {},
+                'total_chunks': total_chunks,
+                'received_chunks': 0,
+                'last_activity': time.time(),
+                'parameters': {
+                    'delimiter': request.form.get('delimiter'),
+                    'timezone': request.form.get('timezone', 'UTC'),
+                    'selected_columns': json.loads(request.form.get('selected_columns', '{}')),
+                    'custom_date_format': request.form.get('custom_date_format'),
+                    'value_column_name': request.form.get('valueColumnName', '').strip(),
+                    'dropdown_count': int(request.form.get('dropdown_count', '2'))
+                }
+            }
+        
+        # Spremi chunk i ažuriraj vrijeme zadnje aktivnosti
+        file_chunk = request.files['fileChunk']
+        chunk_content = file_chunk.read().decode('utf-8')
+        chunk_storage[upload_id]['chunks'][chunk_index] = chunk_content
+        chunk_storage[upload_id]['received_chunks'] += 1
+        chunk_storage[upload_id]['last_activity'] = time.time()
+        
+        # Provjeri da li smo primili sve chunk-ove
+        if chunk_storage[upload_id]['received_chunks'] == total_chunks:
+            # Spoji sve chunk-ove u jedan fajl
+            complete_content = ''
+            for i in range(total_chunks):
+                complete_content += chunk_storage[upload_id]['chunks'][i]
+            
+            # Uzmi parametre iz storage-a
+            params = chunk_storage[upload_id]['parameters']
+            
+            # Procesiraj spojeni fajl
+            result = process_complete_file(complete_content, params)
+            
+            # Očisti storage
+            del chunk_storage[upload_id]
+            
+            return result
+        
+        return jsonify({
+            "success": True,
+            "message": f"Chunk {chunk_index + 1}/{total_chunks} received"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in upload_chunk: {str(e)}")
+        return jsonify({"error": str(e)}), 400
+
+def process_complete_file(file_content, params):
+    try:
+        delimiter = params['delimiter']
+        timezone = params['timezone']
+        selected_columns = params['selected_columns']
+        custom_date_format = params['custom_date_format']
+        value_column_name = params['value_column_name']
+        dropdown_count = params['dropdown_count']
+        has_separate_date_time = dropdown_count == 3
+
+        # Očekivani nazivi kolona prema odabiru
+        date_column = selected_columns.get('column1')
+        time_column = selected_columns.get('column2') if has_separate_date_time else None
+        value_column = selected_columns.get('column3') if has_separate_date_time else selected_columns.get('column2')
+
+        # Detektiraj i provjeri delimiter
+        detected_delimiter = detect_delimiter(file_content)
+        if delimiter != detected_delimiter:
+            return jsonify({
+                "error": f"Incorrect delimiter! Detected: '{detected_delimiter}', provided: '{delimiter}'."
+            }), 400
+
+        # Očisti sadržaj i učitaj u DataFrame
+        cleaned_content = clean_file_content(file_content, delimiter)
+        df = pd.read_csv(StringIO(cleaned_content), delimiter=delimiter)
+        df = df.dropna(axis=1, how='all')
+        df.columns = df.columns.str.strip()
+
+        # Pretvaranje vrijednosti u numerički tip ako je moguće
+        if value_column and value_column in df.columns:
+            df[value_column] = pd.to_numeric(df[value_column], errors='coerce')
+
+        # Parsiranje datuma i/ili vremena
+        if has_separate_date_time and date_column and time_column:
+            try:
+                # Očisti vrijeme od nevažećih znakova
+                def clean_time(time_str):
+                    if not isinstance(time_str, str):
+                        return time_str
+                    cleaned = ''.join(c for c in str(time_str) if c.isdigit() or c in ':.,')                    
+                    parts = cleaned.split(':')
+                    if len(parts) > 1:
+                        seconds_parts = parts[-1].replace('.', ',').split(',', 1)
+                        if len(seconds_parts) > 1:
+                            parts[-1] = seconds_parts[0] + '.' + seconds_parts[1]
+                        cleaned = ':'.join(parts)
+                    return cleaned
+
+                # Očisti i kombinuj datum i vrijeme
+                cleaned_time = df[time_column].apply(clean_time)
+                combined = df[date_column].astype(str) + " " + cleaned_time
+
+                if custom_date_format:
+                    try:
+                        if '%f' in custom_date_format:
+                            def extend_microseconds(x):
+                                parts = x.split('.')
+                                if len(parts) > 1:
+                                    return parts[0] + '.' + parts[1].ljust(6, '0')
+                                return x
+                            combined = combined.apply(extend_microseconds)
+                        
+                        df['datetime'] = pd.to_datetime(combined, format=custom_date_format, errors='coerce')
+                        if df['datetime'].isna().all():
+                            return jsonify({
+                                "error": f"Could not parse any dates with format '{custom_date_format}'. Example value: {combined.iloc[0]}",
+                                "needs_custom_format": True,
+                                "supported_formats": SUPPORTED_DATE_FORMATS
+                            }), 400
+                    except Exception as e:
+                        return jsonify({
+                            "error": f"Error parsing with format '{custom_date_format}': {str(e)}. Example value: {combined.iloc[0]}",
+                            "needs_custom_format": True,
+                            "supported_formats": SUPPORTED_DATE_FORMATS
+                        }), 400
+                else:
+                    try:
+                        df['datetime'] = pd.to_datetime(combined, errors='coerce')
+                        if df['datetime'].isna().all():
+                            return jsonify({
+                                "error": "Could not automatically parse dates. Please provide a custom format.",
+                                "needs_custom_format": True,
+                                "supported_formats": SUPPORTED_DATE_FORMATS,
+                                "example_value": combined.iloc[0] if not combined.empty else ""
+                            }), 400
+                    except Exception:
+                        return jsonify({
+                            "error": "Could not parse dates. Please provide a custom format.",
+                            "needs_custom_format": True,
+                            "supported_formats": SUPPORTED_DATE_FORMATS,
+                            "example_value": combined.iloc[0] if not combined.empty else ""
+                        }), 400
+            except Exception as e:
+                return jsonify({
+                    "error": f"Error combining date and time: {str(e)}",
+                    "needs_custom_format": True
+                }), 400
+        else:
+            # Ako je samo jedna datetime kolona
+            datetime_col = date_column or df.columns[0]
+            success, parsed_dates, err = parse_datetime_column(df, datetime_col, custom_format=custom_date_format)
+            if not success:
+                return jsonify({
+                    "error": err,
+                    "needs_custom_format": True,
+                    "supported_formats": SUPPORTED_DATE_FORMATS
+                }), 400
+            df['datetime'] = parsed_dates
+
+        # Konverzija u UTC
+        try:
+            df = convert_to_utc(df, 'datetime', timezone)
+        except Exception as e:
+            return jsonify({"error": f"Error converting to UTC: {str(e)}"}), 400
+
+        # Provjera postojanja value kolone i priprema rezultata
+        if not value_column or value_column not in df.columns:
+            return jsonify({"error": f"Value column '{value_column}' not found in data"}), 400
+
+        result_df = pd.DataFrame()
+        result_df['UTC'] = df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        final_value_column = value_column_name if value_column_name else value_column
+        result_df[final_value_column] = df[value_column].apply(lambda x: str(x) if pd.notnull(x) else "")
+        result_df.dropna(subset=['UTC'], inplace=True)
+        result_df.sort_values('UTC', inplace=True)
+
+        return jsonify({
+            "success": True,
+            "data": result_df.values.tolist(),
+            "headers": result_df.columns.tolist()
+        })
+
+    except Exception as e:
+        logger.error(f"Error processing complete file: {str(e)}")
+        return jsonify({"error": str(e)}), 400
+
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload-status/<upload_id>', methods=['GET'])
+def check_upload_status(upload_id):
+    try:
+        if upload_id not in chunk_storage:
+            return jsonify({
+                "error": "Upload not found or already completed"
+            }), 404
+            
+        upload_info = chunk_storage[upload_id]
+        return jsonify({
+            "success": True,
+            "totalChunks": upload_info['total_chunks'],
+            "receivedChunks": upload_info['received_chunks'],
+            "isComplete": upload_info['received_chunks'] == upload_info['total_chunks']
+        })
+        
+    except Exception as e:
+        logger.error(f"Error checking upload status: {str(e)}")
+        return jsonify({"error": str(e)}), 400
 
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload', methods=['POST'])
 def upload_files():
