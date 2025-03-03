@@ -18,6 +18,12 @@ temp_files = {}
 
 def zweite_bearbeitung(request):
     try:
+        # Log request information
+        logger.info(f"Request method: {request.method}")
+        logger.info(f"Content type: {request.content_type}")
+        logger.info(f"Files: {request.files}")
+        logger.info(f"Form data: {request.form}")
+
         # Check if file is in request.files
         if 'file' not in request.files:
             logger.error("No file in request.files")
