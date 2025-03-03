@@ -98,29 +98,22 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         df_resampled = pd.DataFrame({'UTC': time_range})
         
         if mode_input == "mean":
-            # Prvo resample originalnih podataka na željeni interval
+            # Optimizovana mean kalkulacija koristeći resample
             df.set_index('UTC', inplace=True)
             
-            # Kreiraj time range koji počinje od offset vremena
-            time_range = pd.date_range(
-                start=time_min,
-                end=time_max_raw,
-                freq=f'{int(tss)}min'
-            )
+            # Direktno resample sa offset-om kao početkom
+            df_resampled = df[value_col_name].resample(
+                rule=f'{int(tss)}min',
+                origin=time_min,
+                closed='right',
+                label='right'
+            ).mean().to_frame()
             
-            # Kreiraj novi DataFrame sa željenim vremenskim intervalima
-            df_resampled = pd.DataFrame({'UTC': time_range})
+            # Filtriraj samo vremena nakon offset-a
+            df_resampled = df_resampled[df_resampled.index >= time_min]
             
-            # Za svaki interval, izračunaj prosek vrednosti koje pripadaju tom intervalu
-            values = []
-            for t in time_range:
-                interval_start = t - pd.Timedelta(minutes=tss)
-                interval_end = t
-                mask = (df.index > interval_start) & (df.index <= interval_end)
-                interval_values = df[mask][value_col_name]
-                values.append(interval_values.mean() if not interval_values.empty else None)
-            
-            df_resampled[value_col_name] = values
+            # Resetuj index da dobijemo UTC kolonu
+            df_resampled.reset_index(inplace=True)
             
         elif mode_input == "intrpl":
             # Postavi UTC kao index za originalne podatke
