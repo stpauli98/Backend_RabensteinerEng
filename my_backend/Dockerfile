@@ -5,7 +5,7 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # Kopiraj requirements.txt pre nego sto kopiras sve fajlove
-COPY my_backend/requirements.txt •
+COPY my_backend/requirements.txt .
 
 # Kreiraj i aktiviraj virtualno okruzenje u kontejneru
 RUN python -m venv venv && . venv/bin/activate && pip install --no-cache-dir -r requirements.txt
