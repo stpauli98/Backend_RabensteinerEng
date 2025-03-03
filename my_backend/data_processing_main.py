@@ -109,18 +109,15 @@ def zweite_bearbeitung(request):
             time_column = df.columns[0]
             data_column = df.columns[1]
             
-                # Optimizovana konverzija u numerički format
-            df[data_column] = pd.to_numeric(df[data_column].astype(str).str.replace(',', '.'), errors='coerce', downcast='float')
+            # Convert data column to numeric, handling both . and , as decimal separators
+            df[data_column] = pd.to_numeric(df[data_column].astype(str).str.replace(',', '.'), errors='coerce')
             
-            # Provera konverzije
+            # Check if conversion was successful
             if df[data_column].isna().all():
                 return jsonify({"error": "Could not convert any values to numeric format"}), 400
-            
-            # Konvertuj vremenske oznake u datetime odmah
-            df[time_column] = pd.to_datetime(df[time_column], format=UTC_fmt)
-            
-            # Postavi vremenske oznake kao index za brže operacije
-            df.set_index(time_column, inplace=True)
+                
+            print("\nAfter numeric conversion:")
+            print(df.head())
             
         except Exception as e:
             print(f"Error processing data: {str(e)}")
@@ -134,30 +131,59 @@ def zweite_bearbeitung(request):
 
         if "EQ_MAX" in locals():
             print("\nPočinjem EQ_MAX obradu...")
+            print(f"EQ_MAX vrednost: {EQ_MAX}")
             
-            # Identifikuj sekvence jednakih vrednosti
-            value_changes = df[data_column] != df[data_column].shift()
-            value_changes.iloc[0] = True  # Prvi red je uvek početak nove sekvence
-            sequence_ids = value_changes.cumsum()
+            # Status des Identifikationsrahmens (frm...frame)
+            frm = 0
+            """
+                0...Im aktuellen Zeitschritt ist kein Identifikationsrahmen für
+                    gleichbleibende Messwerte offen
+                1...Im aktuellen Zeitschritt ist ein Identifikationsrahmen für 
+                    gleichbleibende Messwerte offen
+            """
             
-            # Grupiši po sekvencama i izračunaj njihovo trajanje
-            sequences = df.groupby(sequence_ids).agg({
-                data_column: 'first',
-                time_column: ['first', 'last']
-            })
-            
-            # Izračunaj trajanje svake sekvence u minutama
-            sequences['duration'] = (sequences[time_column]['last'] - 
-                                   sequences[time_column]['first']).dt.total_seconds() / 60
-            
-            # Identifikuj sekvence koje treba zameniti sa NaN
-            long_sequences = sequences[sequences['duration'] >= EQ_MAX]
-            
-            # Zameni duge sekvence sa NaN
-            if not long_sequences.empty:
-                for seq_id in long_sequences.index:
-                    mask = sequence_ids == seq_id
-                    df.loc[mask, data_column] = np.nan
+            # Durchlauf des gesamten Datenrahmens             
+            for i in range (1, len(df)):
+                
+                # Aktueller Messwert ist gleich dem letzen Messwert und 
+                # Identifikationsrahmen ist geschlossen → Identifikationsrahmen wird
+                # geöffnet
+                if df.iloc[i-1][data_column] == df.iloc[i][data_column] and frm == 0:           
+                    
+                    idx_strt = i-1
+                    frm = 1
+                
+                # Aktueller Messwert ist ungleich dem letzten Messwert und
+                # Identifikationsrahmen ist offen → Identifikationsrahmen wird
+                # geschlossen und ausgewertet
+                elif df.iloc[i-1][data_column] != df.iloc[i][data_column] and frm == 1:
+                    
+                    idx_end = i-1
+                    
+                    # Länge des Identifikationsrahmens [min]
+                    frm_width = (dat.strptime(df.iloc[idx_end][time_column], UTC_fmt)-\
+                                dat.strptime(df.iloc[idx_strt][time_column], UTC_fmt)).total_seconds()/60
+                    
+                    # Der Identifikationsrahmen ist zu groß, so dass eine Messlücke
+                    # eingefügt werden muss
+                    if frm_width >= EQ_MAX:
+                        for i_frm in range (idx_strt, idx_end+1):
+                            df.at[i_frm, data_column] = np.nan
+                    frm = 0
+        
+                # Ende des Datensatzes ist erreicht und Identifikationsrahmen ist offen
+                elif i == len(df)-1 and frm == 1: 
+                    idx_end = i
+                    
+                    # Länge des Identifikationsrahmens [min]
+                    frm_width = (dat.strptime(df.iloc[idx_end][time_column], UTC_fmt)-\
+                                dat.strptime(df.iloc[idx_strt][time_column], UTC_fmt)).total_seconds()/60
+                    
+                    # Der Identifikationsrahmen ist zu groß, so dass eine Messlücke
+                    # eingefügt werden muss
+                    if frm_width >= EQ_MAX:
+                        for i_frm in range (idx_strt, idx_end+1):
+                            df.at[i_frm, data_column] = np.nan
                             
         print("\nNakon EQ_MAX obrade:")
         print(df.head())
@@ -168,7 +194,11 @@ def zweite_bearbeitung(request):
 
         if EL0 == 1:
             print("\nPočinjem EL0 obradu...")
-            df[data_column] = df[data_column].replace(0, np.nan)
+            
+            # Durchlauf des gesamten Datenrahmens
+            for i in range (0, len(df)):  
+                if df.iloc[i][data_column] == 0:
+                    df.at[i, data_column] = np.nan
 
         print("\nNakon EL0 obrade:")
         print(df.head())
@@ -179,7 +209,18 @@ def zweite_bearbeitung(request):
 
         if ELNN == 1:
             print("\nPočinjem ELNN obradu...")
-            # Već je konvertovano u numerički format na početku
+            
+            # Durchlauf des gesamten Datenrahmens
+            for i in range (0, len(df)):  
+                try:
+                    # Pokušaj konverzije u float
+                    float_value = float(df.iloc[i][data_column])
+                    # Ako je NaN, ostavi ga kao NaN
+                    if pd.isna(float_value):
+                        df.at[i, data_column] = np.nan
+                except (ValueError, TypeError):
+                    # Ako konverzija ne uspije, postavi na NaN
+                    df.at[i, data_column] = np.nan      
 
             print("\nNakon ELNN obrade:")
             print(df.head())
@@ -271,28 +312,63 @@ def zweite_bearbeitung(request):
 
         if "GAP_MAX" in locals():
             print("\nPočinjem GAP_MAX obradu...")
+            print(f"GAP_MAX vrednost: {GAP_MAX}")
+
+            # Status des Identifikationsrahmens (frm...frame)
+            frm = 0
+            """
+                0...Im aktuellen Zeitschritt ist kein Identifikationsrahmen für
+                    Messlücken offen
+                1...Im aktuellen Zeitschritt ist ein Identifikationsrahmen für 
+                    Messlücken offen
+            """
             
-            # Identifikuj sekvence NaN vrednosti
-            nan_mask = df[data_column].isna()
-            nan_groups = nan_mask.ne(nan_mask.shift()).cumsum()[nan_mask]
-            
-            # Grupiši NaN sekvence
-            for group_id in nan_groups.unique():
-                group_indices = nan_groups[nan_groups == group_id].index
-                if len(group_indices) > 1:
-                    start_idx = group_indices[0]
-                    end_idx = group_indices[-1]
+            # Durchlauf des gesamten Datenrahmens                   
+            for i in range (1, len(df)):
+                
+                # Kein Messwert für den aktuellen Zeitschritt vorhanden und 
+                # Identifikationsrahmen ist geschlossen → Identifikationsrahmen wird 
+                # geöffnet
+                if pd.isna(df.iloc[i][data_column]) and frm == 0:
+                    idx_strt = i
+                    frm = 1
                     
-                    # Proveri da li je gap dovoljno mali za interpolaciju
-                    gap_width = (end_idx - start_idx).total_seconds() / 60
+                # Messwert für den aktuellen Zeitschritt vorhanden und 
+                # Identifikationsrahmen ist offen → Identifikationsrahmen wird
+                # geschlossen und ausgewertet
+                elif not pd.isna(df.iloc[i][data_column]) and frm == 1:
+                    idx_end = i-1
                     
-                    if gap_width <= GAP_MAX:
-                        # Koristi pandas interpolaciju umesto ručnog računanja
-                        df.loc[start_idx:end_idx, data_column] = df[data_column].interpolate(
-                            method='time',
-                            limit_direction='both',
-                            limit=int(GAP_MAX)
-                        )
+                    # Länge des Identifikationsrahmens [min]
+                    frm_width = (dat.strptime(df.iloc[idx_end+1][time_column], \
+                                            UTC_fmt)-\
+                                dat.strptime(df.iloc[idx_strt-1][time_column], \
+                                            UTC_fmt)).total_seconds()/60
+                    
+                    # Der Identifikationsrahmen ist klein genug, um die Anwendung einer
+                    # linearen Interpolation zu erlauben, um die Messlücke zu füllen
+                    if frm_width <= GAP_MAX:
+                        
+                        # Absolute Änderung des Messwertes
+                        dif = float(df.iloc[idx_end+1][data_column])-\
+                            float(df.iloc[idx_strt-1][data_column])
+
+                        # Änderung des Messwertes pro Minute
+                        dif_min = dif/frm_width
+                        
+                        # Lineare Interpolation
+                        for i_frm in range (idx_strt, idx_end+1):
+                            
+
+                            gap_min = (dat.strptime(df.iloc[i_frm][time_column], UTC_fmt)-\
+                                    dat.strptime(df.iloc[idx_strt-1][time_column], UTC_fmt)).total_seconds()/60
+                            
+
+                            df.at[i_frm, data_column] = float(df.iloc[idx_strt-1][data_column])+\
+                                gap_min*dif_min                    
+
+                            i_frm += 1
+                    frm = 0
 
                     # Ende des Datensatzes ist erreicht und Identifikationsrahmen ist offen
 
