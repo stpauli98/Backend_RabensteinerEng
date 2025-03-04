@@ -5,13 +5,13 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # Copy requirements first to leverage Docker cache
-COPY my_backend/requirements.txt requirements.txt
+COPY requirements.txt requirements.txt
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
-COPY my_backend/ ./
+COPY . ./
 
 # Make port 8080 available to the world outside this container
 EXPOSE 8080
