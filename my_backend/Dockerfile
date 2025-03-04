@@ -4,19 +4,20 @@ FROM python:3.9-slim
 # Set working directory
 WORKDIR /app
 
-# Copy requirements.txt first to leverage Docker cache
-COPY my_backend/requirements.txt .
+# Copy requirements first to leverage Docker cache
+COPY my_backend/requirements.txt requirements.txt
 
-# Create and activate virtual environment in container
-RUN python -m venv venv && \
-    . venv/bin/activate && \
-    pip install --no-cache-dir -r requirements.txt
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Now copy all code from backend folder
-COPY my_backend/ .
+# Copy the application code
+COPY my_backend/ ./
 
-# Expose the port the app runs on
+# Make port 8080 available to the world outside this container
 EXPOSE 8080
 
-# Set default command to run the application
-CMD ["./venv/bin/python", "app.py"]
+# Set environment variable for Flask
+ENV PORT=8080
+
+# Run the application
+CMD ["python", "app.py"]
