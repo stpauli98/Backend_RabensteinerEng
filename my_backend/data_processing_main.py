@@ -120,7 +120,7 @@ def zweite_bearbeitung(request):
                     gleichbleibende Messwerte offen
             """
             
-                        # Konvertuj vremenske kolone u datetime format za brže procesiranje
+            # Konvertuj vremenske kolone u datetime format za brže procesiranje
             df[time_column] = pd.to_datetime(df[time_column])
             
             # Kreiraj masku za konstantne vrednosti
@@ -147,6 +147,16 @@ def zweite_bearbeitung(request):
                     # Ako je segment prevelik, postavi vrednosti na NaN
                     if segment_width >= EQ_MAX:
                         df.loc[start_idx:end_idx, data_column] = np.nan
+                        
+            # Interpolacija se ne primenjuje na konstantne segmente
+            # Samo interpoliramo ostale praznine
+            non_constant_mask = ~constant_mask
+            if non_constant_mask.any():
+                df.loc[non_constant_mask, data_column] = df.loc[non_constant_mask, data_column].interpolate(
+                    method='linear',
+                    limit=10,
+                    limit_direction='both'
+                )
 
 
         ##############################################################################
@@ -189,30 +199,37 @@ def zweite_bearbeitung(request):
             value_changes = df[data_column].diff().abs()
             time_diffs = df[time_column].diff().dt.total_seconds() / 60
             
-            # Izračunaj stopu promjene (change rate)
-            change_rates = value_changes / time_diffs
+            # Izračunaj promjene vrijednosti
+            value_changes = df[data_column].diff().abs()
             
-            # Identifikuj tačke gdje je stopa promjene prevelika
-            high_change_mask = change_rates > CHG_MAX
+            # Nađi tačke gde razlika premašuje CHG_MAX
+            extreme_points = value_changes > CHG_MAX
             
-            # Identifikuj segmente sa visokom stopom promjene
-            segment_starts = high_change_mask & ~high_change_mask.shift(1).fillna(False)
-            segment_ends = high_change_mask & ~high_change_mask.shift(-1).fillna(False)
-            
-            start_indices = segment_starts[segment_starts].index
-            end_indices = segment_ends[segment_ends].index
-            
-            # Procesiraj svaki segment
-            for start, end in zip(start_indices, end_indices):
-                if start >= end:
-                    continue
-                    
-                # Provjeri širinu segmenta
-                segment_width = (df.loc[end, time_column] - df.loc[start, time_column]).total_seconds() / 60
+            if extreme_points.any():
+                # Nađi indekse ekstrema
+                extreme_indices = extreme_points[extreme_points].index.tolist()
                 
-                if segment_width <= LG_MAX:
-                    # Postavi NaN za cijeli segment
-                    df.loc[start:end, data_column] = np.nan
+                if extreme_indices:
+                    # Grupiši susedne ekstremne tačke
+                    segments = []
+                    current_segment = [extreme_indices[0]-1]  # Počni sa tačkom pre prvog ekstrema
+                    
+                    for i in range(len(extreme_indices)):
+                        current_idx = extreme_indices[i]
+                        current_segment.append(current_idx)
+                        
+                        # Ako je ovo poslednji indeks ili sledeći indeks nije susedan
+                        if (i == len(extreme_indices)-1 or 
+                            extreme_indices[i+1] > current_idx + 1):
+                            segments.append(current_segment)
+                            if i < len(extreme_indices)-1:
+                                current_segment = [extreme_indices[i+1]-1]
+                    
+                    # Postavi NaN za sve tačke u segmentima sa ekstremima
+                    for segment in segments:
+                        start_idx = segment[0]
+                        end_idx = segment[-1]
+                        df.loc[start_idx:end_idx, data_column] = np.nan
 
         ##############################################################################
         # SCHLIESSEN VON MESSLÜCKEN ###################################################
@@ -268,6 +285,16 @@ def zweite_bearbeitung(request):
         # Prvo zamijenimo np.nan sa None da bi se moglo serijalizovati u JSON
         df = df.replace({np.nan: None})
         
+        # Konvertuj datetime kolonu u željeni format prije konverzije u dictionary
+        if pd.api.types.is_datetime64_any_dtype(df[time_column]):
+            df[time_column] = df[time_column].dt.strftime(UTC_fmt)
+        else:
+            # Ako kolona nije datetime tip, pokušaj konvertovati
+            try:
+                df[time_column] = pd.to_datetime(df[time_column]).dt.strftime(UTC_fmt)
+            except Exception:
+                pass  # Zadrži originalni format ako konverzija ne uspije
+        
         processed_data = {
             'data': df.to_dict('records'),  # Konvertuje DataFrame u listu dictionary-ja
             'message': 'Daten wurden erfolgreich verarbeitet'
@@ -279,13 +306,13 @@ def zweite_bearbeitung(request):
         return jsonify({'error': str(e)}), 400  
                   
 def prepare_save(request):
+    """Prepare CSV file for download from JSON data."""
     try:
-        
+        # Validate request
         if not request.is_json:
             return jsonify({"error": "Request must be JSON"}), 400
             
         data = request.json
-        
         if not data or 'data' not in data:
             return jsonify({"error": "No data received"}), 400
             
@@ -293,7 +320,7 @@ def prepare_save(request):
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
             
-        # Kreiraj privremeni fajl i zapiši CSV podatke
+        # Create and write to temporary file
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
         
@@ -301,76 +328,30 @@ def prepare_save(request):
             for row in save_data:
                 writer.writerow(row)
         except Exception as e:
+            os.unlink(temp_file.name)  # Clean up file if write fails
             return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
             
         temp_file.close()
         
-        # Generiši jedinstveni ID na osnovu trenutnog vremena
-        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-        temp_files[file_id] = temp_file.name
-
-        return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
-    except Exception as e:
-        return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
-
-def download_file(file_id, request):
-    try:
-        if file_id not in temp_files:
-            return jsonify({"error": "File not found"}), 404
-        file_path = temp_files[file_id]
-        if not os.path.exists(file_path):
-            return jsonify({"error": "File not found"}), 404
-
-        download_name = f"data_{file_id}.csv"
-        return send_file(
-            file_path,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype='text/csv'
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        # Pokušaj očistiti privremeni fajl
-        if file_id in temp_files:
-            try:
-                os.unlink(temp_files[file_id])
-                del temp_files[file_id]
-            except Exception as ex:
-                return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
-                  
-def prepare_save(request):
-    try:
-        data = request.json
-        if not data or 'data' not in data:
-            return jsonify({"error": "No data received"}), 400
-        save_data = data['data']
-        if not save_data:
-            return jsonify({"error": "Empty data"}), 400
-
-        # Kreiraj privremeni fajl i zapiši CSV podatke
-        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
-        writer = csv.writer(temp_file, delimiter=';')
-        for row in save_data:
-            writer.writerow(row)
-        temp_file.close()
-
-        # Generiši jedinstveni ID na osnovu trenutnog vremena
+        # Generate unique file ID
         file_id = dat.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Error preparing file: {str(e)}"}), 500
 
 def download_file(file_id, request):
-    try:
-        if file_id not in temp_files:
-            return jsonify({"error": "File not found"}), 404
-        file_path = temp_files[file_id]
-        if not os.path.exists(file_path):
-            return jsonify({"error": "File not found"}), 404
+    """Download a previously prepared CSV file."""
+    if file_id not in temp_files:
+        return jsonify({"error": "File not found"}), 404
+        
+    file_path = temp_files[file_id]
+    if not os.path.exists(file_path):
+        del temp_files[file_id]  # Clean up reference if file doesn't exist
+        return jsonify({"error": "File not found"}), 404
 
+    try:
         download_name = f"data_{file_id}.csv"
         return send_file(
             file_path,
@@ -379,12 +360,11 @@ def download_file(file_id, request):
             mimetype='text/csv'
         )
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
     finally:
-        # Pokušaj očistiti privremeni fajl
-        if file_id in temp_files:
-            try:
-                os.unlink(temp_files[file_id])
-                del temp_files[file_id]
-            except Exception as ex:
-                return jsonify({"error": "Fehler beim Vorbereiten der Datei"}), 500
+        # Clean up temporary file
+        try:
+            os.unlink(file_path)
+            del temp_files[file_id]
+        except Exception:
+            pass  # Ignore cleanup errors
