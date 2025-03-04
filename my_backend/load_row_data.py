@@ -37,6 +37,9 @@ def cleanup_old_uploads():
 
 # Lista podržanih formata datuma
 SUPPORTED_DATE_FORMATS = [
+    '%Y-%m-%dT%H:%M:%S%z',  # ISO format with timezone and seconds
+    '%Y-%m-%dT%H:%M%z',     # ISO format with timezone
+    '%Y-%m-%dT%H:%M:%S',    # ISO format without timezone
     '%Y-%m-%d %H:%M:%S',
     '%d.%m.%Y %H:%M',
     '%Y-%m-%d %H:%M',
@@ -74,7 +77,7 @@ def parse_datetime_column(df, datetime_col, custom_format=None):
         # Očisti vrijeme od nevažećih znakova, zadrži samo brojeve i separatore
         cleaned = ''
         for c in time_str:
-            if c.isdigit() or c in ':-. ':
+            if c.isdigit() or c in ':-+.T ':
                 cleaned += c
         return cleaned
 
@@ -86,25 +89,30 @@ def parse_datetime_column(df, datetime_col, custom_format=None):
         try:
             parsed_dates = pd.to_datetime(df[datetime_col], format=custom_format, errors='coerce')
             if parsed_dates.notna().any():
+                logger.info(f"Successfully parsed using custom format: {custom_format}")
                 return True, parsed_dates, None
         except Exception as e:
-            logger.error(f"Error parsing datetime with custom format: {e}")
+            logger.error(f"Error parsing datetime with custom format {custom_format}: {e}")
 
-    try:
-        parsed_dates = pd.to_datetime(df[datetime_col], errors='coerce')
-        if parsed_dates.notna().any():
-            return True, parsed_dates, None
-    except Exception as e:
-        logger.error(f"Auto parsing of datetime failed: {e}")
-
-    # Pokušaj svih podržanih formata
+    # Prvo pokušaj sa podržanim formatima
     for fmt in SUPPORTED_DATE_FORMATS:
         try:
             parsed_dates = pd.to_datetime(df[datetime_col], format=fmt, errors='coerce')
             if parsed_dates.notna().any():
+                logger.info(f"Successfully parsed dates using format: {fmt}")
                 return True, parsed_dates, None
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to parse with format {fmt}: {str(e)}")
             continue
+
+    # Ako podržani formati ne rade, probaj automatsko parsiranje
+    try:
+        parsed_dates = pd.to_datetime(df[datetime_col], errors='coerce')
+        if parsed_dates.notna().any():
+            logger.info("Successfully parsed dates using automatic detection")
+            return True, parsed_dates, None
+    except Exception as e:
+        logger.error(f"Auto parsing of datetime failed: {e}")
 
     # Ako nijedan format ne odgovara, vrati NaT za sve vrijednosti
     parsed_dates = pd.Series([pd.NaT] * len(df), index=df.index)
