@@ -399,14 +399,15 @@ def upload_chunk(request):
     # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
         response = jsonify({})
-        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Origin'] = 'https://rabensteinerengineering.onrender.com'
         response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
         return response, 200
         
     def cors_response(response, status_code):
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Headers'] = '*'
+        response.headers['Access-Control-Allow-Origin'] = 'https://rabensteinerengineering.onrender.com'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Type'
         return response, status_code
     try:
         if 'fileChunk' not in request.files:

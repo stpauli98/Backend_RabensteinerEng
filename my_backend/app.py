@@ -25,14 +25,16 @@ def index():
         'version': '1.0.0'
     })
 
-# Configure CORS with more permissive settings
+# Configure CORS with specific settings
 CORS(app, resources={
     r"/*": {
-        "origins": ["*"],  # Allow all origins
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        "allow_headers": "*",
-        "expose_headers": "*",
-        "supports_credentials": True,
+        "origins": ["https://rabensteinerengineering.onrender.com"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"],
+        "expose_headers": ["Content-Type"],
+        "supports_credentials": False,  # Set to False since we're not using credentials
+        "send_wildcard": False,  # More secure option
+        "vary_header": True,  # Add Vary header
         "max_age": 600  # 10 minutes
     }
 })
