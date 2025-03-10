@@ -30,9 +30,9 @@ CORS(app, resources={
     r"/*": {
         "origins": [
             "https://rabensteinerengineering.onrender.com",
-            "https://backend-rabensteinereng.onrender.com",
-            "http://localhost:3000",
-            "https://localhost:3000"
+            "https://backend-759399595083.europe-west1.run.app",
+            "http://localhost:5001",
+            "https://localhost:5001"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         "allow_headers": "*",
