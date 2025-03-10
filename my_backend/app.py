@@ -28,12 +28,7 @@ def index():
 # Configure CORS with more permissive settings
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "https://rabensteinerengineering.onrender.com",
-            "https://backend-759399595083.europe-west1.run.app",
-            "http://localhost:5001",
-            "https://localhost:5001"
-        ],
+        "origins": ["*"],  # Allow all origins
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         "allow_headers": "*",
         "expose_headers": "*",

@@ -396,9 +396,21 @@ def upload_chunk(request):
       - totalChunks: Ukupan broj chunkova
       + svi parametri kao za direktan upload
     """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        response = jsonify({})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = '*'
+        return response, 200
+        
+    def cors_response(response, status_code):
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = '*'
+        return response, status_code
     try:
         if 'fileChunk' not in request.files:
-            return jsonify({"error": "Chunk file not found"}), 400
+            return cors_response(jsonify({"error": "Chunk file not found"}), 400)
         
         # Validacija parametara
         try:
@@ -413,7 +425,7 @@ def upload_chunk(request):
             ELNN = request.form.get('radioValueNotNull')
         except (ValueError, TypeError) as e:
             logger.error(f"Error parsing parameters: {str(e)}")
-            return jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400
+            return cors_response(jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400)
 
         # Konvertuj radio button vrednosti
         EL0 = 1 if EL0 == "ja" else 0
@@ -427,11 +439,11 @@ def upload_chunk(request):
             total_chunks = int(request.form.get('totalChunks', 0))
             
             if 'fileChunk' not in request.files:
-                return jsonify({"error": "Chunk file not found"}), 400
+                return cors_response(jsonify({"error": "Chunk file not found"}), 400)
                 
             chunk = request.files['fileChunk']
             if not chunk:
-                return jsonify({"error": "Empty chunk received"}), 400
+                return cors_response(jsonify({"error": "Empty chunk received"}), 400)
 
             # Sačuvaj chunk
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -487,15 +499,15 @@ def upload_chunk(request):
                         except:
                             pass
                     logger.error(f"Errror processing chunks: {str(e)}")
-                    return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+                    return cors_response(jsonify({"error": f"Error processing chunks: {str(e)}"}), 400)
 
-            return jsonify({
+            return cors_response(jsonify({
                 "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
                 "uploadId": upload_id,
                 "chunkIndex": chunk_index,
                 "totalChunks": total_chunks,
                 "remainingChunks": total_chunks - len(received_chunks)
-            }), 200
+            }), 200)
 
         else:
             # Direktan upload
@@ -550,7 +562,7 @@ def upload_chunk(request):
     except Exception as e:
         error_msg = f"Error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
         logger.error(error_msg)
-        return jsonify({
+        return cors_response(jsonify({
             "error": str(e),
             "traceback": traceback.format_exc()
-        }), 400
+        }), 400)
