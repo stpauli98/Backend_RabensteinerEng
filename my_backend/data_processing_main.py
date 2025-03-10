@@ -547,63 +547,6 @@ def upload_chunk(request):
             logger.error(f"Error processing data: {str(e)}")
             return jsonify({"error": str(e)}), 400
 
-        logger.info(f"Prijem chunka {chunk_index+1}/{total_chunks} za uploadId {upload_id}")
-
-        # Sačuvaj chunk
-        chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
-        with open(chunk_filename, 'wb') as f:
-            f.write(file_data)
-
-        # Provjeri jesu li svi chunkovi primljeni
-        received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
-        if len(received_chunks) == total_chunks:
-            logger.info(f"Svi chunkovi primljeni za uploadId {upload_id}. Spajanje...")
-            chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
-            full_content = b""
-            try:
-                for chunk_file in chunks_sorted:
-                    chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
-                    with open(chunk_path, "rb") as cf:
-                        chunk_content = cf.read()
-                        full_content += chunk_content
-                    os.remove(chunk_path)
-                file_content = full_content.decode('utf-8')
-                
-                # Kreiraj novi request objekat sa svim parametrima
-                class MockRequest:
-                    def __init__(self):
-                        self.files = {}
-                        self.form = {}
-                
-                mock_request = MockRequest()
-                mock_request.form = {
-                    'eqMax': str(EQ_MAX),
-                    'chgMax': str(CHG_MAX),
-                    'lgMax': str(LG_MAX),
-                    'gapMax': str(GAP_MAX),
-                    'radioValueNull': 'ja' if EL0 == 1 else 'nein',
-                    'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
-                }
-                
-                # Kreiraj FileStorage objekat sa sadržajem
-                from werkzeug.datastructures import FileStorage
-                from io import BytesIO
-                mock_request.files['file'] = FileStorage(
-                    stream=BytesIO(full_content),
-                    filename='combined_chunks.csv',
-                    content_type='text/csv',
-                )
-                
-                return zweite_bearbeitung(mock_request)
-            except Exception as e:
-                # U slučaju greške, obriši sve chunkove
-                for chunk_file in chunks_sorted:
-                    try:
-                        os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
-                    except:
-                        pass
-                logger.error(f"Error processing chunks: {str(e)}")
-                return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
     except Exception as e:
         error_msg = f"Error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
         logger.error(error_msg)
