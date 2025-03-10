@@ -486,7 +486,7 @@ def upload_chunk(request):
                             os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
                         except:
                             pass
-                    logger.error(f"Error processing chunks: {str(e)}")
+                    logger.error(f"Errror processing chunks: {str(e)}")
                     return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
 
             return jsonify({
