@@ -199,178 +199,78 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
 
 def upload_chunk(request):
     """
-    Endpoint za prihvat pojedinačnih chunkova.
+    Endpoint za prihvat i obradu CSV podataka u delovima (chunks).
     Očekivani parametri (form data):
       - uploadId: jedinstveni ID za upload (string)
-      - chunkIndex: redni broj chanka (int, počinje od 0)
+      - chunkIndex: redni broj chunka (int, počinje od 0)
       - totalChunks: ukupan broj chunkova (int)
-      - tss, offset, mode, intrplMax: dodatni parametri za obradu
-      - fileChunk: binarni sadržaj chanka
-    Ako su svi chunkovi primljeni, oni se spajaju i obrađuju.
+      - fileChunk: Blob/File sa delom CSV podataka
+      - tss: Time step size u minutama (float)
+      - offset: Offset u minutama (float)
+      - mode: Način obrade ('mean', 'intrpl', 'nearest', 'nearest (mean)')
+      - intrplMax: Maksimalno vreme za interpolaciju u minutama (float, default 60)
     """
     try:
-        stream = request.stream
-        boundary = None
-        for key, value in request.headers.items():
-            if key.lower() == 'content-type':
-                logger.info(f"Parsing Content-Type: {value}")
-                for part in value.split(';'):
-                    logger.info(f"Checking part: {part}")
-                    if 'boundary=' in part:
-                        boundary = part.split('=')[1].strip()
-                        logger.info(f"Found boundary: {boundary}")
-                        break
-        if not boundary:
-            logger.error("No boundary found in Content-Type")
-            raise ValueError("No boundary found in Content-Type")
+        # Proveri da li imamo sve potrebne parametre
+        if 'fileChunk' not in request.files:
+            return jsonify({"error": "No file chunk found"}), 400
 
-        # Privremeno čuvamo podatke
-        temp_data = {}
-        current_key = None
-        current_value = []
-        file_data = None
-        file_name = None
-        reading_file = False
-        reading_file_content = False
-        
-        logger.info("Starting to read stream...")
-        line_count = 0
-        for line in stream:
-            line_count += 1
-            
-            # Ako čitamo sadržaj fajla
-            if reading_file_content:
-                if boundary.encode('utf-8') in line:
-                    reading_file_content = False
-                    reading_file = False
-                    current_key = None
-                    current_value = []
-                    logger.info(f"Finished reading file content at line {line_count}")
-                else:
-                    if file_data is None:
-                        file_data = line
-                    else:
-                        file_data += line
-                continue
-            
-            # Pokušaj dekodirati liniju kao tekst
-            try:
-                line_str = line.decode('utf-8', errors='ignore').strip()
-                logger.info(f"Line {line_count}: {line_str[:100]}..." if len(line_str) > 100 else f"Line {line_count}: {line_str}")
-            except:
-                continue
-
-            # Nova sekcija počinje
-            if boundary in line_str:
-                logger.info(f"Found boundary at line {line_count}")
-                if current_key and not reading_file:
-                    temp_data[current_key] = ''.join(current_value)
-                    logger.info(f"Saved value for key {current_key}: {temp_data[current_key][:100]}..." if len(temp_data[current_key]) > 100 else f"Saved value for key {current_key}: {temp_data[current_key]}")
-                current_key = None
-                current_value = []
-                reading_file = False
-                reading_file_content = False
-                continue
-
-            if 'Content-Disposition' in line_str:
-                logger.info(f"Found Content-Disposition at line {line_count}")
-                if 'name="' in line_str:
-                    current_key = line_str.split('name="')[1].split('"')[0]
-                    logger.info(f"Found field name: {current_key}")
-                    # Proveri da li je ovo fajl polje (fileChunk ili file)
-                    reading_file = ('filename="' in line_str and 
-                                  (current_key == 'fileChunk' or current_key == 'file'))
-                    if reading_file:
-                        file_name = line_str.split('filename="')[1].split('"')[0]
-                        logger.info(f"Found file field: {current_key} with filename: {file_name}")
-                continue
-
-            if line_str.startswith('Content-Type:'):
-                logger.info(f"Found Content-Type at line {line_count}: {line_str}")
-                if reading_file:
-                    # Sledeca linija je prazna, pa onda pocinje sadrzaj fajla
-                    reading_file_content = True
-                continue
-
-            # Ako je prazna linija posle Content-Type za fajl,
-            # preskocimo je i cekamo sadrzaj
-            if reading_file and not reading_file_content:
-                continue
-
-            if line_str and current_key is not None:
-                if not reading_file:
-                    if current_key == 'fileContent':
-                        # Za CSV fajl, dodaj novi red
-                        current_value.append(line_str + '\n')
-                    else:
-                        current_value.append(line_str)
-                    pass  # Removed logging
-
+        # Učitaj parametre iz form data
         try:
-            # Prvo proveri da li je ovo direktan upload ili chunk
-            if 'uploadId' in temp_data:
-                # Chunk upload
-                upload_id = temp_data.get('uploadId')
-                chunk_index = int(temp_data.get('chunkIndex', 0))
-                total_chunks = int(temp_data.get('totalChunks', 0))
-                tss = float(temp_data.get('tss', 0))
-                offset = float(temp_data.get('offset', 0))
-                mode_input = temp_data.get('mode', '')
-                intrpl_max = float(temp_data.get('intrplMax', 60))
-                
-                if not upload_id or (not file_data and not temp_data.get('fileChunk')):
-                    logger.error(f"Missing required chunk data: uploadId={bool(upload_id)}, fileData={bool(file_data)}")
-                    return jsonify({"error": "uploadId i fileChunk su obavezni"}), 400
-
-                # Ako imamo fileChunk kao string, tretiraj ga kao file_data
-                if not file_data and temp_data.get('fileChunk'):
-                    file_data = temp_data['fileChunk'].encode('utf-8')
-            else:
-                # Direktan upload
-                tss = float(temp_data.get('tss', 0))
-                offset = int(float(temp_data.get('offset', 0)))  # Konvertuj u int
-                logger.info(f"Parsed offset value: {offset}")
-                mode_input = temp_data.get('mode', '')
-                intrpl_max = float(temp_data.get('intrplMax', 60))
-                file_content = temp_data.get('fileContent')
-
-                if file_content:
-                    # Ako imamo direktan file content, prosledi ga na obradu
-                    logger.info("Processing direct file content")
-                    # Ukloni poslednji newline ako postoji
-                    if file_content.endswith('\n'):
-                        file_content = file_content[:-1]
-                    return process_csv(file_content, tss, offset, mode_input, intrpl_max)
-                else:
-                    logger.error("No file content found")
-                    return jsonify({"error": "Keine Datei gefunden"}), 400
-            
+            upload_id = request.form.get('uploadId')
+            chunk_index = int(request.form.get('chunkIndex', 0))
+            total_chunks = int(request.form.get('totalChunks', 0))
+            tss = float(request.form.get('tss', 0))
+            offset = float(request.form.get('offset', 0))
+            mode = request.form.get('mode', '')
+            intrpl_max = float(request.form.get('intrplMax', 60))
         except (ValueError, TypeError) as e:
-            logger.error(f"Error parsing form values: {str(e)}")
-            return jsonify({"error": "Invalid form values"}), 400
+            logger.error(f"Error parsing parameters: {e}")
+            return jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400
 
-        logger.info(f"Prijem chunka {chunk_index+1}/{total_chunks} za uploadId {upload_id}")
+        # Validacija parametara
+        if not all([upload_id, mode, tss > 0]):
+            return jsonify({"error": "Missing required parameters"}), 400
+
+        # Uzmi chunk fajl
+        chunk = request.files['fileChunk']
+        if not chunk:
+            return jsonify({"error": "Empty chunk received"}), 400
+
+        # Kreiraj folder ako ne postoji
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
         # Sačuvaj chunk
         chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
-        with open(chunk_filename, 'wb') as f:
-            f.write(file_data)
+        chunk.save(chunk_filename)
 
-        # Provjeri jesu li svi chunkovi primljeni
-        received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
+        logger.info(f"Saved chunk {chunk_index + 1}/{total_chunks} for upload {upload_id}")
+
+        # Proveri da li su svi chunkovi primljeni
+        received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) 
+                         if f.startswith(upload_id + "_")]
+
         if len(received_chunks) == total_chunks:
-            logger.info(f"Svi chunkovi primljeni za uploadId {upload_id}. Spajanje...")
-            chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
-            full_content = b""
+            logger.info(f"All chunks received for upload {upload_id}, processing...")
+            
             try:
+                # Sortiraj chunkove po indeksu
+                chunks_sorted = sorted(received_chunks, 
+                                     key=lambda x: int(x.split("_")[1].split(".")[0]))
+                
+                # Spoji sve chunkove
+                full_content = ""
                 for chunk_file in chunks_sorted:
                     chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
-                    with open(chunk_path, "rb") as cf:
-                        chunk_content = cf.read()
+                    with open(chunk_path, 'rb') as f:
+                        chunk_content = f.read().decode('utf-8')
                         full_content += chunk_content
+                    # Obriši chunk fajl nakon čitanja
                     os.remove(chunk_path)
-                file_content = full_content.decode('utf-8')
-                return process_csv(file_content, tss, offset, mode_input, intrpl_max)
+
+                # Obradi spojeni sadržaj
+                return process_csv(full_content, tss, offset, mode, intrpl_max)
+                
             except Exception as e:
                 # U slučaju greške, obriši sve chunkove
                 for chunk_file in chunks_sorted:
@@ -379,14 +279,15 @@ def upload_chunk(request):
                     except:
                         pass
                 raise
-        else:
-            return jsonify({
-                "message": f"Chunk {chunk_index+1}/{total_chunks} primljen",
-                "uploadId": upload_id,
-                "chunkIndex": chunk_index,
-                "totalChunks": total_chunks,
-                "remainingChunks": total_chunks - len(received_chunks)
-            }), 200
+
+        # Vrati status o primljenom chunk-u
+        return jsonify({
+            "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
+            "uploadId": upload_id,
+            "chunkIndex": chunk_index,
+            "totalChunks": total_chunks,
+            "remainingChunks": total_chunks - len(received_chunks)
+        }), 200
 
     except Exception as e:
         error_msg = f"Unexpected error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
