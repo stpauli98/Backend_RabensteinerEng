@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firstProcessing
@@ -76,9 +77,13 @@ def health_check():
 
 #DataProcessingMain
 
-@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/zweite-bearbeitung', methods=['POST'])
-def data_processing_main_zweite_bearbeitung_endpoint():
-    return data_processing_main.zweite_bearbeitung(request)
+#@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/zweite-bearbeitung', methods=['POST'])
+#def data_processing_main_zweite_bearbeitung_endpoint():
+ #   return data_processing_main.zweite_bearbeitung(request)
+
+@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/upload-chunk', methods=['POST'])
+def data_processing_main_upload_chunk_endpoint():
+    return data_processing_main.upload_chunk(request)
 
 @app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/prepare-save', methods=['POST'])
 def data_processing_main_prepare_save_endpoint():

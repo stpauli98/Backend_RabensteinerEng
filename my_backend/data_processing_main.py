@@ -2,11 +2,19 @@ import pandas as pd
 from datetime import datetime as dat
 from io import StringIO
 import numpy as np
-from flask import jsonify, send_file
+from flask import jsonify, send_file, request
 import tempfile
 import csv
 import os
 import traceback
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Directory for temporary chunk storage
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Dictionary to store temporary files
 temp_files = {}
@@ -368,3 +376,238 @@ def download_file(file_id, request):
             del temp_files[file_id]
         except Exception:
             pass  # Ignore cleanup errors
+
+def upload_chunk(request):
+    """
+    Endpoint za prihvat i obradu fajla. Podržava i direktan upload i upload u delovima (chunks).
+    Očekivani parametri za direktan upload (form data):
+      - file: CSV fajl za obradu
+      - eqMax: maksimalna vrijednost za jednake vrijednosti (float)
+      - chgMax: maksimalna vrijednost za promjene (float)
+      - lgMax: maksimalna vrijednost za logaritamske promjene (float)
+      - gapMax: maksimalna vrijednost za praznine (float)
+      - radioValueNull: eliminacija nul vrijednosti (ja/nein)
+      - radioValueNotNull: eliminacija ne-numeričkih vrijednosti (ja/nein)
+    
+    Očekivani parametri za chunk upload:
+      - fileChunk: Deo fajla
+      - uploadId: Jedinstveni ID za ovaj upload
+      - chunkIndex: Redni broj chunka (počinje od 0)
+      - totalChunks: Ukupan broj chunkova
+      + svi parametri kao za direktan upload
+    """
+    try:
+        if 'fileChunk' not in request.files:
+            return jsonify({"error": "Chunk file not found"}), 400
+        
+        # Validacija parametara
+        try:
+            upload_id = request.form.get('uploadId')
+            chunk_index = int(request.form.get('chunkIndex', 0))
+            total_chunks = int(request.form.get('totalChunks', 0))
+            EQ_MAX = float(request.form.get('eqMax', '0'))
+            CHG_MAX = float(request.form.get('chgMax', '0'))
+            LG_MAX = float(request.form.get('lgMax', '0'))
+            GAP_MAX = float(request.form.get('gapMax', '0'))
+            EL0 = request.form.get('radioValueNull')
+            ELNN = request.form.get('radioValueNotNull')
+        except (ValueError, TypeError) as e:
+            logger.error(f"Error parsing parameters: {str(e)}")
+            return jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400
+
+        # Konvertuj radio button vrednosti
+        EL0 = 1 if EL0 == "ja" else 0
+        ELNN = 1 if ELNN == "ja" else 0
+
+        # Proveri da li je chunk upload
+        upload_id = request.form.get('uploadId')
+        if upload_id:
+            # Chunk upload
+            chunk_index = int(request.form.get('chunkIndex', 0))
+            total_chunks = int(request.form.get('totalChunks', 0))
+            
+            if 'fileChunk' not in request.files:
+                return jsonify({"error": "Chunk file not found"}), 400
+                
+            chunk = request.files['fileChunk']
+            if not chunk:
+                return jsonify({"error": "Empty chunk received"}), 400
+
+            # Sačuvaj chunk
+            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+            chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
+            chunk.save(chunk_filename)
+
+            # Proveri da li su svi chunkovi primljeni
+            received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
+            
+            if len(received_chunks) == total_chunks:
+                # Spoji sve chunkove
+                chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
+                full_content = ""
+                
+                try:
+                    for chunk_file in chunks_sorted:
+                        chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
+                        with open(chunk_path, 'rb') as f:
+                            full_content += f.read().decode('utf-8')
+                        os.remove(chunk_path)
+                        
+                    # Kreiraj mock request za obradu
+                    class MockRequest:
+                        def __init__(self):
+                            self.files = {}
+                            self.form = {}
+
+                    mock_request = MockRequest()
+                    mock_request.form = {
+                        'eqMax': str(EQ_MAX),
+                        'chgMax': str(CHG_MAX),
+                        'lgMax': str(LG_MAX),
+                        'gapMax': str(GAP_MAX),
+                        'radioValueNull': 'ja' if EL0 == 1 else 'nein',
+                        'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
+                    }
+
+                    from werkzeug.datastructures import FileStorage
+                    from io import BytesIO
+                    mock_request.files['file'] = FileStorage(
+                        stream=BytesIO(full_content.encode('utf-8')),
+                        filename='combined_chunks.csv',
+                        content_type='text/csv',
+                    )
+
+                    return zweite_bearbeitung(mock_request)
+                    
+                except Exception as e:
+                    # U slučaju greške, obriši sve chunkove
+                    for chunk_file in chunks_sorted:
+                        try:
+                            os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
+                        except:
+                            pass
+                    logger.error(f"Error processing chunks: {str(e)}")
+                    return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+
+            return jsonify({
+                "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
+                "uploadId": upload_id,
+                "chunkIndex": chunk_index,
+                "totalChunks": total_chunks,
+                "remainingChunks": total_chunks - len(received_chunks)
+            }), 200
+
+        else:
+            # Direktan upload
+            if 'file' not in request.files:
+                return jsonify({"error": "Keine Datei gefunden"}), 400
+
+            file = request.files['file']
+            if not file:
+                return jsonify({"error": "Keine Datei gefunden"}), 400
+
+            # Pročitaj sadržaj fajla
+            file_content = file.stream.read().decode('utf-8')
+
+        # Kreiraj mock request za zweite_bearbeitung
+        class MockRequest:
+            def __init__(self):
+                self.files = {}
+                self.form = {}
+
+        mock_request = MockRequest()
+        mock_request.form = {
+            'eqMax': str(eq_max),
+            'chgMax': str(chg_max),
+            'lgMax': str(lg_max),
+            'gapMax': str(gap_max),
+            'radioValueNull': 'ja' if el0 else 'nein',
+            'radioValueNotNull': 'ja' if elnn else 'nein'
+        }
+
+        # Kreiraj FileStorage objekat sa sadržajem
+        from werkzeug.datastructures import FileStorage
+        from io import BytesIO
+        mock_request.files['file'] = FileStorage(
+            stream=BytesIO(file_content.encode('utf-8')),
+            filename='uploaded_file.csv',
+            content_type='text/csv',
+        )
+
+        try:
+            response_data = zweite_bearbeitung(mock_request)
+            # Konvertuj response u format koji frontend očekuje
+            if isinstance(response_data, tuple):
+                response, status_code = response_data
+                if status_code == 200:
+                    return jsonify({"data": response}), 200
+                return response_data
+            return jsonify({"data": response_data}), 200
+        except Exception as e:
+            logger.error(f"Error processing data: {str(e)}")
+            return jsonify({"error": str(e)}), 400
+
+        logger.info(f"Prijem chunka {chunk_index+1}/{total_chunks} za uploadId {upload_id}")
+
+        # Sačuvaj chunk
+        chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
+        with open(chunk_filename, 'wb') as f:
+            f.write(file_data)
+
+        # Provjeri jesu li svi chunkovi primljeni
+        received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
+        if len(received_chunks) == total_chunks:
+            logger.info(f"Svi chunkovi primljeni za uploadId {upload_id}. Spajanje...")
+            chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
+            full_content = b""
+            try:
+                for chunk_file in chunks_sorted:
+                    chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
+                    with open(chunk_path, "rb") as cf:
+                        chunk_content = cf.read()
+                        full_content += chunk_content
+                    os.remove(chunk_path)
+                file_content = full_content.decode('utf-8')
+                
+                # Kreiraj novi request objekat sa svim parametrima
+                class MockRequest:
+                    def __init__(self):
+                        self.files = {}
+                        self.form = {}
+                
+                mock_request = MockRequest()
+                mock_request.form = {
+                    'eqMax': str(EQ_MAX),
+                    'chgMax': str(CHG_MAX),
+                    'lgMax': str(LG_MAX),
+                    'gapMax': str(GAP_MAX),
+                    'radioValueNull': 'ja' if EL0 == 1 else 'nein',
+                    'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
+                }
+                
+                # Kreiraj FileStorage objekat sa sadržajem
+                from werkzeug.datastructures import FileStorage
+                from io import BytesIO
+                mock_request.files['file'] = FileStorage(
+                    stream=BytesIO(full_content),
+                    filename='combined_chunks.csv',
+                    content_type='text/csv',
+                )
+                
+                return zweite_bearbeitung(mock_request)
+            except Exception as e:
+                # U slučaju greške, obriši sve chunkove
+                for chunk_file in chunks_sorted:
+                    try:
+                        os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
+                    except:
+                        pass
+                logger.error(f"Error processing chunks: {str(e)}")
+                return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+    except Exception as e:
+        error_msg = f"Error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
+        logger.error(error_msg)
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 400
