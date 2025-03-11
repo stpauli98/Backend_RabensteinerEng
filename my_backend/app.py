@@ -16,13 +16,24 @@ API_PREFIX_CLOUD = '/api/cloud'
 
 app = Flask(__name__)
 
-# Dozvoli CORS za frontend domen iz Google Cloud Run env varijable
+# Definiši CORS iz ENV varijable
 ALLOWED_ORIGIN = os.getenv("ACCESS_CONTROL_ALLOW_ORIGIN", "https://rabensteinerengineering.onrender.com")
 
+# Globalni CORS
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGIN}}, supports_credentials=True)
 
 @app.after_request
 def apply_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
+# Eksplicitno podrži OPTIONS zahteve
+@app.route("/api/dataProcessingMain/upload-chunk", methods=["OPTIONS"])
+def options_handler():
+    response = jsonify({"message": "CORS preflight OK"})
     response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
