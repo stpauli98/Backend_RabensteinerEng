@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firstProcessing
 import load_row_data
@@ -8,6 +8,7 @@ import adjustmentsOfData
 import cloud
 
 app = Flask(__name__)
+CORS(app)
 
 # API configuration
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
@@ -24,22 +25,22 @@ def index():
         'version': '1.0.0'
     })
 
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', 'https://rabensteinerengineering.onrender.com')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Expose-Headers', 'Content-Type')
-    return response
-
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', 'https://rabensteinerengineering.onrender.com')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-        return response
+# Configure CORS with more permissive settings
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://rabensteinerengineering.onrender.com",
+            "https://backend-759399595083.europe-west1.run.app",
+            "http://localhost:5001",
+            "https://localhost:5001"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        "allow_headers": "*",
+        "expose_headers": "*",
+        "supports_credentials": True,
+        "max_age": 600  # 10 minutes
+    }
+})
 
 #LoadRowData
 
@@ -75,10 +76,6 @@ def health_check():
     return jsonify({"status": "healthy"}), 200
 
 #DataProcessingMain
-
-#@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/zweite-bearbeitung', methods=['POST'])
-#def data_processing_main_zweite_bearbeitung_endpoint():
- #   return data_processing_main.zweite_bearbeitung(request)
 
 @app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/upload-chunk', methods=['POST'])
 def data_processing_main_upload_chunk_endpoint():
