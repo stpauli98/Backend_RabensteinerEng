@@ -31,8 +31,8 @@ CORS(app, resources={
         "origins": [
             "https://rabensteinerengineering.onrender.com",
             "https://backend-759399595083.europe-west1.run.app",
-            "http://localhost:5001",
-            "https://localhost:5001"
+            "http://localhost:3000",
+            "https://localhost:3000"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         "allow_headers": "*",
@@ -44,9 +44,9 @@ CORS(app, resources={
 
 #LoadRowData
 
-@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload', methods=['POST'])
-def load_row_data_upload_endpoint():
-    return load_row_data.upload_files()
+@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload-chunk', methods=['POST'])
+def load_row_data_upload_chunk_endpoint():
+    return load_row_data.upload_chunk(request)
 
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/prepare-save', methods=['POST'])
 def load_row_data_prepare_save_endpoint():
