@@ -7,9 +7,6 @@ import data_processing_main
 import adjustmentsOfData
 import cloud
 
-app = Flask(__name__)
-CORS(app)
-
 # API configuration
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
@@ -17,30 +14,24 @@ API_PREFIX_DATA_PROCESSING_MAIN = '/api/dataProcessingMain'
 API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfDataMain'
 API_PREFIX_CLOUD = '/api/cloud'
 
+app = Flask(__name__)
+
+# Dozvoli CORS za frontend domen iz Google Cloud Run env varijable
+ALLOWED_ORIGIN = os.getenv("ACCESS_CONTROL_ALLOW_ORIGIN", "https://rabensteinerengineering.onrender.com")
+
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGIN}}, supports_credentials=True)
+
+@app.after_request
+def apply_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
 @app.route('/')
 def index():
-    return jsonify({
-        'status': 'online',
-        'message': 'Backend service is running',
-        'version': '1.0.0'
-    })
-
-# Configure CORS with more permissive settings
-CORS(app, resources={
-    r"/*": {
-        "origins": [
-            "https://rabensteinerengineering.onrender.com",
-            "https://backend-759399595083.europe-west1.run.app",
-            "http://localhost:5001",
-            "https://localhost:5001"
-        ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        "allow_headers": "*",
-        "expose_headers": "*",
-        "supports_credentials": True,
-        "max_age": 600  # 10 minutes
-    }
-})
+    return jsonify({"message": "Backend service is running", "CORS": ALLOWED_ORIGIN})
 
 #LoadRowData
 
