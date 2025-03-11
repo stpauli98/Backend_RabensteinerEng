@@ -306,14 +306,40 @@ def zweite_bearbeitung(request):
         if pd.api.types.is_datetime64_any_dtype(df[time_column]):
             df[time_column] = df[time_column].dt.strftime(UTC_fmt)
         else:
-            # Ako kolona nije datetime tip, pokušaj konvertovati
             try:
                 df[time_column] = pd.to_datetime(df[time_column]).dt.strftime(UTC_fmt)
             except Exception:
-                pass  # Zadrži originalni format ako konverzija ne uspije
+                pass
+        
+        # Implementacija paginacije
+        page = request.args.get('page', default=1, type=int)
+        per_page = request.args.get('per_page', default=1000, type=int)  # Default 1000 redova po strani
+        
+        # Ograniči maksimalan broj redova po strani
+        per_page = min(per_page, 5000)  # Maksimalno 5000 redova po strani
+        
+        # Izračunaj ukupan broj stranica
+        total_rows = len(df)
+        total_pages = (total_rows + per_page - 1) // per_page
+        
+        # Osiguraj da je zatražena stranica validna
+        page = max(1, min(page, total_pages))
+        
+        # Izračunaj indekse za trenutnu stranicu
+        start_idx = (page - 1) * per_page
+        end_idx = min(start_idx + per_page, total_rows)
+        
+        # Uzmi samo podatke za trenutnu stranicu
+        page_data = df.iloc[start_idx:end_idx]
         
         processed_data = {
-            'data': df.to_dict('records'),  # Konvertuje DataFrame u listu dictionary-ja
+            'data': page_data.to_dict('records'),
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_pages': total_pages,
+                'total_rows': total_rows
+            },
             'message': 'Daten wurden erfolgreich verarbeitet'
         }
         
