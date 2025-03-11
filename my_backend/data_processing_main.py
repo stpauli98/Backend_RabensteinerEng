@@ -478,8 +478,22 @@ def upload_chunk(request):
                         content_type='text/csv',
                     )
 
-                    return zweite_bearbeitung(mock_request)
-                    
+                    try:
+                        response = zweite_bearbeitung(mock_request)
+                        if isinstance(response, tuple):
+                            response_data, status_code = response
+                            return jsonify(response_data), status_code
+                        return response
+                    except Exception as e:
+                        # U slučaju greške, obriši sve chunkove
+                        for chunk_file in chunks_sorted:
+                            try:
+                                os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
+                            except:
+                                pass
+                        logger.error(f"Error processing chunks: {str(e)}")
+                        return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+
                 except Exception as e:
                     # U slučaju greške, obriši sve chunkove
                     for chunk_file in chunks_sorted:
@@ -487,7 +501,7 @@ def upload_chunk(request):
                             os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
                         except:
                             pass
-                    logger.error(f"Errror processing chunks: {str(e)}")
+                    logger.error(f"Error processing chunks: {str(e)}")
                     return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
 
             return jsonify({
