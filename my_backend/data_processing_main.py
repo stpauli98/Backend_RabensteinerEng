@@ -23,10 +23,10 @@ UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
 def zweite_bearbeitung(request):
     try:
-
         # Check if file is in request.files
         if 'file' not in request.files:
-            return jsonify({"error": "No file uploaded"}), 400
+            response = jsonify({"error": "No file uploaded"})
+            return response, 400
 
         file = request.files['file']
 
@@ -34,7 +34,8 @@ def zweite_bearbeitung(request):
         file_content = file.stream.read().decode('utf-8')   
 
         if not file_content.strip():
-            return jsonify({"error": "Empty file content"}), 400
+            response = jsonify({"error": "Empty file content"})
+            return response, 400
 
         # Get parameters from form data
         try:
@@ -45,7 +46,8 @@ def zweite_bearbeitung(request):
             EL0 = request.form.get('radioValueNull')
             ELNN = request.form.get('radioValueNotNull')
         except (TypeError, ValueError) as e:
-            return jsonify({"error": f"Invalid parameter value: {str(e)}"}), 400
+            response = jsonify({"error": f"Invalid parameter value: {str(e)}"})
+            return response, 400
 
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
@@ -59,7 +61,8 @@ def zweite_bearbeitung(request):
             LG_MAX = float(request.form.get('lgMax'))
             GAP_MAX = float(request.form.get('gapMax'))
         except (TypeError, ValueError) as e:
-            return jsonify({"error": f"Invalid numeric value in parameters: {str(e)}"}), 400
+            response = jsonify({"error": f"Invalid numeric value in parameters: {str(e)}"})
+            return response, 400
 
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
@@ -76,7 +79,8 @@ def zweite_bearbeitung(request):
         first_line = content_lines[0].strip()
         
         if not first_line:
-            return jsonify({"error": "Empty first line"}), 400
+            response = jsonify({"error": "Empty first line"})
+            return response, 400
             
         # Try to detect delimiter
         if ';' in first_line:
@@ -84,7 +88,8 @@ def zweite_bearbeitung(request):
         elif ',' in first_line:
             delimiter = ','
         else:
-            return jsonify({"error": "No valid delimiter (comma or semicolon) found in data"}), 400
+            response = jsonify({"error": "No valid delimiter (comma or semicolon) found in data"})
+            return response, 400
         
         try:
             # Try to read the CSV data
@@ -92,10 +97,12 @@ def zweite_bearbeitung(request):
             
             # Basic validation
             if df.empty:
-                return jsonify({"error": "No data found in file"}), 400
+                response = jsonify({"error": "No data found in file"})
+                return response, 400
             
             if len(df.columns) < 2:
-                return jsonify({"error": f"Data must have at least 2 columns, but found only {len(df.columns)}"}), 400
+                response = jsonify({"error": f"Data must have at least 2 columns, but found only {len(df.columns)}"})
+                return response, 400
                 
             # Get column names
             time_column = df.columns[0]
@@ -106,10 +113,12 @@ def zweite_bearbeitung(request):
             
             # Check if conversion was successful
             if df[data_column].isna().all():
-                return jsonify({"error": "Could not convert any values to numeric format"}), 400
+                response = jsonify({"error": "Could not convert any values to numeric format"})
+                return response, 400
           
         except Exception as e:
-            return jsonify({"error": f"Error processing data: {str(e)}"}), 400
+            response = jsonify({"error": f"Error processing data: {str(e)}"})
+            return response, 400
 
        
 
@@ -308,25 +317,30 @@ def zweite_bearbeitung(request):
             'message': 'Daten wurden erfolgreich verarbeitet'
         }
         
-        return jsonify(processed_data)
+        response = jsonify(processed_data)
+        return response
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 400  
+        response = jsonify({'error': str(e)})
+        return response, 400  
                   
 def prepare_save(request):
     """Prepare CSV file for download from JSON data."""
     try:
         # Validate request
         if not request.is_json:
-            return jsonify({"error": "Request must be JSON"}), 400
+            response = jsonify({"error": "Request must be JSON"})
+            return response, 400
             
         data = request.json
         if not data or 'data' not in data:
-            return jsonify({"error": "No data received"}), 400
+            response = jsonify({"error": "No data received"})
+            return response, 400
             
         save_data = data['data']
         if not save_data:
-            return jsonify({"error": "Empty data"}), 400
+            response = jsonify({"error": "Empty data"})
+            return response, 400
             
         # Create and write to temporary file
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
@@ -337,7 +351,8 @@ def prepare_save(request):
                 writer.writerow(row)
         except Exception as e:
             os.unlink(temp_file.name)  # Clean up file if write fails
-            return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
+            response = jsonify({"error": f"Error writing to CSV: {str(e)}"})
+            return response, 500
             
         temp_file.close()
         
@@ -345,19 +360,23 @@ def prepare_save(request):
         file_id = dat.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
 
-        return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
+        response = jsonify({"message": "File prepared for download", "fileId": file_id})
+        return response, 200
     except Exception as e:
-        return jsonify({"error": f"Error preparing file: {str(e)}"}), 500
+        response = jsonify({"error": f"Error preparing file: {str(e)}"})
+        return response, 500
 
 def download_file(file_id, request):
     """Download a previously prepared CSV file."""
     if file_id not in temp_files:
-        return jsonify({"error": "File not found"}), 404
+        response = jsonify({"error": "File not found"})
+        return response, 404
         
     file_path = temp_files[file_id]
     if not os.path.exists(file_path):
         del temp_files[file_id]  # Clean up reference if file doesn't exist
-        return jsonify({"error": "File not found"}), 404
+        response = jsonify({"error": "File not found"})
+        return response, 404
 
     try:
         download_name = f"data_{file_id}.csv"
@@ -368,7 +387,8 @@ def download_file(file_id, request):
             mimetype='text/csv'
         )
     except Exception as e:
-        return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
+        response = jsonify({"error": f"Error downloading file: {str(e)}"})
+        return response, 500
     finally:
         # Clean up temporary file
         try:
@@ -398,41 +418,35 @@ def upload_chunk(request):
     """
 
     try:
-        if 'fileChunk' not in request.files:
-            return jsonify({"error": "Chunk file not found"}), 400
-        
         # Validacija parametara
-        try:
-            upload_id = request.form.get('uploadId')
-            chunk_index = int(request.form.get('chunkIndex', 0))
-            total_chunks = int(request.form.get('totalChunks', 0))
-            EQ_MAX = float(request.form.get('eqMax', '0'))
-            CHG_MAX = float(request.form.get('chgMax', '0'))
-            LG_MAX = float(request.form.get('lgMax', '0'))
-            GAP_MAX = float(request.form.get('gapMax', '0'))
-            EL0 = request.form.get('radioValueNull')
-            ELNN = request.form.get('radioValueNotNull')
-        except (ValueError, TypeError) as e:
-            logger.error(f"Error parsing parameters: {str(e)}")
-            return jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400
+        upload_id = request.form.get('uploadId')
+        chunk_index = int(request.form.get('chunkIndex', 0))
+        total_chunks = int(request.form.get('totalChunks', 0))
+        EQ_MAX = float(request.form.get('eqMax', '0'))
+        CHG_MAX = float(request.form.get('chgMax', '0'))
+        LG_MAX = float(request.form.get('lgMax', '0'))
+        GAP_MAX = float(request.form.get('gapMax', '0'))
+        EL0 = request.form.get('radioValueNull')
+        ELNN = request.form.get('radioValueNotNull')
 
         # Konvertuj radio button vrednosti
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
 
         # Proveri da li je chunk upload
-        upload_id = request.form.get('uploadId')
         if upload_id:
             # Chunk upload
             chunk_index = int(request.form.get('chunkIndex', 0))
             total_chunks = int(request.form.get('totalChunks', 0))
             
             if 'fileChunk' not in request.files:
-                return jsonify({"error": "Chunk file not found"}), 400
+                response = jsonify({"error": "Chunk file not found"})
+                return response, 400
                 
             chunk = request.files['fileChunk']
             if not chunk:
-                return jsonify({"error": "Empty chunk received"}), 400
+                response = jsonify({"error": "Empty chunk received"})
+                return response, 400
 
             # Sačuvaj chunk
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -504,68 +518,90 @@ def upload_chunk(request):
                     logger.error(f"Error processing chunks: {str(e)}")
                     return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
 
-            return jsonify({
+            # Ako nisu svi chunkovi primljeni, vrati status
+            response = jsonify({
                 "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
                 "uploadId": upload_id,
                 "chunkIndex": chunk_index,
                 "totalChunks": total_chunks,
                 "remainingChunks": total_chunks - len(received_chunks)
-            }), 200
+            })
+            return response, 200
 
         else:
             # Direktan upload
-            if 'file' not in request.files:
-                return jsonify({"error": "Keine Datei gefunden"}), 400
+            try:
+                if 'file' not in request.files:
+                    response = jsonify({"error": "Keine Datei gefunden"})
+                    return response, 400
 
-            file = request.files['file']
-            if not file:
-                return jsonify({"error": "Keine Datei gefunden"}), 400
+                file = request.files['file']
+                if not file:
+                    response = jsonify({"error": "Keine Datei gefunden"})
+                    return response, 400
 
-            # Pročitaj sadržaj fajla
-            file_content = file.stream.read().decode('utf-8')
+                # Pročitaj sadržaj fajla
+                file_content = file.stream.read().decode('utf-8')
 
-        # Kreiraj mock request za zweite_bearbeitung
-        class MockRequest:
-            def __init__(self):
-                self.files = {}
-                self.form = {}
+                # Kreiraj mock request za zweite_bearbeitung
+                class MockRequest:
+                    def __init__(self):
+                        self.files = {}
+                        self.form = {}
 
-        mock_request = MockRequest()
-        mock_request.form = {
-            'eqMax': str(eq_max),
-            'chgMax': str(chg_max),
-            'lgMax': str(lg_max),
-            'gapMax': str(gap_max),
-            'radioValueNull': 'ja' if el0 else 'nein',
-            'radioValueNotNull': 'ja' if elnn else 'nein'
-        }
+                mock_request = MockRequest()
+                mock_request.form = {
+                    'eqMax': str(EQ_MAX),
+                    'chgMax': str(CHG_MAX),
+                    'lgMax': str(LG_MAX),
+                    'gapMax': str(GAP_MAX),
+                    'radioValueNull': 'ja' if EL0 else 'nein',
+                    'radioValueNotNull': 'ja' if ELNN else 'nein'
+                }
 
-        # Kreiraj FileStorage objekat sa sadržajem
-        from werkzeug.datastructures import FileStorage
-        from io import BytesIO
-        mock_request.files['file'] = FileStorage(
-            stream=BytesIO(file_content.encode('utf-8')),
-            filename='uploaded_file.csv',
-            content_type='text/csv',
-        )
+                # Kreiraj FileStorage objekat sa sadržajem
+                from werkzeug.datastructures import FileStorage
+                from io import BytesIO
+                mock_request.files['file'] = FileStorage(
+                    stream=BytesIO(file_content.encode('utf-8')),
+                    filename='uploaded_file.csv',
+                    content_type='text/csv',
+                )
 
-        try:
-            response_data = zweite_bearbeitung(mock_request)
-            # Konvertuj response u format koji frontend očekuje
-            if isinstance(response_data, tuple):
-                response, status_code = response_data
-                if status_code == 200:
-                    return jsonify({"data": response}), 200
-                return response_data
-            return jsonify({"data": response_data}), 200
-        except Exception as e:
-            logger.error(f"Error processing data: {str(e)}")
-            return jsonify({"error": str(e)}), 400
+                try:
+                    response_data = zweite_bearbeitung(mock_request)
+                    # Konvertuj response u format koji frontend očekuje
+                    if isinstance(response_data, tuple):
+                        response, status_code = response_data
+                        if status_code == 200:
+                            response = jsonify({"data": response})
+                            return response, 200
+                        return response, status_code
+                    response = jsonify({"data": response_data})
+                    return response, 200
+                except Exception as e:
+                    error_msg = f"Error in direct upload: {str(e)}\nTraceback: {traceback.format_exc()}"
+                    logger.error(error_msg)
+                    response = jsonify({
+                        "error": str(e),
+                        "traceback": traceback.format_exc()
+                    })
+                    return response, 400
+
+            except Exception as e:
+                error_msg = f"Error in direct upload: {str(e)}\nTraceback: {traceback.format_exc()}"
+                logger.error(error_msg)
+                response = jsonify({
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
+                })
+                return response, 400
 
     except Exception as e:
         error_msg = f"Error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
         logger.error(error_msg)
-        return cors_response(jsonify({
+        response = jsonify({
             "error": str(e),
             "traceback": traceback.format_exc()
-        }), 400)
+        })
+        return response, 400
