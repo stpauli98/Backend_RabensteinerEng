@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import firstProcessing
 import load_row_data
@@ -8,7 +8,6 @@ import adjustmentsOfData
 import cloud
 
 app = Flask(__name__)
-CORS(app)
 
 # API configuration
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
@@ -25,19 +24,22 @@ def index():
         'version': '1.0.0'
     })
 
-# Configure CORS with specific settings
-CORS(app, resources={
-    r"/*": {
-        "origins": ["https://rabensteinerengineering.onrender.com"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "Accept"],
-        "expose_headers": ["Content-Type"],
-        "supports_credentials": False,  # Set to False since we're not using credentials
-        "send_wildcard": False,  # More secure option
-        "vary_header": True,  # Add Vary header
-        "max_age": 600  # 10 minutes
-    }
-})
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', 'https://rabensteinerengineering.onrender.com')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Expose-Headers', 'Content-Type')
+    return response
+
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers.add('Access-Control-Allow-Origin', 'https://rabensteinerengineering.onrender.com')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
 
 #LoadRowData
 
