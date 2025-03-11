@@ -311,40 +311,56 @@ def zweite_bearbeitung(request):
             except Exception:
                 pass
         
-        # Implementacija paginacije
-        page = request.args.get('page', default=1, type=int)
-        per_page = request.args.get('per_page', default=1000, type=int)  # Default 1000 redova po strani
+        from flask import Response, stream_with_context
+        import json
         
-        # Ograniči maksimalan broj redova po strani
-        per_page = min(per_page, 5000)  # Maksimalno 5000 redova po strani
+        # Konvertuj DataFrame u format pogodan za JSON
+        df = df.replace({np.nan: None})
         
-        # Izračunaj ukupan broj stranica
-        total_rows = len(df)
-        total_pages = (total_rows + per_page - 1) // per_page
+        # Konvertuj datetime kolonu u željeni format
+        if pd.api.types.is_datetime64_any_dtype(df[time_column]):
+            df[time_column] = df[time_column].dt.strftime(UTC_fmt)
+        else:
+            try:
+                df[time_column] = pd.to_datetime(df[time_column]).dt.strftime(UTC_fmt)
+            except Exception:
+                pass
+
+        def generate_chunks():
+            CHUNK_SIZE = 1000  # Broj redova po chunk-u
+            total_rows = len(df)
+            total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
+            
+            # Pošalji početne informacije
+            yield json.dumps({
+                'total_rows': total_rows,
+                'total_chunks': total_chunks,
+                'chunk_size': CHUNK_SIZE,
+                'message': 'Daten werden gestreamt'
+            }) + '\n'
+            
+            # Pošalji podatke u delovima
+            for chunk_idx in range(total_chunks):
+                start_idx = chunk_idx * CHUNK_SIZE
+                end_idx = min(start_idx + CHUNK_SIZE, total_rows)
+                
+                chunk_data = {
+                    'chunk_index': chunk_idx,
+                    'data': df.iloc[start_idx:end_idx].to_dict('records')
+                }
+                
+                yield json.dumps(chunk_data) + '\n'
+            
+            # Pošalji završnu poruku
+            yield json.dumps({
+                'message': 'Daten wurden erfolgreich verarbeitet',
+                'status': 'complete'
+            }) + '\n'
         
-        # Osiguraj da je zatražena stranica validna
-        page = max(1, min(page, total_pages))
-        
-        # Izračunaj indekse za trenutnu stranicu
-        start_idx = (page - 1) * per_page
-        end_idx = min(start_idx + per_page, total_rows)
-        
-        # Uzmi samo podatke za trenutnu stranicu
-        page_data = df.iloc[start_idx:end_idx]
-        
-        processed_data = {
-            'data': page_data.to_dict('records'),
-            'pagination': {
-                'page': page,
-                'per_page': per_page,
-                'total_pages': total_pages,
-                'total_rows': total_rows
-            },
-            'message': 'Daten wurden erfolgreich verarbeitet'
-        }
-        
-        response = jsonify(processed_data)
-        return response
+        return Response(
+            stream_with_context(generate_chunks()),
+            mimetype='application/x-ndjson'
+        )
 
     except Exception as e:
         response = jsonify({'error': str(e)})
