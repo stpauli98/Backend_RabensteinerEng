@@ -264,10 +264,12 @@ def convert_to_utc(df, date_column, timezone='UTC'):
 @app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload-chunk', methods=['POST'])
 def upload_chunk(request):
     try:
+        print("\n=== Request Form Data ===")
+        print(f"All form data: {dict(request.form)}")
         if 'fileChunk' not in request.files:
             return jsonify({"error": "Chunk file not found"}), 400
         
-        required_params = ['uploadId', 'chunkIndex', 'totalChunks', 'delimiter', 'selected_columns', 'timezone', 'dropdown_count']
+        required_params = ['uploadId', 'chunkIndex', 'totalChunks', 'delimiter', 'selected_columns', 'timezone', 'dropdown_count', 'hasHeader']
         missing_params = [param for param in required_params if param not in request.form]
         if missing_params:
             return jsonify({"error": f"Missing required parameters: {', '.join(missing_params)}"}), 400
@@ -280,9 +282,11 @@ def upload_chunk(request):
         if upload_id not in chunk_storage:
             try:
                 selected_columns_str = request.form.get('selected_columns')
+                print(f"\nRaw selected_columns from form: {selected_columns_str}")
                 if not selected_columns_str:
                     return jsonify({"error": "selected_columns parameter is required"}), 400
                 selected_columns = json.loads(selected_columns_str)
+                print(f"Parsed selected_columns: {selected_columns}")
                 if not isinstance(selected_columns, dict):
                     return jsonify({"error": "selected_columns must be a JSON object"}), 400
                 
@@ -294,6 +298,7 @@ def upload_chunk(request):
                     'parameters': {
                         'delimiter': request.form.get('delimiter'),
                         'timezone': request.form.get('timezone', 'UTC'),
+                        'has_header': request.form.get('hasHeader', 'nein'),  # Direktno koristimo string vrijednost
                         'selected_columns': selected_columns,
                         'custom_date_format': request.form.get('custom_date_format'),
                         'value_column_name': request.form.get('valueColumnName', '').strip(),
@@ -302,7 +307,7 @@ def upload_chunk(request):
                 }
             except json.JSONDecodeError as e:
                 return jsonify({"error": "Invalid JSON format for selected_columns"}), 400
-        
+
         chunk_content = file_chunk.read()
         chunk_storage[upload_id]['chunks'][chunk_index] = chunk_content
         chunk_storage[upload_id]['received_chunks'] += 1
@@ -337,6 +342,10 @@ def process_chunks(upload_id):
         
         if full_content is None:
             return jsonify({"error": "Could not decode file content with any supported encoding"}), 400
+
+        print("\n=== Decoded File Content ===")
+        print(f"Decoded content: {len(full_content.split('\n'))} lines long")
+        print("=== End Decoded File Content ===")
             
         params = chunk_storage[upload_id]['parameters']
         del chunk_storage[upload_id]
@@ -366,6 +375,8 @@ def check_upload_status(upload_id):
 
 def upload_files(file_content, params):
     try:
+        print("\n=== Processing Upload ===")
+        print(f"Received params: {json.dumps(params, indent=2)}")
         # Preuzimanje parametara iz memorije umesto request.form
         delimiter = params.get('delimiter')
         if not delimiter:
@@ -376,11 +387,33 @@ def upload_files(file_content, params):
         value_column_name = params.get('value_column_name', '').strip()
         dropdown_count = int(params.get('dropdown_count', '2'))
         has_separate_date_time = dropdown_count == 3
+        has_header = params.get('has_header', False)
 
-        # Očekivani nazivi kolona prema odabiru
-        date_column = selected_columns.get('column1')
-        time_column = selected_columns.get('column2') if has_separate_date_time else None
-        value_column = selected_columns.get('column3') if has_separate_date_time else selected_columns.get('column2')
+        print(f"\nSelected columns from frontend:")
+        print(f"selected_columns: {selected_columns}")
+        print(f"has_header: {has_header}")
+
+        # Postavi kolone prema odabiru s frontenda
+        if has_header == 'ja':
+            # Kad ima header, koristi točno ona imena kolona koja je korisnik odabrao
+            date_column = selected_columns.get('column1')  # npr. 'Datum'
+            time_column = selected_columns.get('column2') if has_separate_date_time else None
+            value_column = selected_columns.get('column3') if has_separate_date_time else selected_columns.get('column2') 
+        else:
+            # Kad nema header, koristi indekse kolona koje je korisnik odabrao
+            # Frontend šalje indeks kolone (npr. '4' za petu kolonu)
+            date_column = selected_columns.get('column1', '0')
+            time_column = selected_columns.get('column2', '1')  if has_separate_date_time else None
+            value_column = selected_columns.get('column3', '2') if has_separate_date_time else selected_columns.get('column2') 
+
+            
+        print(f"\nSelected columns from frontend:")
+        print(f"date_column: {date_column}")
+        print(f"time_column: {time_column}")
+        print(f"value_column: {value_column}")
+        print(f"has_separate_date_time: {has_separate_date_time}")
+        
+        print(f"Using columns - Date: {date_column}, Time: {time_column}, Value: {value_column}")
 
         # Pročitaj CSV sadržaj iz primljenog stringa
         detected_delimiter = detect_delimiter(file_content)
@@ -390,9 +423,51 @@ def upload_files(file_content, params):
         # Očisti sadržaj i učitaj u DataFrame
         cleaned_content = clean_file_content(file_content, delimiter)
         try:
-            df = pd.read_csv(StringIO(cleaned_content), delimiter=delimiter)
+            print(f"\n=== Reading CSV with parameters ===\ndelimiter: {delimiter}, has_header: {has_header}")
+            print(f"\nReading CSV file...")
+            
+            # Pročitaj prvu liniju da vidimo je li header
+            with StringIO(cleaned_content) as f:
+                first_line = f.readline().strip()
+                first_line_values = first_line.split(delimiter)
+                # Provjeri izgleda li prvi red kao header
+                looks_like_header = all(not val.replace('.', '').replace(',', '').replace('-', '').isdigit() 
+                                       for val in first_line_values if val.strip())
+                
+                if looks_like_header and has_header == 'nein':
+                    
+                    # Ponovno učitaj CSV bez prve linije
+                    df = pd.read_csv(StringIO(cleaned_content),
+                        delimiter=delimiter,
+                        header=None,
+                        skiprows=1)
+                    print("First line looks like header but has_header is 'nein'. Skipping first line.")
+                else:
+                    df = pd.read_csv(StringIO(cleaned_content),
+                        delimiter=delimiter,
+                        header=0 if has_header == 'ja' else None)
+            
+            print(f"Original columns: {df.columns.tolist()}")
+            print(f"Column types: {df.dtypes}")
+
+            if has_header == 'nein':
+                df.columns = [str(i) for i in range(len(df.columns))]
+            else:
+                df.columns = [col.strip() for col in df.columns]
+            
+            # Očisti prazne kolone
             df = df.dropna(axis=1, how='all')
-            df.columns = df.columns.str.strip()
+            
+            # Konvertiraj imena kolona u stringove ako nisu
+            df.columns = df.columns.astype(str)
+            
+            # Očisti whitespace iz imena kolona
+            df.columns = [col.strip() for col in df.columns]
+            
+            print(f"Cleaned columns: {df.columns.tolist()}")
+            
+            print(f"\nDetected columns: {df.columns.tolist()}")
+            print(f"First row sample: {df.iloc[0].to_dict()}")
         except Exception as e:
             return jsonify({"error": f"Error processing CSV: {str(e)}"}), 400
 
@@ -494,8 +569,8 @@ def prepare_save(request):
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        logger.error(f"Error in prepare_save: {str(e)}")
-        logger.error(traceback.format_exc())
+        print(f"Error in prepare_save: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 def download_file(file_id):
@@ -514,7 +589,7 @@ def download_file(file_id):
             mimetype='text/csv'
         )
     except Exception as e:
-        logger.error(f"Error in download_file: {str(e)}")
+        print(f"Error in download_file: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
         # Pokušaj očistiti privremeni fajl
@@ -523,4 +598,6 @@ def download_file(file_id):
                 os.unlink(temp_files[file_id])
                 del temp_files[file_id]
             except Exception as ex:
-                logger.error(f"Error cleaning up temp file: {ex}")
+                print(f"Error cleaning up temp file: {ex}")
+
+
