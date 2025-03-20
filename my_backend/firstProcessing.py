@@ -8,9 +8,13 @@ import logging
 import tempfile
 import csv
 
-# Konfigurisi logging da bude manje opširan
-logging.basicConfig(level=logging.WARNING)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
 from io import StringIO
 from datetime import datetime as dat, timedelta
 from flask import Flask, request, jsonify, Response, send_file, Blueprint
@@ -36,14 +40,6 @@ def clean_for_json(obj):
     elif pd.isna(obj):
         return None
     return obj
-
-
-# Konfiguracija logginga
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Define API prefix
 API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
