@@ -2,14 +2,20 @@ import pandas as pd
 from datetime import datetime as dat
 from io import StringIO
 import numpy as np
-from flask import jsonify, send_file, request
+from flask import Blueprint, jsonify, send_file, request, Response, stream_with_context
 import tempfile
 import csv
 import os
 import traceback
 import logging
+import json
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # Directory for temporary chunk storage
@@ -21,112 +27,263 @@ temp_files = {}
 # Format for UTC dates
 UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
-def zweite_bearbeitung(request):
+# Create Blueprint
+bp = Blueprint('data_processing_main', __name__)
+
+@bp.route('/upload-chunk', methods=['POST'])
+def handle_upload_chunk():
     try:
-        # Check if file is in request.files
-        if 'file' not in request.files:
-            response = jsonify({"error": "No file uploaded"})
-            return response, 400
+        logger.info(f"Received upload request with form data: {request.form}")
+        logger.info(f"Files in request: {request.files}")
+        return upload_chunk(request)
+    except Exception as e:
+        logger.error(f"Error in handle_upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 400
 
-        file = request.files['file']
-
-        # Read file content
-        file_content = file.stream.read().decode('utf-8')   
-
-        if not file_content.strip():
-            response = jsonify({"error": "Empty file content"})
-            return response, 400
-
-        # Get parameters from form data
-        try:
-            EQ_MAX = float(request.form.get('eqMax', '0'))
-            CHG_MAX = float(request.form.get('chgMax', '0'))
-            LG_MAX = float(request.form.get('lgMax', '0'))
-            GAP_MAX = float(request.form.get('gapMax', '0'))
-            EL0 = request.form.get('radioValueNull')
-            ELNN = request.form.get('radioValueNotNull')
-        except (TypeError, ValueError) as e:
-            response = jsonify({"error": f"Invalid parameter value: {str(e)}"})
-            return response, 400
-
-        EL0 = 1 if EL0 == "ja" else 0
-        ELNN = 1 if ELNN == "ja" else 0
-        content_lines = file_content.splitlines()
+def upload_chunk(req):
+    try:
+        logger.info("Starting upload_chunk processing")
+        # Validate parameters
+        upload_id = req.form.get('uploadId')
+        chunk_index = int(req.form.get('chunkIndex', '0') or '0')
+        total_chunks = int(req.form.get('totalChunks', '0') or '0')
         
-        EL0 = request.form.get('radioValueNull')
-        ELNN = request.form.get('radioValueNotNull')
-        try:
-            EQ_MAX = float(request.form.get('eqMax'))
-            CHG_MAX = float(request.form.get('chgMax'))
-            LG_MAX = float(request.form.get('lgMax'))
-            GAP_MAX = float(request.form.get('gapMax'))
-        except (TypeError, ValueError) as e:
-            response = jsonify({"error": f"Invalid numeric value in parameters: {str(e)}"})
-            return response, 400
+        # Helper function to safely convert to float
+        def safe_float(value, default='0'):
+            try:
+                return float(value) if value.strip() else float(default)
+            except (ValueError, AttributeError):
+                return float(default)
+        
+        # Convert form values to float, using 0 as default for empty or invalid values
+        EQ_MAX = safe_float(req.form.get('eqMax'))
+        CHG_MAX = safe_float(req.form.get('chgMax'))
+        LG_MAX = safe_float(req.form.get('lgMax'))
+        GAP_MAX = safe_float(req.form.get('gapMax'))
+        ELMAX = safe_float(req.form.get('elMax'))
+        ELMIN = safe_float(req.form.get('elMin'))
+        
+        # Get radio button values
+        EL0 = req.form.get('radioValueNull')
+        ELNN = req.form.get('radioValueNotNull')
 
+        # Convert radio button values
         EL0 = 1 if EL0 == "ja" else 0
         ELNN = 1 if ELNN == "ja" else 0
 
+        # If upload_id is provided, it's a chunk upload
+        if upload_id:
+            logger.info(f"Processing chunk upload. Upload ID: {upload_id}, Index: {chunk_index}, Total: {total_chunks}")
+            if 'fileChunk' not in req.files:
+                logger.error(f"No fileChunk in request.files. Available: {list(req.files.keys())}")
+                return jsonify({"error": "Chunk file not found"}), 400
 
-        ##############################################################################
-        # DATEN LADEN #################################################################
-        ##############################################################################
+            chunk = req.files['fileChunk']
+            if not chunk:
+                logger.error("Received empty chunk")
+                return jsonify({"error": "Empty chunk received"}), 400
 
+            logger.info(f"Received chunk with filename: {chunk.filename}, content type: {chunk.content_type}")
+
+            # Save the chunk
+            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+            chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
+            chunk.save(chunk_filename)
+
+            # Check if all chunks have been received
+            received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
+            if len(received_chunks) == total_chunks:
+                # Combine all chunks in sorted order
+                chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
+                full_content = ""
+                try:
+                    for chunk_file in chunks_sorted:
+                        chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
+                        with open(chunk_path, 'rb') as f:
+                            full_content += f.read().decode('utf-8')
+                        os.remove(chunk_path)
+                except Exception as e:
+                    for cf in chunks_sorted:
+                        try:
+                            os.remove(os.path.join(UPLOAD_FOLDER, cf))
+                        except Exception:
+                            pass
+                    logger.error(f"Error processing chunks: {str(e)}")
+                    return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+
+                # Prepare form parameters dictionary
+                form_params = {
+                    'eqMax': str(EQ_MAX),
+                    'chgMax': str(CHG_MAX),
+                    'lgMax': str(LG_MAX),
+                    'gapMax': str(GAP_MAX),
+                    'elMax': str(ELMAX),
+                    'elMin': str(ELMIN),
+                    'radioValueNull': 'ja' if EL0 == 1 else 'nein',
+                    'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
+                }
+                logger.info(f"Creating mock request with content length: {len(full_content)}")
+                mock_request = create_mock_request(form_params, full_content, 'combined_chunks.csv')
+
+                try:
+                    logger.info("Starting zweite_bearbeitung processing")
+                    result = zweite_bearbeitung(mock_request)
+                    logger.info(f"zweite_bearbeitung returned result of type: {type(result)}")
+                    # Return result directly (assume streaming response)
+                    return result
+                except Exception as e:
+                    for cf in chunks_sorted:
+                        try:
+                            os.remove(os.path.join(UPLOAD_FOLDER, cf))
+                        except Exception:
+                            pass
+                    logger.error(f"Error processing chunks: {str(e)}")
+                    return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+
+            # Not all chunks received yet; return status
+            return jsonify({
+                "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
+                "uploadId": upload_id,
+                "chunkIndex": chunk_index,
+                "totalChunks": total_chunks,
+                "remainingChunks": total_chunks - len(received_chunks)
+            }), 200
+
+        else:
+            # Direct upload
+            if 'file' not in req.files:
+                return jsonify({"error": "Keine Datei gefunden"}), 400
+            file = req.files['file']
+            if not file:
+                return jsonify({"error": "Keine Datei gefunden"}), 400
+            file_content = file.stream.read().decode('utf-8')
+            const_form_params = {
+                'eqMax': str(EQ_MAX),
+                'chgMax': str(CHG_MAX),
+                'lgMax': str(LG_MAX),
+                'gapMax': str(GAP_MAX),
+                'elMax': str(ELMAX),
+                'elMin': str(ELMIN),
+                'radioValueNull': 'ja' if EL0 == 1 else 'nein',
+                'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
+            }
+            mock_request = create_mock_request(const_form_params, file_content, file.filename)
+            try:
+                result = zweite_bearbeitung(mock_request)
+                return result
+            except Exception as e:
+                logger.error(f"Error in direct upload: {str(e)}\n{traceback.format_exc()}")
+                return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
+
+    except Exception as e:
+        logger.error(f"Error in upload_chunk: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
+
+def zweite_bearbeitung(req):
+    try:
+        logger.info("Starting zweite_bearbeitung function")
+        logger.info(f"Available files in request: {list(req.files.keys())}")
+        file_key = 'file' if 'file' in req.files else 'fileChunk' if 'fileChunk' in req.files else None
+        if not file_key:
+            return jsonify({"error": "No file uploaded (neither 'file' nor 'fileChunk' found)"}), 400
+
+        file = req.files[file_key]
+        logger.info("Reading file content")
+        file_content = file.stream.read().decode('utf-8')
+        logger.info(f"File content length: {len(file_content)}")
+        if not file_content.strip():
+            return jsonify({"error": "Empty file content"}), 400
+
+        try:
+            EQ_MAX = float(req.form.get('eqMax', '0'))
+            CHG_MAX = float(req.form.get('chgMax', '0'))
+            LG_MAX = float(req.form.get('lgMax', '0'))
+            GAP_MAX = float(req.form.get('gapMax', '0'))
+            ELMAX = float(req.form.get('elMax', '0'))
+            ELMIN = float(req.form.get('elMin', '0'))
+            EL0 = req.form.get('radioValueNull')
+            ELNN = req.form.get('radioValueNotNull')
+            EL0 = 1 if EL0 == "ja" else 0
+            ELNN = 1 if ELNN == "ja" else 0
+        except (TypeError, ValueError) as e:
+            return jsonify({"error": f"Invalid parameter value: {str(e)}"}), 400
+
+        content_lines = file_content.splitlines()
         if not content_lines:
             return jsonify({"error": "No data received"}), 400
 
-        # Detect the delimiter by checking the first line
         first_line = content_lines[0].strip()
-        
         if not first_line:
-            response = jsonify({"error": "Empty first line"})
-            return response, 400
-            
-        # Try to detect delimiter
+            return jsonify({"error": "Empty first line"}), 400
+
         if ';' in first_line:
             delimiter = ';'
         elif ',' in first_line:
             delimiter = ','
         else:
-            response = jsonify({"error": "No valid delimiter (comma or semicolon) found in data"})
-            return response, 400
-        
+            return jsonify({"error": "No valid delimiter (comma or semicolon) found in data"}), 400
+
         try:
-            # Try to read the CSV data
-            df = pd.read_csv(StringIO(file_content), delimiter=delimiter, header=0)
-            
-            # Basic validation
+            logger.info("Cleaning data...")
+            cleaned_content = file_content.replace('\r', '').strip()
+            logger.info("Sample of cleaned data:")
+            for line in cleaned_content.split('\n')[:5]:
+                logger.info(f"  {repr(line)}")
+            logger.info(f"Attempting to read CSV with delimiter: {delimiter}")
+            df = pd.read_csv(StringIO(cleaned_content),
+                             delimiter=delimiter,
+                             header=0,
+                             skipinitialspace=True,
+                             skip_blank_lines=True)
+            logger.info(f"Successfully read CSV with shape: {df.shape}")
+            logger.info(f"Columns: {df.columns.tolist()}")
             if df.empty:
-                response = jsonify({"error": "No data found in file"})
-                return response, 400
-            
+                return jsonify({"error": "No data found in file"}), 400
             if len(df.columns) < 2:
-                response = jsonify({"error": f"Data must have at least 2 columns, but found only {len(df.columns)}"})
-                return response, 400
-                
-            # Get column names
+                return jsonify({"error": f"Data must have at least 2 columns, but found only {len(df.columns)}"}), 400
+
             time_column = df.columns[0]
             data_column = df.columns[1]
-            
-            # Convert data column to numeric, handling both . and , as decimal separators
-            df[data_column] = pd.to_numeric(df[data_column].astype(str).str.replace(',', '.'), errors='coerce')
-            
-            # Check if conversion was successful
+
+            logger.info(f"Converting {data_column} to numeric")
+            df[data_column] = (df[data_column].astype(str)
+                               .str.strip()
+                               .str.replace('\r', '')
+                               .str.replace('\n', '')
+                               .str.replace(',', '.'))
+            df[data_column] = pd.to_numeric(df[data_column], errors='coerce')
+            logger.info(f"Sample values after conversion: {df[data_column].head().tolist()}")
+            logger.info(f"Data column info:\n{df[data_column].describe()}")
             if df[data_column].isna().all():
-                response = jsonify({"error": "Could not convert any values to numeric format"})
-                return response, 400
-          
+                return jsonify({"error": "Could not convert any values to numeric format"}), 400
         except Exception as e:
-            response = jsonify({"error": f"Error processing data: {str(e)}"})
-            return response, 400
+            err_msg = f"Error processing data: {str(e)}\n{traceback.format_exc()}"
+            logger.error(err_msg)
+            return jsonify({"error": err_msg}), 400
 
-       
+        # Konvertiraj stupac u numerički format (potrebno za daljnju obradu)
+        df.iloc[:, 1] = pd.to_numeric(df.iloc[:, 1], errors='coerce')
+        logger.info(f"Column converted to numeric. NaN count: {df.iloc[:, 1].isna().sum()}")
 
-        ##############################################################################
-        # ELIMINIERUNG VON MESSAUSFÄLLEN (GLEICHBLEIBENDE MESSWERTE) ##################
-        ##############################################################################
+        # Primjeni gornju i donju granicu samo ako su definirane (veće od 0)
+        try:
+            if ELMAX > 0:
+                logger.info(f"Applying upper limit: ELMAX={ELMAX}")
+                df.iloc[:, 1] = df.iloc[:, 1].mask(df.iloc[:, 1] > ELMAX, np.nan)
+                logger.info(f"Applied upper limit {ELMAX}. NaN count: {df.iloc[:, 1].isna().sum()}")
+                
+            if ELMIN > 0:
+                logger.info(f"Applying lower limit: ELMIN={ELMIN}")
+                df.iloc[:, 1] = df.iloc[:, 1].mask(df.iloc[:, 1] < ELMIN, np.nan)
+                logger.info(f"Applied lower limit {ELMIN}. NaN count: {df.iloc[:, 1].isna().sum()}")
+        except Exception as e:
+            logger.error(f"Error applying limits: {str(e)}\nTraceback: {traceback.format_exc()}")
+            # U slučaju greške, postavi sve na NaN
+            df.iloc[:, 1] = np.nan
+
 
         if "EQ_MAX" in locals():
+            logger.info(f"Processing equal values with EQ_MAX={EQ_MAX}")
             
             # Status des Identifikationsrahmens (frm...frame)
             frm = 0
@@ -138,7 +295,13 @@ def zweite_bearbeitung(request):
             """
             
             # Konvertuj vremenske kolone u datetime format za brže procesiranje
-            df[time_column] = pd.to_datetime(df[time_column])
+            try:
+                logger.info(f"Converting time column '{time_column}' to datetime")
+                df[time_column] = pd.to_datetime(df[time_column])
+                logger.info("Time column conversion successful")
+            except Exception as e:
+                logger.error(f"Error converting time column: {str(e)}\nFirst few values: {df[time_column].head()}")
+                raise
             
             # Kreiraj masku za konstantne vrednosti
             constant_mask = df[data_column].eq(df[data_column].shift())
@@ -176,6 +339,8 @@ def zweite_bearbeitung(request):
                 )
 
 
+
+       
         ##############################################################################
         # ELIMINIERUNG VON NULLWERTEN #################################################
         ##############################################################################
@@ -192,14 +357,14 @@ def zweite_bearbeitung(request):
 
         if ELNN == 1:
             
-                       # Konvertuj kolonu u numerički format, nevalidne vrijednosti postaju NaN
+            # Konvertuj kolonu u numerički format, nevalidne vrijednosti postaju NaN
             df[data_column] = pd.to_numeric(df[data_column], errors='coerce')
 
         ##############################################################################
-        # ELIMINIERUNG VON AUSREISSERN ################################################
+        # ELIMINIERUNG VON EXTREMEN ###################################################
         ##############################################################################
 
-        if "CHG_MAX" and "LG_MAX" in locals():
+        if "CHG_MAX" in locals() and "LG_MAX" in locals():
             # Status des Identifikationsrahmens (frm...frame)
             frm = 0
             """
@@ -249,7 +414,7 @@ def zweite_bearbeitung(request):
                         df.loc[start_idx:end_idx, data_column] = np.nan
 
         ##############################################################################
-        # SCHLIESSEN VON MESSLÜCKEN ###################################################
+        # ELIMINIERUNG VON GAPS ######################################################
         ##############################################################################
 
         if "GAP_MAX" in locals():
@@ -296,28 +461,9 @@ def zweite_bearbeitung(request):
                     df.loc[start:end-1, data_column] = start_val + time_deltas * slope
 
                     # Ende des Datensatzes ist erreicht und Identifikationsrahmen ist offen
-
-        # Na kraju funkcije, prije except bloka:
-        # Konvertujemo DataFrame u format pogodan za JSON
-        # Prvo zamijenimo np.nan sa None da bi se moglo serijalizovati u JSON
-        df = df.replace({np.nan: None})
-        
-        # Konvertuj datetime kolonu u željeni format prije konverzije u dictionary
-        if pd.api.types.is_datetime64_any_dtype(df[time_column]):
-            df[time_column] = df[time_column].dt.strftime(UTC_fmt)
-        else:
-            try:
-                df[time_column] = pd.to_datetime(df[time_column]).dt.strftime(UTC_fmt)
-            except Exception:
-                pass
-        
-        from flask import Response, stream_with_context
-        import json
         
         # Konvertuj DataFrame u format pogodan za JSON
         df = df.replace({np.nan: None})
-        
-        # Konvertuj datetime kolonu u željeni format
         if pd.api.types.is_datetime64_any_dtype(df[time_column]):
             df[time_column] = df[time_column].dt.strftime(UTC_fmt)
         else:
@@ -326,100 +472,134 @@ def zweite_bearbeitung(request):
             except Exception:
                 pass
 
+        logger.info("Preparing to stream data in chunks")
         def generate_chunks():
-            CHUNK_SIZE = 1000  # Broj redova po chunk-u
+            logger.info("Starting to generate chunks")
+            CHUNK_SIZE = 1000  # Number of rows per chunk
             total_rows = len(df)
             total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
-            
-            # Pošalji početne informacije
+            logger.info(f"Data will be sent in {total_chunks} chunks of {CHUNK_SIZE} rows each")
+            # Send metadata as the first JSON object
             yield json.dumps({
                 'total_rows': total_rows,
                 'total_chunks': total_chunks,
                 'chunk_size': CHUNK_SIZE,
-                'message': 'Daten werden gestreamt'
-            }) + '\n'
-            
-            # Pošalji podatke u delovima
+                'message': 'Daten werden gestreamt',
+                'type': 'metadata'
+            }, separators=(',', ':')) + '\n'
             for chunk_idx in range(total_chunks):
                 start_idx = chunk_idx * CHUNK_SIZE
                 end_idx = min(start_idx + CHUNK_SIZE, total_rows)
-                
                 chunk_data = {
                     'chunk_index': chunk_idx,
-                    'data': df.iloc[start_idx:end_idx].to_dict('records')
+                    'data': df.iloc[start_idx:end_idx].to_dict('records'),
+                    'type': 'data'
                 }
-                
-                yield json.dumps(chunk_data) + '\n'
-            
-            # Pošalji završnu poruku
+                json_line = json.dumps(chunk_data, separators=(',', ':')) + '\n'
+                logger.info(f"Sending chunk {chunk_idx + 1}/{total_chunks}, sample: {repr(json_line[:200])}")
+                yield json_line
             yield json.dumps({
                 'message': 'Daten wurden erfolgreich verarbeitet',
-                'status': 'complete'
-            }) + '\n'
+                'status': 'complete',
+                'type': 'complete'
+            }, separators=(',', ':')) + '\n'
         
+        logger.info("Starting to stream response using generator")
         return Response(
-            stream_with_context(generate_chunks()),
+            generate_chunks(),
             mimetype='application/x-ndjson'
         )
-
     except Exception as e:
-        response = jsonify({'error': str(e)})
-        return response, 400  
-                  
-def prepare_save(request):
+        logger.error(f"Error in zweite_bearbeitung: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 400
+
+@bp.route('/prepare-save', methods=['POST'])
+def prepare_save():
     """Prepare CSV file for download from JSON data."""
     try:
-        # Validate request
+        logger.info(f"Received prepare-save request")
+        
+        # Check if request has JSON data
         if not request.is_json:
-            response = jsonify({"error": "Request must be JSON"})
-            return response, 400
+            logger.error("Request does not contain JSON data")
+            return jsonify({"error": "Request must be JSON"}), 400
             
-        data = request.json
-        if not data or 'data' not in data:
-            response = jsonify({"error": "No data received"})
-            return response, 400
+        # Get the JSON data
+        try:
+            data = request.get_json()
+            logger.info(f"Received data structure: {type(data)}")
+        except Exception as e:
+            logger.error(f"Error parsing JSON data: {str(e)}")
+            return jsonify({"error": "Invalid JSON format"}), 400
+            
+        # Validate data structure
+        if not isinstance(data, dict):
+            logger.error(f"Data is not a dictionary: {type(data)}")
+            return jsonify({"error": "Invalid data format: expected JSON object"}), 400
+            
+        if 'data' not in data:
+            logger.error("Missing 'data' key in request")
+            return jsonify({"error": "Missing 'data' field in request"}), 400
             
         save_data = data['data']
-        if not save_data:
-            response = jsonify({"error": "Empty data"})
-            return response, 400
+        
+        # Validate save_data
+        if not isinstance(save_data, list):
+            logger.error(f"save_data is not a list: {type(save_data)}")
+            return jsonify({"error": "Invalid data format: expected array"}), 400
             
-        # Create and write to temporary file
+        if not save_data:
+            logger.error("Empty save_data array")
+            return jsonify({"error": "Empty data array"}), 400
+            
+        logger.info(f"Processing {len(save_data)} rows of data")
+        
+        # Create temporary file
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
         
         try:
-            for row in save_data:
+            # Write data to CSV
+            for i, row in enumerate(save_data):
+                if not isinstance(row, list):
+                    raise ValueError(f"Invalid row format at index {i}: expected array")
                 writer.writerow(row)
-        except Exception as e:
-            os.unlink(temp_file.name)  # Clean up file if write fails
-            response = jsonify({"error": f"Error writing to CSV: {str(e)}"})
-            return response, 500
+                
+            temp_file.close()
             
-        temp_file.close()
-        
-        # Generate unique file ID
-        file_id = dat.now().strftime('%Y%m%d_%H%M%S')
-        temp_files[file_id] = temp_file.name
-
-        response = jsonify({"message": "File prepared for download", "fileId": file_id})
-        return response, 200
+            # Generate file ID and store reference
+            file_id = dat.now().strftime('%Y%m%d_%H%M%S')
+            temp_files[file_id] = temp_file.name
+            
+            logger.info(f"Successfully prepared file with ID: {file_id}")
+            return jsonify({
+                "message": "File prepared for download",
+                "fileId": file_id,
+                "rowCount": len(save_data)
+            }), 200
+            
+        except Exception as e:
+            # Clean up the temporary file if there's an error
+            try:
+                temp_file.close()
+                os.unlink(temp_file.name)
+            except:
+                pass
+            logger.error(f"Error writing data to CSV: {str(e)}")
+            return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
+            
     except Exception as e:
-        response = jsonify({"error": f"Error preparing file: {str(e)}"})
-        return response, 500
+        logger.error(f"Unexpected error in prepare_save: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
 
-def download_file(file_id, request):
-    """Download a previously prepared CSV file."""
+@bp.route('/download/<file_id>', methods=['GET'])
+def download_file(file_id):
     if file_id not in temp_files:
-        response = jsonify({"error": "File not found"})
-        return response, 404
-        
+        return jsonify({"error": "File not found"}), 404
     file_path = temp_files[file_id]
     if not os.path.exists(file_path):
-        del temp_files[file_id]  # Clean up reference if file doesn't exist
-        response = jsonify({"error": "File not found"})
-        return response, 404
-
+        del temp_files[file_id]
+        return jsonify({"error": "File not found"}), 404
     try:
         download_name = f"data_{file_id}.csv"
         return send_file(
@@ -429,221 +609,28 @@ def download_file(file_id, request):
             mimetype='text/csv'
         )
     except Exception as e:
-        response = jsonify({"error": f"Error downloading file: {str(e)}"})
-        return response, 500
+        return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
     finally:
-        # Clean up temporary file
         try:
             os.unlink(file_path)
             del temp_files[file_id]
         except Exception:
-            pass  # Ignore cleanup errors
+            pass
 
-def upload_chunk(request):
-    """
-    Endpoint za prihvat i obradu fajla. Podržava i direktan upload i upload u delovima (chunks).
-    Očekivani parametri za direktan upload (form data):
-      - file: CSV fajl za obradu
-      - eqMax: maksimalna vrijednost za jednake vrijednosti (float)
-      - chgMax: maksimalna vrijednost za promjene (float)
-      - lgMax: maksimalna vrijednost za logaritamske promjene (float)
-      - gapMax: maksimalna vrijednost za praznine (float)
-      - radioValueNull: eliminacija nul vrijednosti (ja/nein)
-      - radioValueNotNull: eliminacija ne-numeričkih vrijednosti (ja/nein)
-    
-    Očekivani parametri za chunk upload:
-      - fileChunk: Deo fajla
-      - uploadId: Jedinstveni ID za ovaj upload
-      - chunkIndex: Redni broj chunka (počinje od 0)
-      - totalChunks: Ukupan broj chunkova
-      + svi parametri kao za direktan upload
-    """
+def create_mock_request(form_params, file_content, filename):
+    from werkzeug.datastructures import FileStorage
+    from io import BytesIO
 
-    try:
-        # Validacija parametara
-        upload_id = request.form.get('uploadId')
-        chunk_index = int(request.form.get('chunkIndex', 0))
-        total_chunks = int(request.form.get('totalChunks', 0))
-        EQ_MAX = float(request.form.get('eqMax', '0'))
-        CHG_MAX = float(request.form.get('chgMax', '0'))
-        LG_MAX = float(request.form.get('lgMax', '0'))
-        GAP_MAX = float(request.form.get('gapMax', '0'))
-        EL0 = request.form.get('radioValueNull')
-        ELNN = request.form.get('radioValueNotNull')
+    class MockRequest:
+        def __init__(self):
+            self.files = {}
+            self.form = {}
 
-        # Konvertuj radio button vrednosti
-        EL0 = 1 if EL0 == "ja" else 0
-        ELNN = 1 if ELNN == "ja" else 0
-
-        # Proveri da li je chunk upload
-        if upload_id:
-            # Chunk upload
-            chunk_index = int(request.form.get('chunkIndex', 0))
-            total_chunks = int(request.form.get('totalChunks', 0))
-            
-            if 'fileChunk' not in request.files:
-                response = jsonify({"error": "Chunk file not found"})
-                return response, 400
-                
-            chunk = request.files['fileChunk']
-            if not chunk:
-                response = jsonify({"error": "Empty chunk received"})
-                return response, 400
-
-            # Sačuvaj chunk
-            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-            chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
-            chunk.save(chunk_filename)
-
-            # Proveri da li su svi chunkovi primljeni
-            received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
-            
-            if len(received_chunks) == total_chunks:
-                # Spoji sve chunkove
-                chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
-                full_content = ""
-                
-                try:
-                    for chunk_file in chunks_sorted:
-                        chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
-                        with open(chunk_path, 'rb') as f:
-                            full_content += f.read().decode('utf-8')
-                        os.remove(chunk_path)
-                        
-                    # Kreiraj mock request za obradu
-                    class MockRequest:
-                        def __init__(self):
-                            self.files = {}
-                            self.form = {}
-
-                    mock_request = MockRequest()
-                    mock_request.form = {
-                        'eqMax': str(EQ_MAX),
-                        'chgMax': str(CHG_MAX),
-                        'lgMax': str(LG_MAX),
-                        'gapMax': str(GAP_MAX),
-                        'radioValueNull': 'ja' if EL0 == 1 else 'nein',
-                        'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
-                    }
-
-                    from werkzeug.datastructures import FileStorage
-                    from io import BytesIO
-                    mock_request.files['file'] = FileStorage(
-                        stream=BytesIO(full_content.encode('utf-8')),
-                        filename='combined_chunks.csv',
-                        content_type='text/csv',
-                    )
-
-                    try:
-                        response = zweite_bearbeitung(mock_request)
-                        if isinstance(response, tuple):
-                            response_data, status_code = response
-                            return jsonify(response_data), status_code
-                        return response
-                    except Exception as e:
-                        # U slučaju greške, obriši sve chunkove
-                        for chunk_file in chunks_sorted:
-                            try:
-                                os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
-                            except:
-                                pass
-                        logger.error(f"Error processing chunks: {str(e)}")
-                        return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
-
-                except Exception as e:
-                    # U slučaju greške, obriši sve chunkove
-                    for chunk_file in chunks_sorted:
-                        try:
-                            os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
-                        except:
-                            pass
-                    logger.error(f"Error processing chunks: {str(e)}")
-                    return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
-
-            # Ako nisu svi chunkovi primljeni, vrati status
-            response = jsonify({
-                "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
-                "uploadId": upload_id,
-                "chunkIndex": chunk_index,
-                "totalChunks": total_chunks,
-                "remainingChunks": total_chunks - len(received_chunks)
-            })
-            return response, 200
-
-        else:
-            # Direktan upload
-            try:
-                if 'file' not in request.files:
-                    response = jsonify({"error": "Keine Datei gefunden"})
-                    return response, 400
-
-                file = request.files['file']
-                if not file:
-                    response = jsonify({"error": "Keine Datei gefunden"})
-                    return response, 400
-
-                # Pročitaj sadržaj fajla
-                file_content = file.stream.read().decode('utf-8')
-
-                # Kreiraj mock request za zweite_bearbeitung
-                class MockRequest:
-                    def __init__(self):
-                        self.files = {}
-                        self.form = {}
-
-                mock_request = MockRequest()
-                mock_request.form = {
-                    'eqMax': str(EQ_MAX),
-                    'chgMax': str(CHG_MAX),
-                    'lgMax': str(LG_MAX),
-                    'gapMax': str(GAP_MAX),
-                    'radioValueNull': 'ja' if EL0 else 'nein',
-                    'radioValueNotNull': 'ja' if ELNN else 'nein'
-                }
-
-                # Kreiraj FileStorage objekat sa sadržajem
-                from werkzeug.datastructures import FileStorage
-                from io import BytesIO
-                mock_request.files['file'] = FileStorage(
-                    stream=BytesIO(file_content.encode('utf-8')),
-                    filename='uploaded_file.csv',
-                    content_type='text/csv',
-                )
-
-                try:
-                    response_data = zweite_bearbeitung(mock_request)
-                    # Konvertuj response u format koji frontend očekuje
-                    if isinstance(response_data, tuple):
-                        response, status_code = response_data
-                        if status_code == 200:
-                            response = jsonify({"data": response})
-                            return response, 200
-                        return response, status_code
-                    response = jsonify({"data": response_data})
-                    return response, 200
-                except Exception as e:
-                    error_msg = f"Error in direct upload: {str(e)}\nTraceback: {traceback.format_exc()}"
-                    logger.error(error_msg)
-                    response = jsonify({
-                        "error": str(e),
-                        "traceback": traceback.format_exc()
-                    })
-                    return response, 400
-
-            except Exception as e:
-                error_msg = f"Error in direct upload: {str(e)}\nTraceback: {traceback.format_exc()}"
-                logger.error(error_msg)
-                response = jsonify({
-                    "error": str(e),
-                    "traceback": traceback.format_exc()
-                })
-                return response, 400
-
-    except Exception as e:
-        error_msg = f"Error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
-        logger.error(error_msg)
-        response = jsonify({
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        })
-        return response, 400
+    mock_request = MockRequest()
+    mock_request.form = form_params
+    mock_request.files['file'] = FileStorage(
+        stream=BytesIO(file_content.encode('utf-8')),
+        filename=filename,
+        content_type='text/csv'
+    )
+    return mock_request

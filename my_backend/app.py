@@ -3,12 +3,15 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firstProcessing
 import load_row_data
-import data_processing_main
+from data_processing_main import bp as data_processing_main_bp
 import adjustmentsOfData
 import cloud
 
 app = Flask(__name__)
 CORS(app)
+
+# Register blueprints
+app.register_blueprint(data_processing_main_bp, url_prefix='/api/dataProcessingMain')
 
 # API configuration
 API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
@@ -81,17 +84,7 @@ def health_check():
 #def data_processing_main_zweite_bearbeitung_endpoint():
  #   return data_processing_main.zweite_bearbeitung(request)
 
-@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/upload-chunk', methods=['POST'])
-def data_processing_main_upload_chunk_endpoint():
-    return data_processing_main.upload_chunk(request)
 
-@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/prepare-save', methods=['POST'])
-def data_processing_main_prepare_save_endpoint():
-    return data_processing_main.prepare_save(request)
-
-@app.route(f'{API_PREFIX_DATA_PROCESSING_MAIN}/download/<file_id>', methods=['GET'])
-def data_processing_main_download_file_endpoint(file_id):
-    return data_processing_main.download_file(file_id, request)
 
 #AdjustmentsOfData
 
@@ -128,7 +121,6 @@ def cloud_prepare_save_endpoint():
 @app.route(f'{API_PREFIX_CLOUD}/download/<file_id>', methods=['GET'])
 def cloud_download_file_endpoint(file_id):
     return cloud.download_file(file_id, request)
-
 
 
 if __name__ == '__main__':
