@@ -11,14 +11,9 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import pandas as pd
 
-# Konfiguracija aplikacije i logginga
-app = Flask(__name__)
-CORS(app)
+# Konfiguracija logginga
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# API configuration
-API_PREFIX_LOAD_ROW_DATA = '/api/loadRowData'
 
 # Globalni rječnici za privremene fajlove i chunk-ove
 temp_files = {}
@@ -261,7 +256,6 @@ def convert_to_utc(df, date_column, timezone='UTC'):
         logger.error(f"Error converting to UTC: {e}")
         raise
 
-@app.route(f'{API_PREFIX_LOAD_ROW_DATA}/upload-chunk', methods=['POST'])
 def upload_chunk(request):
     try:
         print("\n=== Request Form Data ===")
@@ -599,5 +593,3 @@ def download_file(file_id):
                 del temp_files[file_id]
             except Exception as ex:
                 print(f"Error cleaning up temp file: {ex}")
-
-
