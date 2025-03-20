@@ -31,20 +31,19 @@ API_PREFIX_CLOUD = '/api/cloud'
 
 @app.route('/')
 def index():
-    return jsonify({
-        'status': 'online',
-        'message': 'Backend service is running',
-        'version': '1.0.0',
-        'timestamp': str(dat.now())
-    })
-
-@app.route('/health')
-def health():
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': str(dat.now())
-    })
-
+    try:
+        logger.info("Handling request to index endpoint")
+        return jsonify({
+            'status': 'online',
+            'message': 'Backend service is running',
+            'version': '1.0.0',
+            'timestamp': str(dat.now()),
+            'port': os.environ.get('PORT', '8080'),
+            'env': os.environ.get('FLASK_ENV', 'production')
+        })
+    except Exception as e:
+        logger.error(f"Error in index route: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 #LoadRowData
@@ -78,7 +77,20 @@ def first_processing_download_file_endpoint(file_id):
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy"}), 200
+    try:
+        logger.info("Handling request to health check endpoint")
+        response = {
+            'status': 'healthy',
+            'timestamp': str(dat.now()),
+            'port': os.environ.get('PORT', '8080'),
+            'env': os.environ.get('FLASK_ENV', 'production'),
+            'blueprints': list(app.blueprints.keys())
+        }
+        logger.info(f"Health check response: {response}")
+        return jsonify(response), 200
+    except Exception as e:
+        logger.error(f"Error in health check: {e}")
+        return jsonify({'error': str(e), 'status': 'unhealthy'}), 500
 
 #DataProcessingMain
 
