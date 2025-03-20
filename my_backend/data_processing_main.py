@@ -517,80 +517,35 @@ def zweite_bearbeitung(req):
 def prepare_save():
     """Prepare CSV file for download from JSON data."""
     try:
-        logger.info(f"Received prepare-save request")
-        
-        # Check if request has JSON data
+        logger.info(f"Received prepare-save request with data type: {type(request.json)}")
         if not request.is_json:
-            logger.error("Request does not contain JSON data")
             return jsonify({"error": "Request must be JSON"}), 400
             
-        # Get the JSON data
-        try:
-            data = request.get_json()
-            logger.info(f"Received data structure: {type(data)}")
-        except Exception as e:
-            logger.error(f"Error parsing JSON data: {str(e)}")
-            return jsonify({"error": "Invalid JSON format"}), 400
-            
-        # Validate data structure
-        if not isinstance(data, dict):
-            logger.error(f"Data is not a dictionary: {type(data)}")
-            return jsonify({"error": "Invalid data format: expected JSON object"}), 400
-            
-        if 'data' not in data:
-            logger.error("Missing 'data' key in request")
-            return jsonify({"error": "Missing 'data' field in request"}), 400
+        data = request.json
+        logger.info(f"Received data: {data[:200] if isinstance(data, str) else str(data)[:200]}...")
+        
+        if not data or 'data' not in data:
+            return jsonify({"error": "No data received"}), 400
             
         save_data = data['data']
-        
-        # Validate save_data
-        if not isinstance(save_data, list):
-            logger.error(f"save_data is not a list: {type(save_data)}")
-            return jsonify({"error": "Invalid data format: expected array"}), 400
-            
         if not save_data:
-            logger.error("Empty save_data array")
-            return jsonify({"error": "Empty data array"}), 400
+            return jsonify({"error": "Empty data"}), 400
             
-        logger.info(f"Processing {len(save_data)} rows of data")
-        
-        # Create temporary file
+        logger.info(f"Processing save_data with {len(save_data)} rows")
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
-        
         try:
-            # Write data to CSV
-            for i, row in enumerate(save_data):
-                if not isinstance(row, list):
-                    raise ValueError(f"Invalid row format at index {i}: expected array")
+            for row in save_data:
                 writer.writerow(row)
-                
-            temp_file.close()
-            
-            # Generate file ID and store reference
-            file_id = dat.now().strftime('%Y%m%d_%H%M%S')
-            temp_files[file_id] = temp_file.name
-            
-            logger.info(f"Successfully prepared file with ID: {file_id}")
-            return jsonify({
-                "message": "File prepared for download",
-                "fileId": file_id,
-                "rowCount": len(save_data)
-            }), 200
-            
         except Exception as e:
-            # Clean up the temporary file if there's an error
-            try:
-                temp_file.close()
-                os.unlink(temp_file.name)
-            except:
-                pass
-            logger.error(f"Error writing data to CSV: {str(e)}")
+            os.unlink(temp_file.name)
             return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
-            
+        temp_file.close()
+        file_id = dat.now().strftime('%Y%m%d_%H%M%S')
+        temp_files[file_id] = temp_file.name
+        return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        logger.error(f"Unexpected error in prepare_save: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": f"Error preparing file: {str(e)}"}), 500
 
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
