@@ -7,8 +7,7 @@ import csv
 import time
 from io import StringIO
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify, send_file, Blueprint
 import pandas as pd
 
 # Konfiguracija logginga
@@ -18,6 +17,8 @@ logger = logging.getLogger(__name__)
 # Globalni rječnici za privremene fajlove i chunk-ove
 temp_files = {}
 chunk_storage = {}
+
+bp = Blueprint('load_row_data', __name__)
 
 # Vrijeme nakon kojeg se brišu stari uploadi (30 minuta)
 UPLOAD_EXPIRY_TIME = 30 * 60  # sekundi
@@ -256,7 +257,8 @@ def convert_to_utc(df, date_column, timezone='UTC'):
         logger.error(f"Error converting to UTC: {e}")
         raise
 
-def upload_chunk(request):
+@bp.route('/upload-chunk', methods=['POST'])
+def upload_chunk():
     try:
         print("\n=== Request Form Data ===")
         print(f"All form data: {dict(request.form)}")
@@ -338,7 +340,8 @@ def process_chunks(upload_id):
             return jsonify({"error": "Could not decode file content with any supported encoding"}), 400
 
         print("\n=== Decoded File Content ===")
-        print(f"Decoded content: {len(full_content.split('\n'))} lines long")
+        num_lines = len(full_content.split('\n'))
+        print(f"Decoded content: {num_lines} lines long")
         print("=== End Decoded File Content ===")
             
         params = chunk_storage[upload_id]['parameters']
@@ -541,7 +544,8 @@ def upload_files(file_content, params):
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-def prepare_save(request):
+@bp.route('/prepare-save', methods=['POST'])
+def prepare_save():
     try:
         data = request.json
         if not data or 'data' not in data:
@@ -567,6 +571,7 @@ def prepare_save(request):
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+@bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     try:
         if file_id not in temp_files:
