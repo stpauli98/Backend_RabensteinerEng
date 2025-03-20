@@ -1,4 +1,5 @@
 import os
+from datetime import datetime as dat
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firstProcessing
@@ -8,7 +9,15 @@ import adjustmentsOfData
 import cloud
 
 app = Flask(__name__)
-CORS(app)
+
+# Configure CORS with more permissive settings first
+CORS(app, resources={
+    r"/*": {
+        "origins": ["*"],  # Allow all origins for now
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        "allow_headers": "*"
+    }
+})
 
 # Register blueprints
 app.register_blueprint(data_processing_main_bp, url_prefix='/api/dataProcessingMain')
@@ -25,25 +34,18 @@ def index():
     return jsonify({
         'status': 'online',
         'message': 'Backend service is running',
-        'version': '1.0.0'
+        'version': '1.0.0',
+        'timestamp': str(dat.now())
     })
 
-# Configure CORS with more permissive settings
-CORS(app, resources={
-    r"/*": {
-        "origins": [
-            "https://rabensteinerengineering.onrender.com",
-            "https://backend-759399595083.europe-west1.run.app",
-            "http://localhost:3000",
-            "https://localhost:3000"
-        ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        "allow_headers": "*",
-        "expose_headers": "*",
-        "supports_credentials": True,
-        "max_age": 600  # 10 minutes
-    }
-})
+@app.route('/health')
+def health():
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': str(dat.now())
+    })
+
+
 
 #LoadRowData
 
