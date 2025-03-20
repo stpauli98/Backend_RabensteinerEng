@@ -515,37 +515,30 @@ def zweite_bearbeitung(req):
 
 @bp.route('/prepare-save', methods=['POST'])
 def prepare_save():
-    """Prepare CSV file for download from JSON data."""
     try:
-        logger.info(f"Received prepare-save request with data type: {type(request.json)}")
-        if not request.is_json:
-            return jsonify({"error": "Request must be JSON"}), 400
-            
         data = request.json
-        logger.info(f"Received data: {data[:200] if isinstance(data, str) else str(data)[:200]}...")
-        
         if not data or 'data' not in data:
             return jsonify({"error": "No data received"}), 400
-            
         save_data = data['data']
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
-            
-        logger.info(f"Processing save_data with {len(save_data)} rows")
+
+        # Kreiraj privremeni fajl i zapiši CSV podatke
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
-        try:
-            for row in save_data:
-                writer.writerow(row)
-        except Exception as e:
-            os.unlink(temp_file.name)
-            return jsonify({"error": f"Error writing to CSV: {str(e)}"}), 500
+        for row in save_data:
+            writer.writerow(row)
         temp_file.close()
+
+        # Generiši jedinstveni ID na osnovu trenutnog vremena
         file_id = dat.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = temp_file.name
+
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        return jsonify({"error": f"Error preparing file: {str(e)}"}), 500
+        print(f"Error in prepare_save: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
 
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
@@ -557,12 +550,14 @@ def download_file(file_id):
         return jsonify({"error": "File not found"}), 404
     try:
         download_name = f"data_{file_id}.csv"
-        return send_file(
+        response = send_file(
             file_path,
             as_attachment=True,
             download_name=download_name,
             mimetype='text/csv'
         )
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+        return response
     except Exception as e:
         return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
     finally:

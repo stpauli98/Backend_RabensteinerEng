@@ -3,8 +3,10 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify, send_file, Blueprint
+
+# Create blueprint
+bp = Blueprint('cloud', __name__)
 import base64
 from io import StringIO, BytesIO
 import json
@@ -102,7 +104,8 @@ def interpolate_data(df1, df2, x_col, y_col, max_time_span):
         print(f"Error in interpolation: {str(e)}")
         raise
 
-def clouddata(request):
+@bp.route('/clouddata', methods=['POST'])
+def clouddata():
     if request.method == 'OPTIONS':
         response = app.make_default_options_response()
         response.headers['Access-Control-Allow-Origin'] = '*'
@@ -420,7 +423,8 @@ def _process_data():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-def interpolate(request):
+@bp.route('/interpolate', methods=['POST'])
+def interpolate():
     try:
         print("\nReceived request to /interpolate")
         
@@ -522,7 +526,8 @@ def interpolate(request):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-def prepare_save(request):
+@bp.route('/prepare-save', methods=['POST'])
+def prepare_save():
     try:
         logger.info("Received prepare_save request")
         data = request.json
@@ -563,7 +568,8 @@ def prepare_save(request):
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-def download_file(file_id, request):
+@bp.route('/download/<file_id>', methods=['GET'])
+def download_file(file_id):
     """Download a previously prepared file.
     
     Args:

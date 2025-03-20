@@ -13,9 +13,11 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 from io import StringIO
 from datetime import datetime as dat, timedelta
-from flask import Flask, request, jsonify, Response, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify, Response, send_file, Blueprint
 from werkzeug.formparser import FormDataParser
+
+# Create blueprint
+bp = Blueprint('first_processing', __name__)
 
 # Globalni rečnik za čuvanje privremenih fajlova
 temp_files = {}
@@ -197,7 +199,8 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         logger.error(error_msg)
         return jsonify({"error": str(e)}), 400
 
-def upload_chunk(request):
+@bp.route('/upload_chunk', methods=['POST'])
+def upload_chunk():
     """
     Endpoint za prihvat i obradu CSV podataka u delovima (chunks).
     Očekivani parametri (form data):
@@ -297,7 +300,8 @@ def upload_chunk(request):
             "traceback": traceback.format_exc()
         }), 400
 
-def prepare_save(request):
+@bp.route('/prepare-save', methods=['POST'])
+def prepare_save():
     try:
         data = request.json
         if not data or 'data' not in data:
@@ -323,7 +327,8 @@ def prepare_save(request):
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-def download_file(file_id, request):
+@bp.route('/download/<file_id>', methods=['GET'])
+def download_file(file_id):
     try:
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404

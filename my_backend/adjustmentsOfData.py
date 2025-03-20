@@ -8,8 +8,10 @@ import tempfile
 import os
 import csv
 import logging
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify, send_file, Blueprint
+
+# Create blueprint
+bp = Blueprint('adjustments_of_data', __name__)
 from io import StringIO
 import traceback
 import json
@@ -61,7 +63,8 @@ def get_time_column(df):
                 return col
     return None
 
-def analyse_data(request):
+@bp.route('/analyse-data', methods=['POST'])
+def analyse_data():
     try:
         global stored_data, info_df
         logger.info("=== Starting file analysis ===")
@@ -361,7 +364,8 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
         traceback.print_exc()
         raise
 
-def adjust_data(request):
+@bp.route('/adjust-data', methods=['POST'])
+def adjust_data():
     try:
         global stored_data, info_df
         logger.info("=== Starting data adjustment ===")
@@ -485,7 +489,8 @@ def adjust_data(request):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 400
 
-def upload_chunk(request):
+@bp.route('/upload-chunk', methods=['POST'])
+def upload_chunk():
     """
     Endpoint za prihvat pojedinačnih chunkova.
     Očekivani parametri (form data):
@@ -683,7 +688,8 @@ def upload_chunk(request):
             "traceback": traceback.format_exc()
         }), 400
 
-def prepare_save(request):
+@bp.route('/prepare-save', methods=['POST'])
+def prepare_save():
     try:
         data = request.json
         if not data or 'data' not in data:
@@ -709,7 +715,8 @@ def prepare_save(request):
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-def download_file(file_id, request):
+@bp.route('/download/<file_id>', methods=['GET'])
+def download_file(file_id):
     try:
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404
