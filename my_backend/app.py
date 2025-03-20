@@ -1,7 +1,15 @@
 import os
+import logging
 from datetime import datetime as dat
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 from firstProcessing import bp as first_processing_bp
 from load_row_data import bp as load_row_data_bp
 from data_processing_main import bp as data_processing_main_bp

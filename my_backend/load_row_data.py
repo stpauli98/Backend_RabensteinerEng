@@ -339,11 +339,7 @@ def process_chunks(upload_id):
         if full_content is None:
             return jsonify({"error": "Could not decode file content with any supported encoding"}), 400
 
-        print("\n=== Decoded File Content ===")
         num_lines = len(full_content.split('\n'))
-        print(f"Decoded content: {num_lines} lines long")
-        print("=== End Decoded File Content ===")
-            
         params = chunk_storage[upload_id]['parameters']
         del chunk_storage[upload_id]
         
