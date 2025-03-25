@@ -2,13 +2,16 @@ import pandas as pd
 from datetime import datetime as dat
 from io import StringIO
 import numpy as np
-from flask import Blueprint, jsonify, send_file, request, Response, stream_with_context
+from flask import Blueprint, jsonify, send_file, request, Response
 import tempfile
 import csv
 import os
 import traceback
 import logging
 import json
+
+# Create Blueprint
+bp = Blueprint('data_processing_main_bp', __name__)
 
 # Configure logging
 logging.basicConfig(
@@ -26,9 +29,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 temp_files = {}
 # Format for UTC dates
 UTC_fmt = "%Y-%m-%d %H:%M:%S"
-
-# Create Blueprint
-bp = Blueprint('data_processing_main', __name__)
 
 @bp.route('/upload-chunk', methods=['POST'])
 def handle_upload_chunk():
