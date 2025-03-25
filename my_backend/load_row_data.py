@@ -7,8 +7,11 @@ import csv
 import time
 from io import StringIO
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file, Blueprint
+from flask import request, jsonify, send_file, Blueprint
 import pandas as pd
+
+# Create Blueprint
+bp = Blueprint('load_row_data', __name__)
 
 # Konfiguracija logginga
 logging.basicConfig(level=logging.INFO)
@@ -17,8 +20,6 @@ logger = logging.getLogger(__name__)
 # Globalni rječnici za privremene fajlove i chunk-ove
 temp_files = {}
 chunk_storage = {}
-
-bp = Blueprint('load_row_data', __name__)
 
 # Vrijeme nakon kojeg se brišu stari uploadi (30 minuta)
 UPLOAD_EXPIRY_TIME = 30 * 60  # sekundi

@@ -1,38 +1,71 @@
 import pandas as pd
 import numpy as np
-import math
-import sys
 from datetime import datetime
-import statistics
 import tempfile
 import os
 import csv
 import logging
-from flask import Flask, request, jsonify, send_file, Blueprint
-
-# Create blueprint
-bp = Blueprint('adjustments_of_data', __name__)
-from io import StringIO
 import traceback
+import time
+from io import StringIO, BytesIO
+from flask import request, jsonify, send_file, Blueprint
+from werkzeug.datastructures import FileStorage, ImmutableMultiDict
 import json
+from flask_cors import CORS
+from flask import Flask
+
+# Create Blueprint
+#bp = Blueprint('adjustmentsOfData_bp', __name__)
+
+# Initialize Flask app
+app = Flask(__name__)
+CORS(app)
+
+# API prefix
+API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
+
+# Configure temp upload folder
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Global dictionaries to store data
+adjustment_chunks = {}  # Store chunks during adjustment
+temp_files = {}  # Store temporary files for download
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Dictionary to store temporary files
-temp_files = {}
-
+# UTC format
 UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
-# Global dictionary to store DataFrames
-stored_data = {}  # Dictionary to store DataFrames
-info_df = pd.DataFrame()  # Initialize empty DataFrame for info
+# Constants
+UPLOAD_EXPIRY_TIME = 30 * 60  # 30 minuta u sekundama
+
+# Global variables to store data
+stored_data = {}
+# Dictionary to store DataFrames
+info_df = pd.DataFrame(columns=['Name der Datei', 'Name der Messreihe', 'Startzeit (UTC)', 'Endzeit (UTC)',
+                                'Zeitschrittweite [min]', 'Offset [min]', 'Anzahl der Datenpunkte',
+                                'Anzahl der numerischen Datenpunkte', 'Anteil an numerischen Datenpunkten'])  # DataFrame for file info
+
+# Function to check if file is a CSV
+def cleanup_old_files():
+    """Clean up files older than UPLOAD_EXPIRY_TIME"""
+    current_time = time.time()
+    for file_id, file_info in list(temp_files.items()):
+        if current_time - file_info.get('timestamp', 0) > UPLOAD_EXPIRY_TIME:
+            try:
+                os.remove(file_info['path'])
+                del temp_files[file_id]
+            except (OSError, KeyError) as e:
+                logger.error(f"Error cleaning up file {file_id}: {str(e)}")
 
 def allowed_file(filename):
     """Check if file has .csv extension"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() == 'csv'
 
+# Function to detect delimiter
 def detect_delimiter(file_content):
     """
     Detect the delimiter used in a CSV file content
@@ -52,6 +85,7 @@ def detect_delimiter(file_content):
         return max(counts.items(), key=lambda x: x[1])[0]
     return ';'  # Default to semicolon if no delimiter found
 
+# Function to get time column
 def get_time_column(df):
     """
     Check for common time column names and return the first one found
@@ -61,24 +95,195 @@ def get_time_column(df):
         for time_col in time_columns:
             if time_col.lower() in col.lower():
                 return col
-    return None
+        return None
+    try:
+        
+        # Get upload metadata from form
+        upload_id = request.form.get('uploadId')
+        chunk_index = int(request.form.get('chunkIndex'))
+        total_chunks = int(request.form.get('totalChunks'))
+        
+        # Validacija parametara
+        if not all([upload_id, isinstance(chunk_index, int), isinstance(total_chunks, int)]):
+            return jsonify({"error": "Missing or invalid required parameters"}), 400
+            
+        
+        # Get the file chunk
+        if 'files[]' not in request.files:
+            logger.error(f"No file part. Available files: {list(request.files.keys())}")
+            return jsonify({'error': 'No file part'}), 400
+            
+        file = request.files['files[]']
+        if not file:
+            return jsonify({'error': 'No selected file'}), 400
+            
+        # Read file content
+        file_content = file.read()
+        if not file_content:
+            return jsonify({'error': 'Empty file content'}), 400
+            
+        # Create upload directory if it doesn't exist
+        upload_dir = os.path.join(UPLOAD_FOLDER, upload_id)
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Save the chunk
+        chunk_path = os.path.join(upload_dir, f'chunk_{chunk_index}')
+        with open(chunk_path, 'wb') as f:
+            f.write(file_content)
+        
+        # Check if all chunks have been received
+        received_chunks = [f for f in os.listdir(upload_dir) if f.startswith('chunk_')]
+        
+        # If this was the last chunk and we have all chunks, combine them
+        if len(received_chunks) == total_chunks:
+            # Combine all chunks into final file
+            final_path = os.path.join(upload_dir, 'complete_file.csv')
+            with open(final_path, 'wb') as outfile:
+                for i in range(total_chunks):
+                    chunk_path = os.path.join(upload_dir, f'chunk_{i}')
+                    try:
+                        with open(chunk_path, 'rb') as infile:
+                            outfile.write(infile.read())
+                        # Delete chunk after combining
+                        os.remove(chunk_path)
+                    except Exception as e:
+                        logger.error(f"Error processing chunk {i}: {str(e)}")
+                        return jsonify({"error": f"Error processing chunk {i}"}), 500
+            
+            return jsonify({
+                'status': 'complete',
+                'message': 'File upload complete',
+                'path': final_path
+            })
+        
+        return jsonify({
+            'status': 'chunk_received',
+            'message': f'Received chunk {chunk_index + 1} of {total_chunks}',
+            'chunksReceived': len(received_chunks)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 400
 
-@bp.route('/analyse-data', methods=['POST'])
+# First Step
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])
+def upload_chunk():
+    # Clean up old files before new upload
+    cleanup_old_files()
+    """
+    Endpoint za prihvat pojedinačnih chunkova.
+    Očekivani parametri (form data):
+      - uploadId: jedinstveni ID za upload (string)
+      - chunkIndex: redni broj chanka (int, počinje od 0)
+      - totalChunks: ukupan broj chunkova (int)
+      - filename: originalno ime fajla
+      - tss, offset, mode, intrplMax: dodatni parametri za obradu
+      - files[]: sadržaj fajla kao file
+    Ako su svi chunkovi primljeni, oni se spajaju i obrađuju.
+    """
+    try:
+        # Get upload metadata from form
+        upload_id = request.form.get('uploadId')
+        chunk_index = int(request.form.get('chunkIndex'))
+        total_chunks = int(request.form.get('totalChunks'))
+        filename = request.form.get('filename')
+        tss = int(request.form.get('tss', 0))
+        offset = int(request.form.get('offset', 0))
+        mode_input = request.form.get('mode', '')
+        intrpl_max = float(request.form.get('intrplMax', 60))
+        
+        # Validacija parametara
+        if not all([upload_id, isinstance(chunk_index, int), isinstance(total_chunks, int)]):
+            return jsonify({"error": "Missing or invalid required parameters"}), 400
+            
+        # Get the file from request
+        if 'files[]' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
+            
+        file = request.files['files[]']
+        if not file:
+            return jsonify({'error': 'No selected file'}), 400
+            
+        # Read file content
+        file_content = file.read().decode('utf-8')
+        if not file_content:
+            return jsonify({'error': 'Empty file content'}), 400
+            
+        # Create upload directory if it doesn't exist
+        upload_dir = os.path.join(UPLOAD_FOLDER, upload_id)
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Save the chunk
+        chunk_path = os.path.join(upload_dir, f'chunk_{chunk_index}')
+        with open(chunk_path, 'w', encoding='utf-8') as f:
+            f.write(file_content)
+        
+        # Check if all chunks have been received
+        received_chunks = [f for f in os.listdir(upload_dir) if f.startswith('chunk_')]
+        
+        # If this was the last chunk and we have all chunks, combine them
+        if len(received_chunks) == total_chunks:
+            # Combine all chunks into final file with original filename
+            final_path = os.path.join(upload_dir, filename)
+            with open(final_path, 'w', encoding='utf-8') as outfile:
+                for i in range(total_chunks):
+                    chunk_path = os.path.join(upload_dir, f'chunk_{i}')
+                    try:
+                        with open(chunk_path, 'r', encoding='utf-8') as infile:
+                            outfile.write(infile.read())
+                        # Delete chunk after combining
+                        os.remove(chunk_path)
+                    except Exception as e:
+                        return jsonify({"error": f"Error processing chunk {i}"}), 500
+            
+            # Process the complete file
+            try:
+                # Create a temporary request context
+                with app.test_request_context():
+                    # Create a FileStorage object with the complete file
+                    with open(final_path, 'rb') as f:
+                        file_data = f.read()
+                    file_obj = FileStorage(
+                        stream=BytesIO(file_data),
+                        filename=filename,
+                        content_type='text/csv'
+                    )
+                    
+                    # Set up the request context with our file and parameters
+                    request.files = ImmutableMultiDict([('files[]', file_obj)])
+                    request.form = ImmutableMultiDict([
+                        ('tss', str(tss)),
+                        ('offset', str(offset)),
+                        ('mode', mode_input),
+                        ('intrplMax', str(intrpl_max))
+                    ])
+                    
+                    # Process the file using analyse_data
+                    return analyse_data()
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+            
+        return jsonify({
+            'status': 'chunk_received',
+            'message': f'Received chunk {chunk_index + 1} of {total_chunks}',
+            'chunksReceived': len(received_chunks)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# First Step Analyse
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/analyse-data', methods=['POST'])
 def analyse_data():
     try:
         global stored_data, info_df
-        logger.info("=== Starting file analysis ===")
-        logger.info(f"Content-Type: {request.content_type}")
-        logger.info(f"Files: {request.files}")
-        logger.info(f"Form: {request.form}")
         
         # Get the file from request
         if not request.files:
-            logger.error("No files in request")
             return jsonify({"error": "No files provided"}), 400
             
         files = request.files.getlist('files[]') if 'files[]' in request.files else [request.files['file']]
-        logger.info(f"Processing {len(files)} files")
         
         all_file_info = []
         processed_data = []
@@ -90,19 +295,14 @@ def analyse_data():
                     try:
                         file_content = file.read().decode('utf-8')
                         file.seek(0)  # Reset file pointer
-                        logger.info(f"Successfully read file: {file.filename}")
                     except UnicodeDecodeError as e:
-                        logger.error(f"Error decoding file {file.filename}: {str(e)}")
                         return jsonify({"error": f"Could not decode file {file.filename}. Make sure it's a valid UTF-8 encoded CSV file."}), 400
                     
                     # Detect delimiter from content
                     delimiter = detect_delimiter(file_content)
-                    logger.info(f"Detected delimiter: {repr(delimiter)} for file {file.filename}")
-                    logger.debug(f"First few lines:\n{file_content[:200]}")
                     
                     # Read CSV with detected delimiter
                     df = pd.read_csv(StringIO(file_content), delimiter=delimiter)
-                    logger.info(f"Loaded file {file.filename} with columns: {df.columns.tolist()}")
                     
                     # Find time column
                     time_col = get_time_column(df)
@@ -115,25 +315,19 @@ def analyse_data():
                     
                     # Convert UTC column to datetime
                     df['UTC'] = pd.to_datetime(df['UTC'])
-                    logger.info(f"Processed {len(df)} rows from {file.filename}")
-                    
-                    print(f"Sample data:\n{df.head()}")
                     
                     # Store the DataFrame for later use
                     stored_data[file.filename] = df
                     
-                    # Calculate basic statistics
-                    numeric_columns = df.select_dtypes(include=[np.number]).columns
-                    numeric_count = int(df[numeric_columns].count().sum())
-                    total_count = int(len(df) * len(numeric_columns))
-                    numeric_percentage = float(numeric_count / total_count * 100) if total_count > 0 else 0.0
-                    
                     # Calculate time step
                     time_step = None
                     try:
+                        # Calculate time differences and convert to minutes
                         time_diffs = pd.to_datetime(df['UTC']).diff().dropna()
-                        avg_time_diff = time_diffs.mean().total_seconds() / 60  # Convert to minutes
-                        time_step = float(avg_time_diff)
+                        time_diffs_minutes = time_diffs.dt.total_seconds() / 60
+                        
+                        # Get the most common time difference (mode)
+                        time_step = int(time_diffs_minutes.mode()[0])
                     except Exception as e:
                         print(f"Error calculating time step: {str(e)}")
                     
@@ -145,8 +339,6 @@ def analyse_data():
                             break
 
                     if measurement_col:
-                        print(f"\nMeasurement column: {measurement_col}")
-                        print(f"Measurement stats:\n{df[measurement_col].describe()}")
 
                         # Izračunaj offset iz podataka
                         first_time = df['UTC'].iloc[0]
@@ -163,10 +355,6 @@ def analyse_data():
                             'Anzahl der numerischen Datenpunkte': int(df[measurement_col].count()),
                             'Anteil an numerischen Datenpunkten': float(df[measurement_col].count() / len(df) * 100)
                         }
-                        
-                        print(f"\nFile info:")
-                        print(json.dumps(file_info, indent=2))
-                        
                         all_file_info.append(file_info)
                     
                     # Convert DataFrame to records with explicit type conversion
@@ -187,11 +375,8 @@ def analyse_data():
                     processed_data.append(df_records)
                     
                 except Exception as e:
-                    logger.error(f"Error processing file {file.filename}: {str(e)}")
-                    logger.error(traceback.format_exc())
                     return jsonify({"error": f"Error processing file {file.filename}: {str(e)}"}), 400
             else:
-                logger.error(f"Invalid file format for {file.filename}")
                 return jsonify({"error": f"Invalid file format for {file.filename}"}), 400
         
         # Update global info_df - append new info to existing
@@ -213,21 +398,382 @@ def analyse_data():
                 'dataframe': processed_data[0] if processed_data else []
             }
         }
-        logger.info(f"Sending response with {len(all_file_info)} files processed")
         return jsonify(response_data)
         
     except Exception as e:
-        logger.error(f"Error in analyse_data: {str(e)}")
-        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 400
 
-def process_data_detailed(df, filename, start_time=None, end_time=None, time_step=None, offset=None, method='mean'):
+# SECOND STEP
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjust-data-chunk', methods=['POST'])
+def adjust_data():
     try:
-        print(f"\n=== Processing data with parameters ===")
+        global stored_data, info_df, adjustment_chunks
+        
+        data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data received"}), 400
+
+        # Get chunk parameters
+        upload_id = data.get('uploadId')
+        chunk_info = data.get('chunkInfo')
+        chunk_data = data.get('dataChunk')
+        
+        # Get additional parameters that we'll need in complete_adjustment
+        start_time = data.get('startTime')
+        end_time = data.get('endTime')
+        time_step_size = data.get('timeStepSize')
+        offset = data.get('offset', 0)
+        files = data.get('files', [])
+        
+        # Get methods from request or existing params
+        methods = data.get('methods')
+        if upload_id in adjustment_chunks and not methods:
+            # If methods not in request, use existing methods
+            methods = adjustment_chunks[upload_id]['params'].get('methods', {})
+        else:
+            # If no existing methods, use empty dict
+            methods = methods or {}
+
+        # Validate parameters
+        if (upload_id is None or chunk_info is None or chunk_data is None):
+            return jsonify({"error": "Missing required parameters"}), 400
+
+        # Get chunk info
+        total_chunks = chunk_info.get('totalChunks')
+        current_chunk = chunk_info.get('currentChunk')
+
+        # Initialize chunk storage if not exists
+        if (upload_id not in adjustment_chunks):
+            adjustment_chunks[upload_id] = {
+                'chunks': {},
+                'params': {
+                    'startTime': start_time,
+                    'endTime': end_time,
+                    'timeStepSize': time_step_size,
+                    'offset': offset,
+                    'methods': methods,
+                    'files': files
+                }
+            }
+
+        # Store chunk
+        adjustment_chunks[upload_id]['chunks'][current_chunk] = chunk_data
+
+
+        return jsonify({
+            "message": f"Chunk {current_chunk} received",
+            "remainingChunks": total_chunks - len(adjustment_chunks[upload_id]['chunks'])
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in receive_adjustment_chunk: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 400
+
+# Route to complete adjustment
+@app.route(f'/adjustdata/complete', methods=['POST'])
+def complete_adjustment():
+    """
+    Ovaj endpoint se poziva kada su svi chunkovi poslani.
+    Očekuje JSON payload s:
+      - uploadId: jedinstveni ID za upload (string)
+      - totalChunks: ukupan broj chunkova (int)
+      - startTime: početno vrijeme (opciono)
+      - endTime: završno vrijeme (opciono)
+      - timeStepSize: veličina vremenskog koraka (opciono)
+      - offset: pomak u minutama (opciono, default 0)
+      - methods: metode za obradu podataka (opciono)
+      - files: lista imena fajlova
+    Nakon toga, backend kombinira sve primljene chunkove,
+    obrađuje ih i vraća konačni rezultat.
+    """
+    try:
+        global stored_data, info_df, adjustment_chunks
+        
+        data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data received"}), 400
+
+        # Obavezni parametri
+        upload_id = data.get('uploadId')
+        total_chunks = data.get('totalChunks')
+        
+        if not upload_id or total_chunks is None:
+            return jsonify({"error": "Missing uploadId or totalChunks"}), 400
+            
+        # Get stored parameters
+        if upload_id not in adjustment_chunks:
+            return jsonify({"error": "Upload ID not found"}), 
+        
+        # Update methods if provided in the request
+        if 'methods' in data and data['methods']:
+            adjustment_chunks[upload_id]['params']['methods'] = data['methods']
+        
+        params = adjustment_chunks[upload_id]['params']
+        
+        files = params['files']
+        requested_time_step = params['timeStepSize']
+        requested_offset = params['offset']
+        methods = params['methods']
+        start_time = params['startTime']
+        end_time = params['endTime']
+        
+        print("\n=== Parameters after combining chunks ===")
+        print(f"Files: {files}")
+        print(f"Start Time: {start_time}")
+        print(f"End Time: {end_time}")
+        print(f"Requested Time Step: {requested_time_step}")
+        print(f"Requested Offset: {requested_offset}")
+        print(f"Selected Methods: {methods}")
+        
+        # Get chunks data
+        chunks = adjustment_chunks.get(upload_id, {}).get('chunks', {})
+        if not chunks:
+            # If no chunks in memory, try to read from filesystem
+            upload_dir = os.path.join(UPLOAD_FOLDER, upload_id)
+            if not os.path.exists(upload_dir):
+                return jsonify({"error": f"No data found for upload ID: {upload_id}"}), 404
+                
+            # Load chunks from filesystem into memory
+            chunks = {}
+            for chunk_index in range(total_chunks):
+                chunk_path = os.path.join(upload_dir, f'chunk_{chunk_index}')
+                if os.path.exists(chunk_path):
+                    with open(chunk_path, 'r', encoding='utf-8') as f:
+                        chunks[chunk_index + 1] = f.read()
+                        
+            if not chunks:
+                return jsonify({"error": "No chunks found"}), 404
+                
+            # Store chunks in memory for processing
+            adjustment_chunks[upload_id] = {
+                'chunks': chunks,
+                'params': {
+                    'startTime': data.get('startTime'),
+                    'endTime': data.get('endTime'),
+                    'timeStepSize': data.get('timeStepSize'),
+                    'offset': data.get('offset', 0),
+                    'methods': data.get('methods', {}),
+                    'files': data.get('files', [])
+                }
+            }
+            
+        # Clean up methods by stripping whitespace
+        if methods:
+            methods = {k: v.strip() if isinstance(v, str) else v for k, v in methods.items()}
+            
+        # Define valid methods
+        VALID_METHODS = {'mean', 'intrpl', 'nearest', 'nearest (mean)', 'nearest (max. delta)'}
+        
+        # Process each file separately
+        for filename in files:
+            # Get data for this file from all chunks
+            file_data = []
+            
+            # Get all chunks from memory
+            chunks_data = adjustment_chunks[upload_id]['chunks']
+            
+            # Convert chunks to DataFrame
+            for chunk_index, chunk_content in sorted(chunks_data.items()):
+                try:
+                    # If chunk_content is a list (from adjust-data-chunk), convert to DataFrame directly
+                    if isinstance(chunk_content, list):
+                        chunk_data = pd.DataFrame(chunk_content)
+                    else:
+                        # If it's a string (from file upload), parse CSV
+                        delimiter = detect_delimiter(chunk_content)
+                        # Prvo pročitamo samo header da vidimo koje kolone stvarno postoje
+                        header = pd.read_csv(StringIO(chunk_content), delimiter=delimiter, nrows=0)
+                        # Učitamo samo kolone koje postoje u fajlu
+                        chunk_data = pd.read_csv(StringIO(chunk_content), delimiter=delimiter, usecols=header.columns)
+                        
+                    if chunk_data.empty:
+                        continue
+                    file_data.append(chunk_data)
+                except Exception as e:
+                    logger.error(f"Error processing chunk {chunk_index}: {str(e)}")
+                    return jsonify({"error": f"Error processing chunk {chunk_index}: {str(e)}"}), 500
+                
+            # Combine all chunks into a single DataFrame
+            if not file_data:
+                continue
+
+            df = pd.concat(file_data, ignore_index=True)
+            
+            if 'UTC' not in df.columns:
+                logger.error(f"No UTC column found in file {filename}")
+                continue
+                
+            df['UTC'] = pd.to_datetime(df['UTC'])
+            
+            # Get time step and offset from info_df---------------------------
+            file_info = info_df[info_df['Name der Datei'] == filename].iloc[0]
+            file_time_step = file_info['Zeitschrittweite [min]']
+            file_offset = file_info['Offset [min]']
+            # Check if this file needs processing
+            # Convert requested_offset to minutes from midnight if needed
+            if requested_offset >= file_time_step:
+                requested_offset = requested_offset % file_time_step
+                
+            # Check if file needs processing and has a valid method
+            needs_processing = file_time_step != requested_time_step or file_offset != requested_offset
+            method = methods.get(filename, '').strip()
+            has_valid_method = method and method in VALID_METHODS
+            
+            if needs_processing and not has_valid_method:
+                return jsonify({
+                    "success": True,
+                    "methodsRequired": True,
+                    "message": f"Die Datei {filename} benötigt eine Verarbeitungsmethode (Zeitschrittweite: {file_time_step}->{requested_time_step}, Offset: {file_offset}->{requested_offset}).",
+                    "data": {
+                        "info_df": [{
+                            "filename": filename,
+                            "current_timestep": file_time_step,
+                            "requested_timestep": requested_time_step,
+                            "current_offset": file_offset,
+                            "requested_offset": requested_offset,
+                            "valid_methods": list(VALID_METHODS)
+                        }],
+                        "dataframe": []
+                    }
+                    }), 200
+            else:
+                print(f"\nFile {filename} does not need processing - parameters match")
+
+        
+        # Check if all files have methods assigned
+        missing_methods = [f for f in files if f not in methods]
+        if missing_methods:
+            return jsonify({
+                    "error": f"Missing methods for files: {', '.join(missing_methods)}"
+                }), 400
+            
+        # Check if all chunks received
+        if upload_id not in adjustment_chunks:
+            return jsonify({"error": "Upload ID not found"}), 400
+            
+        chunks = adjustment_chunks[upload_id]['chunks']
+        received_chunks = len(chunks)
+        if received_chunks != total_chunks:
+            return jsonify({"error": f"Missing chunks. Received {received_chunks} out of {total_chunks}"}), 400
+
+        # Combine all chunks
+        combined_data = []
+        for i in range(1, total_chunks + 1):
+            chunk = chunks.get(i)
+            if chunk is None:
+                return jsonify({"error": f"Missing chunk {i}"}), 400
+            combined_data.extend(chunk)  # Each chunk is a list of records
+
+
+        # Use time step and offset from stored params
+        time_step = params['timeStepSize']
+        offset = params['offset']
+        
+        # Get methods from stored params
+        methods = params['methods']
+
+        # Process data for each file
+        all_results = []
+        all_info_records = []
+        
+        for file in files:
+            result_data, info_record = process_data_detailed(
+                combined_data,
+                file,
+                start_time,
+                end_time,
+                time_step,
+                offset,
+                methods
+            )
+            all_results.extend(result_data)
+            if info_record:
+                all_info_records.append(info_record)
+
+        # Nakon obrade, očistite spremljene chunkove
+        del adjustment_chunks[upload_id]
+        
+        return jsonify({
+            "success": True,
+            "methodsRequired": False,
+            "data": {
+                "info_df": all_info_records,
+                "dataframe": all_results
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in complete_adjustment: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 400
+
+# Function to process data with detailed logging
+def process_data_detailed(data, filename, start_time=None, end_time=None, time_step=None, offset=None, methods={}):
+    try:
+        print(f"\n===Krece obrada | Processing data with parameters ===")
         print(f"DataFrame name: {filename}")
+        
+        # Convert list of dictionaries to DataFrame
+        df = pd.DataFrame(data)
         
         # Convert UTC column to datetime if it's not already
         df['UTC'] = pd.to_datetime(df['UTC'])
+        
+        # Get the method for this file if available and strip whitespace
+        method = methods.get(filename, '').strip() if methods else None
+        
+        # Apply the selected method if we have a time_step and a valid method
+        if time_step and method:
+            # Get measurement columns (non-UTC columns) pre obrade
+            measurement_cols = [col for col in df.columns if col != 'UTC']
+            if not measurement_cols:
+                raise ValueError("No measurement columns found in DataFrame")
+            measurement_col = measurement_cols[0]  # Take the first measurement column
+            
+            # Prvo postavimo UTC kao index za sve metode
+            df.set_index('UTC', inplace=True)
+            
+            # Ako imamo duplikate u indexu, rešimo ih pre reindex-a
+            if df.index.duplicated().any():
+                if method in ['mean', 'nearest (mean)']:
+                    # Za metode koje koriste mean, odmah grupišemo po UTC
+                    df = df.groupby(level=0).mean()
+                else:
+                    # Za ostale metode, uzimamo prvi zapis za svaki timestamp
+                    df = df.loc[~df.index.duplicated(keep='first')]
+            
+            # Sortiramo index da bude monoton rastuci
+            df = df.sort_index()
+            
+            # Kreiramo novi vremenski index sa zadatim time step-om
+            new_index = pd.date_range(start=df.index[0], end=df.index[-1], freq=f'{time_step}min')
+            
+            if method == 'mean':
+                # Klasična metoda proseka
+                df = df.resample(f'{time_step}min').mean()
+                df = df.interpolate(method='linear')
+                
+            elif method == 'intrpl':
+                # Linearna interpolacija
+                df = df.reindex(new_index).interpolate(method='linear')
+                
+            elif method == 'nearest':
+                # Najbliža vrednost
+                df = df.reindex(new_index, method='nearest')
+                
+            elif method == 'nearest (mean)':
+                # Prvo nađemo najbližu vrednost, pa onda prosek ako ima više vrednosti
+                df = df.reindex(new_index, method='nearest')
+                df = df.resample(f'{time_step}min').mean()
+                
+            elif method == 'nearest (max. delta)':
+                # Najbliža vrednost sa maksimalnom dozvoljenom razlikom
+                df = df.reindex(new_index, method='nearest', tolerance=pd.Timedelta(minutes=time_step))
+                # Vrednosti koje su dalje od time_step će biti NaN
+            
+            # Reset index za sve metode i osiguraj da se kolona zove 'UTC'
+            df.reset_index(inplace=True)
+            if 'index' in df.columns:
+                df.rename(columns={'index': 'UTC'}, inplace=True)
         
         # Get measurement columns (non-UTC columns)
         measurement_cols = [col for col in df.columns if col != 'UTC']
@@ -252,6 +798,10 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
         
         # Create regular time index
         if time_step:
+            # Osiguraj da imamo UTC kolonu
+            if 'index' in df.columns and 'UTC' not in df.columns:
+                df.rename(columns={'index': 'UTC'}, inplace=True)
+                
             # Create new time index
             if start_time is None:
                 start_time = df['UTC'].min()
@@ -267,13 +817,15 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
             
             # Resample data based on method
             if method == 'mean':
-                resampled = df.set_index('UTC').resample(f'{time_step}min', offset=f'{offset}min')[measurement_col].mean()
+                # Set index and resample with mean
+                df_indexed = df.set_index('UTC').sort_index()  # Sortiramo pre resample
+                resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[measurement_col].mean()
                 result_df = pd.DataFrame({
                     'UTC': resampled.index,
                     measurement_col: resampled.values
                 })
             elif method == 'max':
-                resampled = df.set_index('UTC').resample(f'{time_step}min', offset=f'{offset}min')[measurement_col].max()
+                resampled = df.set_index('UTC').sort_index().resample(f'{time_step}min', offset=f'{offset}min')[measurement_col].max()
                 result_df = pd.DataFrame({
                     'UTC': resampled.index,
                     measurement_col: resampled.values
@@ -285,25 +837,36 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
                     measurement_col: resampled.values
                 })
             elif method == 'nearest':
-                df_indexed = df.set_index('UTC')
-                resampled = df_indexed[measurement_col].reindex(new_index, method='nearest')
+                # First aggregate any duplicate timestamps by taking their mean
+                df_indexed = df.groupby('UTC')[measurement_col].mean()
+                # Then reindex with nearest method
+                resampled = df_indexed.reindex(new_index, method='nearest')
                 result_df = pd.DataFrame({
                     'UTC': new_index,
                     measurement_col: resampled.values
                 })
             elif method == 'nearest (mean)':
-                df_indexed = df.set_index('UTC')
-                nearest_vals = df_indexed[measurement_col].reindex(new_index, method='nearest')
+                # First aggregate any duplicate timestamps by taking their mean
+                df_indexed = df.groupby('UTC')[measurement_col].mean()
+                # Then reindex with nearest method
+                nearest_vals = df_indexed.reindex(new_index, method='nearest')
                 rolling_mean = nearest_vals.rolling(window=2, min_periods=1).mean()
                 result_df = pd.DataFrame({
                     'UTC': new_index,
                     measurement_col: rolling_mean.values
                 })
             elif method == 'nearest (max. delta)':
-                df_indexed = df.set_index('UTC')
-                nearest_vals = df_indexed[measurement_col].reindex(new_index, method='nearest')
-                deltas = nearest_vals.diff().abs()
+                # First aggregate any duplicate timestamps by taking their mean
+                df_indexed = df.groupby('UTC')[measurement_col].mean()
+                # Then reindex with nearest method
+                nearest_vals = df_indexed.reindex(new_index, method='nearest')
+                # Calculate forward and backward deltas
+                forward_deltas = nearest_vals.diff()
+                backward_deltas = nearest_vals.diff(-1)
+                # Get absolute deltas and take minimum of forward/backward
+                deltas = pd.concat([forward_deltas.abs(), backward_deltas.abs()], axis=1).min(axis=1)
                 max_delta = deltas.quantile(0.95)  # Use 95th percentile as threshold
+                # Only mask values where both forward and backward deltas exceed threshold
                 masked_values = nearest_vals.where(deltas <= max_delta)
                 result_df = pd.DataFrame({
                     'UTC': new_index,
@@ -318,11 +881,7 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
         total_points = len(result_df)
         numeric_points = result_df[measurement_col].count()
         numeric_ratio = (numeric_points / total_points * 100) if total_points > 0 else 0
-        
-        print("\nStatistics:")
-        print(f"Total points: {total_points}")
-        print(f"Numeric points: {numeric_points}")
-        print(f"Numeric ratio: {numeric_ratio:.1f}%")
+       
         
         # Create info record
         original_name = filename
@@ -331,15 +890,12 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
             'Name der Messreihe': measurement_col,
             'Startzeit (UTC)': result_df['UTC'].iloc[0].strftime(UTC_fmt) if len(result_df) > 0 else None,
             'Endzeit (UTC)': result_df['UTC'].iloc[-1].strftime(UTC_fmt) if len(result_df) > 0 else None,
-            'Zeitschrittweite [min]': float(time_step) if time_step else None,
-            'Offset [min]': float(offset) if offset else 0.0,
+            'Zeitschrittweite [min]': time_step,  # Already a number from frontend
+            'Offset [min]': offset,  # Already a number from frontend
             'Anzahl der Datenpunkte': int(total_points),
             'Anzahl der numerischen Datenpunkte': int(numeric_points),
             'Anteil an numerischen Datenpunkten': float(numeric_ratio)
         }
-        
-        print("\nInfo record:")
-        print(json.dumps(info_record, indent=2))
         
         # Convert to records
         records = []
@@ -353,10 +909,6 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
             }
             records.append(record)
             
-        logger.info(f"Converted {len(records)} records")
-        if records:
-            logger.info(f"Sample record: {records[0]}")
-            
         return records, info_record
         
     except Exception as e:
@@ -364,339 +916,33 @@ def process_data_detailed(df, filename, start_time=None, end_time=None, time_ste
         traceback.print_exc()
         raise
 
-@bp.route('/adjust-data', methods=['POST'])
-def adjust_data():
-    try:
-        global stored_data, info_df
-        logger.info("=== Starting data adjustment ===")
-        
-        data = request.json
-        if not data:
-            return jsonify({"error": "No JSON data received"}), 400
-            
-        # Get parameters only once
-        start_time = data.get('startTime')
-        end_time = data.get('endTime')
-        time_step = data.get('timeStepSize')
-        offset = data.get('offset', 0)  # Default to 0
-        methods = data.get('methods', {})  # Dictionary of filename -> method
-        files = data.get('files', [])  # List of files to process
-        
-        print(f"\nReceived parameters:")
-        print(f"Start time: {start_time}")
-        print(f"End time: {end_time}")
-        print(f"Time step: {time_step}")
-        print(f"Offset: {offset}")
-        print(f"Methods: {methods}")
-        print(f"Files: {files}")
-        
-        if not stored_data or info_df.empty:
-            return jsonify({"error": "No data available. Please upload a file first."}), 400
-
-        # Create dictionary of files to process
-        files_to_process = {}
-        for filename in files:
-            if filename in stored_data:
-                df = stored_data[filename].copy()  # Make a copy to avoid modifying original
-                df.name = filename  # Set name for the DataFrame
-                files_to_process[filename] = df
-            else:
-                return jsonify({"error": f"File {filename} not found"}), 400
-
-        all_processed_data = []
-        all_processed_info = []
-        files_needing_methods = []
-        processed_files = set()  # Keep track of processed files
-
-        # First pass: identify files needing method selection
-        for filename, df in files_to_process.items():
-            if filename in processed_files:
-                continue
-
-            try:
-                file_info = info_df[info_df['Name der Datei'] == filename].iloc[0].to_dict()
-                current_timestep = float(file_info.get('Zeitschrittweite [min]', 0))
-                current_offset = float(file_info.get('Offset [min]', 0))
-                
-                needs_method = False
-                if time_step is not None:
-                    time_step_float = float(time_step)
-                    offset_float = float(offset) if offset is not None else 0.0
-                    needs_method = not (math.isclose(current_timestep, time_step_float, rel_tol=1e-9) and 
-                                     math.isclose(current_offset, offset_float, rel_tol=1e-9))
-                    
-                    if needs_method:
-                        # Check if we have a method for this file
-                        file_method = methods.get(filename)
-                        files_needing_methods.append({
-                            'filename': filename,
-                            'current_timestep': current_timestep,
-                            'requested_timestep': time_step_float,
-                            'current_offset': current_offset,
-                            'requested_offset': offset_float,
-                            'method': file_method
-                        })
-                        if not file_method:
-                            continue
-
-                # Process data if method is provided or not needed
-                if not needs_method or (needs_method and methods.get(filename)):
-                    actual_start = pd.to_datetime(start_time) if start_time else pd.to_datetime(file_info['Startzeit (UTC)'])
-                    actual_end = pd.to_datetime(end_time) if end_time else pd.to_datetime(file_info['Endzeit (UTC)'])
-                    
-                    result, info_record = process_data_detailed(
-                        df,
-                        filename,
-                        start_time=actual_start.strftime(UTC_fmt),
-                        end_time=actual_end.strftime(UTC_fmt),
-                        time_step=time_step_float if time_step is not None else None,
-                        offset=offset_float if offset is not None else None,
-                        method=methods.get(filename) if needs_method else 'mean'
-                    )
-                    
-                    if result:
-                        all_processed_data.extend(result)
-                        all_processed_info.append(info_record)
-                        processed_files.add(filename)
-                
-            except Exception as e:
-                print(f"Error processing file {filename}: {str(e)}")
-                traceback.print_exc()
-                continue
-
-        # Return appropriate response based on processing results
-        if files_needing_methods and not all(f.get('method') for f in files_needing_methods):
-            return jsonify({
-                "success": True,
-                "methodsRequired": True,
-                "filesNeedingMethods": files_needing_methods,
-                "data": None
-            })
-        elif all_processed_info:
-            return jsonify({
-                "success": True,
-                "methodsRequired": False,
-                "data": {
-                    "info_df": all_processed_info,
-                    "dataframe": all_processed_data
-                }
-            })
-        else:
-            return jsonify({"error": "No data was processed"}), 400
-
-    except Exception as e:
-        print(f"Error in adjust_data: {str(e)}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 400
-
-@bp.route('/upload-chunk', methods=['POST'])
-def upload_chunk():
-    """
-    Endpoint za prihvat pojedinačnih chunkova.
-    Očekivani parametri (form data):
-      - uploadId: jedinstveni ID za upload (string)
-      - chunkIndex: redni broj chanka (int, počinje od 0)
-      - totalChunks: ukupan broj chunkova (int)
-      - tss, offset, mode, intrplMax: dodatni parametri za obradu
-      - fileChunk: binarni sadržaj chanka
-    Ako su svi chunkovi primljeni, oni se spajaju i obrađuju.
-    """
-    try:
-        stream = request.stream
-        boundary = None
-        for key, value in request.headers.items():
-            if key.lower() == 'content-type':
-                logger.info(f"Parsing Content-Type: {value}")
-                for part in value.split(';'):
-                    logger.info(f"Checking part: {part}")
-                    if 'boundary=' in part:
-                        boundary = part.split('=')[1].strip()
-                        logger.info(f"Found boundary: {boundary}")
-                        break
-        if not boundary:
-            logger.error("No boundary found in Content-Type")
-            raise ValueError("No boundary found in Content-Type")
-
-        # Privremeno čuvamo podatke
-        temp_data = {}
-        current_key = None
-        current_value = []
-        file_data = None
-        file_name = None
-        reading_file = False
-        reading_file_content = False
-        
-        logger.info("Starting to read stream...")
-        line_count = 0
-        for line in stream:
-            line_count += 1
-            
-            # Ako čitamo sadržaj fajla
-            if reading_file_content:
-                if boundary.encode('utf-8') in line:
-                    reading_file_content = False
-                    reading_file = False
-                    current_key = None
-                    current_value = []
-                    logger.info(f"Finished reading file content at line {line_count}")
-                else:
-                    if file_data is None:
-                        file_data = line
-                    else:
-                        file_data += line
-                continue
-            
-            # Pokušaj dekodirati liniju kao tekst
-            try:
-                line_str = line.decode('utf-8', errors='ignore').strip()
-                logger.info(f"Line {line_count}: {line_str[:100]}..." if len(line_str) > 100 else f"Line {line_count}: {line_str}")
-            except:
-                continue
-
-            # Nova sekcija počinje
-            if boundary in line_str:
-                logger.info(f"Found boundary at line {line_count}")
-                if current_key and not reading_file:
-                    temp_data[current_key] = ''.join(current_value)
-                    logger.info(f"Saved value for key {current_key}: {temp_data[current_key][:100]}..." if len(temp_data[current_key]) > 100 else f"Saved value for key {current_key}: {temp_data[current_key]}")
-                current_key = None
-                current_value = []
-                reading_file = False
-                reading_file_content = False
-                continue
-
-            if 'Content-Disposition' in line_str:
-                logger.info(f"Found Content-Disposition at line {line_count}")
-                if 'name="' in line_str:
-                    current_key = line_str.split('name="')[1].split('"')[0]
-                    logger.info(f"Found field name: {current_key}")
-                    # Proveri da li je ovo fajl polje (fileChunk ili file)
-                    reading_file = ('filename="' in line_str and 
-                                  (current_key == 'fileChunk' or current_key == 'file'))
-                    if reading_file:
-                        file_name = line_str.split('filename="')[1].split('"')[0]
-                        logger.info(f"Found file field: {current_key} with filename: {file_name}")
-                continue
-
-            if line_str.startswith('Content-Type:'):
-                logger.info(f"Found Content-Type at line {line_count}: {line_str}")
-                if reading_file:
-                    # Sledeca linija je prazna, pa onda pocinje sadrzaj fajla
-                    reading_file_content = True
-                continue
-
-            # Ako je prazna linija posle Content-Type za fajl,
-            # preskocimo je i cekamo sadrzaj
-            if reading_file and not reading_file_content:
-                continue
-
-            if line_str and current_key is not None:
-                if not reading_file:
-                    if current_key == 'fileContent':
-                        # Za CSV fajl, dodaj novi red
-                        current_value.append(line_str + '\n')
-                    else:
-                        current_value.append(line_str)
-                    pass  # Removed logging
-
-        try:
-            # Prvo proveri da li je ovo direktan upload ili chunk
-            if 'uploadId' in temp_data:
-                # Chunk upload
-                upload_id = temp_data.get('uploadId')
-                chunk_index = int(temp_data.get('chunkIndex', 0))
-                total_chunks = int(temp_data.get('totalChunks', 0))
-                tss = float(temp_data.get('tss', 0))
-                offset = float(temp_data.get('offset', 0))
-                mode_input = temp_data.get('mode', '')
-                intrpl_max = float(temp_data.get('intrplMax', 60))
-                
-                if not upload_id or (not file_data and not temp_data.get('fileChunk')):
-                    logger.error(f"Missing required chunk data: uploadId={bool(upload_id)}, fileData={bool(file_data)}")
-                    return jsonify({"error": "uploadId i fileChunk su obavezni"}), 400
-
-                # Ako imamo fileChunk kao string, tretiraj ga kao file_data
-                if not file_data and temp_data.get('fileChunk'):
-                    file_data = temp_data['fileChunk'].encode('utf-8')
-            else:
-                # Direktan upload
-                tss = float(temp_data.get('tss', 0))
-                offset = float(temp_data.get('offset', 0))
-                mode_input = temp_data.get('mode', '')
-                intrpl_max = float(temp_data.get('intrplMax', 60))
-                file_content = temp_data.get('fileContent')
-
-                if file_content:
-                    # Ako imamo direktan file content, prosledi ga na obradu
-                    logger.info("Processing direct file content")
-                    # Ukloni poslednji newline ako postoji
-                    if file_content.endswith('\n'):
-                        file_content = file_content[:-1]
-                    return process_csv(file_content, tss, offset, mode_input, intrpl_max)
-                else:
-                    logger.error("No file content found")
-                    return jsonify({"error": "Keine Datei gefunden"}), 400
-            
-        except (ValueError, TypeError) as e:
-            logger.error(f"Error parsing form values: {str(e)}")
-            return jsonify({"error": "Invalid form values"}), 400
-
-        logger.info(f"Prijem chunka {chunk_index+1}/{total_chunks} za uploadId {upload_id}")
-
-        # Sačuvaj chunk
-        chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
-        with open(chunk_filename, 'wb') as f:
-            f.write(file_data)
-
-        # Provjeri jesu li svi chunkovi primljeni
-        received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
-        if len(received_chunks) == total_chunks:
-            logger.info(f"Svi chunkovi primljeni za uploadId {upload_id}. Spajanje...")
-            chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
-            full_content = b""
-            try:
-                for chunk_file in chunks_sorted:
-                    chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
-                    with open(chunk_path, "rb") as cf:
-                        chunk_content = cf.read()
-                        full_content += chunk_content
-                    os.remove(chunk_path)
-                file_content = full_content.decode('utf-8')
-                return process_csv(file_content, tss, offset, mode_input, intrpl_max)
-            except Exception as e:
-                # U slučaju greške, obriši sve chunkove
-                for chunk_file in chunks_sorted:
-                    try:
-                        os.remove(os.path.join(UPLOAD_FOLDER, chunk_file))
-                    except:
-                        pass
-                raise
-        else:
-            return jsonify({
-                "message": f"Chunk {chunk_index+1}/{total_chunks} primljen",
-                "uploadId": upload_id,
-                "chunkIndex": chunk_index,
-                "totalChunks": total_chunks,
-                "remainingChunks": total_chunks - len(received_chunks)
-            }), 200
-
-    except Exception as e:
-        error_msg = f"Unexpected error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
-        logger.error(error_msg)
-        return jsonify({
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }), 400
-
-@bp.route('/prepare-save', methods=['POST'])
+# Route to prepare data for saving
+@app.route('/prepare-save', methods=['POST'])
 def prepare_save():
+    # Clean up old files before saving new ones
+    cleanup_old_files()
     try:
-        data = request.json
-        if not data or 'data' not in data:
+        # Try to get data from JSON
+        try:
+            data = request.get_json(force=True)
+        except:
+            # If JSON fails, try form data
+            data = request.form.to_dict()
+            
+        if not data:
             return jsonify({"error": "No data received"}), 400
-        save_data = data['data']
+            
+        # Handle both direct data and nested data format
+        save_data = data.get('data', data)
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
+
+        # Convert save_data to list if it's a string (from form data)
+        if isinstance(save_data, str):
+            try:
+                save_data = json.loads(save_data)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid data format"}), 400
 
         # Kreiraj privremeni fajl i zapiši CSV podatke
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
@@ -707,7 +953,10 @@ def prepare_save():
 
         # Generiši jedinstveni ID na osnovu trenutnog vremena
         file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-        temp_files[file_id] = temp_file.name
+        temp_files[file_id] = {
+            'path': temp_file.name,
+            'timestamp': time.time()
+        }
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
@@ -715,12 +964,16 @@ def prepare_save():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-@bp.route('/download/<file_id>', methods=['GET'])
+# Route to download file
+@app.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
+    # Clean up old files before download
+    cleanup_old_files()
     try:
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404
-        file_path = temp_files[file_id]
+        file_info = temp_files[file_id]
+        file_path = file_info['path']
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
 
@@ -742,3 +995,7 @@ def download_file(file_id):
                 del temp_files[file_id]
             except Exception as ex:
                 logger.error(f"Error cleaning up temp file: {ex}")
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=True)

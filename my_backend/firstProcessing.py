@@ -6,7 +6,13 @@ import gzip
 import traceback
 import logging
 import tempfile
-import csv
+import csv 
+from io import StringIO
+from datetime import datetime as dat
+from flask import request, jsonify, Response, send_file, Blueprint
+
+# Create blueprint
+bp = Blueprint('first_processing', __name__)
 
 # Configure logging
 logging.basicConfig(
@@ -15,13 +21,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from io import StringIO
-from datetime import datetime as dat, timedelta
-from flask import Flask, request, jsonify, Response, send_file, Blueprint
-from werkzeug.formparser import FormDataParser
-
-# Create blueprint
-bp = Blueprint('first_processing', __name__)
 
 # Globalni rečnik za čuvanje privremenih fajlova
 temp_files = {}
@@ -40,9 +39,6 @@ def clean_for_json(obj):
     elif pd.isna(obj):
         return None
     return obj
-
-# Define API prefix
-API_PREFIX_FIRST_PROCESSING = '/api/firstProcessing'
 
 # Folder za privremeno spremanje chunkova
 UPLOAD_FOLDER = "chunk_uploads"
