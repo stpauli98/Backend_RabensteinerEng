@@ -61,11 +61,11 @@ def adjustments_of_data_adjust_data():
 def adjustments_of_data_complete():
     return adjustmentsOfData.complete_adjustment()
 
-@app.route('/prepare-save', methods=['POST'])
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/prepare-save', methods=['POST'])
 def adjustments_of_data_prepare_save():
     return adjustmentsOfData.prepare_save()
 
-@app.route('/download/<file_id>', methods=['GET'])
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
 def adjustments_of_data_download(file_id):
     return adjustmentsOfData.download_file(file_id)
 
