@@ -195,12 +195,12 @@ def zweite_bearbeitung(req):
             return jsonify({"error": "Empty file content"}), 400
 
         try:
-            EQ_MAX = float(req.form.get('eqMax', '0'))
-            CHG_MAX = float(req.form.get('chgMax', '0'))
-            LG_MAX = float(req.form.get('lgMax', '0'))
-            GAP_MAX = float(req.form.get('gapMax', '0'))
-            ELMAX = float(req.form.get('elMax', '0'))
-            ELMIN = float(req.form.get('elMin', '0'))
+            EQ_MAX = float(req.form.get('eqMax'))
+            CHG_MAX = float(req.form.get('chgMax'))
+            LG_MAX = float(req.form.get('lgMax'))
+            GAP_MAX = float(req.form.get('gapMax'))
+            ELMAX = float(req.form.get('elMax'))
+            ELMIN = float(req.form.get('elMin'))
             EL0 = req.form.get('radioValueNull')
             ELNN = req.form.get('radioValueNotNull')
             EL0 = 1 if EL0 == "ja" else 0
@@ -365,53 +365,48 @@ def zweite_bearbeitung(req):
         ##############################################################################
 
         if "CHG_MAX" in locals() and "LG_MAX" in locals():
-            # Status des Identifikationsrahmens (frm...frame)
-            frm = 0
-            """
-                0...Im aktuellen Zeitschritt ist kein Identifikationsrahmen für
-                    Ausreisser offen
-                1...Im aktuellen Zeitschritt ist ein Identifikationsrahmen für 
-                    Ausreisser offen
-            """
+            logger.info(f"Processing data with CHG_MAX={CHG_MAX} and LG_MAX={LG_MAX}")
             
-                       # Konvertuj vremenske kolone u datetime format za brže procesiranje
+            # Konvertuj vremenske kolone u datetime format
             df[time_column] = pd.to_datetime(df[time_column])
             
-            # Izračunaj promjene vrijednosti i vremenske razlike
+            # Izračunaj promjene vrijednosti po jedinici vremena (rate of change)
             value_changes = df[data_column].diff().abs()
             time_diffs = df[time_column].diff().dt.total_seconds() / 60
+            change_rates = value_changes / time_diffs
             
-            # Izračunaj promjene vrijednosti
-            value_changes = df[data_column].diff().abs()
+            # Inicijaliziraj masku za označavanje NaN vrijednosti
+            nan_mask = pd.Series(False, index=df.index)
             
-            # Nađi tačke gde razlika premašuje CHG_MAX
-            extreme_points = value_changes > CHG_MAX
+            # Nađi tačke gdje je rate of change veći od CHG_MAX
+            extreme_points = change_rates > CHG_MAX
             
             if extreme_points.any():
-                # Nađi indekse ekstrema
-                extreme_indices = extreme_points[extreme_points].index.tolist()
+                # Nađi početke segmenata sa ekstremnim promjenama
+                segment_starts = extreme_points & ~extreme_points.shift(1, fill_value=False)
+                start_indices = segment_starts[segment_starts].index.tolist()
                 
-                if extreme_indices:
-                    # Grupiši susedne ekstremne tačke
-                    segments = []
-                    current_segment = [extreme_indices[0]-1]  # Počni sa tačkom pre prvog ekstrema
+                for start_idx in start_indices:
+                    # Nađi kraj trenutnog segmenta
+                    segment_end = (~extreme_points[start_idx:]).idxmax() if (~extreme_points[start_idx:]).any() else len(df) - 1
                     
-                    for i in range(len(extreme_indices)):
-                        current_idx = extreme_indices[i]
-                        current_segment.append(current_idx)
-                        
-                        # Ako je ovo poslednji indeks ili sledeći indeks nije susedan
-                        if (i == len(extreme_indices)-1 or 
-                            extreme_indices[i+1] > current_idx + 1):
-                            segments.append(current_segment)
-                            if i < len(extreme_indices)-1:
-                                current_segment = [extreme_indices[i+1]-1]
+                    # Izračunaj širinu segmenta u minutama
+                    segment_width = (df.loc[segment_end, time_column] - 
+                                   df.loc[start_idx, time_column]).total_seconds() / 60
                     
-                    # Postavi NaN za sve tačke u segmentima sa ekstremima
-                    for segment in segments:
-                        start_idx = segment[0]
-                        end_idx = segment[-1]
-                        df.loc[start_idx:end_idx, data_column] = np.nan
+                    # Ako je segment širi od LG_MAX, označi ga za NaN
+                    if segment_width > LG_MAX:
+                        nan_mask.loc[start_idx:segment_end] = True
+                    
+                    # Ako nije širi od LG_MAX, ali ima ekstremne promjene,
+                    # označi samo tačke s ekstremnim promjenama
+                    else:
+                        nan_mask.loc[start_idx:segment_end] = extreme_points.loc[start_idx:segment_end]
+            
+            # Primijeni NaN masku na podatke
+            df.loc[nan_mask, data_column] = np.nan
+            
+            logger.info(f"Processed {nan_mask.sum()} points with extreme changes or large gaps")
 
         ##############################################################################
         # ELIMINIERUNG VON GAPS ######################################################
