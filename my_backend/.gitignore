@@ -1,3 +1,20 @@
-.pyc
-.csv
-.chunk
+# Python cache files
+**/*.pyc
+**/__pycache__/
+**/*.pyo
+
+# Docker files
+**/Dockerfile
+docker-compose.yml
+*.yaml
+cloudbuild.yaml
+
+# Data and temp files
+*.csv
+*.chunk
+temp_uploads/
+
+# Environment and system files
+*.env
+*.env.example
+.DS_Store
