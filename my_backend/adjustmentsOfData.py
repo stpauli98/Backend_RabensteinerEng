@@ -15,11 +15,7 @@ from flask_cors import CORS
 from flask import Flask
 
 # Create Blueprint
-#bp = Blueprint('adjustmentsOfData_bp', __name__)
-
-# Initialize Flask app
-app = Flask(__name__)
-CORS(app)
+bp = Blueprint('adjustmentsOfData_bp', __name__)
 
 # API prefix
 API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
@@ -167,7 +163,7 @@ def get_time_column(df):
         return jsonify({"error": str(e)}), 400
 
 # First Step
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])
+@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])
 def upload_chunk():
     # Clean up old files before new upload
     cleanup_old_files()
@@ -274,7 +270,7 @@ def upload_chunk():
         return jsonify({"error": str(e)}), 400
 
 # First Step Analyse
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/analyse-data', methods=['POST'])
+@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/analyse-data', methods=['POST'])
 def analyse_data():
     try:
         global stored_data, info_df
@@ -403,8 +399,8 @@ def analyse_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# SECOND STEP
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjust-data-chunk', methods=['POST'])
+# Second Step
+@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjust-data-chunk', methods=['POST'])
 def adjust_data():
     try:
         global stored_data, info_df, adjustment_chunks
@@ -480,7 +476,7 @@ def adjust_data():
         return jsonify({"error": str(e)}), 400
 
 # Route to complete adjustment
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjustdata/complete', methods=['POST'])
+@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjustdata/complete', methods=['POST'])
 def complete_adjustment():
     """
     Ovaj endpoint se poziva kada su svi chunkovi poslani.
@@ -1001,7 +997,7 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         raise
 
 # Route to prepare data for saving
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/prepare-save', methods=['POST'])
+@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/prepare-save', methods=['POST'])
 def prepare_save():
     # Clean up old files before saving new ones
     cleanup_old_files()
@@ -1049,7 +1045,7 @@ def prepare_save():
         return jsonify({"error": str(e)}), 500
 
 # Route to download file
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
+@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     # Clean up old files before download
     cleanup_old_files()
@@ -1079,7 +1075,3 @@ def download_file(file_id):
                 del temp_files[file_id]
             except Exception as ex:
                 logger.error(f"Error cleaning up temp file: {ex}")
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
