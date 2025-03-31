@@ -449,6 +449,7 @@ def adjust_data():
                 'params': {
                     'startTime': start_time,
                     'endTime': end_time,
+                    'files': files,  # Store files list
                     'timeStepSize': time_step_size,
                     'offset': offset,
                     'methods': methods,
@@ -457,6 +458,15 @@ def adjust_data():
             }
 
         # Store chunk
+        # Add filename to each record in chunk_data
+        for record in chunk_data:
+            # Find which file this chunk belongs to based on the columns
+            for file in files:
+                if any(col in record for col in stored_data[file].columns):
+                    record['filename'] = file
+                    break
+        
+        # Store chunk data
         adjustment_chunks[upload_id]['chunks'][current_chunk] = chunk_data
 
 
@@ -470,7 +480,7 @@ def adjust_data():
         return jsonify({"error": str(e)}), 400
 
 # Route to complete adjustment
-@app.route(f'/adjustdata/complete', methods=['POST'])
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjustdata/complete', methods=['POST'])
 def complete_adjustment():
     """
     Ovaj endpoint se poziva kada su svi chunkovi poslani.
@@ -656,14 +666,48 @@ def complete_adjustment():
         if received_chunks != total_chunks:
             return jsonify({"error": f"Missing chunks. Received {received_chunks} out of {total_chunks}"}), 400
 
-        # Combine all chunks
-        combined_data = []
+        # Initialize data structures for each file
+        data_by_file = {file: [] for file in files}
+        
+        # Combine chunks and separate by filename
         for i in range(1, total_chunks + 1):
             chunk = chunks.get(i)
             if chunk is None:
                 return jsonify({"error": f"Missing chunk {i}"}), 400
-            combined_data.extend(chunk)  # Each chunk is a list of records
-
+            
+            # Debug: Print first few records of each chunk
+            print(f"\nProcessing chunk {i}:")
+            for idx, record in enumerate(chunk[:5]):
+                print(f"Record {idx}: {record}")
+                
+            # Distribute records to appropriate files
+            for record in chunk:
+                # Find which file this record belongs to by checking columns
+                best_match = None
+                max_matches = 0
+                print("\nChecking record:", record)
+                
+                for filename, df in stored_data.items():
+                    # Get non-UTC columns from the original DataFrame
+                    data_columns = [col for col in df.columns if col != 'UTC']
+                    print(f"Checking against {filename} with columns: {data_columns}")
+                    
+                    # Check how many columns match
+                    matching_cols = [col for col in data_columns if col in record]
+                    print(f"Found {len(matching_cols)} matching columns: {matching_cols}")
+                    
+                    # Update best match if this file has more matching columns
+                    if len(matching_cols) > max_matches:
+                        max_matches = len(matching_cols)
+                        best_match = filename
+                
+                if best_match:
+                    # Create a copy of the record to avoid modifying the original
+                    record_copy = record.copy()
+                    record_copy['filename'] = best_match
+                    data_by_file[best_match].append(record_copy)
+                else:
+                    print(f"Warning: Could not determine file for record: {record}")
 
         # Use time step and offset from stored params
         time_step = params['timeStepSize']
@@ -672,13 +716,25 @@ def complete_adjustment():
         # Get methods from stored params
         methods = params['methods']
 
+        # Debug: Print data distribution by file
+        print("\nData distribution by file:")
+        for f in files:
+            print(f"File {f}: {len(data_by_file.get(f, []))} records")
+            if f in data_by_file and data_by_file[f]:
+                print("First record:", data_by_file[f][0])
+
         # Process data for each file
         all_results = []
         all_info_records = []
         
         for file in files:
+            # Skip if no data for this file
+            if not data_by_file[file]:
+                logger.warning(f"No data found for file {file}")
+                continue
+
             result_data, info_record = process_data_detailed(
-                combined_data,
+                data_by_file[file],  # Send only data for this specific file
                 file,
                 start_time,
                 end_time,
@@ -686,6 +742,7 @@ def complete_adjustment():
                 offset,
                 methods
             )
+            print("result_data koji se salju na glavnu obradu: ", result_data[:10])
             all_results.extend(result_data)
             if info_record:
                 all_info_records.append(info_record)
@@ -712,11 +769,36 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         print(f"\n===Krece obrada | Processing data with parameters ===")
         print(f"DataFrame name: {filename}")
         
+        # Debug: Print raw data structure
+        print("Raw data first 5 records:")
+        for i, record in enumerate(data[:5]):
+            print(record)
+            if i >= 4: break
+        
         # Convert list of dictionaries to DataFrame
         df = pd.DataFrame(data)
         
+        # Filter data to keep only records for this specific file
+        df = df[df['filename'] == filename].copy()
+        
+        if len(df) == 0:
+            raise ValueError(f"No data found for file {filename}")
+            
         # Convert UTC column to datetime if it's not already
         df['UTC'] = pd.to_datetime(df['UTC'])
+        
+        # Identify the measurement column for this file from stored_data
+        file_columns = stored_data[filename].columns
+        measurement_cols = [col for col in file_columns if col != 'UTC']
+        if not measurement_cols:
+            raise ValueError(f"No measurement columns found for file {filename}")
+        measurement_col = measurement_cols[0]
+        
+        # Keep only UTC and the relevant measurement column
+        df = df[['UTC', measurement_col]]
+        
+        print(f"\nSelected measurement column for {filename}: {measurement_col}")
+        print("Initial data shape:", df.shape)
         
         # Get the method for this file if available and strip whitespace
         method = methods.get(filename, '').strip() if methods else None
@@ -736,7 +818,9 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
             if df.index.duplicated().any():
                 if method in ['mean', 'nearest (mean)']:
                     # Za metode koje koriste mean, odmah grupišemo po UTC
-                    df = df.groupby(level=0).mean()
+                    # Isključujemo filename kolonu iz mean operacije
+                    numeric_cols = df.select_dtypes(include=[np.number]).columns
+                    df = df[numeric_cols].groupby(level=0).mean()
                 else:
                     # Za ostale metode, uzimamo prvi zapis za svaki timestamp
                     df = df.loc[~df.index.duplicated(keep='first')]
@@ -917,7 +1001,7 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         raise
 
 # Route to prepare data for saving
-@app.route('/prepare-save', methods=['POST'])
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/prepare-save', methods=['POST'])
 def prepare_save():
     # Clean up old files before saving new ones
     cleanup_old_files()
@@ -965,7 +1049,7 @@ def prepare_save():
         return jsonify({"error": str(e)}), 500
 
 # Route to download file
-@app.route('/download/<file_id>', methods=['GET'])
+@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     # Clean up old files before download
     cleanup_old_files()
