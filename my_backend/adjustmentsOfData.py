@@ -163,7 +163,7 @@ def get_time_column(df):
         return jsonify({"error": str(e)}), 400
 
 # First Step
-@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])
+@bp.route('/upload-chunk', methods=['POST'])
 def upload_chunk():
     # Clean up old files before new upload
     cleanup_old_files()
@@ -270,7 +270,7 @@ def upload_chunk():
         return jsonify({"error": str(e)}), 400
 
 # First Step Analyse
-@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/analyse-data', methods=['POST'])
+@bp.route('/analyse-data', methods=['POST'])
 def analyse_data():
     try:
         global stored_data, info_df
@@ -400,7 +400,7 @@ def analyse_data():
         return jsonify({"error": str(e)}), 400
 
 # Second Step
-@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjust-data-chunk', methods=['POST'])
+@bp.route('/adjust-data-chunk', methods=['POST'])
 def adjust_data():
     try:
         global stored_data, info_df, adjustment_chunks
@@ -476,7 +476,7 @@ def adjust_data():
         return jsonify({"error": str(e)}), 400
 
 # Route to complete adjustment
-@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjustdata/complete', methods=['POST'])
+@bp.route('/adjustdata/complete', methods=['POST'])
 def complete_adjustment():
     """
     Ovaj endpoint se poziva kada su svi chunkovi poslani.
