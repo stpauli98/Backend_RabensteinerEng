@@ -42,7 +42,7 @@ app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
 
 #API prefix
-API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
+#API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
 
 # AdjustmentsOfData routes
 '''@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])

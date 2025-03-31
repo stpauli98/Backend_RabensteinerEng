@@ -11,14 +11,12 @@ from io import StringIO, BytesIO
 from flask import request, jsonify, send_file, Blueprint
 from werkzeug.datastructures import FileStorage, ImmutableMultiDict
 import json
-from flask_cors import CORS
-from flask import Flask
 
 # Create Blueprint
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 
 # API prefix
-API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
+#API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
 
 # Configure temp upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
@@ -997,7 +995,7 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         raise
 
 # Route to prepare data for saving
-@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/prepare-save', methods=['POST'])
+@bp.route('/prepare-save', methods=['POST'])
 def prepare_save():
     # Clean up old files before saving new ones
     cleanup_old_files()
@@ -1045,7 +1043,7 @@ def prepare_save():
         return jsonify({"error": str(e)}), 500
 
 # Route to download file
-@bp.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
+@bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     # Clean up old files before download
     cleanup_old_files()
