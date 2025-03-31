@@ -8,7 +8,7 @@ import logging
 import traceback
 import time
 from io import StringIO, BytesIO
-from flask import request, jsonify, send_file, Blueprint
+from flask import request, jsonify, send_file, Blueprint, current_app
 from werkzeug.datastructures import FileStorage, ImmutableMultiDict
 import json
 
@@ -234,7 +234,7 @@ def upload_chunk():
             # Process the complete file
             try:
                 # Create a temporary request context
-                with app.test_request_context():
+                with current_app.test_request_context():
                     # Create a FileStorage object with the complete file
                     with open(final_path, 'rb') as f:
                         file_data = f.read()
