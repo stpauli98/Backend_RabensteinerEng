@@ -1,8 +1,6 @@
 import os
 import logging
 
-# Import adjustmentsOfData module
-import adjustmentsOfData
 
 from datetime import datetime as dat
 from flask import Flask, request, jsonify
@@ -11,6 +9,7 @@ from flask_cors import CORS
 from firstProcessing import bp as first_processing_bp
 from load_row_data import bp as load_row_data_bp
 from data_processing_main import bp as data_processing_main_bp
+from adjustmentsOfData import bp as adjustmentsOfData_bp
 from cloud import bp as cloud_bp
 
 # Configure logging
@@ -40,12 +39,13 @@ app.register_blueprint(data_processing_main_bp, url_prefix='/api/dataProcessingM
 app.register_blueprint(load_row_data_bp, url_prefix='/api/loadRowData')
 app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
+app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
 
 #API prefix
 API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
 
 # AdjustmentsOfData routes
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])
+'''@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])
 def adjustments_of_data_upload_chunk():
     return adjustmentsOfData.upload_chunk()
 
@@ -68,7 +68,7 @@ def adjustments_of_data_prepare_save():
 @app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
 def adjustments_of_data_download(file_id):
     return adjustmentsOfData.download_file(file_id)
-
+'''
 
 @app.route('/')
 def index():
