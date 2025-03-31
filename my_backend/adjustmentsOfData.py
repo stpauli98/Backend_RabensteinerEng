@@ -273,6 +273,9 @@ def analyse_data():
     try:
         global stored_data, info_df
         
+        # Clear stored data for new analysis
+        stored_data.clear()
+        
         # Get the file from request
         if not request.files:
             return jsonify({"error": "No files provided"}), 400
@@ -367,6 +370,9 @@ def analyse_data():
                         df_records.append(converted_record)
                     
                     processed_data.append(df_records)
+                    
+                    # Store DataFrame for later use
+                    stored_data[file.filename] = df
                     
                 except Exception as e:
                     return jsonify({"error": f"Error processing file {file.filename}: {str(e)}"}), 400
