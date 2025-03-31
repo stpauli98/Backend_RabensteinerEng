@@ -1,9 +1,7 @@
 import os
 import logging
-
-
 from datetime import datetime as dat
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 from flask_cors import CORS
 
 from firstProcessing import bp as first_processing_bp
@@ -18,7 +16,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
 
 app = Flask(__name__)
 
@@ -79,8 +76,8 @@ def index():
             'message': 'Backend service is running',
             'version': '1.0.0',
             'timestamp': str(dat.now()),
-            'port': os.environ.get('PORT', '8080'),
-            'env': os.environ.get('FLASK_ENV', 'production')
+            'port': os.environ.get('PORT', '5001'),
+            'env': os.environ.get('FLASK_ENV', 'development')
         })
     except Exception as e:
         logger.error(f"Error in index route: {e}")
