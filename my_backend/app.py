@@ -73,7 +73,7 @@ def index():
         logger.info("Handling request to index endpoint")
         return jsonify({
             'status': 'online',
-            'message': 'Backend service is running',
+            'message': 'Backend service is runninggggg',
             'version': '1.0.0',
             'timestamp': str(dat.now()),
             'port': os.environ.get('PORT', '5001'),
