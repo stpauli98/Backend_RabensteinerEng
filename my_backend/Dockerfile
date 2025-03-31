@@ -19,10 +19,10 @@ COPY . .
 RUN mkdir -p /app/temp_uploads && chmod 777 /app/temp_uploads
 
 # Set environment variables
-ENV PORT=5001
+ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=app.py
-ENV FLASK_ENV=development
+ENV FLASK_ENV=production
 ENV GUNICORN_CMD_ARGS="--workers=1 --threads=8 --timeout=0 --bind=:${PORT} --log-level=info"
 
 # Expose port
