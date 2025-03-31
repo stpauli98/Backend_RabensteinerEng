@@ -520,15 +520,7 @@ def complete_adjustment():
         methods = params['methods']
         start_time = params['startTime']
         end_time = params['endTime']
-        
-        print("\n=== Parameters after combining chunks ===")
-        print(f"Files: {files}")
-        print(f"Start Time: {start_time}")
-        print(f"End Time: {end_time}")
-        print(f"Requested Time Step: {requested_time_step}")
-        print(f"Requested Offset: {requested_offset}")
-        print(f"Selected Methods: {methods}")
-        
+
         # Get chunks data
         chunks = adjustment_chunks.get(upload_id, {}).get('chunks', {})
         if not chunks:
@@ -668,27 +660,19 @@ def complete_adjustment():
             chunk = chunks.get(i)
             if chunk is None:
                 return jsonify({"error": f"Missing chunk {i}"}), 400
-            
-            # Debug: Print first few records of each chunk
-            print(f"\nProcessing chunk {i}:")
-            for idx, record in enumerate(chunk[:5]):
-                print(f"Record {idx}: {record}")
                 
             # Distribute records to appropriate files
             for record in chunk:
                 # Find which file this record belongs to by checking columns
                 best_match = None
                 max_matches = 0
-                print("\nChecking record:", record)
                 
                 for filename, df in stored_data.items():
                     # Get non-UTC columns from the original DataFrame
                     data_columns = [col for col in df.columns if col != 'UTC']
-                    print(f"Checking against {filename} with columns: {data_columns}")
                     
                     # Check how many columns match
                     matching_cols = [col for col in data_columns if col in record]
-                    print(f"Found {len(matching_cols)} matching columns: {matching_cols}")
                     
                     # Update best match if this file has more matching columns
                     if len(matching_cols) > max_matches:
@@ -701,7 +685,7 @@ def complete_adjustment():
                     record_copy['filename'] = best_match
                     data_by_file[best_match].append(record_copy)
                 else:
-                    print(f"Warning: Could not determine file for record: {record}")
+                    logger.warning(f"Warning: Could not determine file for record: {record}")
 
         # Use time step and offset from stored params
         time_step = params['timeStepSize']
@@ -709,13 +693,6 @@ def complete_adjustment():
         
         # Get methods from stored params
         methods = params['methods']
-
-        # Debug: Print data distribution by file
-        print("\nData distribution by file:")
-        for f in files:
-            print(f"File {f}: {len(data_by_file.get(f, []))} records")
-            if f in data_by_file and data_by_file[f]:
-                print("First record:", data_by_file[f][0])
 
         # Process data for each file
         all_results = []
@@ -736,7 +713,6 @@ def complete_adjustment():
                 offset,
                 methods
             )
-            print("result_data koji se salju na glavnu obradu: ", result_data[:10])
             all_results.extend(result_data)
             if info_record:
                 all_info_records.append(info_record)
@@ -763,12 +739,6 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         print(f"\n===Krece obrada | Processing data with parameters ===")
         print(f"DataFrame name: {filename}")
         
-        # Debug: Print raw data structure
-        print("Raw data first 5 records:")
-        for i, record in enumerate(data[:5]):
-            print(record)
-            if i >= 4: break
-        
         # Convert list of dictionaries to DataFrame
         df = pd.DataFrame(data)
         
@@ -790,9 +760,6 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         
         # Keep only UTC and the relevant measurement column
         df = df[['UTC', measurement_col]]
-        
-        print(f"\nSelected measurement column for {filename}: {measurement_col}")
-        print("Initial data shape:", df.shape)
         
         # Get the method for this file if available and strip whitespace
         method = methods.get(filename, '').strip() if methods else None
@@ -859,9 +826,6 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
             raise ValueError("No measurement columns found in DataFrame")
             
         measurement_col = measurement_cols[0]  # Take the first measurement column
-        print(f"\nProcessing measurement column: {measurement_col}")
-        print("Sample data:")
-        print(df.head())
         
         # Convert measurement values to float, replacing non-numeric values with NaN
         df[measurement_col] = pd.to_numeric(df[measurement_col], errors='coerce')
@@ -871,8 +835,6 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
             start_time = pd.to_datetime(start_time)
             end_time = pd.to_datetime(end_time)
             df = df[(df['UTC'] >= start_time) & (df['UTC'] <= end_time)]
-            print(f"\nFiltered by time range: {start_time} to {end_time}")
-            print(f"Remaining points: {len(df)}")
         
         # Create regular time index
         if time_step:
