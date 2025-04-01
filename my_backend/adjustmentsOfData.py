@@ -76,7 +76,7 @@ def allowed_file(filename):
 # Function to detect delimiter
 def detect_delimiter(file_content):
     """
-    Detect the delimiter used in a CSV file content
+    Detect the delimiter used in a CSV file contentt
     """
     # Common delimiters
     delimiters = [';', ',', '\t']
