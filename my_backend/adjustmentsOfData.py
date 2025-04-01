@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime
 import tempfile
 import os
+import time
 import csv
 import logging
 import traceback
@@ -45,15 +46,28 @@ info_df = pd.DataFrame(columns=['Name der Datei', 'Name der Messreihe', 'Startze
 
 # Function to check if file is a CSV
 def cleanup_old_files():
-    """Clean up files older than UPLOAD_EXPIRY_TIME"""
+    """Clean up temporary files older than 5 minutes"""
+    success = True
+    errors = []
     current_time = time.time()
+    EXPIRY_TIME = 5 * 60  # 5 minutes in seconds
+
     for file_id, file_info in list(temp_files.items()):
-        if current_time - file_info.get('timestamp', 0) > UPLOAD_EXPIRY_TIME:
-            try:
+        try:
+            file_age = current_time - file_info.get('timestamp', 0)
+            if file_age > EXPIRY_TIME:
                 os.remove(file_info['path'])
                 del temp_files[file_id]
-            except (OSError, KeyError) as e:
-                logger.error(f"Error cleaning up file {file_id}: {str(e)}")
+                logger.info(f"Cleaned up file {file_id} (age: {file_age/60:.1f} minutes)")
+        except (OSError, KeyError) as e:
+            success = False
+            errors.append(str(e))
+            logger.error(f"Error cleaning up file {file_id}: {str(e)}")
+    
+    if success:
+        return jsonify({"success": True, "message": "Old files cleaned up successfully"}), 200
+    else:
+        return jsonify({"error": "Some files could not be cleaned up", "details": errors}), 500
 
 def allowed_file(filename):
     """Check if file has .csv extension"""
@@ -128,18 +142,15 @@ def upload_chunk():
             
         # Read file content
         file_content = file.read().decode('utf-8')
-        #logger.info(f"File content: {file_content[:100]}...")
         if not file_content:
             return jsonify({'error': 'Empty file content'}), 400
             
         # Create upload directory if it doesn't exist
         upload_dir = os.path.join(UPLOAD_FOLDER, upload_id)
         os.makedirs(upload_dir, exist_ok=True)
-        #logger.info(f"Upload directory created in Folder {UPLOAD_FOLDER} with ID {upload_id} on path {upload_dir}")
         
         # Save the chunk
         chunk_path = os.path.join(upload_dir, f'chunk_{chunk_index}')
-        logger.info(f"Chunk saved to {chunk_path}")
         with open(chunk_path, 'w', encoding='utf-8') as f:
             f.write(file_content)
         
@@ -163,10 +174,8 @@ def upload_chunk():
             
             # Process the complete file
             try:
-                logger.info(f"Starting analysis of file {final_path}")
                 # Analyze the complete file
                 result = analyse_data(final_path, upload_id)
-                logger.info(f"Analysis complete for {final_path}")
                 response_data = {
                     'status': 'complete',
                     'message': 'File upload and analysis complete',
@@ -185,7 +194,9 @@ def upload_chunk():
         })
         
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 400
+        
 
 # First Step Analyse
 def analyse_data(file_path, upload_id=None):
@@ -208,23 +219,17 @@ def analyse_data(file_path, upload_id=None):
         
         try:
             # Read file content
-            logger.info(f"Reading file content from {file_path}")
             with open(file_path, 'r', encoding='utf-8') as file:
                 file_content = file.read()
-            logger.info(f"Successfully read {len(file_content)} bytes from {file_path}")
         except UnicodeDecodeError as e:
             logger.error(f"UnicodeDecodeError reading {file_path}: {str(e)}")
             raise ValueError(f"Could not decode file {file_path}. Make sure it's a valid UTF-8 encoded CSV file.")
         
         # Detect delimiter from content
-        logger.info(f"Detecting delimiter for {file_path}")
         delimiter = detect_delimiter(file_content)
-        logger.info(f"Detected delimiter '{delimiter}' for {file_path}")
         
         # Read CSV with detected delimiter
-        logger.info(f"Reading CSV with delimiter '{delimiter}' for {file_path}")
         df = pd.read_csv(StringIO(file_content), delimiter=delimiter)
-        logger.info(f"Successfully read CSV with {len(df)} rows and {len(df.columns)} columns")
         
         # Find time column
         time_col = get_time_column(df)
@@ -240,16 +245,13 @@ def analyse_data(file_path, upload_id=None):
                     
         # Store the DataFrame for later use
         filename = os.path.basename(file_path)
-        logger.info(f"Storing DataFrame for {filename}")
         stored_data[filename] = df
         
         # Store DataFrame in adjustment_chunks if upload_id provided
         if upload_id:
-            logger.info(f"Storing DataFrame in adjustment_chunks for upload_id {upload_id}")
             if upload_id not in adjustment_chunks:
                 adjustment_chunks[upload_id] = {'chunks': {}, 'params': {}, 'dataframes': {}}
             adjustment_chunks[upload_id]['dataframes'][filename] = df
-            logger.info(f"Successfully stored DataFrame in adjustment_chunks for {filename}")
                     
         # Calculate time step
         time_step = None
@@ -261,7 +263,8 @@ def analyse_data(file_path, upload_id=None):
             # Get the most common time difference (mode)
             time_step = int(time_diffs_minutes.mode()[0])
         except Exception as e:
-            print(f"Error calculating time step: {str(e)}")
+            logger.error(f"Error calculating time step: {str(e)}")
+            traceback.print_exc()
         
         # Get the measurement column (second column or first non-time column)
         measurement_col = None
@@ -323,11 +326,6 @@ def analyse_data(file_path, upload_id=None):
         # Prepare response data
         dataframe_data = processed_data[0] if processed_data else []
         
-        logger.info(f"Analysis complete for {file_path}:")
-        logger.info(f"- Info records: {len(all_file_info)}")
-        logger.info(f"- Data records: {len(dataframe_data)}")
-        logger.info(f"- First record sample: {dataframe_data[0] if dataframe_data else 'No data'}")
-        
         # Return just the data, not a response object
         return {
             'info_df': all_file_info,
@@ -357,16 +355,23 @@ def adjust_data():
         end_time = data.get('endTime')
         time_step_size = data.get('timeStepSize')
         offset = data.get('offset', 0)
-        intrpl_max = data.get('intrplMax', None)
         
         # Get methods from request or existing params
-        methods = data.get('methods')
+        methods = data.get('methods', {})
         if upload_id in adjustment_chunks and not methods:
             # If methods not in request, use existing methods
             methods = adjustment_chunks[upload_id]['params'].get('methods', {})
-        else:
-            # If no existing methods, use empty dict
-            methods = methods or {}
+
+        # Extract intrplMax values from methods
+        intrpl_max_values = {}
+        for filename, method_info in methods.items():
+            if isinstance(method_info, dict) and 'intrpl_max' in method_info:
+                try:
+                    intrpl_max_values[filename] = float(method_info['intrpl_max'])
+                    logger.info(f"Received intrplMax for {filename}: {method_info['intrpl_max']}, converted to: {intrpl_max_values[filename]}")
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Could not convert intrplMax for {filename}: {e}")
+                    intrpl_max_values[filename] = None
 
         # Validate parameters
         if (upload_id is None or chunk_info is None or chunk_data is None):
@@ -385,8 +390,8 @@ def adjust_data():
                     'endTime': end_time,
                     'timeStepSize': time_step_size,
                     'offset': offset,
-                    'intrplMax': intrpl_max,
-                    'methods': methods
+                    'methods': methods,
+                    'intrplMaxValues': intrpl_max_values
                 }
             }
         else:
@@ -396,8 +401,11 @@ def adjust_data():
             if end_time is not None: params['endTime'] = end_time
             if time_step_size is not None: params['timeStepSize'] = time_step_size
             if offset is not None: params['offset'] = offset
-            if intrpl_max is not None: params['intrplMax'] = intrpl_max
             if methods: params['methods'].update(methods)
+            # Update intrplMax values
+            if 'intrplMaxValues' not in params:
+                params['intrplMaxValues'] = {}
+            params['intrplMaxValues'].update(intrpl_max_values)
 
         # Add filename to each record based on 'Name der Datei'
         for record in chunk_data:
@@ -417,6 +425,7 @@ def adjust_data():
 
     except Exception as e:
         logger.error(f"Error in receive_adjustment_chunk: {str(e)}\n{traceback.format_exc()}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 400
 
 # Route to complete adjustment
@@ -460,15 +469,16 @@ def complete_adjustment():
         
         params = adjustment_chunks[upload_id]['params']
         
+        # Convert parameters to appropriate types
         requested_time_step = params['timeStepSize']
         requested_offset = params['offset']
         methods = params['methods']
         start_time = params['startTime']
         end_time = params['endTime']
-
-        # Log the entire state for debugging
-        logger.info(f"Complete adjustment called for upload_id: {upload_id}")
-        logger.info(f"Current adjustment_chunks state: {adjustment_chunks}")
+        
+        # Get intrplMax values for each file
+        intrpl_max_values = params.get('intrplMaxValues', {})
+        logger.info(f"Complete adjustment: Using intrplMax values: {intrpl_max_values}")
         
         # Get chunks data
         chunks = adjustment_chunks.get(upload_id, {}).get('chunks', {})
@@ -476,20 +486,11 @@ def complete_adjustment():
         if not chunks:
             return jsonify({"error": "No chunks found in memory for this upload ID"}), 404
             
-        logger.info(f"Found {len(chunks)} chunks")
-        
         # Extract and inspect chunks
         all_records = []
         for chunk_idx, chunk_data in chunks.items():
-            logger.info(f"Chunk {chunk_idx} type: {type(chunk_data)}")
-            logger.info(f"Chunk {chunk_idx} sample: {chunk_data[:2] if isinstance(chunk_data, list) else 'Not a list'}")
             if isinstance(chunk_data, list):
                 all_records.extend(chunk_data)
-        
-        logger.info(f"Total records collected: {len(all_records)}")
-        if all_records:
-            logger.info(f"Sample record: {all_records[0]}")
-            logger.info(f"Sample record keys: {all_records[0].keys() if isinstance(all_records[0], dict) else 'Not a dict'}")
         
         # Get filenames from records
         filenames = set()
@@ -497,17 +498,9 @@ def complete_adjustment():
             if isinstance(record, dict) and 'Name der Datei' in record:
                 filenames.add(record['Name der Datei'])
         
-        logger.info(f"Found files in chunks: {filenames}")
-        
         if not filenames:
-            logger.error("No filenames found in records")
             return jsonify({"error": "No valid data found in chunks"}), 404
         
-        # Log what we have
-        logger.info(f"Found {len(stored_data)} files and {len(chunks)} chunks for upload_id {upload_id}")
-        logger.info(f"Files: {list(stored_data.keys())}")
-        logger.info(f"Processing parameters: {params}")
-            
         # Clean up methods by stripping whitespace
         if methods:
             methods = {k: v.strip() if isinstance(v, str) else v for k, v in methods.items()}
@@ -517,10 +510,8 @@ def complete_adjustment():
         
         # Process each file separately
         for filename in filenames:
-            logger.info(f"Processing file: {filename}")
             # Get data for this file from all chunks
             file_data = [record for record in all_records if record.get('Name der Datei') == filename]
-            logger.info(f"Found {len(file_data)} records for {filename}")
             
             # Convert to DataFrame
             if not file_data:  # Skip if no data for this file
@@ -529,7 +520,6 @@ def complete_adjustment():
                 
             try:
                 df = pd.DataFrame(file_data)
-                logger.info(f"Created DataFrame for {filename} with columns: {df.columns.tolist()}")
             except Exception as e:
                 logger.error(f"Error creating DataFrame for {filename}: {str(e)}")
                 return jsonify({"error": f"Error processing file {filename}: {str(e)}"}), 500
@@ -608,9 +598,9 @@ def complete_adjustment():
                     if filename in data_by_file:
                         data_by_file[filename].append(record)
                     else:
-                        logger.warning(f"Found record for unknown file {filename}: {record}")
+                        logger.warning(f"Found record for unknown file {filename}: {record:100}")
                 else:
-                    logger.warning(f"Record missing 'Name der Datei': {record}")
+                    logger.warning(f"Record missing 'Name der Datei': {record:100}")
 
         # Use time step and offset from stored params
         time_step = params['timeStepSize']
@@ -629,6 +619,11 @@ def complete_adjustment():
                 logger.warning(f"No data found for file {filename}")
                 continue
 
+            # Get intrplMax for this specific file
+            intrpl_max = intrpl_max_values.get(filename)
+            if intrpl_max:
+                logger.info(f"Using intrplMax {intrpl_max} for file {filename}")
+
             result_data, info_record = process_data_detailed(
                 data_by_file[filename],  # Send only data for this specific file
                 filename,
@@ -637,7 +632,7 @@ def complete_adjustment():
                 time_step,
                 offset,
                 methods,
-                params.get('intrplMax')
+                intrpl_max  # Use the converted value
             )
             all_results.extend(result_data)
             if info_record:
@@ -657,13 +652,14 @@ def complete_adjustment():
 
     except Exception as e:
         logger.error(f"Error in complete_adjustment: {str(e)}\n{traceback.format_exc()}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 400
 
 # Function to process data with detailed logging
 def process_data_detailed(data, filename, start_time=None, end_time=None, time_step=None, offset=None, methods={}, intrpl_max=None):
     try:
-        print(f"\n===Krece obrada | Processing data with parameters ===")
-        print(f"DataFrame name: {filename}")
+        logger.info(f"\n===Krece obrada | Processing data with parameters ===")
+        logger.info(f"DataFrame name: {filename}")
         
         # Convert list of dictionaries to DataFrame
         df = pd.DataFrame(data)
@@ -691,7 +687,7 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         # Get the method for this file if available
         method_info = methods.get(filename, {})
         method = method_info.get('method', '').strip() if isinstance(method_info, dict) else None
-        logger.info(f"Using method '{method}' for file {filename}")
+        logger.info(f"Using method '{method}' with intrpl_max '{intrpl_max}' for file {filename}")
         
         # Apply the selected method if we have a time_step and a valid method
         if time_step and method:
