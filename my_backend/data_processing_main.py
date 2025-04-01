@@ -194,19 +194,27 @@ def zweite_bearbeitung(req):
         if not file_content.strip():
             return jsonify({"error": "Empty file content"}), 400
 
-        try:
-            EQ_MAX = float(req.form.get('eqMax'))
-            CHG_MAX = float(req.form.get('chgMax'))
-            LG_MAX = float(req.form.get('lgMax'))
-            GAP_MAX = float(req.form.get('gapMax'))
-            ELMAX = float(req.form.get('elMax'))
-            ELMIN = float(req.form.get('elMin'))
-            EL0 = req.form.get('radioValueNull')
-            ELNN = req.form.get('radioValueNotNull')
-            EL0 = 1 if EL0 == "ja" else 0
-            ELNN = 1 if ELNN == "ja" else 0
-        except (TypeError, ValueError) as e:
-            return jsonify({"error": f"Invalid parameter value: {str(e)}"}), 400
+        # Helper function to safely convert form values to float
+        def safe_float(value):
+            if value and value.strip():
+                try:
+                    return float(value)
+                except ValueError:
+                    return None
+            return None
+
+        # Safely convert form values
+        EQ_MAX = safe_float(req.form.get('eqMax'))
+        CHG_MAX = safe_float(req.form.get('chgMax'))
+        LG_MAX = safe_float(req.form.get('lgMax'))
+        GAP_MAX = safe_float(req.form.get('gapMax'))
+        ELMAX = safe_float(req.form.get('elMax'))
+        ELMIN = safe_float(req.form.get('elMin'))
+        EL0 = req.form.get('radioValueNull')
+        ELNN = req.form.get('radioValueNotNull')
+        EL0 = 1 if EL0 == "ja" else 0
+        ELNN = 1 if ELNN == "ja" else 0
+
 
         content_lines = file_content.splitlines()
         if not content_lines:
@@ -246,13 +254,25 @@ def zweite_bearbeitung(req):
             data_column = df.columns[1]
 
             logger.info(f"Converting {data_column} to numeric")
-            df[data_column] = (df[data_column].astype(str)
+            logger.info(f"Original data types: {df.dtypes}")
+            logger.info(f"Original sample values: {df[data_column].head().tolist()}")
+            
+            # Convert to string and clean
+            df[data_column] = df[data_column].astype(str)
+            logger.info(f"After string conversion: {df[data_column].head().tolist()}")
+            
+            # Clean the data
+            df[data_column] = (df[data_column]
                                .str.strip()
                                .str.replace('\r', '')
                                .str.replace('\n', '')
                                .str.replace(',', '.'))
+            logger.info(f"After cleaning: {df[data_column].head().tolist()}")
+            
+            # Convert to numeric
             df[data_column] = pd.to_numeric(df[data_column], errors='coerce')
-            logger.info(f"Sample values after conversion: {df[data_column].head().tolist()}")
+            logger.info(f"Final sample values: {df[data_column].head().tolist()}")
+            logger.info(f"NaN count: {df[data_column].isna().sum()}")
             logger.info(f"Data column info:\n{df[data_column].describe()}")
             if df[data_column].isna().all():
                 return jsonify({"error": "Could not convert any values to numeric format"}), 400
@@ -282,7 +302,7 @@ def zweite_bearbeitung(req):
             df.iloc[:, 1] = np.nan
 
 
-        if "EQ_MAX" in locals():
+        if EQ_MAX is not None and EQ_MAX > 0:
             logger.info(f"Processing equal values with EQ_MAX={EQ_MAX}")
             
             # Status des Identifikationsrahmens (frm...frame)
@@ -364,7 +384,7 @@ def zweite_bearbeitung(req):
         # ELIMINIERUNG VON EXTREMEN ###################################################
         ##############################################################################
 
-        if "CHG_MAX" in locals() and "LG_MAX" in locals():
+        if all(x is not None and x > 0 for x in [CHG_MAX, LG_MAX]):
             logger.info(f"Processing data with CHG_MAX={CHG_MAX} and LG_MAX={LG_MAX}")
             
             # Konvertuj vremenske kolone u datetime format
@@ -412,7 +432,7 @@ def zweite_bearbeitung(req):
         # ELIMINIERUNG VON GAPS ######################################################
         ##############################################################################
 
-        if "GAP_MAX" in locals():
+        if GAP_MAX is not None and GAP_MAX > 0:
 
             # Status des Identifikationsrahmens (frm...frame)
             frm = 0
