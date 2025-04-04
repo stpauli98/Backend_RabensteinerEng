@@ -209,6 +209,7 @@ def analyse_data(file_path, upload_id=None):
     """
     try:
         logger.info(f"Starting analyse_data for {file_path}")
+        logger.info("=== Analyzing file ===")
         global stored_data, info_df
         
         # Clear stored data for new analysis
@@ -322,18 +323,40 @@ def analyse_data(file_path, upload_id=None):
                 info_df = info_df[~info_df['Name der Datei'].isin(existing_files)]
                 # Append new info
                 info_df = pd.concat([info_df, new_info_df], ignore_index=True)
+<<<<<<< Updated upstream
         
         # Prepare response data
         dataframe_data = processed_data[0] if processed_data else []
         
         # Return just the data, not a response object
+=======
+        # Log the state of dataframes after analysis
+        if upload_id in adjustment_chunks:
+            logger.info(f"=== Dataframes after analysis for upload_id {upload_id} ===")
+            for df_name, df in adjustment_chunks[upload_id]['dataframes'].items():
+                logger.info(f"DataFrame '{df_name}' added with {len(df)} rows")
+        else:
+            logger.info(f"No dataframes found for upload_id {upload_id}")
+        
+        # Log the state of dataframes after analysis
+        if upload_id in adjustment_chunks:
+            logger.info(f"=== Dataframes after analysis for upload_id {upload_id} ===")
+            for df_name, df in adjustment_chunks[upload_id]['dataframes'].items():
+                logger.info(f"DataFrame '{df_name}' added with {len(df)} rows")
+        else:
+            logger.info(f"No dataframes found for upload_id {upload_id}")
+            
+        # Log and return the upload_id
+        logger.info(f"File info and upload_id returned: {upload_id}")
+>>>>>>> Stashed changes
         return {
             'info_df': all_file_info,
             'dataframe': dataframe_data
         }
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        logger.error(f"Error in analyse_data: {str(e)}\n{traceback.format_exc()}")
+        raise
 
 # Second Step
 @bp.route('/adjust-data-chunk', methods=['POST'])
@@ -354,7 +377,9 @@ def adjust_data():
         start_time = data.get('startTime')
         end_time = data.get('endTime')
         time_step_size = data.get('timeStepSize')
-        offset = data.get('offset', 0)
+        offset = data.get('offset')
+
+        logger.info(f"Adjusting data with parameters: start_time={start_time}, end_time={end_time}, time_step_size={time_step_size}, offset={offset}")
         
         # Get methods from request or existing params
         methods = data.get('methods', {})
@@ -406,6 +431,7 @@ def adjust_data():
             if 'intrplMaxValues' not in params:
                 params['intrplMaxValues'] = {}
             params['intrplMaxValues'].update(intrpl_max_values)
+<<<<<<< Updated upstream
 
         # Add filename to each record based on 'Name der Datei'
         for record in chunk_data:
@@ -413,6 +439,10 @@ def adjust_data():
                 record['filename'] = record['Name der Datei']
             else:
                 logger.warning(f"Record missing 'Name der Datei': {record}")
+=======
+        # Get list of files being processed
+        filenames = list(dataframes.keys())
+>>>>>>> Stashed changes
         
         # Store chunk data
         adjustment_chunks[upload_id]['chunks'][current_chunk] = chunk_data
@@ -472,9 +502,23 @@ def complete_adjustment():
         # Convert parameters to appropriate types
         requested_time_step = params['timeStepSize']
         requested_offset = params['offset']
+<<<<<<< Updated upstream
         methods = params['methods']
         start_time = params['startTime']
         end_time = params['endTime']
+=======
+        
+        # Get optional parameters   OVO CE BITI BITNO ZA KASNIJE
+        methods = params.get('methods', {})
+        start_time = params.get('startTime')
+        end_time = params.get('endTime')
+        time_step = params.get('timeStepSize')
+        offset = params.get('offset')
+        
+        # Initialize result lists
+        all_results = []
+        all_info_records = []
+>>>>>>> Stashed changes
         
         # Get intrplMax values for each file
         intrpl_max_values = params.get('intrplMaxValues', {})
@@ -486,6 +530,7 @@ def complete_adjustment():
         if not chunks:
             return jsonify({"error": "No chunks found in memory for this upload ID"}), 404
             
+<<<<<<< Updated upstream
         # Extract and inspect chunks
         all_records = []
         for chunk_idx, chunk_data in chunks.items():
@@ -500,6 +545,27 @@ def complete_adjustment():
         
         if not filenames:
             return jsonify({"error": "No valid data found in chunks"}), 404
+=======
+        # Get DataFrames and their filenames
+        dataframes = adjustment_chunks[upload_id]['dataframes']
+        if not dataframes:
+            return jsonify({"error": "No data found for this upload ID"}), 404
+            
+        # Log dataframes content
+        logger.info("=== Dataframes content ===")
+        for df_name, df in dataframes.items():
+            logger.info(f"DataFrame '{df_name}': {len(df)} rows")
+            
+        # Log info_df content
+        logger.info("=== Info DataFrame content ===")
+        for _, row in info_df.iterrows():
+            logger.info(f"File: {row['Name der Datei']}, Time step: {row['Zeitschrittweite [min]']}, Offset: {row['Offset [min]']}")
+            
+        # Get list of filenames from dataframes
+        filenames = list(dataframes.keys())
+        logger.info(f"Processing files: {filenames}")
+        logger.info(f"Methods received from frontend: {methods}")
+>>>>>>> Stashed changes
         
         # Clean up methods by stripping whitespace
         if methods:
@@ -535,11 +601,12 @@ def complete_adjustment():
             file_info = info_df[info_df['Name der Datei'] == filename].iloc[0]
             file_time_step = file_info['Zeitschrittweite [min]']
             file_offset = file_info['Offset [min]']
-            # Check if this file needs processing
+            # Check if this file needs processingComplete adjustment
             # Convert requested_offset to minutes from midnight if needed
             if requested_offset >= file_time_step:
                 requested_offset = requested_offset % file_time_step
                 
+<<<<<<< Updated upstream
             # Check if file needs processing and has a valid method
             needs_processing = file_time_step != requested_time_step or file_offset != requested_offset
             method = methods.get(filename, {})
@@ -620,30 +687,81 @@ def complete_adjustment():
                 continue
 
             # Get intrplMax for this specific file
+=======
+            # Check if parameters match
+            needs_processing = file_time_step != time_step or file_offset != offset
+            logger.info(f"Checking parameters for {filename}: needs_processing={needs_processing}")
+            logger.info(f"File parameters: time_step={file_time_step}, offset={file_offset}")
+            logger.info(f"Requested parameters: time_step={time_step}, offset={offset}")
+            
+            # Ako file treba obradu, provjerimo ima li metodu
+            if needs_processing:
+                method = methods.get(filename, {})
+                method = method.get('method', '').strip() if isinstance(method, dict) else ''
+                has_valid_method = method and method in VALID_METHODS
+                
+                if not has_valid_method:
+                    # Ako nemamo validnu metodu, tražimo je od korisnika
+                    return jsonify({
+                        "success": True,
+                        "methodsRequired": True,
+                        "hasValidMethod": False,
+                        "message": f"Die Datei {filename} benötigt eine Verarbeitungsmethode (Zeitschrittweite: {file_time_step}->{time_step}, Offset: {file_offset}->{offset}).",
+                        "data": {
+                            "info_df": [{
+                                "filename": filename,
+                                "current_timestep": file_time_step,
+                                "requested_timestep": time_step,
+                                "current_offset": file_offset,
+                                "requested_offset": offset,
+                                "valid_methods": list(VALID_METHODS)
+                            }],
+                            "dataframe": []
+                        }
+                    }), 200
+            
+            # Get intrplMax for this file if available
+>>>>>>> Stashed changes
             intrpl_max = intrpl_max_values.get(filename)
-            if intrpl_max:
-                logger.info(f"Using intrplMax {intrpl_max} for file {filename}")
-
+            
+            # Process the data - koristimo originalne parametre ako ne treba obradu
+            process_time_step = time_step if needs_processing else file_time_step
+            process_offset = offset if needs_processing else file_offset
+            
+            logger.info(f"Processing file {filename} with parameters:")
+            logger.info(f"  - Time step: {process_time_step}")
+            logger.info(f"  - Offset: {process_offset}")
+            logger.info(f"  - Method: {methods.get(filename, {}).get('method', 'None')}")
+            
             result_data, info_record = process_data_detailed(
+<<<<<<< Updated upstream
                 data_by_file[filename],  # Send only data for this specific file
+=======
+                dataframes[filename],
+>>>>>>> Stashed changes
                 filename,
                 start_time,
                 end_time,
-                time_step,
-                offset,
+                process_time_step,
+                process_offset,
                 methods,
-                intrpl_max  # Use the converted value
+                intrpl_max
             )
-            all_results.extend(result_data)
-            if info_record:
+            
+            logger.info(f"Results for {filename}:")
+            logger.info(f"  - Result data length: {len(result_data) if result_data else 0}")
+            logger.info(f"  - Info record: {'Present' if info_record else 'None'}")
+            
+            if result_data is not None:
+                all_results.extend(result_data)
+                logger.info(f"Added {len(result_data)} records to all_results")
+            if info_record is not None:
                 all_info_records.append(info_record)
-
-        # Nakon obrade, očistite spremljene chunkove
-        del adjustment_chunks[upload_id]
-        
+                logger.info("Added info record to all_info_records")
+                
+        # Return processed results
         return jsonify({
             "success": True,
-            "methodsRequired": False,
             "data": {
                 "info_df": all_info_records,
                 "dataframe": all_results
