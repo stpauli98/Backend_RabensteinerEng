@@ -8,7 +8,8 @@ import logging
 import tempfile
 import csv 
 from io import StringIO
-from datetime import datetime as dat
+from datetime import datetime
+import time
 from flask import request, jsonify, Response, send_file, Blueprint
 
 # Create blueprint
@@ -298,7 +299,9 @@ def prepare_save():
         data = request.json
         if not data or 'data' not in data:
             return jsonify({"error": "No data received"}), 400
-        save_data = data['data']
+        data_wrapper = data['data']
+        save_data = data_wrapper.get('data', [])
+        file_name = data_wrapper.get('fileName', '')
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
 
@@ -310,8 +313,12 @@ def prepare_save():
         temp_file.close()
 
         # Generiši jedinstveni ID na osnovu trenutnog vremena
-        file_id = dat.now().strftime('%Y%m%d_%H%M%S')
-        temp_files[file_id] = temp_file.name
+        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        temp_files[file_id] = {
+            'path': temp_file.name,
+            'fileName': file_name or f"data_{file_id}.csv",  # Koristi poslato ime ili default
+            'timestamp': time.time()
+        }
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
@@ -324,17 +331,30 @@ def download_file(file_id):
     try:
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404
-        file_path = temp_files[file_id]
+            
+        file_info = temp_files[file_id]
+        file_path = file_info['path']
+        
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
 
-        download_name = f"data_{file_id}.csv"
-        return send_file(
+        # Koristi sačuvano ime fajla
+        download_name = file_info['fileName']
+        
+        response = send_file(
             file_path,
             as_attachment=True,
             download_name=download_name,
             mimetype='text/csv'
         )
+        
+        # Cleanup nakon slanja
+        try:
+            os.unlink(file_info['path'])
+        except Exception as e:
+            logger.error(f"Error cleaning up temp file: {e}")
+        return response
+
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}")
         return jsonify({"error": str(e)}), 500
