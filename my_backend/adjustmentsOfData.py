@@ -46,28 +46,58 @@ info_df = pd.DataFrame(columns=['Name der Datei', 'Name der Messreihe', 'Startze
 
 # Function to check if file is a CSV
 def cleanup_old_files():
-    """Clean up temporary files older than 5 minutes"""
+    """Clean up files older than 5 minutes from temp_uploads directory"""
     success = True
     errors = []
+    deleted_count = 0
     current_time = time.time()
     EXPIRY_TIME = 5 * 60  # 5 minutes in seconds
-
-    for file_id, file_info in list(temp_files.items()):
-        try:
-            file_age = current_time - file_info.get('timestamp', 0)
-            if file_age > EXPIRY_TIME:
-                os.remove(file_info['path'])
-                del temp_files[file_id]
-                logger.info(f"Cleaned up file {file_id} (age: {file_age/60:.1f} minutes)")
-        except (OSError, KeyError) as e:
-            success = False
-            errors.append(str(e))
-            logger.error(f"Error cleaning up file {file_id}: {str(e)}")
     
-    if success:
-        return jsonify({"success": True, "message": "Old files cleaned up successfully"}), 200
-    else:
-        return jsonify({"error": "Some files could not be cleaned up", "details": errors}), 500
+    # Get temp_uploads directory path
+    temp_dir = os.path.join(os.path.dirname(__file__), 'temp_uploads')
+    
+    try:
+        # Prolazi kroz sve poddirektorijume
+        for root, dirs, files in os.walk(temp_dir, topdown=False):
+            for name in files:
+                file_path = os.path.join(root, name)
+                try:
+                    # Proveri starost fajla
+                    file_age = current_time - os.path.getmtime(file_path)
+                    if file_age > EXPIRY_TIME:
+                        os.remove(file_path)
+                        deleted_count += 1
+                        logger.info(f"Cleaned up file {name} (age: {file_age/60:.1f} minutes)")
+                except Exception as e:
+                    success = False
+                    errors.append(f"Error with {name}: {str(e)}")
+                    logger.error(f"Error cleaning up file {name}: {str(e)}")
+            
+            # Pokušaj obrisati prazne direktorijume
+            for dir_name in dirs:
+                dir_path = os.path.join(root, dir_name)
+                try:
+                    os.rmdir(dir_path)  # Ovo će uspeti samo ako je direktorijum prazan
+                    logger.info(f"Removed empty directory: {dir_path}")
+                except OSError:
+                    # Ignoriši greške ako direktorijum nije prazan
+                    pass
+        
+        # Očisti temp_files dictionary za obrisane fajlove
+        for file_id, file_info in list(temp_files.items()):
+            if not os.path.exists(file_info['path']):
+                del temp_files[file_id]
+    
+        return jsonify({
+            "success": success,
+            "message": f"Cleaned up {deleted_count} files older than 5 minutes",
+            "deleted_count": deleted_count,
+            "errors": errors if errors else None
+        }), 200 if success else 500
+                
+    except Exception as e:
+        logger.error(f"Error in cleanup_old_files: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 def allowed_file(filename):
     """Check if file has .csv extension"""
@@ -108,8 +138,6 @@ def get_time_column(df):
 # First Step
 @bp.route('/upload-chunk', methods=['POST'])
 def upload_chunk():
-    # Clean up old files before new upload
-    cleanup_old_files()
     """
     Endpoint za prihvat pojedinačnih chunkova.
     Očekivani parametri (form data):
@@ -886,8 +914,6 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
 # Route to prepare data for saving
 @bp.route('/prepare-save', methods=['POST'])
 def prepare_save():
-    # Clean up old files before saving new ones
-    cleanup_old_files()
     try:
         # Try to get data from JSON
         try:
@@ -934,8 +960,6 @@ def prepare_save():
 # Route to download file
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
-    # Clean up old files before download
-    cleanup_old_files()
     try:
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404
@@ -956,9 +980,5 @@ def download_file(file_id):
         return jsonify({"error": str(e)}), 500
     finally:
         # Pokušaj očistiti privremeni fajl
-        if file_id in temp_files:
-            try:
-                os.unlink(temp_files[file_id])
-                del temp_files[file_id]
-            except Exception as ex:
-                logger.error(f"Error cleaning up temp file: {ex}")
+        cleanup_old_files()
+        
