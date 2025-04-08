@@ -67,7 +67,6 @@ def cleanup_old_files():
                     if file_age > EXPIRY_TIME:
                         os.remove(file_path)
                         deleted_count += 1
-                        logger.info(f"Cleaned up file {name} (age: {file_age/60:.1f} minutes)")
                 except Exception as e:
                     success = False
                     errors.append(f"Error with {name}: {str(e)}")
@@ -78,9 +77,7 @@ def cleanup_old_files():
                 dir_path = os.path.join(root, dir_name)
                 try:
                     os.rmdir(dir_path)  # Ovo će uspeti samo ako je direktorijum prazan
-                    logger.info(f"Removed empty directory: {dir_path}")
                 except OSError:
-                    # Ignoriši greške ako direktorijum nije prazan
                     pass
         
         # Očisti temp_files dictionary za obrisane fajlove
@@ -236,8 +233,6 @@ def analyse_data(file_path, upload_id=None):
         upload_id (str, optional): ID of the upload if this is part of a chunked upload
     """
     try:
-        logger.info(f"Starting analyse_data for {file_path}")
-        logger.info("=== Analyzing file ===")
         global stored_data, info_df
         
         # Clear stored data for new analysis
@@ -351,24 +346,7 @@ def analyse_data(file_path, upload_id=None):
                 info_df = info_df[~info_df['Name der Datei'].isin(existing_files)]
                 # Append new info
                 info_df = pd.concat([info_df, new_info_df], ignore_index=True)
-        # Log the state of dataframes after analysis
-        if upload_id in adjustment_chunks:
-            logger.info(f"=== Dataframes after analysis for upload_id {upload_id} ===")
-            for df_name, df in adjustment_chunks[upload_id]['dataframes'].items():
-                logger.info(f"DataFrame '{df_name}' added with {len(df)} rows")
-        else:
-            logger.info(f"No dataframes found for upload_id {upload_id}")
-        
-        # Log the state of dataframes after analysis
-        if upload_id in adjustment_chunks:
-            logger.info(f"=== Dataframes after analysis for upload_id {upload_id} ===")
-            for df_name, df in adjustment_chunks[upload_id]['dataframes'].items():
-                logger.info(f"DataFrame '{df_name}' added with {len(df)} rows")
-        else:
-            logger.info(f"No dataframes found for upload_id {upload_id}")
-            
-        # Log and return the upload_id
-        logger.info(f"File info and upload_id returned: {upload_id}")
+        # Return the upload_id
         return {
             'info_df': all_file_info,
             'upload_id': upload_id
@@ -408,8 +386,6 @@ def adjust_data():
         time_step_size = data.get('timeStepSize')
         offset = data.get('offset')
 
-        logger.info(f"Adjusting data with parameters: start_time={start_time}, end_time={end_time}, time_step_size={time_step_size}, offset={offset}")
-        
         # Get methods from request or existing params
         methods = data.get('methods', {})
         if not methods:
@@ -422,7 +398,6 @@ def adjust_data():
             if isinstance(method_info, dict) and 'intrpl_max' in method_info:
                 try:
                     intrpl_max_values[filename] = float(method_info['intrpl_max'])
-                    logger.info(f"Received intrplMax for {filename}: {method_info['intrpl_max']}, converted to: {intrpl_max_values[filename]}")
                 except (TypeError, ValueError) as e:
                     logger.warning(f"Could not convert intrplMax for {filename}: {e}")
                     intrpl_max_values[filename] = None
@@ -537,28 +512,14 @@ def complete_adjustment():
         
         # Get intrplMax values for each file
         intrpl_max_values = params.get('intrplMaxValues', {})
-        logger.info(f"Complete adjustment: Using intrplMax values: {intrpl_max_values}")
         
-            
         # Get DataFrames and their filenames
         dataframes = adjustment_chunks[upload_id]['dataframes']
         if not dataframes:
             return jsonify({"error": "No data found for this upload ID"}), 404
             
-        # Log dataframes content
-        logger.info("=== Dataframes content ===")
-        for df_name, df in dataframes.items():
-            logger.info(f"DataFrame '{df_name}': {len(df)} rows")
-            
-        # Log info_df content
-        logger.info("=== Info DataFrame content ===")
-        for _, row in info_df.iterrows():
-            logger.info(f"File: {row['Name der Datei']}, Time step: {row['Zeitschrittweite [min]']}, Offset: {row['Offset [min]']}")
-            
         # Get list of filenames from dataframes
         filenames = list(dataframes.keys())
-        logger.info(f"Processing files: {filenames}")
-        logger.info(f"Methods received from frontend: {methods}")
         
         # Clean up methods by stripping whitespace
         if methods:
@@ -590,9 +551,6 @@ def complete_adjustment():
                 
             # Check if parameters match
             needs_processing = file_time_step != time_step or file_offset != offset
-            logger.info(f"Checking parameters for {filename}: needs_processing={needs_processing}")
-            logger.info(f"File parameters: time_step={file_time_step}, offset={file_offset}")
-            logger.info(f"Requested parameters: time_step={time_step}, offset={offset}")
             
             # Ako file treba obradu, provjerimo ima li metodu
             if needs_processing:
@@ -627,11 +585,6 @@ def complete_adjustment():
             process_time_step = time_step if needs_processing else file_time_step
             process_offset = offset if needs_processing else file_offset
             
-            logger.info(f"Processing file {filename} with parameters:")
-            logger.info(f"  - Time step: {process_time_step}")
-            logger.info(f"  - Offset: {process_offset}")
-            logger.info(f"  - Method: {methods.get(filename, {}).get('method', 'None')}")
-            
             result_data, info_record = process_data_detailed(
                 dataframes[filename],
                 filename,
@@ -643,16 +596,10 @@ def complete_adjustment():
                 intrpl_max
             )
             
-            logger.info(f"Results for {filename}:")
-            logger.info(f"  - Result data length: {len(result_data) if result_data else 0}")
-            logger.info(f"  - Info record: {'Present' if info_record else 'None'}")
-            
             if result_data is not None:
                 all_results.extend(result_data)
-                logger.info(f"Added {len(result_data)} records to all_results")
             if info_record is not None:
                 all_info_records.append(info_record)
-                logger.info("Added info record to all_info_records")
                 
         # Return processed results
         return jsonify({
@@ -668,243 +615,342 @@ def complete_adjustment():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 400
 
-# Function to process data with detailed logging
+# Pomoćne funkcije za obradu podataka
+def prepare_data(data, filename):
+    """Priprema podataka za obradu"""
+    # Kopiranje DataFrame-a
+    df = data.copy()
+    
+    if len(df) == 0:
+        raise ValueError(f"No data found for file {filename}")
+    
+    # Konverzija UTC kolone u datetime
+    df['UTC'] = pd.to_datetime(df['UTC'])
+    
+    # Identifikacija kolona merenja
+    measurement_cols = [col for col in df.columns if col != 'UTC']
+    if not measurement_cols:
+        raise ValueError(f"No measurement columns found for file {filename}")
+    
+    # Konverzija vrednosti merenja u float, ali sačuvaj originalne vrednosti
+    for col in measurement_cols:
+        # Sačuvaj originalne vrednosti pre konverzije
+        df[f"{col}_original"] = df[col].copy()
+        # Konvertuj u numeričke vrednosti, NaN za ne-numeričke
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    return df, measurement_cols
+
+def filter_by_time_range(df, start_time, end_time):
+    """Filtriranje podataka po vremenskom rasponu"""
+    if start_time and end_time:
+        start_time = pd.to_datetime(start_time)
+        end_time = pd.to_datetime(end_time)
+        return df[(df['UTC'] >= start_time) & (df['UTC'] <= end_time)]
+    return df
+
+def get_method_for_file(methods, filename):
+    """Dobijanje metode obrade za fajl"""
+    method_info = methods.get(filename, {})
+    if isinstance(method_info, dict):
+        return method_info.get('method', '').strip()
+    return None
+
+def apply_processing_method(df, col, method, time_step, offset, start_time, end_time, intrpl_max):
+    """Primena metode obrade na podatke"""
+    non_numeric_mask = ~pd.to_numeric(df[col], errors='coerce').notna() & ~df[col].isna()
+    if non_numeric_mask.any():
+        non_numeric_values = df.loc[non_numeric_mask, col].unique()
+    
+    # Ako nemamo time_step, vraćamo originalne podatke
+    if not time_step:
+        return df
+        
+    # Ako je metoda prazna, generiramo sve vremenske korake ali zadržavamo originalne podatke
+    if not method:
+        
+        # Određivanje vremenskog raspona
+        if start_time is None:
+            start_time = df_indexed.index.min()
+        else:
+            start_time = pd.to_datetime(start_time)
+            
+        if end_time is None:
+            end_time = df_indexed.index.max()
+        else:
+            end_time = pd.to_datetime(end_time)
+        
+        # Primena offseta ako je obezbeđen
+        if offset:
+            start_time = start_time + pd.Timedelta(minutes=offset)
+        
+        # Kreiranje novog indeksa sa zadatim time step-om
+        new_index = pd.date_range(start=start_time, end=end_time, freq=f'{time_step}min')
+    
+    # Izdvajamo UTC, relevantnu kolonu merenja i originalnu vrednost ako postoji
+    original_col = f"{col}_original"
+    columns_to_extract = ['UTC', col]
+    if original_col in df.columns:
+        columns_to_extract.append(original_col)
+    
+    df_single_col = df[columns_to_extract].copy()
+    
+    # Postavljamo UTC kao indeks
+    df_indexed = df_single_col.set_index('UTC')
+    
+    # Rešavanje duplikata u indeksu
+    if df_indexed.index.duplicated().any():
+        if method in ['mean', 'nearest (mean)']:
+            # Za metode koje koriste mean, grupišemo po UTC
+            df_indexed = df_indexed.groupby(level=0).mean()
+        else:
+            # Za ostale metode, uzimamo prvi zapis za svaki timestamp
+            df_indexed = df_indexed.loc[~df_indexed.index.duplicated(keep='first')]
+    
+    # Sortiranje indeksa
+    df_indexed = df_indexed.sort_index()
+    
+    # Određivanje vremenskog raspona
+    if start_time is None:
+        start_time = df_indexed.index.min()
+    else:
+        start_time = pd.to_datetime(start_time)
+        
+    if end_time is None:
+        end_time = df_indexed.index.max()
+    else:
+        end_time = pd.to_datetime(end_time)
+    
+    # Primena offseta ako je obezbeđen
+    if offset:
+        start_time = start_time + pd.Timedelta(minutes=offset)
+    
+    # Kreiranje novog indeksa sa zadatim time step-om
+    new_index = pd.date_range(start=start_time, end=end_time, freq=f'{time_step}min')
+    
+    # Primena odgovarajuće metode
+    if method == 'mean':
+        # Resample sa offsetom
+        resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[col].mean()
+        result_df = pd.DataFrame({
+            'UTC': resampled.index,
+            col: resampled.values
+        })
+        
+    elif method == 'max':
+        # Resample sa offsetom
+        resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[col].max()
+        result_df = pd.DataFrame({
+            'UTC': resampled.index,
+            col: resampled.values
+        })
+        
+    elif method == 'min':
+        # Resample sa offsetom
+        resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[col].min()
+        result_df = pd.DataFrame({
+            'UTC': resampled.index,
+            col: resampled.values
+        })
+        
+    elif method == 'intrpl':
+        # Parametri za interpolaciju
+        reindex_params = {'method': None}  # Koristimo interpolate umesto method parametra
+        
+        # Reindex sa novim indeksom
+        resampled = df_indexed.reindex(new_index, **reindex_params)
+        
+        # Interpolacija
+        if intrpl_max is None:
+            logger.warning(f"'intrpl' method requires intrpl_max parameter. Using unlimited interpolation")
+            interpolated = resampled.interpolate(method='linear', limit_direction='both')
+        else:
+            limit_periods = int(intrpl_max / time_step)  # Konvertujemo minute u broj perioda
+            interpolated = resampled.interpolate(
+                method='linear',
+                limit=limit_periods,
+                limit_direction='both'
+            )
+            
+        result_df = pd.DataFrame({
+            'UTC': interpolated.index,
+            col: interpolated[col].values
+        })
+        
+    elif method == 'nearest':
+        # Prvo agregiramo duplikate
+        df_aggregated = df_indexed.groupby(level=0)[col].mean()
+        # Zatim reindex sa nearest metodom
+        resampled = df_aggregated.reindex(new_index, method='nearest')
+        result_df = pd.DataFrame({
+            'UTC': new_index,
+            col: resampled.values
+        })
+        
+    elif method == 'nearest (mean)':
+        # Prvo agregiramo duplikate
+        df_aggregated = df_indexed.groupby(level=0)[col].mean()
+        # Zatim reindex sa nearest metodom
+        nearest_vals = df_aggregated.reindex(new_index, method='nearest')
+        rolling_mean = nearest_vals.rolling(window=2, min_periods=1).mean()
+        result_df = pd.DataFrame({
+            'UTC': new_index,
+            col: rolling_mean.values
+        })
+        
+    elif method == 'nearest (max. delta)':
+        # Prvo agregiramo duplikate
+        df_aggregated = df_indexed.groupby(level=0)[col].mean()
+        
+        # Parametri za reindex
+        reindex_params = {'method': 'nearest'}
+        
+        # Dodajemo tolerance ako je intrpl_max definisan
+        if intrpl_max is not None:
+            reindex_params['tolerance'] = pd.Timedelta(minutes=intrpl_max)
+        
+        # Reindex sa nearest metodom i tolerancijom
+        nearest_vals = df_aggregated.reindex(new_index, **reindex_params)
+        
+        # Jednostavnija implementacija koja koristi tolerance parametar
+        # Vrednosti koje su dalje od tolerance će biti NaN
+        result_df = pd.DataFrame({
+            'UTC': new_index,
+            col: nearest_vals.values
+        })
+        
+    elif not method:
+        # Ako je metoda prazna, generiramo sve vremenske korake s originalnim podacima
+        
+        # Kreiramo novi DataFrame s pravilnim vremenskim koracima
+        result_df = pd.DataFrame(index=new_index)
+        result_df['UTC'] = result_df.index
+        
+        # Reindeksiramo originalne podatke na novi indeks
+        # Koristimo nearest metodu za reindeksiranje kako bismo sačuvali originalne vrijednosti
+        # ali ne popunjavamo praznine između - one ostaju NaN
+        if col in df_indexed.columns:
+            # Koristimo reindex bez metode kako bismo dobili NaN za nedostajuće vrijednosti
+            resampled = df_indexed[col].reindex(new_index)
+            result_df[col] = resampled
+        
+        # Ako imamo originalnu kolonu, također je reindeksiramo
+        original_col = f"{col}_original"
+        if original_col in df_indexed.columns:
+            original_resampled = df_indexed[original_col].reindex(new_index)
+            result_df[original_col] = original_resampled
+    else:
+        # Ako metoda nije prepoznata, vraćamo originalne podatke
+        result_df = df_single_col
+    
+    # Osiguravamo da imamo UTC kolonu
+    if 'index' in result_df.columns and 'UTC' not in result_df.columns:
+        result_df.rename(columns={'index': 'UTC'}, inplace=True)
+    
+    return result_df
+
+# Kreiranje info zapisa za rezultate
+def create_info_record(df, col, filename, time_step, offset):
+    """Kreiranje info zapisa za rezultate"""
+    total_points = len(df)
+    numeric_points = df[col].count()
+    numeric_ratio = (numeric_points / total_points * 100) if total_points > 0 else 0
+    
+    return {
+        'Name der Datei': filename,
+        'Name der Messreihe': col,
+        'Startzeit (UTC)': df['UTC'].iloc[0].strftime(UTC_fmt) if len(df) > 0 else None,
+        'Endzeit (UTC)': df['UTC'].iloc[-1].strftime(UTC_fmt) if len(df) > 0 else None,
+        'Zeitschrittweite [min]': time_step,
+        'Offset [min]': offset,
+        'Anzahl der Datenpunkte': int(total_points),
+        'Anzahl der numerischen Datenpunkte': int(numeric_points),
+        'Anteil an numerischen Datenpunkten': float(numeric_ratio)
+    }
+# Kreiranje zapisa za rezultate
+def create_records(df, col, filename):
+    """Konverzija DataFrame-a u zapise"""
+    records = []
+    original_col = f"{col}_original"  # Kolona sa originalnim vrednostima
+    
+    for _, row in df.iterrows():
+        utc_timestamp = int(pd.to_datetime(row['UTC']).timestamp() * 1000)  # Konverzija u milisekunde
+        
+        # Provjera tipa podatka
+        if pd.notnull(row[col]):
+            # Ako je numerička vrijednost, koristimo je
+            value = float(row[col])
+        else:
+            # Ako je NaN, provjeravamo originalnu vrijednost
+            if original_col in df.columns and pd.notnull(row[original_col]):
+                # Koristimo originalnu ne-numeričku vrijednost
+                value = str(row[original_col])
+            else:
+                # Ako nemamo originalnu vrijednost, koristimo "None"
+                value = "None"
+        
+        record = {
+            'UTC': utc_timestamp, 
+            col: value,
+            'filename': filename
+        }
+        records.append(record)
+    
+    return records
+
+# Glavna funkcija za obradu podataka sa detaljnim logovanjem
 def process_data_detailed(data, filename, start_time=None, end_time=None, time_step=None, offset=None, methods={}, intrpl_max=None):
     try:
-        logger.info(f"\n===Krece obrada | Processing data with parameters ===")
-        logger.info(f"DataFrame name: {filename}")
+        # 1. Priprema podataka
+        df, measurement_cols = prepare_data(data, filename)
         
-        # Copy the DataFrame
-        df = data.copy()
+        # 2. Filtriranje po vremenskom rasponu
+        df = filter_by_time_range(df, start_time, end_time)
         
-        if len(df) == 0:
-            raise ValueError(f"No data found for file {filename}")
+        # 3. Dobijanje metode obrade za ovaj fajl
+        method = get_method_for_file(methods, filename)
+        
+        # Ako nemamo metodu, koristimo praznu metodu za generiranje svih vremenskih koraka
+        if not method:
+            method = ''  # Prazna metoda će generirati sve vremenske korake
+        
+        # 4. Obrada podataka za svaku kolonu merenja
+        all_records = []
+        all_info_records = []
+        
+        # Ako imamo samo jednu kolonu merenja, obrađujemo je direktno
+        if len(measurement_cols) == 1:
+            measurement_col = measurement_cols[0]
             
-        # Convert UTC column to datetime if it's not already
-        df['UTC'] = pd.to_datetime(df['UTC'])
-        
-        # Identify the measurement column from data
-        columns = df.columns
-        measurement_cols = [col for col in columns if col != 'UTC']
-        if not measurement_cols:
-            raise ValueError(f"No measurement columns found for file {filename}")
-        measurement_col = measurement_cols[0]
-        logger.info(f"Using measurement column: {measurement_col} for file {filename}")
-        
-        # Keep only UTC and the relevant measurement column
-        df = df[['UTC', measurement_col]]
-        
-        # Get the method for this file if available
-        method_info = methods.get(filename, {})
-        method = method_info.get('method', '').strip() if isinstance(method_info, dict) else None
-        logger.info(f"Using method '{method}' with intrpl_max '{intrpl_max}' for file {filename}")
-        
-        # Apply the selected method if we have a time_step and a valid method
-        if time_step and method:
-            # Get measurement columns (non-UTC columns) pre obrade
-            measurement_cols = [col for col in df.columns if col != 'UTC']
-            if not measurement_cols:
-                raise ValueError("No measurement columns found in DataFrame")
-            measurement_col = measurement_cols[0]  # Take the first measurement column
+            # Primena metode obrade
+            processed_df = apply_processing_method(
+                df, measurement_col, method, time_step, offset, start_time, end_time, intrpl_max
+            )
             
-            # Prvo postavimo UTC kao index za sve metode
-            df.set_index('UTC', inplace=True)
+            # Kreiranje zapisa i statistika
+            records = create_records(processed_df, measurement_col, filename)
+            info_record = create_info_record(processed_df, measurement_col, filename, time_step, offset)
             
-            # Ako imamo duplikate u indexu, rešimo ih pre reindex-a
-            if df.index.duplicated().any():
-                if method in ['mean', 'nearest (mean)']:
-                    # Za metode koje koriste mean, odmah grupišemo po UTC
-                    # Isključujemo filename kolonu iz mean operacije
-                    numeric_cols = df.select_dtypes(include=[np.number]).columns
-                    df = df[numeric_cols].groupby(level=0).mean()
-                else:
-                    # Za ostale metode, uzimamo prvi zapis za svaki timestamp
-                    df = df.loc[~df.index.duplicated(keep='first')]
-            
-            # Sortiramo index da bude monoton rastuci
-            df = df.sort_index()
-            
-            # Kreiramo novi vremenski index sa zadatim time step-om
-            new_index = pd.date_range(start=df.index[0], end=df.index[-1], freq=f'{time_step}min')
-            
-            if method == 'mean':
-                # Klasična metoda proseka
-                df = df.resample(f'{time_step}min').mean()
-                df = df.interpolate(method='linear')
-                
-            elif method == 'intrpl':
-                if intrpl_max is None:
-                    logger.warning(f"'intrpl' method requires intrpl_max parameter. Using unlimited interpolation for {filename}")
-                    df = df.reindex(new_index).interpolate(method='linear', limit_direction='both')
-                else:
-                    # Linearna interpolacija sa limitom baziranim na intrpl_max
-                    limit_periods = int(intrpl_max / time_step)  # Konvertujemo minute u broj perioda
-                    df = df.reindex(new_index).interpolate(
-                        method='linear',
-                        limit=limit_periods,  # Maksimalan broj uzastopnih NaN-ova za popunjavanje
-                        limit_direction='both'  # Popunjavamo NaN-ove u oba smera
-                    )
-                
-            elif method == 'nearest':
-                # Najbliža vrednost
-                df = df.reindex(new_index, method='nearest')
-                
-            elif method == 'nearest (mean)':
-                # Prvo nađemo najbližu vrednost, pa onda prosek ako ima više vrednosti
-                df = df.reindex(new_index, method='nearest')
-                df = df.resample(f'{time_step}min').mean()
-                
-            elif method == 'nearest (max. delta)':
-                # Najbliža vrednost sa maksimalnom dozvoljenom razlikom
-                df = df.reindex(new_index, method='nearest', tolerance=pd.Timedelta(minutes=time_step))
-                # Vrednosti koje su dalje od time_step će biti NaN
-            
-            # Reset index za sve metode i osiguraj da se kolona zove 'UTC'
-            df.reset_index(inplace=True)
-            if 'index' in df.columns:
-                df.rename(columns={'index': 'UTC'}, inplace=True)
+            return records, info_record
         
-        # Get measurement columns (non-UTC columns)
-        measurement_cols = [col for col in df.columns if col != 'UTC']
-        if not measurement_cols:
-            raise ValueError("No measurement columns found in DataFrame")
+        # Ako imamo više kolona merenja, obrađujemo svaku pojedinačno
+        combined_records = []
+        
+        for col in measurement_cols:
+            # Primena metode obrade
+            processed_df = apply_processing_method(
+                df, col, method, time_step, offset, start_time, end_time, intrpl_max
+            )
             
-        measurement_col = measurement_cols[0]  # Take the first measurement column
-        
-        # Convert measurement values to float, replacing non-numeric values with NaN
-        df[measurement_col] = pd.to_numeric(df[measurement_col], errors='coerce')
-        
-        # Filter by time range if provided
-        if start_time and end_time:
-            start_time = pd.to_datetime(start_time)
-            end_time = pd.to_datetime(end_time)
-            df = df[(df['UTC'] >= start_time) & (df['UTC'] <= end_time)]
-        
-        # Create regular time index
-        if time_step:
-            # Osiguraj da imamo UTC kolonu
-            if 'index' in df.columns and 'UTC' not in df.columns:
-                df.rename(columns={'index': 'UTC'}, inplace=True)
-                
-            # Create new time index
-            if start_time is None:
-                start_time = df['UTC'].min()
-            if end_time is None:
-                end_time = df['UTC'].max()
-                
-            # Apply offset if provided
-            if offset:
-                start_time = start_time + pd.Timedelta(minutes=offset)
-                
-            # Create new index with specified time step
-            new_index = pd.date_range(start=start_time, end=end_time, freq=f'{time_step}min')
+            # Kreiranje zapisa i statistika
+            records = create_records(processed_df, col, filename)
+            info_record = create_info_record(processed_df, col, filename, time_step, offset)
             
-            # Resample data based on method
-            if method == 'mean':
-                # Set index and resample with mean
-                df_indexed = df.set_index('UTC').sort_index()  # Sortiramo pre resample
-                resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[measurement_col].mean()
-                result_df = pd.DataFrame({
-                    'UTC': resampled.index,
-                    measurement_col: resampled.values
-                })
-            elif method == 'max':
-                resampled = df.set_index('UTC').sort_index().resample(f'{time_step}min', offset=f'{offset}min')[measurement_col].max()
-                result_df = pd.DataFrame({
-                    'UTC': resampled.index,
-                    measurement_col: resampled.values
-                })
-            elif method == 'min':
-                resampled = df.set_index('UTC').resample(f'{time_step}min', offset=f'{offset}min')[measurement_col].min()
-                result_df = pd.DataFrame({
-                    'UTC': resampled.index,
-                    measurement_col: resampled.values
-                })
-            elif method == 'nearest':
-                # First aggregate any duplicate timestamps by taking their mean
-                df_indexed = df.groupby('UTC')[measurement_col].mean()
-                # Then reindex with nearest method
-                resampled = df_indexed.reindex(new_index, method='nearest')
-                result_df = pd.DataFrame({
-                    'UTC': new_index,
-                    measurement_col: resampled.values
-                })
-            elif method == 'nearest (mean)':
-                # First aggregate any duplicate timestamps by taking their mean
-                df_indexed = df.groupby('UTC')[measurement_col].mean()
-                # Then reindex with nearest method
-                nearest_vals = df_indexed.reindex(new_index, method='nearest')
-                rolling_mean = nearest_vals.rolling(window=2, min_periods=1).mean()
-                result_df = pd.DataFrame({
-                    'UTC': new_index,
-                    measurement_col: rolling_mean.values
-                })
-            elif method == 'nearest (max. delta)':
-                # First aggregate any duplicate timestamps by taking their mean
-                df_indexed = df.groupby('UTC')[measurement_col].mean()
-                
-                # Then reindex with nearest method, using tolerance if available
-                reindex_params = {
-                    'method': 'nearest'
-                }
-                if intrpl_max is not None:
-                    reindex_params['tolerance'] = pd.Timedelta(minutes=intrpl_max)
-                    
-                nearest_vals = df_indexed.reindex(new_index, **reindex_params)
-                
-                # Calculate forward and backward deltas
-                forward_deltas = nearest_vals.diff()
-                backward_deltas = nearest_vals.diff(-1)
-                
-                # Get absolute deltas and take minimum of forward/backward
-                deltas = pd.concat([forward_deltas.abs(), backward_deltas.abs()], axis=1).min(axis=1)
-                max_delta = deltas.quantile(0.95)  # Use 95th percentile as threshold
-                
-                # Only mask values where both forward and backward deltas exceed threshold
-                # AND where the time difference is greater than intrpl_max
-                masked_values = nearest_vals.where(deltas <= max_delta)
-                result_df = pd.DataFrame({
-                    'UTC': new_index,
-                    measurement_col: masked_values.values
-                })
-            else:
-                result_df = df
-        else:
-            result_df = df
-            
-        # Calculate statistics
-        total_points = len(result_df)
-        numeric_points = result_df[measurement_col].count()
-        numeric_ratio = (numeric_points / total_points * 100) if total_points > 0 else 0
-       
+            combined_records.extend(records)
+            all_info_records.append(info_record)
         
-        # Create info record
-        original_name = filename
-        info_record = {
-            'Name der Datei': original_name,
-            'Name der Messreihe': measurement_col,
-            'Startzeit (UTC)': result_df['UTC'].iloc[0].strftime(UTC_fmt) if len(result_df) > 0 else None,
-            'Endzeit (UTC)': result_df['UTC'].iloc[-1].strftime(UTC_fmt) if len(result_df) > 0 else None,
-            'Zeitschrittweite [min]': time_step,  # Already a number from frontend
-            'Offset [min]': offset,  # Already a number from frontend
-            'Anzahl der Datenpunkte': int(total_points),
-            'Anzahl der numerischen Datenpunkte': int(numeric_points),
-            'Anteil an numerischen Datenpunkten': float(numeric_ratio)
-        }
-        
-        # Convert to records
-        records = []
-        for _, row in result_df.iterrows():
-            utc_timestamp = int(pd.to_datetime(row['UTC']).timestamp() * 1000)  # Convert to milliseconds
-            value = float(row[measurement_col]) if pd.notnull(row[measurement_col]) else None
-            record = {
-                'UTC': utc_timestamp, 
-                measurement_col: value,
-                'filename': original_name  # Use original name for the record
-            }
-            records.append(record)
-            
-        return records, info_record
+        # Ako imamo više kolona, vraćamo samo prvi info_record za kompatibilnost sa postojećim kodom
+        return combined_records, all_info_records[0] if all_info_records else None
         
     except Exception as e:
         logger.error(f"Error in process_data_detailed: {str(e)}")
@@ -981,4 +1027,3 @@ def download_file(file_id):
     finally:
         # Pokušaj očistiti privremeni fajl
         cleanup_old_files()
-        
