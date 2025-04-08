@@ -38,42 +38,13 @@ app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
 
-#API prefix
-#API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
-
-# AdjustmentsOfData routes
-'''@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/upload-chunk', methods=['POST'])
-def adjustments_of_data_upload_chunk():
-    return adjustmentsOfData.upload_chunk()
-
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/analyse-data', methods=['POST'])
-def adjustments_of_data_analyse_data():
-    return adjustmentsOfData.analyse_data()
-
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjust-data-chunk', methods=['POST'])
-def adjustments_of_data_adjust_data():
-    return adjustmentsOfData.adjust_data()
-
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/adjustdata/complete', methods=['POST'])
-def adjustments_of_data_complete():
-    return adjustmentsOfData.complete_adjustment()
-
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/prepare-save', methods=['POST'])
-def adjustments_of_data_prepare_save():
-    return adjustmentsOfData.prepare_save()
-
-@app.route(f'{API_PREFIX_ADJUSTMENTS_OF_DATA}/download/<file_id>', methods=['GET'])
-def adjustments_of_data_download(file_id):
-    return adjustmentsOfData.download_file(file_id)
-'''
-
 @app.route('/')
 def index():
     try:
         logger.info("Handling request to index endpoint")
         return jsonify({
             'status': 'online',
-            'message': 'Backend service is runninggggg',
+            'message': 'Backend service is running',
             'version': '1.0.0',
             'timestamp': str(dat.now()),
             'port': os.environ.get('PORT', '5001'),
