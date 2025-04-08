@@ -1003,6 +1003,8 @@ def prepare_save():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+# The complete_upload functionality has been moved to cloud.py
+# to avoid circular imports and infinite recursion
 # Route to download file
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
