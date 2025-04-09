@@ -3,20 +3,25 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file, Blueprint
+import tempfile
+import os
+import time
+import csv
+import logging
+import traceback
+import time
+from io import StringIO
+from flask import request, jsonify, send_file, Blueprint, Response
+import json
+import uuid
+import shutil
+import base64
+from io import StringIO, BytesIO
+import os
+import sys
 
 # Create blueprint
 bp = Blueprint('cloud', __name__)
-import base64
-from io import StringIO, BytesIO
-import json
-import os
-import sys
-import tempfile
-import csv
-import traceback
-import logging
-import shutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -972,15 +977,70 @@ def interpolate_chunked():
                 'message': 'The file contains no valid data points for interpolation'
             }), 400
 
-        return jsonify({
-            'success': True,
-            'data': {
-                'points': chart_data,
+        # Define chunk size for streaming (number of data points per chunk)
+        CHUNK_SIZE = 1000  # Adjust this based on your needs
+        
+        # Calculate total number of chunks needed
+        total_rows = len(df2_resampled)
+        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE  # Ceiling division
+        
+        logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
+        
+        # Define a generator function to stream the data in chunks
+        def generate_chunks():
+            # First, send metadata about the dataset
+            meta_data = {
+                'type': 'meta',
+                'total_rows': total_rows,
+                'total_chunks': total_chunks,
                 'added_points': added_points,
-                'total_points': len(df2_resampled),
-                'removed_points': 0
+                'original_points': len(df2),
+                'success': True
             }
-        })
+            yield json.dumps(meta_data, separators=(',', ':')) + '\n'
+            
+            # Then send the data chunks
+            for chunk_idx in range(total_chunks):
+                start_idx = chunk_idx * CHUNK_SIZE
+                end_idx = min(start_idx + CHUNK_SIZE, total_rows)
+                
+                # Convert this chunk of data to the format expected by frontend
+                chunk_data_list = []
+                for _, row in df2_resampled.iloc[start_idx:end_idx].iterrows():
+                    # Skip NaT values
+                    if pd.isna(row['UTC']) or pd.isna(row['load']):
+                        continue
+                        
+                    try:
+                        chunk_data_list.append({
+                            'UTC': row['UTC'].strftime("%Y-%m-%d %H:%M:%S"),
+                            'value': float(row['load'])
+                        })
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Error converting row to chart data: {e}. Row: {row}")
+                        continue
+                
+                chunk_data = {
+                    'type': 'data',
+                    'chunk_index': chunk_idx,
+                    'data': chunk_data_list
+                }
+                
+                yield json.dumps(chunk_data, separators=(',', ':')) + '\n'
+            
+            # Finally, send completion message
+            yield json.dumps({
+                'type': 'complete',
+                'message': 'Data streaming completed',
+                'success': True
+            }, separators=(',', ':')) + '\n'
+
+        # Return a streaming response
+        logger.info("Starting to stream response using generator")
+        return Response(
+            generate_chunks(),
+            mimetype='application/x-ndjson'
+        )
         
     except Exception as e:
         logger.error(f"Error in interpolation-chunked endpoint: {str(e)}")
