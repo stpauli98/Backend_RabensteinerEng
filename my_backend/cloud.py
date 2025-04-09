@@ -720,9 +720,6 @@ def interpolate_chunked():
     """Process a chunked file upload for interpolation."""
     try:
         logger.info("Received request to /interpolate-chunked")
-        logger.info(f"Request method: {request.method}")
-        logger.info(f"Request content type: {request.content_type}")
-        logger.info(f"Request data: {request.json}")
         
         # Get upload ID and parameters from request
         data = request.json
@@ -772,33 +769,38 @@ def interpolate_chunked():
         chunk_dir = get_chunk_dir(upload_id)
         combined_file_path = os.path.join(chunk_dir, 'combined_interpolate_file.csv')
         
+        # Optimizacija: Koristimo binary mode i veći buffer za brže kombinovanje fajlova
         with open(combined_file_path, 'wb') as outfile:
             for i in range(upload_info['total_chunks']):
                 chunk_path = os.path.join(chunk_dir, f"interpolate_file_{i}")
                 if os.path.exists(chunk_path):
                     with open(chunk_path, 'rb') as infile:
-                        outfile.write(infile.read())
+                        # Kopiranje u većim blokovima za bolje performanse
+                        shutil.copyfileobj(infile, outfile, 1024*1024)  # 1MB buffer
         
         logger.info(f"Combined file created at: {combined_file_path}")
         
-        # Read the combined CSV file
+        # Optimizacija: Koristimo engine='c' za brže parsiranje CSV-a
         try:
+            # Detektujemo separator bez učitavanja celog fajla
             with open(combined_file_path, 'r', encoding='utf-8') as f:
-                file_content = f.read()
-            
+                first_line = f.readline()
+                
             # Try different separators if needed
-            if ';' in file_content:
+            if ';' in first_line:
                 sep = ';'
-            elif ',' in file_content:
+            elif ',' in first_line:
                 sep = ','
             else:
                 sep = None  # Let pandas detect
                 
             logger.info(f"Using separator: {sep}")
             
-            df2 = pd.read_csv(StringIO(file_content), 
+            # Optimizacija: Učitavamo samo potrebne kolone i koristimo engine='c'
+            df2 = pd.read_csv(combined_file_path, 
                              sep=sep,
-                             decimal=',')   # Use comma as decimal separator
+                             decimal=',',
+                             engine='c')   # Brži C engine
         except Exception as e:
             logger.error(f"Error reading CSV file: {str(e)}")
             return jsonify({
@@ -806,8 +808,6 @@ def interpolate_chunked():
                 'error': f'Error reading CSV file: {str(e)}', 
                 'message': 'Please check the file format'
             }), 400
-        
-        logger.info(f"CSV columns: {df2.columns.tolist()}")
         
         # Check if UTC column exists
         if 'UTC' not in df2.columns:
@@ -818,9 +818,10 @@ def interpolate_chunked():
                 'message': 'The file must contain a UTC column with timestamps'
             }), 400
         
-        # Find load column
-        load_cols = [col for col in df2.columns if any(term in str(col).lower() 
-                                                     for term in ['last', 'load', 'leistung', 'kw', 'w'])]
+        # Optimizacija: Brža pretraga load kolone
+        load_terms = set(['last', 'load', 'leistung', 'kw', 'w'])
+        load_cols = [col for col in df2.columns if 
+                    any(term in str(col).lower() for term in load_terms)]
         
         if not load_cols:
             # If no specific load column found, use the first non-UTC column
@@ -839,46 +840,23 @@ def interpolate_chunked():
             y_col = load_cols[0]
             logger.info(f"Found load column: {y_col}")
         
-        # Print first few rows to debug
-        logger.info("First few rows of data:")
-        logger.info(df2.head().to_string())
+        # Optimizacija: Zadržavamo samo potrebne kolone za smanjenje memorije
+        df2 = df2[['UTC', y_col]].copy()
         
-        # Clean the data - ensure y_col is string before applying regex
+        # Optimizacija: Brža konverzija u numeričke vrednosti
         if not pd.api.types.is_numeric_dtype(df2[y_col]):
-            # Convert to string first if not already
-            df2[y_col] = df2[y_col].astype(str)
-            # Remove any non-numeric characters and convert to float
-            df2[y_col] = df2[y_col].replace(r'[^\d\-\.,]', '', regex=True)
-            # Replace comma with dot for decimal point
-            df2[y_col] = df2[y_col].str.replace(',', '.')
-        
-        # Convert to float, replacing any invalid values with NaN
-        df2[y_col] = pd.to_numeric(df2[y_col], errors='coerce')
+            # Direktna konverzija u numeričke vrednosti
+            df2[y_col] = pd.to_numeric(df2[y_col].astype(str).str.replace(',', '.').str.replace(r'[^\d\-\.]', '', regex=True), errors='coerce')
         
         # Remove rows with NaN values
-        original_len = len(df2)
-        df2 = df2.dropna(subset=[y_col])
-        dropped_rows = original_len - len(df2)
-        if dropped_rows > 0:
-            logger.info(f"Dropped {dropped_rows} rows with invalid values")
+        df2.dropna(subset=[y_col], inplace=True)
         
-        # Convert time column to datetime
+        # Optimizacija: Brža konverzija vremena
         try:
-            # Try common datetime formats
-            df2['UTC'] = pd.to_datetime(df2['UTC'], errors='coerce')
-            
-            # Check if we have NaT values and try different formats if needed
-            if df2['UTC'].isna().any():
-                logger.warning("Some datetime values could not be parsed with default format")
-                # Try with specific format if needed
-                df2['UTC'] = pd.to_datetime(df2['UTC'], format="%Y-%m-%d %H:%M:%S", errors='coerce')
-            
+            # Koristimo cache=True za brže parsiranje datuma
+            df2['UTC'] = pd.to_datetime(df2['UTC'], errors='coerce', cache=True)
             # Drop rows with invalid datetime
-            original_len = len(df2)
-            df2 = df2.dropna(subset=['UTC'])
-            dropped_rows = original_len - len(df2)
-            if dropped_rows > 0:
-                logger.info(f"Dropped {dropped_rows} rows with invalid datetime values")
+            df2.dropna(subset=['UTC'], inplace=True)
                 
         except Exception as e:
             logger.error(f"Error converting UTC to datetime: {str(e)}")
@@ -889,18 +867,11 @@ def interpolate_chunked():
             }), 400
         
         # Sort by time
-        df2 = df2.sort_values('UTC')
+        df2.sort_values('UTC', inplace=True)
         
-        logger.info(f"Data types after cleaning:")
-        logger.info(df2.dtypes)
-        logger.info("\nSample of cleaned data:")
-        logger.info(df2[[y_col, 'UTC']].head().to_string())
-        
-        # Create a DataFrame with just UTC and load data
-        df_load = pd.DataFrame({
-            'UTC': df2['UTC'],
-            'load': df2[y_col]  # Already converted to float
-        })
+        # Optimizacija: Direktno koristimo postojeće kolone umesto kreiranja novog DataFrame-a
+        df2.rename(columns={y_col: 'load'}, inplace=True)
+        df_load = df2.set_index('UTC')
         
         # Check if we have enough data points
         if len(df_load) < 2:
@@ -911,31 +882,37 @@ def interpolate_chunked():
                 'message': 'The file must contain at least 2 valid data points for interpolation'
             }), 400
         
-        # Set UTC as index
-        df_load.set_index('UTC', inplace=True)
-        
-        # Calculate time difference between consecutive points
-        time_diffs = df_load.index.to_series().diff().dt.total_seconds() / 60  # in minutes
-        max_gap = time_diffs.max()
+        # Optimizacija: Brže računanje vremenskih razlika
+        time_diffs = (df_load.index[1:] - df_load.index[:-1]).total_seconds() / 60  # in minutes
+        max_gap = time_diffs.max() if len(time_diffs) > 0 else 0
         logger.info(f"Maximum time gap in data: {max_gap} minutes")
         
-        # Only interpolate gaps smaller than max_time_span
-        if max_gap > max_time_span:
-            logger.info(f"Limiting interpolation to gaps smaller than {max_time_span} minutes")
+        # Optimizacija: Prilagodljivi interval resample-a za velike skupove podataka
+        # Koristimo veći interval za velike skupove podataka da smanjimo broj tačaka
+        total_minutes = (df_load.index[-1] - df_load.index[0]).total_seconds() / 60
         
-        # Resample to 1-minute intervals and interpolate
-        # Use limit to restrict interpolation to max_time_span minutes
+        # Izaberemo interval na osnovu ukupnog vremenskog raspona
+        if total_minutes > 10000:  # Ako je vremenski raspon veći od ~7 dana
+            resample_interval = '5min'  # Koristimo 5-minutni interval
+            logger.info(f"Large time span detected ({total_minutes} minutes), using 5-minute intervals")
+        else:
+            resample_interval = '1min'  # Standardni 1-minutni interval
+            logger.info(f"Using standard 1-minute intervals")
+        
+        # Resample i interpolacija
         limit = int(max_time_span)  # Convert to integer number of minutes
-        df2_resampled = df_load.resample('1min').interpolate(method='linear', limit=limit)
+        df2_resampled = df_load.resample(resample_interval).interpolate(method='linear', limit=limit)
         
         # Reset index to get UTC back as a column
         df2_resampled.reset_index(inplace=True)
         
         # Calculate added points
-        added_points = len(df2_resampled) - len(df2)
+        original_points = len(df2)
+        total_points = len(df2_resampled)
+        added_points = total_points - original_points
         
-        logger.info(f"Original points: {len(df2)}")
-        logger.info(f"Interpolated points: {len(df2_resampled)}")
+        logger.info(f"Original points: {original_points}")
+        logger.info(f"Interpolated points: {total_points}")
         logger.info(f"Added points: {added_points}")
         
         # Prepare data for frontend chart
@@ -978,7 +955,7 @@ def interpolate_chunked():
             }), 400
 
         # Define chunk size for streaming (number of data points per chunk)
-        CHUNK_SIZE = 1000  # Adjust this based on your needs
+        CHUNK_SIZE = 5000  # Adjust this based on your needs
         
         # Calculate total number of chunks needed
         total_rows = len(df2_resampled)
@@ -986,7 +963,28 @@ def interpolate_chunked():
         
         logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
         
-        # Define a generator function to stream the data in chunks
+        # Prepare data for streaming
+        # Optimizacija: Efikasnija konverzija DataFrame-a u JSON format
+        valid_mask = ~df2_resampled['UTC'].isna() & ~df2_resampled['load'].isna()
+        valid_df = df2_resampled[valid_mask].copy()
+        
+        # Formatiramo UTC kolonu
+        valid_df['UTC'] = valid_df['UTC'].dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Konvertujemo u DataFrame sa potrebnim kolonama
+        chart_df = valid_df.rename(columns={'load': 'value'})[['UTC', 'value']]
+        
+        # Određujemo broj redova i chunk-ova
+        total_rows = len(chart_df)
+        CHUNK_SIZE = 5000  # Optimizovana veličina chunk-a za bolje performanse
+        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE  # Ceiling division
+        
+        # Sačuvamo broj originalnih tačaka za meta podatke
+        original_points_count = original_points  # Koristimo već definisanu promenljivu
+        
+        logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
+        
+        # Funkcija za generisanje chunk-ova
         def generate_chunks():
             # First, send metadata about the dataset
             meta_data = {
@@ -994,31 +992,18 @@ def interpolate_chunked():
                 'total_rows': total_rows,
                 'total_chunks': total_chunks,
                 'added_points': added_points,
-                'original_points': len(df2),
+                'original_points': original_points_count,
                 'success': True
             }
             yield json.dumps(meta_data, separators=(',', ':')) + '\n'
             
-            # Then send the data chunks
+            # Optimizacija: Procesiramo chunk-ove efikasnije
             for chunk_idx in range(total_chunks):
                 start_idx = chunk_idx * CHUNK_SIZE
                 end_idx = min(start_idx + CHUNK_SIZE, total_rows)
                 
-                # Convert this chunk of data to the format expected by frontend
-                chunk_data_list = []
-                for _, row in df2_resampled.iloc[start_idx:end_idx].iterrows():
-                    # Skip NaT values
-                    if pd.isna(row['UTC']) or pd.isna(row['load']):
-                        continue
-                        
-                    try:
-                        chunk_data_list.append({
-                            'UTC': row['UTC'].strftime("%Y-%m-%d %H:%M:%S"),
-                            'value': float(row['load'])
-                        })
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Error converting row to chart data: {e}. Row: {row}")
-                        continue
+                # Konvertujemo chunk direktno u listu rečnika
+                chunk_data_list = chart_df.iloc[start_idx:end_idx].to_dict('records')
                 
                 chunk_data = {
                     'type': 'data',
@@ -1034,14 +1019,19 @@ def interpolate_chunked():
                 'message': 'Data streaming completed',
                 'success': True
             }, separators=(',', ':')) + '\n'
-
-        # Return a streaming response
-        logger.info("Starting to stream response using generator")
-        return Response(
-            generate_chunks(),
-            mimetype='application/x-ndjson'
-        )
+            
+            # Clean up the chunks after processing
+            try:
+                # Only remove the specific upload's directory, not the entire chunk directory
+                shutil.rmtree(chunk_dir)
+                logger.info(f"Cleaned up chunk directory for upload {upload_id}")
+                # Remove from memory
+                del chunk_uploads[upload_id]
+            except Exception as e:
+                logger.warning(f"Error cleaning up chunks: {str(e)}")
         
+        # Return a streaming response
+        return Response(generate_chunks(), mimetype='application/x-ndjson')
     except Exception as e:
         logger.error(f"Error in interpolation-chunked endpoint: {str(e)}")
         logger.error(traceback.format_exc())
