@@ -32,6 +32,9 @@ chunk_uploads = {}
 CHUNK_DIR = os.path.join(tempfile.gettempdir(), 'cloud_chunks')
 os.makedirs(CHUNK_DIR, exist_ok=True)
 
+# Valid file types for chunked uploads
+VALID_FILE_TYPES = ['temp_file', 'load_file', 'interpolate_file']
+
 def get_chunk_dir(upload_id):
     """Create and return a directory path for storing chunks of a specific upload."""
     chunk_dir = os.path.join(CHUNK_DIR, upload_id)
@@ -54,7 +57,7 @@ def upload_chunk():
         if not upload_id:
             return jsonify({'success': False, 'error': 'No upload ID provided'}), 400
             
-        if not file_type or file_type not in ['temp_file', 'load_file']:
+        if not file_type or file_type not in VALID_FILE_TYPES:
             return jsonify({'success': False, 'error': 'Invalid file type'}), 400
         
         # Create directory for this upload if it doesn't exist
@@ -64,7 +67,8 @@ def upload_chunk():
         if upload_id not in chunk_uploads:
             chunk_uploads[upload_id] = {
                 'temp_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None},
-                'load_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None}
+                'load_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None},
+                'interpolate_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None}
             }
         
         # Update chunk tracking
@@ -104,6 +108,7 @@ def calculate_bounds(predictions, tolerance_type, tol_cnt, tol_dep):
     
     return upper_bound, lower_bound
 
+# Route for handling chunked upload completion
 @bp.route('/complete', methods=['POST', 'OPTIONS'])
 def complete_redirect():
     """Handle chunked upload completion directly instead of redirecting."""
@@ -237,8 +242,6 @@ def complete_redirect():
             'error': str(e)
         }), 500
         
-
-
 def interpolate_data(df1, df2, x_col, y_col, max_time_span):
     """Perform linear interpolation on the data within the specified time span."""
     try:
@@ -572,6 +575,7 @@ def _process_data_frames(df1, df2, data):
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# Route for handling chunked upload completion
 @bp.route('/clouddata', methods=['POST'])
 def clouddata():
     if request.method == 'OPTIONS':
@@ -589,6 +593,7 @@ def clouddata():
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 def _process_data():
     try:
@@ -650,43 +655,131 @@ def _process_data():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@bp.route('/interpolate', methods=['POST'])
-def interpolate():
+# Route for handling prepare save
+@bp.route('/prepare-save', methods=['POST'])
+def prepare_save():
     try:
-        logger.info("Received request to /interpolate")
+        logger.info("Received prepare_save request")
+        data = request.json
+        if not data or 'data' not in data:
+            logger.error("No data received in request")
+            return jsonify({"success": False, "error": "No data received"}), 400
+            
+        save_data = data['data']
+        if not save_data:
+            logger.error("Empty data received")
+            return jsonify({"success": False, "error": "Empty data"}), 400
+
+        # Get filename if provided, otherwise use default
+        filename = data.get('filename', 'interpolated_data')
+        logger.info(f"Using filename: {filename}")
+        logger.info(f"Processing {len(save_data)} rows of data")
+
+        # Create temporary file and write CSV data
+        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
+        writer = csv.writer(temp_file, delimiter=';')
+        
+        try:
+            for row in save_data:
+                writer.writerow(row)
+        except Exception as e:
+            logger.error(f"Error writing to CSV: {str(e)}")
+            os.unlink(temp_file.name)  # Clean up the file
+            raise
+            
+        temp_file.close()
+        logger.info(f"Successfully wrote data to temporary file: {temp_file.name}")
+
+        # Generate unique ID based on current time
+        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Store both the file path and the custom filename
+        temp_files[file_id] = {
+            'path': temp_file.name,
+            'filename': filename
+        }
+        logger.info(f"Generated file ID: {file_id} for filename: {filename}")
+
+        return jsonify({
+            "success": True,
+            "message": "File prepared for download", 
+            "fileId": file_id
+        }), 200
+    except Exception as e:
+        logger.error(f"Error in prepare_save: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Route for handling chunked upload for interpolation
+@bp.route('/interpolate-chunked', methods=['POST'])
+def interpolate_chunked():
+    """Process a chunked file upload for interpolation."""
+    try:
+        logger.info("Received request to /interpolate-chunked")
         logger.info(f"Request method: {request.method}")
         logger.info(f"Request content type: {request.content_type}")
-        logger.info(f"Form data: {request.form}")
-        logger.info(f"Files: {request.files.keys()}")
+        logger.info(f"Request data: {request.json}")
         
-        # Check if files are present in request
-        if 'load.csv' not in request.files:
-            logger.error("Missing load.csv file in request")
+        # Get upload ID and parameters from request
+        data = request.json
+        if not data or 'uploadId' not in data:
+            logger.error("Missing uploadId in request")
             return jsonify({
                 'success': False, 
-                'error': 'Load file is required', 
-                'message': 'Please upload a load file'
+                'error': 'Upload ID is required', 
+                'message': 'Please provide a valid upload ID'
             }), 400
             
-        # Get files and parameters from request
-        load_file = request.files['load.csv']
+        upload_id = data['uploadId']
+        logger.info(f"Processing upload ID: {upload_id}")
         
         # Validate max_time_span parameter
         try:
-            max_time_span = float(request.form.get('max_time_span', '60'))
+            max_time_span = float(data.get('max_time_span', '60'))
             logger.info(f"Using max_time_span: {max_time_span}")
         except ValueError as e:
-            logger.error(f"Invalid max_time_span value: {request.form.get('max_time_span')}")
+            logger.error(f"Invalid max_time_span value: {data.get('max_time_span')}")
             return jsonify({
                 'success': False, 
                 'error': 'Invalid max_time_span parameter', 
                 'message': 'Please provide a valid number for max_time_span'
             }), 400
         
-        # Read CSV file
+        # Check if upload exists
+        if upload_id not in chunk_uploads:
+            logger.error(f"Upload ID not found: {upload_id}")
+            return jsonify({
+                'success': False, 
+                'error': 'Upload ID not found', 
+                'message': 'The specified upload ID does not exist'
+            }), 404
+        
+        # Check if all chunks have been received
+        upload_info = chunk_uploads[upload_id]['interpolate_file']
+        if len(upload_info['received_chunks']) < upload_info['total_chunks']:
+            logger.error(f"Not all chunks received for upload {upload_id}")
+            return jsonify({
+                'success': False, 
+                'error': 'Incomplete upload', 
+                'message': f"Only {len(upload_info['received_chunks'])}/{upload_info['total_chunks']} chunks received"
+            }), 400
+        
+        # Combine chunks into a single file
+        chunk_dir = get_chunk_dir(upload_id)
+        combined_file_path = os.path.join(chunk_dir, 'combined_interpolate_file.csv')
+        
+        with open(combined_file_path, 'wb') as outfile:
+            for i in range(upload_info['total_chunks']):
+                chunk_path = os.path.join(chunk_dir, f"interpolate_file_{i}")
+                if os.path.exists(chunk_path):
+                    with open(chunk_path, 'rb') as infile:
+                        outfile.write(infile.read())
+        
+        logger.info(f"Combined file created at: {combined_file_path}")
+        
+        # Read the combined CSV file
         try:
-            file_content = load_file.stream.read().decode('utf-8')
-            logger.info(f"File content sample: {file_content[:100]}...")
+            with open(combined_file_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
             
             # Try different separators if needed
             if ';' in file_content:
@@ -857,6 +950,16 @@ def interpolate():
                 logger.warning(f"Error converting row to chart data: {e}. Row: {row}")
                 continue
 
+        # Clean up the chunks after processing
+        try:
+            # Only remove the specific upload's directory, not the entire chunk directory
+            shutil.rmtree(chunk_dir)
+            logger.info(f"Cleaned up chunk directory for upload {upload_id}")
+            # Remove from memory
+            del chunk_uploads[upload_id]
+        except Exception as e:
+            logger.warning(f"Error cleaning up chunks: {str(e)}")
+        
         logger.info(f"Sample of chart data being sent: {chart_data[:5] if chart_data else 'No data'}")
         logger.info(f"Total points in chart data: {len(chart_data)}")
         
@@ -880,7 +983,7 @@ def interpolate():
         })
         
     except Exception as e:
-        logger.error(f"Error in interpolation endpoint: {str(e)}")
+        logger.error(f"Error in interpolation-chunked endpoint: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({
             'success': False, 
@@ -888,59 +991,7 @@ def interpolate():
             'message': 'An error occurred during interpolation'
         }), 500
 
-@bp.route('/prepare-save', methods=['POST'])
-def prepare_save():
-    try:
-        logger.info("Received prepare_save request")
-        data = request.json
-        if not data or 'data' not in data:
-            logger.error("No data received in request")
-            return jsonify({"success": False, "error": "No data received"}), 400
-            
-        save_data = data['data']
-        if not save_data:
-            logger.error("Empty data received")
-            return jsonify({"success": False, "error": "Empty data"}), 400
-
-        # Get filename if provided, otherwise use default
-        filename = data.get('filename', 'interpolated_data')
-        logger.info(f"Using filename: {filename}")
-        logger.info(f"Processing {len(save_data)} rows of data")
-
-        # Create temporary file and write CSV data
-        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
-        writer = csv.writer(temp_file, delimiter=';')
-        
-        try:
-            for row in save_data:
-                writer.writerow(row)
-        except Exception as e:
-            logger.error(f"Error writing to CSV: {str(e)}")
-            os.unlink(temp_file.name)  # Clean up the file
-            raise
-            
-        temp_file.close()
-        logger.info(f"Successfully wrote data to temporary file: {temp_file.name}")
-
-        # Generate unique ID based on current time
-        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-        # Store both the file path and the custom filename
-        temp_files[file_id] = {
-            'path': temp_file.name,
-            'filename': filename
-        }
-        logger.info(f"Generated file ID: {file_id} for filename: {filename}")
-
-        return jsonify({
-            "success": True,
-            "message": "File prepared for download", 
-            "fileId": file_id
-        }), 200
-    except Exception as e:
-        logger.error(f"Error in prepare_save: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
-
+# Route for handling file download
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     """Download a previously prepared file.
