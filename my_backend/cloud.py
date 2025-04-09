@@ -11,7 +11,7 @@ import logging
 import traceback
 import time
 from io import StringIO
-from flask import request, jsonify, send_file, Blueprint, Response
+from flask import request, jsonify, send_file, Blueprint, Response, url_for
 import json
 import uuid
 import shutil
@@ -19,6 +19,11 @@ import base64
 from io import StringIO, BytesIO
 import os
 import sys
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+from matplotlib.patches import Polygon
 
 # Create blueprint
 bp = Blueprint('cloud', __name__)
@@ -848,8 +853,8 @@ def interpolate_chunked():
             # Direktna konverzija u numeričke vrednosti
             df2[y_col] = pd.to_numeric(df2[y_col].astype(str).str.replace(',', '.').str.replace(r'[^\d\-\.]', '', regex=True), errors='coerce')
         
-        # Remove rows with NaN values
-        df2.dropna(subset=[y_col], inplace=True)
+        # Keep NaN values as NaN for interpolation (don't convert to string yet)
+        # This ensures the column remains numeric for interpolation
         
         # Optimizacija: Brža konverzija vremena
         try:
@@ -899,6 +904,11 @@ def interpolate_chunked():
             resample_interval = '1min'  # Standardni 1-minutni interval
             logger.info(f"Using standard 1-minute intervals")
         
+        # Ensure load column is numeric before interpolation
+        if not pd.api.types.is_numeric_dtype(df_load['load']):
+            logger.info("Converting load column to numeric before interpolation")
+            df_load['load'] = pd.to_numeric(df_load['load'], errors='coerce')
+            
         # Resample i interpolacija
         limit = int(max_time_span)  # Convert to integer number of minutes
         df2_resampled = df_load.resample(resample_interval).interpolate(method='linear', limit=limit)
@@ -918,15 +928,19 @@ def interpolate_chunked():
         # Prepare data for frontend chart
         chart_data = []
         for _, row in df2_resampled.iterrows():
-            # Skip NaT values
-            if pd.isna(row['UTC']) or pd.isna(row['load']):
-                logger.warning(f"Skipping row with NaT/NaN values: {row}")
+            # Convert NaN values to string 'NaN' instead of skipping them
+            # Only skip rows with invalid timestamps (NaT)
+            if pd.isna(row['UTC']):
+                logger.warning(f"Skipping row with NaT timestamp: {row}")
                 continue
+            
+            # Convert NaN load values to string 'NaN'
+            load_value = 'NaN' if pd.isna(row['load']) else float(row['load'])
                 
             try:
                 chart_data.append({
                     'UTC': row['UTC'].strftime("%Y-%m-%d %H:%M:%S"),
-                    'value': float(row['load'])
+                    'value': load_value
                 })
             except (ValueError, TypeError) as e:
                 logger.warning(f"Error converting row to chart data: {e}. Row: {row}")
@@ -965,8 +979,12 @@ def interpolate_chunked():
         
         # Prepare data for streaming
         # Optimizacija: Efikasnija konverzija DataFrame-a u JSON format
-        valid_mask = ~df2_resampled['UTC'].isna() & ~df2_resampled['load'].isna()
+        # Only filter out rows with invalid timestamps, keep NaN load values
+        valid_mask = ~df2_resampled['UTC'].isna()
         valid_df = df2_resampled[valid_mask].copy()
+        
+        # Convert NaN load values to string 'NaN' after interpolation
+        valid_df['load'] = valid_df['load'].apply(lambda x: 'NaN' if pd.isna(x) else x)
         
         # Formatiramo UTC kolonu
         valid_df['UTC'] = valid_df['UTC'].dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -1040,6 +1058,208 @@ def interpolate_chunked():
             'error': str(e), 
             'message': 'An error occurred during interpolation'
         }), 500
+
+# Route for generating chart images
+@bp.route('/generate-chart', methods=['POST'])
+def generate_chart():
+    """Generate a chart image based on provided data and return the image URL.
+    
+    Expects JSON with:
+    - chartData: Array of data points with x, y, upperBound, lowerBound
+    - xAxisLabel: Label for x-axis
+    - yAxisLabel: Label for y-axis
+    - xAxisUnit: Unit for x-axis (optional)
+    - yAxisUnit: Unit for y-axis (optional)
+    - equation: Equation string (optional)
+    - width: Chart width in pixels
+    - height: Chart height in pixels
+    
+    Returns:
+    - JSON with imageUrl pointing to the generated chart image
+    """
+    try:
+        logger.info("Received request to generate chart")
+        
+        # Get data from request
+        data = request.json
+        if not data or 'chartData' not in data:
+            logger.error("Invalid chart data: missing chartData field")
+            return jsonify({'success': False, 'error': 'Invalid chart data'}), 400
+            
+        chart_data = data['chartData']
+        if not chart_data or len(chart_data) == 0:
+            logger.error("Empty chart data provided")
+            return jsonify({'success': False, 'error': 'Empty chart data'}), 400
+            
+        logger.info(f"Processing chart with {len(chart_data)} data points")
+            
+        # Extract parameters
+        x_axis_label = data.get('xAxisLabel', 'X')
+        y_axis_label = data.get('yAxisLabel', 'Y')
+        x_axis_unit = data.get('xAxisUnit', '')
+        y_axis_unit = data.get('yAxisUnit', '')
+        equation = data.get('equation', '')
+        width = data.get('width', 800)
+        height = data.get('height', 600)
+        
+        # Set figure size and DPI for high quality
+        plt.figure(figsize=(width/100, height/100), dpi=100)
+        
+        # Extract data points
+        x_values = [point['x'] for point in chart_data]
+        y_values = [point['y'] for point in chart_data]
+        upper_bounds = [point.get('upperBound') for point in chart_data]
+        lower_bounds = [point.get('lowerBound') for point in chart_data]
+        
+        # Sort data by x values to ensure proper line plotting for the prediction line
+        sorted_indices = np.argsort(x_values)
+        sorted_x = np.array(x_values)[sorted_indices]
+        sorted_y = np.array(y_values)[sorted_indices]
+        sorted_upper = np.array(upper_bounds)[sorted_indices]
+        sorted_lower = np.array(lower_bounds)[sorted_indices]
+        
+        # Add tolerance bands if available
+        if all(ub is not None for ub in upper_bounds) and all(lb is not None for lb in lower_bounds):
+            # Plot upper and lower bounds
+            plt.plot(sorted_x, sorted_upper, 'r--', linewidth=1, label='Upper Bound')
+            plt.plot(sorted_x, sorted_lower, 'g--', linewidth=1, label='Lower Bound')
+            
+            # Calculate the middle line between upper and lower bounds
+            middle_line = (sorted_upper + sorted_lower) / 2
+            plt.plot(sorted_x, middle_line, 'b-', linewidth=2, label='Middle Line')
+            
+            # Fill the area between upper and lower bounds
+            plt.fill_between(sorted_x, sorted_lower, sorted_upper, color='lightblue', alpha=0.3)
+            
+            # Identify points within and outside tolerance bands
+            within_tolerance = []
+            outside_tolerance = []
+            
+            # For each point, check if it's within the tolerance bands
+            for i, (x, y) in enumerate(zip(x_values, y_values)):
+                # Find the closest index in the sorted arrays
+                closest_idx = np.abs(sorted_x - x).argmin()
+                
+                # Get the upper and lower bounds at this x position
+                upper = sorted_upper[closest_idx]
+                lower = sorted_lower[closest_idx]
+                
+                # Check if the point is within tolerance
+                if lower <= y <= upper:
+                    within_tolerance.append((x, y))
+                else:
+                    outside_tolerance.append((x, y))
+            
+            # Plot points within tolerance in green
+            if within_tolerance:
+                x_within, y_within = zip(*within_tolerance) if within_tolerance else ([], [])
+                plt.scatter(x_within, y_within, color='green', s=50, alpha=0.7, label='Within Tolerance')
+            
+            # Plot points outside tolerance in red
+            if outside_tolerance:
+                x_outside, y_outside = zip(*outside_tolerance) if outside_tolerance else ([], [])
+                plt.scatter(x_outside, y_outside, color='red', s=50, alpha=0.7, label='Outside Tolerance')
+        
+        # Add axis labels with units
+        if x_axis_unit:
+            plt.xlabel(f'{x_axis_label} [{x_axis_unit}]')
+        else:
+            plt.xlabel(x_axis_label)
+            
+        if y_axis_unit:
+            plt.ylabel(f'{y_axis_label} [{y_axis_unit}]')
+        else:
+            plt.ylabel(y_axis_label)
+        
+        # Add equation if provided
+        if equation:
+            plt.text(0.05, 0.95, f'Equation: {equation}', transform=plt.gca().transAxes, 
+                     fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        # Add grid and legend
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend()
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Save the figure to a BytesIO object
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format='png', bbox_inches='tight')
+        img_buffer.seek(0)
+        plt.close()
+        
+        # Generate a unique ID for the image
+        image_id = str(uuid.uuid4())
+        
+        # Save the image to a temporary file
+        img_path = os.path.join(tempfile.gettempdir(), f'chart_{image_id}.png')
+        with open(img_path, 'wb') as f:
+            f.write(img_buffer.getvalue())
+        
+        # Store the image path in the temp_files dictionary
+        temp_files[image_id] = {
+            'path': img_path,
+            'filename': 'chart',
+            'created_at': time.time()
+        }
+        
+        # Instead of using a URL that requires a separate request,
+        # encode the image directly as base64 and return it inline
+        # This avoids CORS issues and problems with different ports
+        img_buffer.seek(0)
+        encoded_image = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+        
+        logger.info(f"Chart generated successfully with ID: {image_id}")
+        
+        # Return both the URL and the base64 data
+        # The frontend can use the base64 data directly without making another request
+        return jsonify({
+            'success': True,
+            'imageUrl': f'/api/cloud/chart-image/{image_id}',
+            'imageData': f'data:image/png;base64,{encoded_image}'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in generate_chart: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# Route for retrieving generated chart images
+@bp.route('/chart-image/<image_id>', methods=['GET'])
+def get_chart_image(image_id):
+    """Retrieve a previously generated chart image.
+    
+    Args:
+        image_id (str): The unique identifier for the chart image
+        
+    Returns:
+        Flask response with the image or error message
+    """
+    try:
+        logger.info(f"Received request for chart image with ID: {image_id}")
+        logger.info(f"Available temp files: {list(temp_files.keys())}")
+        
+        if image_id not in temp_files:
+            logger.error(f"Image ID not found in temp_files: {image_id}")
+            return jsonify({"success": False, "error": "Image not found"}), 404
+            
+        file_info = temp_files[image_id]
+        file_path = file_info['path']
+        logger.info(f"Found image at path: {file_path}")
+        
+        if not os.path.exists(file_path):
+            logger.error(f"Image file not found at path: {file_path}")
+            return jsonify({"success": False, "error": "Image file not found"}), 404
+
+        return send_file(
+            file_path,
+            mimetype='image/png'
+        )
+    except Exception as e:
+        logger.error(f"Error in get_chart_image: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # Route for handling file download
 @bp.route('/download/<file_id>', methods=['GET'])
