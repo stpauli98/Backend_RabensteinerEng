@@ -245,10 +245,12 @@ def convert_to_utc(df, date_column, timezone='UTC'):
         if not pd.api.types.is_datetime64_any_dtype(df[date_column]):
             df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
         if df[date_column].dt.tz is None:
-            if timezone.upper() == 'UTC':
-                df[date_column] = df[date_column].dt.tz_localize('UTC', ambiguous='NaT', nonexistent='NaT')
-            else:
+            try:
                 df[date_column] = df[date_column].dt.tz_localize(timezone, ambiguous='NaT', nonexistent='NaT')
+            except Exception as e:
+                logger.error(f"Nicht unterstützte Zeitzone '{timezone}': {e}")
+                raise ValueError(f"Nicht unterstützte Zeitzone '{timezone}'. Bitte prüfen Sie die Eingabe auf der Frontend-Seite.")
+            if timezone.upper() != 'UTC':
                 df[date_column] = df[date_column].dt.tz_convert('UTC')
         else:
             if str(df[date_column].dt.tz) != 'UTC':
