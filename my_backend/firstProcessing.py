@@ -90,7 +90,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         )
         
         # Kreiraj DataFrame sa željenim vremenima
-        df_resampled = pd.DataFrame({'UTC': time_range})
+        df_utc = pd.DataFrame({'UTC': time_range})
         
         if mode_input == "mean":
             # Optimizovana mean kalkulacija koristeći resample
@@ -111,25 +111,26 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
             df_resampled.reset_index(inplace=True)
             
         elif mode_input == "intrpl":
-            # Postavi UTC kao index za originalne podatke
-            df.set_index('UTC', inplace=True)
+            # UTC als Index setzen für Originaldaten
+            df.set_index("UTC", 
+                        inplace = True)
             
-            # Koristi merge_asof za interpolaciju sa tačnim vremenima
             df_resampled = pd.merge_asof(
-                df_resampled,
-                df.reset_index(),
-                left_on='UTC',
-                right_on='UTC',
-                direction='nearest',
-                tolerance=pd.Timedelta(minutes=intrpl_max)
-            )
+                            df_utc,
+                            df.reset_index(),
+                            left_on     ='UTC',
+                            right_on    ='UTC',
+                            direction   ='nearest',
+                            tolerance   = pd.Timedelta(minutes = tss/2)
+                            )
             
-            # Interpolacija vrednosti
-            df_resampled.set_index('UTC', inplace=True)
-            df_resampled[value_col_name] = df_resampled[value_col_name].interpolate(
-                method='time',
-                limit=int(intrpl_max * 60 / tss)
-            )
+            df_resampled.set_index("UTC", 
+                        inplace = True)
+            
+            df_resampled = df_resampled.interpolate(method = "time",
+                                                    limit = int(intrpl_max/tss))
+            
+            # Reset index to get UTC column back for JSON conversion
             df_resampled.reset_index(inplace=True)
             
         elif mode_input in ["nearest", "nearest (mean)"]:
