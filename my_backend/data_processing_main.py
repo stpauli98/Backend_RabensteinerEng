@@ -418,19 +418,43 @@ def zweite_bearbeitung(req):
 
                     # Ende des Datensatzes ist erreicht und Identifikationsrahmen ist offen
         
-        # Konvertuj DataFrame u format pogodan za JSON
-        df = df.replace({np.nan: None})
-        if pd.api.types.is_datetime64_any_dtype(df[time_column]):
-            df[time_column] = df[time_column].dt.strftime(UTC_fmt)
-        else:
-            try:
-                df[time_column] = pd.to_datetime(df[time_column]).dt.strftime(UTC_fmt)
-            except Exception:
-                pass
+        # === TIME-BASED INTERPOLATION ON A REGULAR GRID ===
+        # Parameters for the time grid
+        tss = float(req.form.get('tss', 1))  # Time step in minutes, provided by the user
+        intrpl_max = float(req.form.get('intrplMax', 10))  # Max gap (in minutes) for interpolation, provided by the user
+
+        # Prepare a regular time grid from the minimum to the maximum timestamp
+        df[time_column] = pd.to_datetime(df[time_column])
+        start_time = df[time_column].min()
+        end_time = df[time_column].max()
+        utc_grid = pd.date_range(start=start_time, end=end_time, freq=f'{int(tss)}min')
+        df_utc = pd.DataFrame({time_column: utc_grid})
+
+        # Merge the original data onto the regular time grid using nearest match within half the step size
+        df_for_merge = df[[time_column, data_column]].copy()
+        df_for_merge = df_for_merge.sort_values(time_column)
+        df_resampled = pd.merge_asof(
+            df_utc,
+            df_for_merge,
+            left_on=time_column,
+            right_on=time_column,
+            direction='nearest',
+            tolerance=pd.Timedelta(minutes=tss/2)
+        )
+        df_resampled.set_index(time_column, inplace=True)
+
+        # Perform time-based interpolation on the resampled data
+        df_resampled[data_column] = df_resampled[data_column].interpolate(
+            method='time',
+            limit=int(intrpl_max/tss)
+        )
+        df_resampled.reset_index(inplace=True)
+        df_resampled[time_column] = df_resampled[time_column].dt.strftime(UTC_fmt)
+        df_resampled = df_resampled.replace({np.nan: None})
 
         def generate_chunks():
-            CHUNK_SIZE = 1000  # Number of rows per chunk
-            total_rows = len(df)
+            CHUNK_SIZE = 1000  # Number of rows per chunk in the stream
+            total_rows = len(df_resampled)
             total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
             # Send metadata as the first JSON object
             yield json.dumps({
@@ -440,22 +464,24 @@ def zweite_bearbeitung(req):
                 'message': 'Daten werden gestreamt',
                 'type': 'metadata'
             }, separators=(',', ':')) + '\n'
+            # Stream each chunk of data as a separate JSON line
             for chunk_idx in range(total_chunks):
                 start_idx = chunk_idx * CHUNK_SIZE
                 end_idx = min(start_idx + CHUNK_SIZE, total_rows)
                 chunk_data = {
                     'chunk_index': chunk_idx,
-                    'data': df.iloc[start_idx:end_idx].to_dict('records'),
+                    'data': df_resampled.iloc[start_idx:end_idx].to_dict('records'),
                     'type': 'data'
                 }
                 json_line = json.dumps(chunk_data, separators=(',', ':')) + '\n'
                 yield json_line
+            # Send a final message to indicate completion
             yield json.dumps({
                 'message': 'Daten wurden erfolgreich verarbeitet',
                 'status': 'complete',
                 'type': 'complete'
             }, separators=(',', ':')) + '\n'
-        
+
         return Response(
             generate_chunks(),
             mimetype='application/x-ndjson'
