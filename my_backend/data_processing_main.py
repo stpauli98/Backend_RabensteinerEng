@@ -34,16 +34,12 @@ UTC_fmt = "%Y-%m-%d %H:%M:%S"
 @bp.route('/upload-chunk', methods=['POST'])
 def handle_upload_chunk():
     try:
-        logger.info(f"Received upload request with form data: {request.form}")
-        logger.info(f"Files in request: {request.files}")
         return upload_chunk(request)
     except Exception as e:
-        logger.error(f"Error in handle_upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}")
         return jsonify({"error": str(e)}), 400
 
 def upload_chunk(req):
     try:
-        logger.info("Starting upload_chunk processing")
         # Validate parameters
         upload_id = req.form.get('uploadId')
         chunk_index = int(req.form.get('chunkIndex', '0') or '0')
@@ -74,27 +70,18 @@ def upload_chunk(req):
 
         # If upload_id is provided, it's a chunk upload
         if upload_id:
-            logger.info(f"Processing chunk upload. Upload ID: {upload_id}, Index: {chunk_index}, Total: {total_chunks}")
             if 'fileChunk' not in req.files:
-                logger.error(f"No fileChunk in request.files. Available: {list(req.files.keys())}")
                 return jsonify({"error": "Chunk file not found"}), 400
 
             chunk = req.files['fileChunk']
             if not chunk:
-                logger.error("Received empty chunk")
                 return jsonify({"error": "Empty chunk received"}), 400
 
-            logger.info(f"Received chunk with filename: {chunk.filename}, content type: {chunk.content_type}")
-
-            # Save the chunk
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
             chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
             chunk.save(chunk_filename)
-
-            # Check if all chunks have been received
             received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
             if len(received_chunks) == total_chunks:
-                # Combine all chunks in sorted order
                 chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
                 full_content = ""
                 try:
@@ -109,10 +96,8 @@ def upload_chunk(req):
                             os.remove(os.path.join(UPLOAD_FOLDER, cf))
                         except Exception:
                             pass
-                    logger.error(f"Error processing chunks: {str(e)}")
                     return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
 
-                # Prepare form parameters dictionary
                 form_params = {
                     'eqMax': str(EQ_MAX),
                     'chgMax': str(CHG_MAX),
@@ -123,14 +108,10 @@ def upload_chunk(req):
                     'radioValueNull': 'ja' if EL0 == 1 else 'nein',
                     'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
                 }
-                logger.info(f"Creating mock request with content length: {len(full_content)}")
                 mock_request = create_mock_request(form_params, full_content, 'combined_chunks.csv')
 
                 try:
-                    logger.info("Starting zweite_bearbeitung processing")
                     result = zweite_bearbeitung(mock_request)
-                    logger.info(f"zweite_bearbeitung returned result of type: {type(result)}")
-                    # Return result directly (assume streaming response)
                     return result
                 except Exception as e:
                     for cf in chunks_sorted:
@@ -138,7 +119,6 @@ def upload_chunk(req):
                             os.remove(os.path.join(UPLOAD_FOLDER, cf))
                         except Exception:
                             pass
-                    logger.error(f"Error processing chunks: {str(e)}")
                     return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
 
             # Not all chunks received yet; return status
@@ -173,29 +153,22 @@ def upload_chunk(req):
                 result = zweite_bearbeitung(mock_request)
                 return result
             except Exception as e:
-                logger.error(f"Error in direct upload: {str(e)}\n{traceback.format_exc()}")
                 return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
 
     except Exception as e:
-        logger.error(f"Error in upload_chunk: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
 
 def zweite_bearbeitung(req):
     try:
-        logger.info("Starting zweite_bearbeitung function")
-        logger.info(f"Available files in request: {list(req.files.keys())}")
         file_key = 'file' if 'file' in req.files else 'fileChunk' if 'fileChunk' in req.files else None
         if not file_key:
             return jsonify({"error": "No file uploaded (neither 'file' nor 'fileChunk' found)"}), 400
 
         file = req.files[file_key]
-        logger.info("Reading file content")
         file_content = file.stream.read().decode('utf-8')
-        logger.info(f"File content length: {len(file_content)}")
         if not file_content.strip():
             return jsonify({"error": "Empty file content"}), 400
 
-        # Helper function to safely convert form values to float
         def safe_float(value):
             if value and value.strip():
                 try:
@@ -204,7 +177,6 @@ def zweite_bearbeitung(req):
                     return None
             return None
 
-        # Safely convert form values
         EQ_MAX = safe_float(req.form.get('eqMax'))
         CHG_MAX = safe_float(req.form.get('chgMax'))
         LG_MAX = safe_float(req.form.get('lgMax'))
@@ -233,19 +205,12 @@ def zweite_bearbeitung(req):
             return jsonify({"error": "No valid delimiter (comma or semicolon) found in data"}), 400
 
         try:
-            logger.info("Cleaning data...")
             cleaned_content = file_content.replace('\r', '').strip()
-            logger.info("Sample of cleaned data:")
-            for line in cleaned_content.split('\n')[:5]:
-                logger.info(f"  {repr(line)}")
-            logger.info(f"Attempting to read CSV with delimiter: {delimiter}")
             df = pd.read_csv(StringIO(cleaned_content),
                              delimiter=delimiter,
                              header=0,
                              skipinitialspace=True,
                              skip_blank_lines=True)
-            logger.info(f"Successfully read CSV with shape: {df.shape}")
-            logger.info(f"Columns: {df.columns.tolist()}")
             if df.empty:
                 return jsonify({"error": "No data found in file"}), 400
             if len(df.columns) < 2:
@@ -254,13 +219,10 @@ def zweite_bearbeitung(req):
             time_column = df.columns[0]
             data_column = df.columns[1]
 
-            logger.info(f"Converting {data_column} to numeric")
-            logger.info(f"Original data types: {df.dtypes}")
-            logger.info(f"Original sample values: {df[data_column].head().tolist()}")
             
             # Convert to string and clean
             df[data_column] = df[data_column].astype(str)
-            logger.info(f"After string conversion: {df[data_column].head().tolist()}")
+            
             
             # Clean the data
             df[data_column] = (df[data_column]
@@ -268,43 +230,30 @@ def zweite_bearbeitung(req):
                                .str.replace('\r', '')
                                .str.replace('\n', '')
                                .str.replace(',', '.'))
-            logger.info(f"After cleaning: {df[data_column].head().tolist()}")
             
             # Convert to numeric
-            df[data_column] = pd.to_numeric(df[data_column], errors='coerce')
-            logger.info(f"Final sample values: {df[data_column].head().tolist()}")
-            logger.info(f"NaN count: {df[data_column].isna().sum()}")
-            logger.info(f"Data column info:\n{df[data_column].describe()}")
+            df[data_column] = pd.to_numeric(df[data_column], errors='coerce'    )
             if df[data_column].isna().all():
                 return jsonify({"error": "Could not convert any values to numeric format"}), 400
         except Exception as e:
             err_msg = f"Error processing data: {str(e)}\n{traceback.format_exc()}"
-            logger.error(err_msg)
             return jsonify({"error": err_msg}), 400
 
         # Konvertiraj stupac u numerički format (potrebno za daljnju obradu)
         df.iloc[:, 1] = pd.to_numeric(df.iloc[:, 1], errors='coerce')
-        logger.info(f"Column converted to numeric. NaN count: {df.iloc[:, 1].isna().sum()}")
 
         # Primjeni gornju i donju granicu samo ako su definirane (veće od 0)
         try:
             if ELMAX > 0:
-                logger.info(f"Applying upper limit: ELMAX={ELMAX}")
                 df.iloc[:, 1] = df.iloc[:, 1].mask(df.iloc[:, 1] > ELMAX, np.nan)
-                logger.info(f"Applied upper limit {ELMAX}. NaN count: {df.iloc[:, 1].isna().sum()}")
                 
             if ELMIN > 0:
-                logger.info(f"Applying lower limit: ELMIN={ELMIN}")
                 df.iloc[:, 1] = df.iloc[:, 1].mask(df.iloc[:, 1] < ELMIN, np.nan)
-                logger.info(f"Applied lower limit {ELMIN}. NaN count: {df.iloc[:, 1].isna().sum()}")
         except Exception as e:
-            logger.error(f"Error applying limits: {str(e)}\nTraceback: {traceback.format_exc()}")
-            # U slučaju greške, postavi sve na NaN
             df.iloc[:, 1] = np.nan
 
 
         if EQ_MAX is not None and EQ_MAX > 0:
-            logger.info(f"Processing equal values with EQ_MAX={EQ_MAX}")
             
             # Status des Identifikationsrahmens (frm...frame)
             frm = 0
@@ -316,13 +265,7 @@ def zweite_bearbeitung(req):
             """
             
             # Konvertuj vremenske kolone u datetime format za brže procesiranje
-            try:
-                logger.info(f"Converting time column '{time_column}' to datetime")
-                df[time_column] = pd.to_datetime(df[time_column])
-                logger.info("Time column conversion successful")
-            except Exception as e:
-                logger.error(f"Error converting time column: {str(e)}\nFirst few values: {df[time_column].head()}")
-                raise
+            df[time_column] = pd.to_datetime(df[time_column])
             
             # Kreiraj masku za konstantne vrednosti
             constant_mask = df[data_column].eq(df[data_column].shift())
@@ -386,7 +329,6 @@ def zweite_bearbeitung(req):
         ##############################################################################
 
         if all(x is not None and x > 0 for x in [CHG_MAX, LG_MAX]):
-            logger.info(f"Processing data with CHG_MAX={CHG_MAX} and LG_MAX={LG_MAX}")
             
             # Konvertuj vremenske kolone u datetime format
             df[time_column] = pd.to_datetime(df[time_column])
@@ -426,8 +368,6 @@ def zweite_bearbeitung(req):
             
             # Primijeni NaN masku na podatke
             df.loc[nan_mask, data_column] = np.nan
-            
-            logger.info(f"Processed {nan_mask.sum()} points with extreme changes or large gaps")
 
         ##############################################################################
         # ELIMINIERUNG VON GAPS ######################################################
@@ -488,13 +428,10 @@ def zweite_bearbeitung(req):
             except Exception:
                 pass
 
-        logger.info("Preparing to stream data in chunks")
         def generate_chunks():
-            logger.info("Starting to generate chunks")
             CHUNK_SIZE = 1000  # Number of rows per chunk
             total_rows = len(df)
             total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
-            logger.info(f"Data will be sent in {total_chunks} chunks of {CHUNK_SIZE} rows each")
             # Send metadata as the first JSON object
             yield json.dumps({
                 'total_rows': total_rows,
@@ -512,7 +449,6 @@ def zweite_bearbeitung(req):
                     'type': 'data'
                 }
                 json_line = json.dumps(chunk_data, separators=(',', ':')) + '\n'
-                logger.info(f"Sending chunk {chunk_idx + 1}/{total_chunks}, sample: {repr(json_line[:200])}")
                 yield json_line
             yield json.dumps({
                 'message': 'Daten wurden erfolgreich verarbeitet',
@@ -520,13 +456,11 @@ def zweite_bearbeitung(req):
                 'type': 'complete'
             }, separators=(',', ':')) + '\n'
         
-        logger.info("Starting to stream response using generator")
         return Response(
             generate_chunks(),
             mimetype='application/x-ndjson'
         )
     except Exception as e:
-        logger.error(f"Error in zweite_bearbeitung: {str(e)}\n{traceback.format_exc()}")
         return jsonify({'error': str(e)}), 400
 
 @bp.route('/prepare-save', methods=['POST'])
@@ -581,14 +515,13 @@ def download_file(file_id):
         response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
         return response
     except Exception as e:
-        logger.error(f"Error in download_file: {str(e)}")
         return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
     finally:
         try:
             os.unlink(file_path)
             del temp_files[file_id]
         except Exception as e:
-            logger.error(f"Error cleaning up temp file: {e}")
+            return jsonify({"error": f"Error cleaning up temp file: {str(e)}"}), 500
 
 def create_mock_request(form_params, file_content, filename):
     from werkzeug.datastructures import FileStorage
