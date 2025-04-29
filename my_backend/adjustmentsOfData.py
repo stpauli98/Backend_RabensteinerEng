@@ -754,28 +754,51 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
         })
         
     elif method == 'intrpl':
-        # Parametri za interpolaciju
-        reindex_params = {'method': None}  # Koristimo interpolate umesto method parametra
-        
-        # Reindex sa novim indeksom
-        resampled = df_indexed.reindex(new_index, **reindex_params)
-        
-        # Interpolacija
+        # === TIME-BASED INTERPOLATION ON A REGULAR GRID (like data_processing_main.py) ===
+        # Prepare UTC as datetime
+        df_indexed = df_single_col.set_index('UTC')
+        df_indexed.index = pd.to_datetime(df_indexed.index)
+
+        # Prepare a regular time grid from start_time to end_time
+        if start_time is None:
+            start_time_grid = df_indexed.index.min()
+        else:
+            start_time_grid = pd.to_datetime(start_time)
+        if end_time is None:
+            end_time_grid = df_indexed.index.max()
+        else:
+            end_time_grid = pd.to_datetime(end_time)
+        utc_grid = pd.date_range(start=start_time_grid, end=end_time_grid, freq=f'{int(time_step)}min')
+        df_utc = pd.DataFrame({'UTC': utc_grid})
+
+        # Merge the original data onto the regular time grid using nearest match within half the step size
+        df_for_merge = df_single_col.copy()
+        df_for_merge['UTC'] = pd.to_datetime(df_for_merge['UTC'])
+        df_for_merge = df_for_merge.sort_values('UTC')
+        df_resampled = pd.merge_asof(
+            df_utc,
+            df_for_merge,
+            left_on='UTC',
+            right_on='UTC',
+            direction='nearest',
+            tolerance=pd.Timedelta(minutes=time_step/2)
+        )
+        df_resampled.set_index('UTC', inplace=True)
+
+        # Interpolate using method='time'
         if intrpl_max is None:
             logger.warning(f"'intrpl' method requires intrpl_max parameter. Using unlimited interpolation")
-            interpolated = resampled.interpolate(method='linear', limit_direction='both')
+            interpolated = df_resampled.interpolate(method='time', limit_direction='both')
         else:
-            limit_periods = int(intrpl_max / time_step)  # Konvertujemo minute u broj perioda
-            interpolated = resampled.interpolate(
-                method='linear',
+            limit_periods = int(intrpl_max / time_step)
+            interpolated = df_resampled.interpolate(
+                method='time',
                 limit=limit_periods,
                 limit_direction='both'
             )
-            
-        result_df = pd.DataFrame({
-            'UTC': interpolated.index,
-            col: interpolated[col].values
-        })
+        interpolated.reset_index(inplace=True)
+        interpolated['UTC'] = interpolated['UTC'].dt.strftime(UTC_fmt)
+        result_df = interpolated[['UTC', col]]
         
     elif method == 'nearest':
         # Prvo agregiramo duplikate
@@ -856,11 +879,23 @@ def create_info_record(df, col, filename, time_step, offset):
     numeric_points = df[col].count()
     numeric_ratio = (numeric_points / total_points * 100) if total_points > 0 else 0
     
+    def format_utc(val):
+        if pd.isnull(val):
+            return None
+        if hasattr(val, 'strftime'):
+            return val.strftime(UTC_fmt)
+        try:
+            # Ako je string, pokušaj parsirati
+            dt = pd.to_datetime(val)
+            return dt.strftime(UTC_fmt)
+        except Exception:
+            return str(val)
+
     return {
         'Name der Datei': filename,
         'Name der Messreihe': col,
-        'Startzeit (UTC)': df['UTC'].iloc[0].strftime(UTC_fmt) if len(df) > 0 else None,
-        'Endzeit (UTC)': df['UTC'].iloc[-1].strftime(UTC_fmt) if len(df) > 0 else None,
+        'Startzeit (UTC)': format_utc(df['UTC'].iloc[0]) if len(df) > 0 else None,
+        'Endzeit (UTC)': format_utc(df['UTC'].iloc[-1]) if len(df) > 0 else None,
         'Zeitschrittweite [min]': time_step,
         'Offset [min]': offset,
         'Anzahl der Datenpunkte': int(total_points),
