@@ -5,20 +5,15 @@ from sklearn.preprocessing import PolynomialFeatures
 from datetime import datetime
 import tempfile
 import os
-import time
 import csv
 import logging
 import traceback
-import time
 from io import StringIO
-from flask import request, jsonify, send_file, Blueprint, Response, url_for
+from flask import request, jsonify, send_file, Blueprint, Response
 import json
-import uuid
 import shutil
 import base64
-from io import StringIO, BytesIO
 import os
-import sys
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -53,26 +48,33 @@ def get_chunk_dir(upload_id):
 
 @bp.route('/upload-chunk', methods=['POST'])
 def upload_chunk():
-    """Handle chunk upload for large files."""
+    """
+    Handle chunk upload for large files (5MB chunks). 
+    Frontend expects: { success: bool, data: { uploadId, progress, ... } }
+    Ako dođe do greške, data sadrži opis greške.
+    """
     try:
         if 'file' not in request.files:
-            return jsonify({'success': False, 'error': 'No file part in the request'}), 400
-            
+            return jsonify({'success': False, 'data': {'error': 'No file part in the request'}}), 400
+
         file_chunk = request.files['file']
         upload_id = request.form.get('uploadId')
-        chunk_index = int(request.form.get('chunkIndex', 0))
-        total_chunks = int(request.form.get('totalChunks', 1))
         file_type = request.form.get('fileType')
-        
+        # chunkIndex i totalChunks moraju biti int, validacija
+        try:
+            chunk_index = int(request.form.get('chunkIndex', 0))
+            total_chunks = int(request.form.get('totalChunks', 1))
+        except Exception:
+            return jsonify({'success': False, 'data': {'error': 'Invalid chunk index or total chunks'}}), 400
+
         if not upload_id:
-            return jsonify({'success': False, 'error': 'No upload ID provided'}), 400
-            
+            return jsonify({'success': False, 'data': {'error': 'No upload ID provided'}}), 400
         if not file_type or file_type not in VALID_FILE_TYPES:
-            return jsonify({'success': False, 'error': 'Invalid file type'}), 400
-        
+            return jsonify({'success': False, 'data': {'error': 'Invalid file type'}}), 400
+
         # Create directory for this upload if it doesn't exist
         chunk_dir = get_chunk_dir(upload_id)
-        
+
         # Save chunk information
         if upload_id not in chunk_uploads:
             chunk_uploads[upload_id] = {
@@ -80,29 +82,30 @@ def upload_chunk():
                 'load_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None},
                 'interpolate_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None}
             }
-        
+
         # Update chunk tracking
         chunk_uploads[upload_id][file_type]['total_chunks'] = total_chunks
         chunk_uploads[upload_id][file_type]['received_chunks'].add(chunk_index)
         chunk_uploads[upload_id][file_type]['filename'] = file_chunk.filename
-        
+
         # Save the chunk to disk
         chunk_path = os.path.join(chunk_dir, f"{file_type}_{chunk_index}")
         file_chunk.save(chunk_path)
-        
-        logger.info(f"Received chunk {chunk_index+1}/{total_chunks} for {file_type} in upload {upload_id}")
-        
+
         return jsonify({
             'success': True,
-            'message': f'Chunk {chunk_index+1}/{total_chunks} received',
-            'uploadId': upload_id,
-            'progress': len(chunk_uploads[upload_id][file_type]['received_chunks']) / total_chunks
+            'data': {
+                'uploadId': upload_id,
+                'progress': len(chunk_uploads[upload_id][file_type]['received_chunks']) / total_chunks,
+                'chunkIndex': chunk_index,
+                'totalChunks': total_chunks,
+                'fileType': file_type
+            }
         })
-        
     except Exception as e:
         logger.error(f"Error in chunk upload: {str(e)}")
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
 def calculate_bounds(predictions, tolerance_type, tol_cnt, tol_dep): 
     """Calculate upper and lower bounds based on tolerance type."""
@@ -124,10 +127,10 @@ def complete_redirect():
     """Handle chunked upload completion directly instead of redirecting."""
     try:
         if request.method == 'OPTIONS':
-            # Handle preflight request
+            # Handle CORS preflight request, response format uvek sa 'data'
             response = jsonify({
                 'success': True,
-                'message': 'CORS preflight request successful'
+                'data': {'message': 'CORS preflight request successful'}
             })
             # Set CORS headers
             response.headers.add('Access-Control-Allow-Origin', '*')
@@ -151,41 +154,43 @@ def complete_redirect():
                 logger.info(f"JSON data: {data}")
             except Exception as e:
                 logger.error(f"Error parsing JSON: {str(e)}")
+                # Error: loš format zahteva
                 return jsonify({
                     'success': False,
-                    'error': 'Invalid request format. Expected JSON or FormData.'
+                    'data': {'error': 'Invalid request format. Expected JSON or FormData.'}
                 }), 400
-        
+
         upload_id = data.get('uploadId')
         logger.info(f"Completing upload for ID: {upload_id}")
-        
+
         if not upload_id or upload_id not in chunk_uploads:
             logger.error(f"Invalid upload ID: {upload_id}")
-            return jsonify({
-                'success': False,
-                'error': 'Invalid upload ID'
-            }), 400
-        
+            # Error: uploadId nije validan
+            return jsonify({'success': False, 'data': {'error': 'Invalid upload ID'}}), 400
+
         upload_info = chunk_uploads[upload_id]
         chunk_dir = get_chunk_dir(upload_id)
-        
+
         # Check if all chunks have been received for both files
         temp_info = upload_info['temp_file']
         load_info = upload_info['load_file']
-        
+
         logger.info(f"Temp file: {temp_info['received_chunks']}/{temp_info['total_chunks']} chunks")
         logger.info(f"Load file: {load_info['received_chunks']}/{load_info['total_chunks']} chunks")
-        
+
         if (len(temp_info['received_chunks']) != temp_info['total_chunks'] or 
             len(load_info['received_chunks']) != load_info['total_chunks']):
             logger.error(f"Not all chunks received. Temp: {len(temp_info['received_chunks'])}/{temp_info['total_chunks']}, Load: {len(load_info['received_chunks'])}/{load_info['total_chunks']}")
+            # Error: nisu svi chunkovi primljeni
             return jsonify({
                 'success': False,
-                'error': 'Not all chunks received',
-                'temp_progress': len(temp_info['received_chunks']) / max(temp_info['total_chunks'], 1),
-                'load_progress': len(load_info['received_chunks']) / max(load_info['total_chunks'], 1)
+                'data': {
+                    'error': 'Not all chunks received',
+                    'temp_progress': len(temp_info['received_chunks']) / max(temp_info['total_chunks'], 1),
+                    'load_progress': len(load_info['received_chunks']) / max(load_info['total_chunks'], 1)
+                }
             }), 400
-        
+
         logger.info("All chunks received, reassembling files")
         
         # Reassemble the files
@@ -230,252 +235,232 @@ def complete_redirect():
                 import shutil
                 shutil.rmtree(chunk_dir)
                 del chunk_uploads[upload_id]
-                logger.info(f"Cleaned up chunks for upload ID: {upload_id}")
+                logger.info(f"Cleaned up chunk directory for upload {upload_id}")
             except Exception as e:
-                logger.error(f"Error cleaning up chunks: {str(e)}")
-            
-            logger.info("Sending response with processed data")
+                logger.warning(f"Error cleaning up chunks: {str(e)}")
+
+            # Očekuje se da _process_data_frames vraća jsonify sa {'success': True, 'data': ...}
             return result
-            
         except Exception as e:
-            logger.error(f"Error processing reassembled files: {str(e)}")
-            traceback.print_exc()
-            return jsonify({
-                'success': False,
-                'error': f'Error processing files: {str(e)}'
-            }), 500
+            logger.error(f"Error processing uploaded files: {str(e)}")
+            # Error: problem sa obradom fajlova
+            return jsonify({'success': False, 'data': {'error': f'Error processing uploaded files: {str(e)}'}}), 500
     except Exception as e:
         logger.error(f"Error in complete_redirect: {str(e)}")
-        traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-        
+        # Error: generalni exception
+        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
+
 def interpolate_data(df1, df2, x_col, y_col, max_time_span):
-    """Perform linear interpolation on the data within the specified time span."""
+    """
+    Perform linear interpolation on the data within the specified time span.
+    Vraća interpolirani DataFrame i broj interpoliranih tačaka.
+    Svi logovi idu kroz logger, ne koristi se print.
+    """
     try:
-        # Create combined dataframe
+        # Kombinuj podatke iz oba DataFrame-a
         cld = pd.DataFrame()
         cld['UTC'] = df1['UTC']
         cld[x_col] = df1[x_col]
         cld[y_col] = df2[y_col]
-        
-        # Store original number of points
+
+        # Originalan broj tačaka
         original_points = len(cld)
-        
-        # Drop any rows where either x or y is NaN
+
+        # Izbaci redove sa NaN vrednostima
         cld = cld.dropna()
-        
         if cld.empty:
+            logger.error('No valid data points after combining datasets')
             raise ValueError('No valid data points after combining datasets')
-        
-        print(f"Combined data shape: {cld.shape}")
-        
-        # Calculate time differences between consecutive points
-        cld['time_diff'] = cld['UTC'].diff().dt.total_seconds() / 60  # Convert to minutes
-        
-        # Find gaps larger than max_time_span
+
+        logger.info(f"Combined data shape: {cld.shape}")
+
+        # Izračunaj vremenske razlike između tačaka
+        cld['time_diff'] = cld['UTC'].diff().dt.total_seconds() / 60  # u minutima
+
+        # Pronađi velike praznine (gaps)
         large_gaps = cld[cld['time_diff'] > max_time_span].index
-        
         interpolated_points = 0
-        
+
         if len(large_gaps) > 0:
-            print(f"Found {len(large_gaps)} gaps larger than {max_time_span} minutes")
-            
-            # Split data into chunks where gaps are too large
+            logger.info(f"Found {len(large_gaps)} gaps larger than {max_time_span} minutes")
+            # Podeli podatke na segmente gde su praznine prevelike
             chunks = []
             start_idx = 0
-            
             for gap_idx in large_gaps:
                 if gap_idx > start_idx:
                     chunk = cld.loc[start_idx:gap_idx-1].copy()
-                    # Perform linear interpolation within the chunk
+                    # Linearna interpolacija unutar segmenta
                     interpolated_chunk = chunk.set_index('UTC').resample('1min').interpolate(method='linear')
                     chunks.append(interpolated_chunk)
                 start_idx = gap_idx
-            
-            # Add the last chunk
+            # Dodaj poslednji segment
             if start_idx < len(cld):
                 chunk = cld.loc[start_idx:].copy()
                 chunk = chunk.set_index('UTC').resample('1min').interpolate(method='linear')
                 chunks.append(chunk)
-            
-            # Combine all interpolated chunks
+            # Kombinuj sve segmente
             cld_interpolated = pd.concat(chunks)
-            
-            # Update the working dataframe
             cld = cld_interpolated.reset_index()
-            
-            # Calculate number of interpolated points
             interpolated_points = len(cld) - original_points
-            
-            print(f"After interpolation: {len(cld)} points (Added {interpolated_points} points)")
-        
+            logger.info(f"After interpolation: {len(cld)} points (Added {interpolated_points} points)")
+
         return cld, interpolated_points
     except Exception as e:
-        print(f"Error in interpolation: {str(e)}")
+        logger.error(f"Error in interpolation: {str(e)}")
         raise
 
+
 def _process_data_frames(df1, df2, data):
-    """Process data from dataframes.
-    This function contains the core data processing logic extracted from _process_data
-    to be reusable for both direct uploads and chunked uploads.
-    
-    Args:
-        df1: Temperature dataframe
-        df2: Load dataframe
-        data: Dictionary containing processing parameters
-        
-    Returns:
-        JSON response with processed data or error
+    """
+    Process data from dataframes for both direct and chunked uploads.
+    Svi odgovori koriste jsonify({'success': True/False, 'data': ...})
+    Svi print pozivi su zamenjeni logger-om.
     """
     try:
-        print(f"Processing dataframes with shapes: {df1.shape}, {df2.shape}")
-        print(f"Columns in temperature file: {df1.columns.tolist()}")
-        print(f"Columns in load file: {df2.columns.tolist()}")
-        
-        # Use the first column that's not UTC as the temperature column
+        logger.info(f"Processing dataframes with shapes: {df1.shape}, {df2.shape}")
+        logger.info(f"Columns in temperature file: {df1.columns.tolist()}")
+        logger.info(f"Columns in load file: {df2.columns.tolist()}")
+
+        # Pronađi kolone za temperaturu i opterećenje
         temp_cols = [col for col in df1.columns if col != 'UTC']
         load_cols = [col for col in df2.columns if col != 'UTC']
-        
+
         if temp_cols:
             x = temp_cols[0]
-            print(f"Using temperature column: {x}")
+            logger.info(f"Using temperature column: {x}")
         else:
-            print("No temperature column found. Available columns:", df1.columns.tolist())
-            return jsonify({'success': False, 'error': f'No valid temperature column found. Available columns: {df1.columns.tolist()}'}), 400
-            
+            logger.error(f"No temperature column found. Available columns: {df1.columns.tolist()}")
+            return jsonify({'success': False, 'data': {'error': f'No valid temperature column found. Available columns: {df1.columns.tolist()}'}}), 400
+
         if load_cols:
             y = load_cols[0]
-            print(f"Using load column: {y}")
+            logger.info(f"Using load column: {y}")
         else:
-            print("No load column found. Available columns:", df2.columns.tolist())
-            return jsonify({'success': False, 'error': f'No valid load column found. Available columns: {df2.columns.tolist()}'}), 400
-            
-        # Convert time column to datetime with specific format and sort
+            logger.error(f"No load column found. Available columns: {df2.columns.tolist()}")
+            return jsonify({'success': False, 'data': {'error': f'No valid load column found. Available columns: {df2.columns.tolist()}'}}), 400
+
+        # Pretvori vreme u datetime i sortiraj
         df1['UTC'] = pd.to_datetime(df1['UTC'], format="%Y-%m-%d %H:%M:%S")
         df2['UTC'] = pd.to_datetime(df2['UTC'], format="%Y-%m-%d %H:%M:%S")
-        
-        # Convert data columns to numeric
+
+        # Pretvori podatke u numeričke vrednosti
         df1[x] = pd.to_numeric(df1[x], errors='coerce')
         df2[y] = pd.to_numeric(df2[y], errors='coerce')
-        
-        # Sort both dataframes by time
+
+        # Sortiraj po vremenu
         df1 = df1.sort_values('UTC')
         df2 = df2.sort_values('UTC')
-        
-        print(f"Data ranges after sorting:")
-        print(f"Temperature range: {df1[x].min():.2f} to {df1[x].max():.2f} °C")
-        print(f"Load range before conversion: {df2[y].min():.2f} to {df2[y].max():.2f} kW")
-        
-        # Convert kW to W if needed
+
+        logger.info(f"Data ranges after sorting:")
+        logger.info(f"Temperature range: {df1[x].min():.2f} to {df1[x].max():.2f} °C")
+        logger.info(f"Load range before conversion: {df2[y].min():.2f} to {df2[y].max():.2f} kW")
+
+        # Ako je potrebno, konvertuj kW u W
         if 'kw' in y.lower():
-            print("Converting kW to W")
+            logger.info("Converting kW to W")
             df2[y] = df2[y] * 1000
-            print(f"Load range after conversion: {df2[y].min():.2f} to {df2[y].max():.2f} W")
-        
-        # Verify data alignment
+            logger.info(f"Load range after conversion: {df2[y].min():.2f} to {df2[y].max():.2f} W")
+
+        # Proveri da li se vremena poklapaju
         if not df1['UTC'].equals(df2['UTC']):
-            print("Warning: Time stamps don't match exactly")
-            print(f"Temperature times: {df1['UTC'].tolist()}")
-            print(f"Load times: {df2['UTC'].tolist()}")
-            return jsonify({'success': False, 'error': 'Time stamps in files do not match'}), 400
-        
-        # Clean and validate data
+            logger.warning("Time stamps don't match exactly")
+            logger.warning(f"Temperature times: {df1['UTC'].tolist()}")
+            logger.warning(f"Load times: {df2['UTC'].tolist()}")
+            return jsonify({'success': False, 'data': {'error': 'Time stamps in files do not match'}}), 400
+
+        # Čišćenje i validacija podataka
         try:
-            # Drop any rows with NaN values
+            # Izbaci redove sa NaN vrednostima
             df1 = df1.dropna()
             df2 = df2.dropna()
-            
             if df1.empty or df2.empty:
-                return jsonify({'success': False, 'error': 'No valid numeric data found after cleaning'}), 400
-                
-            print(f"Data cleaned. New shapes: {df1.shape}, {df2.shape}")
-            
-            # Create combined dataframe
+                logger.error('No valid numeric data found after cleaning')
+                return jsonify({'success': False, 'data': {'error': 'No valid numeric data found after cleaning'}}), 400
+
+            logger.info(f"Data cleaned. New shapes: {df1.shape}, {df2.shape}")
+
+            # Kombinuj podatke
             cld = pd.DataFrame()
             cld[x] = df1[x]
             cld[y] = df2[y]
-            
-            # Drop any rows where either x or y is NaN
             cld = cld.dropna()
-            
             if cld.empty:
-                return jsonify({'success': False, 'error': 'No valid data points after combining datasets'}), 400
-            
-            print(f"Combined data shape: {cld.shape}")
-            
-            # Sort by x values
+                logger.error('No valid data points after combining datasets')
+                return jsonify({'success': False, 'data': {'error': 'No valid data points after combining datasets'}}), 400
+
+            logger.info(f"Combined data shape: {cld.shape}")
+
+            # Sortiraj po x
             cld_srt = cld.sort_values(by=x).copy()
-            
-            # Verify no NaN values remain
+
+            # Proveri da li ima NaN vrednosti
             if cld_srt[x].isna().any() or cld_srt[y].isna().any():
-                return jsonify({'success': False, 'error': 'NaN values found in processed data'}), 400
-                
+                logger.error('NaN values found in processed data')
+                return jsonify({'success': False, 'data': {'error': 'NaN values found in processed data'}}), 400
+
         except Exception as e:
-            print(f"Error cleaning data: {str(e)}")
-            return jsonify({'success': False, 'error': f'Error cleaning data: {str(e)}'}), 400
-        
-        # Get parameters with reasonable defaults
-        REG = data.get('REG', 'lin')  # Default to linear regression
-        TR = data.get('TR', 'cnt')    # Default to constant tolerance
-        
-        # Set default tolerances based on data range
+            logger.error(f"Error cleaning data: {str(e)}")
+            return jsonify({'success': False, 'data': {'error': f'Error cleaning data: {str(e)}'}}), 400
+
+        # Parametri za regresiju i tolerancije
+        REG = data.get('REG', 'lin')  # Default linear regression
+        TR = data.get('TR', 'cnt')    # Default constant tolerance
+
+        # Podrazumevane tolerancije na osnovu opsega
         y_range = df2[y].max() - df2[y].min()
-        default_tol = y_range * 0.1  # 10% of data range
-        
-        # Get tolerance parameters
+        default_tol = y_range * 0.1  # 10% opsega
+
+        # Dohvati tolerancije
         try:
             TOL_CNT = float(data.get('TOL_CNT', default_tol))
-            TOL_DEP = float(data.get('TOL_DEP', 0.1))  # 10% default for dependent tolerance
+            TOL_DEP = float(data.get('TOL_DEP', 0.1))  # 10% default za zavisnu toleranciju
         except ValueError:
-            print("Using default tolerances due to invalid input")
+            logger.warning("Using default tolerances due to invalid input")
             TOL_CNT = default_tol
             TOL_DEP = 0.1
         
-        # If tolerance is too small compared to data range, adjust it
-        if TOL_CNT < y_range * 0.01:  # If tolerance is less than 1% of range
-            TOL_CNT = y_range * 0.1  # Set to 10% of range
-            print(f"Adjusted tolerance to {TOL_CNT:.2f} (10% of data range)")
+        # Ako je tolerancija premala u odnosu na opseg podataka, povećaj je
+        if TOL_CNT < y_range * 0.01:  # Manje od 1% opsega
+            TOL_CNT = y_range * 0.1  # Postavi na 10% opsega
+            logger.info(f"Adjusted tolerance to {TOL_CNT:.2f} (10% of data range)")
         
-        print(f"Parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}")
+        logger.info(f"Parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}")
         
-        # Perform regression
+        # Izvrši regresiju
         if REG == "lin":
             try:
-                # Get min and max values for constraints
+                # Pronađi min i max vrednosti za ograničenja
                 min_y = cld_srt[y].min()
                 max_y = cld_srt[y].max()
                 x_min = cld_srt[x].min()
                 x_max = cld_srt[x].max()
                 
-                # Print data ranges for debugging
-                print(f"Data ranges - X: [{x_min}, {x_max}], Y: [{min_y}, {max_y}]")
+                # Loguj opsege podataka
+                logger.info(f"Data ranges - X: [{x_min}, {x_max}], Y: [{min_y}, {max_y}]")
                 
                 # Fit linear regression
                 lin_mdl = LinearRegression()
                 lin_mdl.fit(cld_srt[[x]], cld_srt[y])
                 
-                # Calculate predictions
+                # Izračunaj predikcije
                 lin_prd = lin_mdl.predict(cld_srt[[x]])
                 
-                # Calculate average y value for high temperatures
-                high_temp_threshold = x_max * 0.8  # Last 20% of temperature range
+                # Prosek Y za visoke temperature
+                high_temp_threshold = x_max * 0.8  # Zadnjih 20% opsega
                 high_temp_avg = cld_srt[cld_srt[x] >= high_temp_threshold][y].mean()
                 
-                # Replace predictions for high temperatures with average value
+                # Zameni predikcije za visoke temperature prosekom
                 for i in range(len(lin_prd)):
                     curr_x = cld_srt[x].iloc[i]
                     if curr_x >= high_temp_threshold:
                         lin_prd[i] = high_temp_avg
                 
-                # Print last few predictions for debugging
-                print("Last 5 points:")
+                # Loguj poslednjih nekoliko predikcija
+                logger.info("Last 5 points:")
                 for i in range(-5, 0):
-                    print(f"X: {cld_srt[x].iloc[i]}, Y: {cld_srt[y].iloc[i]}, Pred: {lin_prd[i]}")
+                    logger.info(f"X: {cld_srt[x].iloc[i]}, Y: {cld_srt[y].iloc[i]}, Pred: {lin_prd[i]}")
                 
-                # Calculate bounds with validation
+                # Izračunaj granice sa validacijom
                 upper_bound, lower_bound = calculate_bounds(lin_prd, TR, TOL_CNT, TOL_DEP)
                 
                 # Ensure bounds are within reasonable limits and not zero
@@ -602,72 +587,57 @@ def clouddata():
         print(f"Error in clouddata endpoint: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 def _process_data():
     try:
-        print("\nReceived request to /clouddata")
+        logger.info("\nReceived request to /clouddata")
         data = request.json
-        print("Received data:", data)
-        
-        if data is None:
-            print("No data received")
-            return jsonify({'error': 'No data received'}), 400
-            
-        # Get files from request
-        temp_data = data['files']['temp_out.csv']
-        load_data = data['files']['load.csv']
-        
-        if not temp_data or not load_data:
-            print("One or both files are empty")
-            return jsonify({'error': 'One or both files are empty'}), 400
-        
-        try:
-            # Convert base64 data to DataFrame
-            print("Attempting to decode and read temperature data...")
-            temp_decoded = base64.b64decode(temp_data).decode('utf-8')
-            print("Temperature data preview:", temp_decoded[:200])
-            df1 = pd.read_csv(StringIO(temp_decoded), sep=';')
-            
-            print("Attempting to decode and read load data...")
-            load_decoded = base64.b64decode(load_data).decode('utf-8')
-            print("Load data preview:", load_decoded[:200])
-            df2 = pd.read_csv(StringIO(load_decoded), sep=';')
-            
-            print(f"Successfully read data. Shapes: {df1.shape}, {df2.shape}")
-            print(f"Columns in temperature file: {df1.columns.tolist()}")
-            print(f"Columns in load file: {df2.columns.tolist()}")
-            
-            print("First few rows of temperature file:")
-            print(df1.head())
-            print("First few rows of load file:")
-            print(df2.head())
-            
+        logger.info(f"Received data: {data}")
 
-            
-            # Process the data using the common function
+        if data is None:
+            logger.error("No data received")
+            return jsonify({'success': False, 'data': {'error': 'No data received'}}), 400
+
+        # Preuzmi fajlove iz zahteva
+        temp_data = data['files'].get('temp_out.csv')
+        load_data = data['files'].get('load.csv')
+
+        if not temp_data or not load_data:
+            logger.error("One or both files are empty")
+            return jsonify({'success': False, 'data': {'error': 'One or both files are empty'}}), 400
+
+        try:
+            # Dekodiraj base64 podatke i učitaj u DataFrame
+            logger.info("Attempting to decode and read temperature data...")
+            temp_decoded = base64.b64decode(temp_data).decode('utf-8')
+            logger.debug(f"Temperature data preview: {temp_decoded[:200]}")
+            df1 = pd.read_csv(StringIO(temp_decoded), sep=';')
+
+            logger.info("Attempting to decode and read load data...")
+            load_decoded = base64.b64decode(load_data).decode('utf-8')
+            logger.debug(f"Load data preview: {load_decoded[:200]}")
+            df2 = pd.read_csv(StringIO(load_decoded), sep=';')
+
+            logger.info(f"Successfully read data. Shapes: {df1.shape}, {df2.shape}")
+            logger.info(f"Columns in temperature file: {df1.columns.tolist()}")
+            logger.info(f"Columns in load file: {df2.columns.tolist()}")
+            logger.debug("First few rows of temperature file:")
+            logger.debug(f"{df1.head()}")
+            logger.debug(f"{df2.head()}")
+
+            # Obradi podatke koristeći zajedničku funkciju
             return _process_data_frames(df1, df2, data)
-            
-        except UnicodeDecodeError as e:
-            print(f"Error decoding CSV files: {str(e)}")
-            return jsonify({'error': 'Error decoding CSV files. Please ensure files are UTF-8 encoded.'}), 400
-        except pd.errors.EmptyDataError:
-            print("Error: One or both CSV files are empty")
-            return jsonify({'error': 'One or both CSV files are empty'}), 400
         except Exception as e:
-            print(f"Error reading CSV files: {str(e)}")
-            return jsonify({'error': f'Error reading CSV files: {str(e)}'}), 400
+            logger.error(f"Error reading CSV files: {str(e)}")
+            return jsonify({'success': False, 'data': {'error': f'Error reading CSV files: {str(e)}'}}), 400
 
     except Exception as e:
-        print("Error processing data:", str(e))
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error processing data: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
-# Route for handling prepare save
-@bp.route('/prepare-save', methods=['POST'])
-def prepare_save():
+
     try:
         logger.info("Received prepare_save request")
         data = request.json
@@ -722,58 +692,50 @@ def prepare_save():
 # Route for handling chunked upload for interpolation
 @bp.route('/interpolate-chunked', methods=['POST'])
 def interpolate_chunked():
-    """Process a chunked file upload for interpolation."""
+    """
+    Process a chunked file upload for interpolation.
+    Svi odgovori su u formatu: {'success': bool, 'data': ...}
+    U slučaju greške, data je objekat sa 'error' poljem.
+    """
     try:
         logger.info("Received request to /interpolate-chunked")
-        
+
         # Get upload ID and parameters from request
         data = request.json
         if not data or 'uploadId' not in data:
             logger.error("Missing uploadId in request")
-            return jsonify({
-                'success': False, 
-                'error': 'Upload ID is required', 
-                'message': 'Please provide a valid upload ID'
-            }), 400
-            
+            # Error: uploadId nedostaje
+            return jsonify({'success': False, 'data': {'error': 'Upload ID is required'}}), 400
+
         upload_id = data['uploadId']
         logger.info(f"Processing upload ID: {upload_id}")
-        
+
         # Validate max_time_span parameter
         try:
             max_time_span = float(data.get('max_time_span', '60'))
             logger.info(f"Using max_time_span: {max_time_span}")
         except ValueError as e:
             logger.error(f"Invalid max_time_span value: {data.get('max_time_span')}")
-            return jsonify({
-                'success': False, 
-                'error': 'Invalid max_time_span parameter', 
-                'message': 'Please provide a valid number for max_time_span'
-            }), 400
-        
+            # Error: loš max_time_span
+            return jsonify({'success': False, 'data': {'error': 'Invalid max_time_span parameter'}}), 400
+
         # Check if upload exists
         if upload_id not in chunk_uploads:
             logger.error(f"Upload ID not found: {upload_id}")
-            return jsonify({
-                'success': False, 
-                'error': 'Upload ID not found', 
-                'message': 'The specified upload ID does not exist'
-            }), 404
-        
+            # Error: upload ne postoji
+            return jsonify({'success': False, 'data': {'error': 'Upload ID not found'}}), 404
+
         # Check if all chunks have been received
         upload_info = chunk_uploads[upload_id]['interpolate_file']
         if len(upload_info['received_chunks']) < upload_info['total_chunks']:
             logger.error(f"Not all chunks received for upload {upload_id}")
-            return jsonify({
-                'success': False, 
-                'error': 'Incomplete upload', 
-                'message': f"Only {len(upload_info['received_chunks'])}/{upload_info['total_chunks']} chunks received"
-            }), 400
-        
+            # Error: nisu svi chunkovi primljeni
+            return jsonify({'success': False, 'data': {'error': f"Incomplete upload: Only {len(upload_info['received_chunks'])}/{upload_info['total_chunks']} chunks received"}}), 400
+
         # Combine chunks into a single file
         chunk_dir = get_chunk_dir(upload_id)
         combined_file_path = os.path.join(chunk_dir, 'combined_interpolate_file.csv')
-        
+
         # Optimizacija: Koristimo binary mode i veći buffer za brže kombinovanje fajlova
         with open(combined_file_path, 'wb') as outfile:
             for i in range(upload_info['total_chunks']):
@@ -782,15 +744,15 @@ def interpolate_chunked():
                     with open(chunk_path, 'rb') as infile:
                         # Kopiranje u većim blokovima za bolje performanse
                         shutil.copyfileobj(infile, outfile, 1024*1024)  # 1MB buffer
-        
+
         logger.info(f"Combined file created at: {combined_file_path}")
-        
+
         # Optimizacija: Koristimo engine='c' za brže parsiranje CSV-a
         try:
             # Detektujemo separator bez učitavanja celog fajla
             with open(combined_file_path, 'r', encoding='utf-8') as f:
                 first_line = f.readline()
-                
+
             # Try different separators if needed
             if ';' in first_line:
                 sep = ';'
@@ -798,9 +760,9 @@ def interpolate_chunked():
                 sep = ','
             else:
                 sep = None  # Let pandas detect
-                
+
             logger.info(f"Using separator: {sep}")
-            
+
             # Optimizacija: Učitavamo samo potrebne kolone i koristimo engine='c'
             df2 = pd.read_csv(combined_file_path, 
                              sep=sep,
@@ -808,26 +770,20 @@ def interpolate_chunked():
                              engine='c')   # Brži C engine
         except Exception as e:
             logger.error(f"Error reading CSV file: {str(e)}")
-            return jsonify({
-                'success': False, 
-                'error': f'Error reading CSV file: {str(e)}', 
-                'message': 'Please check the file format'
-            }), 400
-        
+            # Error: CSV parsiranje nije uspelo
+            return jsonify({'success': False, 'data': {'error': f'Error reading CSV file: {str(e)}'}}), 400
+
         # Check if UTC column exists
         if 'UTC' not in df2.columns:
             logger.error("UTC column not found in the file")
-            return jsonify({
-                'success': False, 
-                'error': 'UTC column not found', 
-                'message': 'The file must contain a UTC column with timestamps'
-            }), 400
-        
+            # Error: nema UTC kolone
+            return jsonify({'success': False, 'data': {'error': 'UTC column not found. The file must contain a UTC column with timestamps'}}), 400
+
         # Optimizacija: Brža pretraga load kolone
         load_terms = set(['last', 'load', 'leistung', 'kw', 'w'])
         load_cols = [col for col in df2.columns if 
                     any(term in str(col).lower() for term in load_terms)]
-        
+
         if not load_cols:
             # If no specific load column found, use the first non-UTC column
             non_utc_cols = [col for col in df2.columns if col != 'UTC']
@@ -959,13 +915,15 @@ def interpolate_chunked():
         logger.info(f"Sample of chart data being sent: {chart_data[:5] if chart_data else 'No data'}")
         logger.info(f"Total points in chart data: {len(chart_data)}")
         
-        # If we have no valid points, return an error
+        # Ako nema validnih tačaka, vrati grešku u novom formatu
         if not chart_data:
             logger.error("No valid data points after processing")
             return jsonify({
-                'success': False, 
-                'error': 'No valid data points after processing', 
-                'message': 'The file contains no valid data points for interpolation'
+                'success': False,
+                'data': {
+                    'error': 'No valid data points after processing',
+                    'message': 'The file contains no valid data points for interpolation'
+                }
             }), 400
 
         # Define chunk size for streaming (number of data points per chunk)
@@ -1059,207 +1017,44 @@ def interpolate_chunked():
             'message': 'An error occurred during interpolation'
         }), 500
 
-# Route for generating chart images
-@bp.route('/generate-chart', methods=['POST'])
-def generate_chart():
-    """Generate a chart image based on provided data and return the image URL.
-    
-    Expects JSON with:
-    - chartData: Array of data points with x, y, upperBound, lowerBound
-    - xAxisLabel: Label for x-axis
-    - yAxisLabel: Label for y-axis
-    - xAxisUnit: Unit for x-axis (optional)
-    - yAxisUnit: Unit for y-axis (optional)
-    - equation: Equation string (optional)
-    - width: Chart width in pixels
-    - height: Chart height in pixels
-    
-    Returns:
-    - JSON with imageUrl pointing to the generated chart image
-    """
-    try:
-        logger.info("Received request to generate chart")
-        
-        # Get data from request
-        data = request.json
-        if not data or 'chartData' not in data:
-            logger.error("Invalid chart data: missing chartData field")
-            return jsonify({'success': False, 'error': 'Invalid chart data'}), 400
-            
-        chart_data = data['chartData']
-        if not chart_data or len(chart_data) == 0:
-            logger.error("Empty chart data provided")
-            return jsonify({'success': False, 'error': 'Empty chart data'}), 400
-            
-        logger.info(f"Processing chart with {len(chart_data)} data points")
-            
-        # Extract parameters
-        x_axis_label = data.get('xAxisLabel', 'X')
-        y_axis_label = data.get('yAxisLabel', 'Y')
-        x_axis_unit = data.get('xAxisUnit', '')
-        y_axis_unit = data.get('yAxisUnit', '')
-        equation = data.get('equation', '')
-        width = data.get('width', 800)
-        height = data.get('height', 600)
-        
-        # Set figure size and DPI for high quality
-        plt.figure(figsize=(width/100, height/100), dpi=100)
-        
-        # Extract data points
-        x_values = [point['x'] for point in chart_data]
-        y_values = [point['y'] for point in chart_data]
-        upper_bounds = [point.get('upperBound') for point in chart_data]
-        lower_bounds = [point.get('lowerBound') for point in chart_data]
-        
-        # Sort data by x values to ensure proper line plotting for the prediction line
-        sorted_indices = np.argsort(x_values)
-        sorted_x = np.array(x_values)[sorted_indices]
-        sorted_y = np.array(y_values)[sorted_indices]
-        sorted_upper = np.array(upper_bounds)[sorted_indices]
-        sorted_lower = np.array(lower_bounds)[sorted_indices]
-        
-        # Add tolerance bands if available
-        if all(ub is not None for ub in upper_bounds) and all(lb is not None for lb in lower_bounds):
-            # Plot upper and lower bounds
-            plt.plot(sorted_x, sorted_upper, 'r--', linewidth=1, label='Upper Bound')
-            plt.plot(sorted_x, sorted_lower, 'g--', linewidth=1, label='Lower Bound')
-            
-            # Calculate the middle line between upper and lower bounds
-            middle_line = (sorted_upper + sorted_lower) / 2
-            plt.plot(sorted_x, middle_line, 'b-', linewidth=2, label='Middle Line')
-            
-            # Fill the area between upper and lower bounds
-            plt.fill_between(sorted_x, sorted_lower, sorted_upper, color='lightblue', alpha=0.3)
-            
-            # Identify points within and outside tolerance bands
-            within_tolerance = []
-            outside_tolerance = []
-            
-            # For each point, check if it's within the tolerance bands
-            for i, (x, y) in enumerate(zip(x_values, y_values)):
-                # Find the closest index in the sorted arrays
-                closest_idx = np.abs(sorted_x - x).argmin()
-                
-                # Get the upper and lower bounds at this x position
-                upper = sorted_upper[closest_idx]
-                lower = sorted_lower[closest_idx]
-                
-                # Check if the point is within tolerance
-                if lower <= y <= upper:
-                    within_tolerance.append((x, y))
-                else:
-                    outside_tolerance.append((x, y))
-            
-            # Plot points within tolerance in green
-            if within_tolerance:
-                x_within, y_within = zip(*within_tolerance) if within_tolerance else ([], [])
-                plt.scatter(x_within, y_within, color='green', s=50, alpha=0.7, label='Within Tolerance')
-            
-            # Plot points outside tolerance in red
-            if outside_tolerance:
-                x_outside, y_outside = zip(*outside_tolerance) if outside_tolerance else ([], [])
-                plt.scatter(x_outside, y_outside, color='red', s=50, alpha=0.7, label='Outside Tolerance')
-        
-        # Add axis labels with units
-        if x_axis_unit:
-            plt.xlabel(f'{x_axis_label} [{x_axis_unit}]')
-        else:
-            plt.xlabel(x_axis_label)
-            
-        if y_axis_unit:
-            plt.ylabel(f'{y_axis_label} [{y_axis_unit}]')
-        else:
-            plt.ylabel(y_axis_label)
-        
-        # Add equation if provided
-        if equation:
-            plt.text(0.05, 0.95, f'Equation: {equation}', transform=plt.gca().transAxes, 
-                     fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        # Add grid and legend
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
-        
-        # Adjust layout
-        plt.tight_layout()
-        
-        # Save the figure to a BytesIO object
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', bbox_inches='tight')
-        img_buffer.seek(0)
-        plt.close()
-        
-        # Generate a unique ID for the image
-        image_id = str(uuid.uuid4())
-        
-        # Save the image to a temporary file
-        img_path = os.path.join(tempfile.gettempdir(), f'chart_{image_id}.png')
-        with open(img_path, 'wb') as f:
-            f.write(img_buffer.getvalue())
-        
-        # Store the image path in the temp_files dictionary
-        temp_files[image_id] = {
-            'path': img_path,
-            'filename': 'chart',
-            'created_at': time.time()
-        }
-        
-        # Instead of using a URL that requires a separate request,
-        # encode the image directly as base64 and return it inline
-        # This avoids CORS issues and problems with different ports
-        img_buffer.seek(0)
-        encoded_image = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-        
-        logger.info(f"Chart generated successfully with ID: {image_id}")
-        
-        # Return both the URL and the base64 data
-        # The frontend can use the base64 data directly without making another request
-        return jsonify({
-            'success': True,
-            'imageUrl': f'/api/cloud/chart-image/{image_id}',
-            'imageData': f'data:image/png;base64,{encoded_image}'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error in generate_chart: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'error': str(e)}), 500
 
-# Route for retrieving generated chart images
-@bp.route('/chart-image/<image_id>', methods=['GET'])
-def get_chart_image(image_id):
-    """Retrieve a previously generated chart image.
-    
-    Args:
-        image_id (str): The unique identifier for the chart image
-        
-    Returns:
-        Flask response with the image or error message
+# Route for handling prepare save
+@bp.route('/prepare-save', methods=['POST'])
+def prepare_save():
+    """
+    Retrieve a previously generated chart image.
+    Očekuje se da image_id dođe iz request.json['image_id'].
+    Svi error odgovori su u formatu {'success': False, 'data': {'error': ...}}
     """
     try:
+        data = request.json
+        if not data or 'image_id' not in data:
+            logger.error("No image_id provided in request.")
+            return jsonify({"success": False, "data": {"error": "No image_id provided in request."}}), 400
+        image_id = data['image_id']
         logger.info(f"Received request for chart image with ID: {image_id}")
         logger.info(f"Available temp files: {list(temp_files.keys())}")
-        
+
         if image_id not in temp_files:
             logger.error(f"Image ID not found in temp_files: {image_id}")
-            return jsonify({"success": False, "error": "Image not found"}), 404
-            
+            return jsonify({"success": False, "data": {"error": "Image not found"}}), 404
+
         file_info = temp_files[image_id]
         file_path = file_info['path']
         logger.info(f"Found image at path: {file_path}")
-        
+
         if not os.path.exists(file_path):
             logger.error(f"Image file not found at path: {file_path}")
-            return jsonify({"success": False, "error": "Image file not found"}), 404
+            return jsonify({"success": False, "data": {"error": "Image file not found"}}), 404
 
         return send_file(
             file_path,
             mimetype='image/png'
         )
     except Exception as e:
-        logger.error(f"Error in get_chart_image: {str(e)}")
+        logger.error(f"Error in prepare_save: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "data": {"error": str(e)}}), 500
 
 # Route for handling file download
 @bp.route('/download/<file_id>', methods=['GET'])
