@@ -116,8 +116,8 @@ def calculate_bounds(predictions, tolerance_type, tol_cnt, tol_dep):
         upper_bound = predictions * (1 + tol_dep) + tol_cnt
         lower_bound = predictions * (1 - tol_dep) - tol_cnt
     
-    # Ensure lower bound is not negative
-    lower_bound = np.maximum(lower_bound, 0)
+    # Do not force lower bound to be >= 0; allow negative values if regression/tolerance allows
+    # lower_bound = np.maximum(lower_bound, 0)
     
     return upper_bound, lower_bound
 
@@ -429,58 +429,31 @@ def _process_data_frames(df1, df2, data):
         # Izvrši regresiju
         if REG == "lin":
             try:
-                # Pronađi min i max vrednosti za ograničenja
-                min_y = cld_srt[y].min()
-                max_y = cld_srt[y].max()
-                x_min = cld_srt[x].min()
-                x_max = cld_srt[x].max()
-                
-                # Loguj opsege podataka
-                logger.info(f"Data ranges - X: [{x_min}, {x_max}], Y: [{min_y}, {max_y}]")
-                
                 # Fit linear regression
                 lin_mdl = LinearRegression()
                 lin_mdl.fit(cld_srt[[x]], cld_srt[y])
-                
-                # Izračunaj predikcije
                 lin_prd = lin_mdl.predict(cld_srt[[x]])
-                
-                # Prosek Y za visoke temperature
-                high_temp_threshold = x_max * 0.8  # Zadnjih 20% opsega
-                high_temp_avg = cld_srt[cld_srt[x] >= high_temp_threshold][y].mean()
-                
-                # Zameni predikcije za visoke temperature prosekom
-                for i in range(len(lin_prd)):
-                    curr_x = cld_srt[x].iloc[i]
-                    if curr_x >= high_temp_threshold:
-                        lin_prd[i] = high_temp_avg
-                
-                # Loguj poslednjih nekoliko predikcija
-                logger.info("Last 5 points:")
-                for i in range(-5, 0):
-                    logger.info(f"X: {cld_srt[x].iloc[i]}, Y: {cld_srt[y].iloc[i]}, Pred: {lin_prd[i]}")
-                
-                # Izračunaj granice sa validacijom
-                upper_bound, lower_bound = calculate_bounds(lin_prd, TR, TOL_CNT, TOL_DEP)
-                
-                # Ensure bounds are within reasonable limits and not zero
-                upper_bound = np.maximum(upper_bound, high_temp_avg * 1.2)  # At least 20% above average
-                lower_bound = np.maximum(lower_bound, high_temp_avg * 0.8)  # At least 20% below average
-                
-                # Get coefficients for equation
                 lin_fcn = f"y = {lin_mdl.coef_[0]:.2f}x + {lin_mdl.intercept_:.2f}"
-                print("Linear regression:", lin_fcn)
-                
-                # Calculate tolerance bounds
-                upper_bound, lower_bound = calculate_bounds(lin_prd, TR, TOL_CNT, TOL_DEP)
-                
-                # Filter points within tolerance
-                mask = (cld_srt[y] >= lower_bound) & (cld_srt[y] <= upper_bound)
+                logger.info(f"Linearna regresija: {lin_fcn}")
+
+                # Tolerancije i maskiranje kao u cloudOG.py
+                if TR == "cnt":
+                    upper_bound = lin_prd + TOL_CNT
+                    lower_bound = lin_prd - TOL_CNT
+                    mask = np.abs(cld_srt[y] - lin_prd) <= TOL_CNT
+                elif TR == "dep":
+                    upper_bound = lin_prd + TOL_DEP * np.abs(lin_prd) + TOL_CNT
+                    lower_bound = lin_prd - TOL_DEP * np.abs(lin_prd) - TOL_CNT
+                    mask = np.abs(cld_srt[y] - lin_prd) <= (np.abs(lin_prd) * TOL_DEP + TOL_CNT)
+                else:
+                    logger.error(f"Unknown tolerance type: {TR}")
+                    return jsonify({'success': False, 'data': {'error': f'Unknown tolerance type: {TR}'}}), 400
+
                 cld_srt_flt = cld_srt[mask]
-                
+
                 if len(cld_srt_flt) == 0:
-                    print(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
-                    print(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
+                    logger.warning(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
+                    logger.warning(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
                     return jsonify({
                         'error': 'No points within tolerance bounds. Try increasing the tolerance values.',
                         'min_y': float(cld_srt[y].min()),
@@ -488,8 +461,7 @@ def _process_data_frames(df1, df2, data):
                         'min_bound': float(lower_bound.min()),
                         'max_bound': float(upper_bound.max())
                     }), 400
-                
-                # Prepare response data
+
                 result_data = {
                     'x_values': cld_srt[x].tolist(),
                     'y_values': cld_srt[y].tolist(),
@@ -504,36 +476,38 @@ def _process_data_frames(df1, df2, data):
             except ValueError as ve:
                 return jsonify({'error': str(ve)}), 400
             except Exception as e:
-                print(f"Error in linear regression: {str(e)}")
+                logger.error(f"Error in linear regression: {str(e)}")
                 return jsonify({'error': f'Error in linear regression: {str(e)}'}), 500
         else:  # REG == "poly"
             try:
-                # Polynomial regression
+                # Polynomial regression (degree 2)
                 poly_features = PolynomialFeatures(degree=2)
                 X_poly = poly_features.fit_transform(cld_srt[[x]])
-                
                 poly_mdl = LinearRegression()
                 poly_mdl.fit(X_poly, cld_srt[y])
-                
-                # Generate predictions
                 poly_prd = poly_mdl.predict(X_poly)
-                
-                # Get coefficients for equation
                 coeffs = poly_mdl.coef_
                 intercept = poly_mdl.intercept_
                 poly_fcn = f"y = {coeffs[2]:.2f}x² + {coeffs[1]:.2f}x + {intercept:.2f}"
-                print("Polynomial regression:", poly_fcn)
-                
-                # Calculate tolerance bounds
-                upper_bound, lower_bound = calculate_bounds(poly_prd, TR, TOL_CNT, TOL_DEP)
-                
-                # Filter points within tolerance
-                mask = (cld_srt[y] >= lower_bound) & (cld_srt[y] <= upper_bound)
+                logger.info(f"Polynom-Regression (Grad 2): {poly_fcn}")
+
+                if TR == "cnt":
+                    upper_bound = poly_prd + TOL_CNT
+                    lower_bound = poly_prd - TOL_CNT
+                    mask = np.abs(cld_srt[y] - poly_prd) <= TOL_CNT
+                elif TR == "dep":
+                    upper_bound = poly_prd + TOL_DEP * np.abs(poly_prd) + TOL_CNT
+                    lower_bound = poly_prd - TOL_DEP * np.abs(poly_prd) - TOL_CNT
+                    mask = np.abs(cld_srt[y] - poly_prd) <= (np.abs(poly_prd) * TOL_DEP + TOL_CNT)
+                else:
+                    logger.error(f"Unknown tolerance type: {TR}")
+                    return jsonify({'success': False, 'data': {'error': f'Unknown tolerance type: {TR}'}}), 400
+
                 cld_srt_flt = cld_srt[mask]
-                
+
                 if len(cld_srt_flt) == 0:
-                    print(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
-                    print(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
+                    logger.warning(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
+                    logger.warning(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
                     return jsonify({
                         'error': 'No points within tolerance bounds. Try increasing the tolerance values.',
                         'min_y': float(cld_srt[y].min()),
@@ -541,8 +515,7 @@ def _process_data_frames(df1, df2, data):
                         'min_bound': float(lower_bound.min()),
                         'max_bound': float(upper_bound.max())
                     }), 400
-                
-                # Prepare response data
+
                 result_data = {
                     'x_values': cld_srt[x].tolist(),
                     'y_values': cld_srt[y].tolist(),
@@ -554,15 +527,14 @@ def _process_data_frames(df1, df2, data):
                     'equation': poly_fcn,
                     'removed_points': len(cld_srt) - len(cld_srt_flt)
                 }
-                
             except ValueError as ve:
                 return jsonify({'error': str(ve)}), 400
             except Exception as e:
-                print(f"Error in polynomial regression: {str(e)}")
+                logger.error(f"Error in polynomial regression: {str(e)}")
                 return jsonify({'error': f'Error in polynomial regression: {str(e)}'}), 500
 
         # Send response
-        print("Sending response:")
+        logger.info("Sending response:")
         return jsonify({'success': True, 'data': result_data})
         
     except Exception as e:
