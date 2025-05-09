@@ -38,6 +38,11 @@ app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
 
+# Health check endpoint
+@app.route('/health')
+def health():
+    return jsonify(status="ok"), 200
+
 @app.route('/')
 def index():
     try:
@@ -47,8 +52,8 @@ def index():
             'message': 'Backend service is running',
             'version': '1.0.0',
             'timestamp': str(dat.now()),
-            'port': os.environ.get('PORT', '5001'),
-            'env': os.environ.get('FLASK_ENV', 'development')
+            'port': os.environ.get('PORT', '8080'),
+            'env': os.environ.get('FLASK_ENV', 'production')
         })
     except Exception as e:
         logger.error(f"Error in index route: {e}")
@@ -56,4 +61,4 @@ def index():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=False)
