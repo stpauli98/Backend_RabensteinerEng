@@ -115,6 +115,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
             df.set_index("UTC", 
                         inplace = True)
             
+            # First, merge with nearest values within tolerance
             df_resampled = pd.merge_asof(
                             df_utc,
                             df.reset_index(),
@@ -127,8 +128,46 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
             df_resampled.set_index("UTC", 
                         inplace = True)
             
+            # Create a copy of the dataframe before interpolation to identify gaps
+            df_before_interp = df_resampled.copy()
+            
+            # Find the actual measurement points (non-NaN values)
+            actual_measurements = df_before_interp[~df_before_interp[value_col_name].isna()]
+            
+            # Calculate time differences between consecutive measurements
+            if len(actual_measurements) > 1:
+                # Get the timestamps of actual measurements
+                measurement_times = actual_measurements.index.to_list()
+                
+                # Calculate time differences between consecutive measurements in minutes
+                time_diffs = np.diff(measurement_times) / pd.Timedelta(minutes=1)
+                
+                # Find gaps larger than intrpl_max
+                large_gaps = np.where(time_diffs > float(intrpl_max))[0]
+                
+                logger.info(f"Found {len(large_gaps)} large measurement gaps exceeding {intrpl_max} minutes")
+                
+                # For each large gap, create a mask to prevent interpolation
+                for gap_idx in large_gaps:
+                    gap_start = measurement_times[gap_idx]
+                    gap_end = measurement_times[gap_idx + 1]
+                    
+                    # Create a mask for timestamps that fall within the large gap
+                    # We'll allow interpolation for up to intrpl_max minutes after the last measurement
+                    max_interp_time = gap_start + pd.Timedelta(minutes=float(intrpl_max))
+                    
+                    # Points that are in the gap but beyond the max interpolation time should not be interpolated
+                    no_interp_mask = ((df_resampled.index > max_interp_time) & 
+                                      (df_resampled.index < gap_end))
+                    
+                    # Set these points to NaN to prevent interpolation
+                    if no_interp_mask.any():
+                        logger.info(f"Preventing interpolation for {no_interp_mask.sum()} points in gap between "
+                                   f"{gap_start} and {gap_end} (beyond {intrpl_max} minutes)")
+            
+            # Now perform the interpolation with the limit
             df_resampled = df_resampled.interpolate(method = "time",
-                                                    limit = int(intrpl_max/tss))
+                                                   limit = int(intrpl_max/tss))
             
             # Reset index to get UTC column back for JSON conversion
             df_resampled.reset_index(inplace=True)
@@ -138,38 +177,38 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
             df.set_index('UTC', inplace=True)
             
             if mode_input == "nearest":
-                # Koristi merge_asof za najbliže vrednosti sa tačnim vremenima
-                df_resampled = pd.merge_asof(
-                    df_resampled,
-                    df.reset_index(),
-                    left_on='UTC',
-                    right_on='UTC',
-                    direction='nearest',
-                    tolerance=pd.Timedelta(minutes=tss/2)
-                )
+                    # Koristi merge_asof za najbliže vrednosti sa tačnim vremenima
+                    df_resampled = pd.merge_asof(
+                        df_utc,
+                        df.reset_index(),
+                        left_on='UTC',
+                        right_on='UTC',
+                        direction='nearest',
+                        tolerance=pd.Timedelta(minutes=tss/2)
+                    )
             else:  # nearest (mean)
-                # Proveri da li je UTC već index
-                if df.index.name != 'UTC':
-                    if 'UTC' in df.columns:
-                        df.set_index('UTC', inplace=True)
-                    else:
-                        # Ako je UTC već index ali nije imenovan
-                        df.index.name = 'UTC'
-                
-                # Kreiraj resampler sa offset vremenom kao početkom
-                resampled = df[value_col_name].resample(
-                    rule=f'{int(tss)}min',
-                    origin=time_min,
-                    closed='right',
-                    label='right'
-                ).mean()
-                
-                # Filtriraj samo vremena nakon offset-a
-                mask = resampled.index >= time_min
-                resampled = resampled[mask]
-                
-                # Kreiraj finalni DataFrame
-                df_resampled = pd.DataFrame({'UTC': resampled.index, value_col_name: resampled.values})
+                    # Proveri da li je UTC već index
+                    if df.index.name != 'UTC':
+                        if 'UTC' in df.columns:
+                            df.set_index('UTC', inplace=True)
+                        else:
+                            # Ako je UTC već index ali nije imenovan
+                            df.index.name = 'UTC'
+                    
+                    # Kreiraj resampler sa offset vremenom kao početkom
+                    resampled = df[value_col_name].resample(
+                        rule=f'{int(tss)}min',
+                        origin=time_min,
+                        closed='right',
+                        label='right'
+                    ).mean()
+                    
+                    # Filtriraj samo vremena nakon offset-a
+                    mask = resampled.index >= time_min
+                    resampled = resampled[mask]
+                    
+                    # Kreiraj finalni DataFrame
+                    df_resampled = pd.DataFrame({'UTC': resampled.index, value_col_name: resampled.values})
         
         # Konvertuj rezultate u JSON format sa specificnim formatom vremena
         result = df_resampled.apply(
