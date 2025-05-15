@@ -230,12 +230,14 @@ def complete_redirect():
             # Process the data
             result = _process_data_frames(df1, df2, processing_params)
             
-            # Clean up the chunks
+            # Clean up chunks
             try:
-                import shutil
-                shutil.rmtree(chunk_dir)
-                del chunk_uploads[upload_id]
-                logger.info(f"Cleaned up chunk directory for upload {upload_id}")
+                chunk_dir = get_chunk_dir(upload_id)
+                if os.path.exists(chunk_dir):
+                    shutil.rmtree(chunk_dir)
+                if upload_id in chunk_uploads:
+                    del chunk_uploads[upload_id]
+                logger.info(f"Successfully cleaned up chunks for upload ID: {upload_id}")
             except Exception as e:
                 logger.warning(f"Error cleaning up chunks: {str(e)}")
 
@@ -970,11 +972,12 @@ def interpolate_chunked():
             
             # Clean up the chunks after processing
             try:
-                # Only remove the specific upload's directory, not the entire chunk directory
-                shutil.rmtree(chunk_dir)
-                logger.info(f"Cleaned up chunk directory for upload {upload_id}")
-                # Remove from memory
-                del chunk_uploads[upload_id]
+                chunk_dir = get_chunk_dir(upload_id)
+                if os.path.exists(chunk_dir):
+                    shutil.rmtree(chunk_dir)
+                if upload_id in chunk_uploads:
+                    del chunk_uploads[upload_id]
+                logger.info(f"Successfully cleaned up chunks for upload ID: {upload_id}")
             except Exception as e:
                 logger.warning(f"Error cleaning up chunks: {str(e)}")
         
@@ -994,35 +997,72 @@ def interpolate_chunked():
 @bp.route('/prepare-save', methods=['POST'])
 def prepare_save():
     """
-    Retrieve a previously generated chart image.
-    Očekuje se da image_id dođe iz request.json['image_id'].
-    Svi error odgovori su u formatu {'success': False, 'data': {'error': ...}}
+    Save data to a CSV file for download.
+    
+    Expected payload: {
+        'data': array of arrays (CSV data with headers and values),
+        'filename': string (optional, default is 'interpolated_data')
+    }
+    
+    Returns: {
+        'success': bool,
+        'fileId': string (ID for download endpoint),
+        'filename': string
+    }
     """
     try:
         data = request.json
-        if not data or 'image_id' not in data:
-            logger.error("No image_id provided in request.")
-            return jsonify({"success": False, "data": {"error": "No image_id provided in request."}}), 400
-        image_id = data['image_id']
-        logger.info(f"Received request for chart image with ID: {image_id}")
-        logger.info(f"Available temp files: {list(temp_files.keys())}")
-
-        if image_id not in temp_files:
-            logger.error(f"Image ID not found in temp_files: {image_id}")
-            return jsonify({"success": False, "data": {"error": "Image not found"}}), 404
-
-        file_info = temp_files[image_id]
-        file_path = file_info['path']
-        logger.info(f"Found image at path: {file_path}")
-
-        if not os.path.exists(file_path):
-            logger.error(f"Image file not found at path: {file_path}")
-            return jsonify({"success": False, "data": {"error": "Image file not found"}}), 404
-
-        return send_file(
-            file_path,
-            mimetype='image/png'
-        )
+        if not data:
+            logger.error("No data provided in request.")
+            return jsonify({"success": False, "data": {"error": "No data provided in request."}}), 400
+            
+        # Handle data saving request
+        if 'data' in data:
+            csv_data = data['data']
+            filename = data.get('filename', 'interpolated_data')
+            
+            if not isinstance(csv_data, list) or len(csv_data) == 0:
+                logger.error("Invalid data format for CSV")
+                return jsonify({"success": False, "data": {"error": "Invalid data format"}}), 400
+                
+            logger.info(f"Preparing CSV file with name: {filename}")
+            
+            # Create a temporary file to store the CSV data
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+            
+            try:
+                # Write the data to the CSV file
+                with open(temp_file.name, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    for row in csv_data:
+                        writer.writerow(row)
+                        
+                # Generate a unique file ID
+                file_id = f"csv_{datetime.now().strftime('%Y%m%d%H%M%S')}_{os.getpid()}"
+                
+                # Store the file info for later retrieval
+                temp_files[file_id] = {
+                    'path': temp_file.name,
+                    'filename': filename,
+                    'created_at': datetime.now().isoformat()
+                }
+                
+                logger.info(f"CSV file prepared with ID: {file_id}")
+                
+                return jsonify({
+                    "success": True,
+                    "fileId": file_id,
+                    "filename": filename
+                })
+                
+            except Exception as e:
+                # Clean up the temporary file if an error occurs
+                if os.path.exists(temp_file.name):
+                    os.unlink(temp_file.name)
+                raise e
+        else:
+            logger.error("No 'data' field provided in request")
+            return jsonify({"success": False, "data": {"error": "Missing 'data' field in request"}}), 400
     except Exception as e:
         logger.error(f"Error in prepare_save: {str(e)}")
         logger.error(traceback.format_exc())
