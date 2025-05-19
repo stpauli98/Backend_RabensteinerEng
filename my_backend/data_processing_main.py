@@ -1,568 +1,356 @@
 import pandas as pd
-from datetime import datetime
-import time
-from io import StringIO
 import numpy as np
-from flask import Blueprint, jsonify, send_file, request, Response
-import tempfile
-import csv
-import os
-import traceback
-import logging
+from datetime import datetime
+from flask import Blueprint, request, Response, jsonify, send_file
+import io
 import json
-
-# Create Blueprint
-bp = Blueprint('data_processing_main_bp', __name__)
+import csv
+import tempfile
+import os
+import math
+import logging
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Directory for temporary chunk storage
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
+bp = Blueprint('data_processing', __name__)
+UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "upload_chunks")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Dictionary to store temporary files
-temp_files = {}
-# Format for UTC dates
-UTC_fmt = "%Y-%m-%d %H:%M:%S"
+def clean_data(df, value_column, params):
+    logger.info("Starting data cleaning with parameters: %s", params)
+    df["UTC"] = pd.to_datetime(df["UTC"], format="%Y-%m-%d %H:%M:%S")
 
-@bp.route('/upload-chunk', methods=['POST'])
-def handle_upload_chunk():
-    try:
-        return upload_chunk(request)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    # ELIMINIERUNG VON MESSAUSFÄLLEN (GLEICHBLEIBENDE MESSWERTE)
+    if params.get("eqMax"):
+        logger.info("Eliminierung von Messausfällen (gleichbleibende Messwerte)")
+        eq_max = float(params["eqMax"])
+        frm = 0
+        for i in range(1, len(df)):
+            if df.iloc[i-1][value_column] == df.iloc[i][value_column] and frm == 0:
+                idx_strt = i-1
+                frm = 1
+            elif df.iloc[i-1][value_column] != df.iloc[i][value_column] and frm == 1:
+                idx_end = i-1
+                frm_width = (df.iloc[idx_end]["UTC"] - df.iloc[idx_strt]["UTC"]).total_seconds() / 60
+                if frm_width >= eq_max:
+                    for i_frm in range(idx_strt, idx_end+1):
+                        df.iloc[i_frm, df.columns.get_loc(value_column)] = "nan"
+                frm = 0
+            elif i == len(df)-1 and frm == 1:
+                idx_end = i
+                frm_width = (df.iloc[idx_end]["UTC"] - df.iloc[idx_strt]["UTC"]).total_seconds() / 60
+                if frm_width >= eq_max:
+                    for i_frm in range(idx_strt, idx_end+1):
+                        df.iloc[i_frm, df.columns.get_loc(value_column)] = "nan"
 
-def upload_chunk(req):
-    try:
-        # Validate parameters
-        upload_id = req.form.get('uploadId')
-        chunk_index = int(req.form.get('chunkIndex', '0') or '0')
-        total_chunks = int(req.form.get('totalChunks', '0') or '0')
-        
-        # Helper function to safely convert to float
-        def safe_float(value, default='0'):
+    # WERTE ÜBER DEM OBEREN GRENZWERT ENTFERNEN
+    if params.get("elMax"):
+        logger.info("Werte über dem oberen Grenzwert entfernen")
+        el_max = float(params["elMax"])
+        for i in range(len(df)):
             try:
-                return float(value) if value.strip() else float(default)
-            except (ValueError, AttributeError):
-                return float(default)
+                if float(df.iloc[i][value_column]) > el_max:
+                    df.iloc[i, df.columns.get_loc(value_column)] = "nan"
+            except:
+                df.iloc[i, df.columns.get_loc(value_column)] = "nan"
+
+    # WERTE UNTER DEM UNTEREN GRENZWERT ENTFERNEN
+    if params.get("elMin"):
+        logger.info("Werte unter dem unteren Grenzwert entfernen")
+        el_min = float(params["elMin"])
+        for i in range(len(df)):
+            try:
+                if float(df.iloc[i][value_column]) < el_min:
+                    df.iloc[i, df.columns.get_loc(value_column)] = "nan"
+            except:
+                df.iloc[i, df.columns.get_loc(value_column)] = "nan"
+
+    # ELIMINIERUNG VON NULLWERTEN
+    if params.get("radioValueNull") == "ja":
+        logger.info("Eliminierung von Nullwerten")
+        for i in range(len(df)):
+            if df.iloc[i][value_column] == 0:
+                df.iloc[i, df.columns.get_loc(value_column)] = "nan"
+
+    # ELIMINIERUNG VON NICHT NUMERISCHEN WERTEN
+    if params.get("radioValueNotNull") == "ja":
+        logger.info("Eliminierung von nicht numerischen Werten")
+        for i in range(len(df)):
+            try:
+                float(df.iloc[i][value_column])
+                if math.isnan(float(df.iloc[i][value_column])):
+                    df.iloc[i, df.columns.get_loc(value_column)] = "nan"
+            except:
+                df.iloc[i, df.columns.get_loc(value_column)] = "nan"
+
+    # ELIMINIERUNG VON AUSREISSERN
+    if params.get("chgMax") and params.get("lgMax"):
+        logger.info("Eliminierung von Ausreissern")
+        chg_max = float(params["chgMax"])
+        lg_max = float(params["lgMax"])
+        frm = 0
+        for i in range(1, len(df)):
+            if df.iloc[i][value_column] == "nan" and frm == 0:
+                pass
+            elif df.iloc[i][value_column] == "nan" and frm == 1:
+                idx_end = i-1
+                for i_frm in range(idx_strt, idx_end+1):
+                    df.iloc[i_frm, df.columns.get_loc(value_column)] = "nan"
+                frm = 0
+            elif df.iloc[i-1][value_column] == "nan":
+                pass
+            else:
+                chg = abs(float(df.iloc[i][value_column]) - float(df.iloc[i-1][value_column]))
+                t = (df.iloc[i]["UTC"] - df.iloc[i-1]["UTC"]).total_seconds() / 60
+                if chg/t > chg_max and frm == 0:
+                    idx_strt = i
+                    frm = 1
+                elif chg/t > chg_max and frm == 1:
+                    idx_end = i-1
+                    for i_frm in range(idx_strt, idx_end+1):
+                        df.iloc[i_frm, df.columns.get_loc(value_column)] = "nan"
+                    frm = 0
+                elif frm == 1 and (df.iloc[i]["UTC"] - df.iloc[idx_strt]["UTC"]).total_seconds() / 60 > lg_max:
+                    frm = 0
+
+    # SCHLIESSEN VON MESSLÜCKEN
+    if params.get("gapMax"):
+        logger.info("Schließen von Messlücken")
+        gap_max = float(params["gapMax"])
+        frm = 0
+        for i in range(1, len(df)):
+            if df.iloc[i][value_column] == "nan" and frm == 0:
+                idx_strt = i
+                frm = 1
+            elif df.iloc[i][value_column] != "nan" and frm == 1:
+                idx_end = i-1
+                frm_width = (df.iloc[idx_end+1]["UTC"] - df.iloc[idx_strt-1]["UTC"]).total_seconds() / 60
+                if frm_width <= gap_max:
+                    dif = float(df.iloc[idx_end+1][value_column]) - float(df.iloc[idx_strt-1][value_column])
+                    dif_min = dif/frm_width
+                    for i_frm in range(idx_strt, idx_end+1):
+                        gap_min = (df.iloc[i_frm]["UTC"] - df.iloc[idx_strt-1]["UTC"]).total_seconds() / 60
+                        df.iloc[i_frm, df.columns.get_loc(value_column)] = float(df.iloc[idx_strt-1][value_column]) + gap_min*dif_min
+                frm = 0
+
+    logger.info("Data cleaning completed")
+    return df
+
+@bp.route("/api/dataProcessingMain/upload-chunk", methods=["POST"])
+def upload_chunk():
+    try:
+        # Log the entire request for debugging
+        logger.info("=== Upload Chunk Request Details ===")
+        logger.info(f"Request method: {request.method}")
+        logger.info(f"Request headers: {dict(request.headers)}")
+        logger.info(f"Request form keys: {list(request.form.keys())}")
+        logger.info(f"Request files keys: {list(request.files.keys())}")
+        logger.info(f"Request content type: {request.content_type}")
         
-        # Convert form values to float, using 0 as default for empty or invalid values
-        EQ_MAX = safe_float(req.form.get('eqMax'))
-        CHG_MAX = safe_float(req.form.get('chgMax'))
-        LG_MAX = safe_float(req.form.get('lgMax'))
-        GAP_MAX = safe_float(req.form.get('gapMax'))
-        ELMAX = safe_float(req.form.get('elMax'))
-        ELMIN = safe_float(req.form.get('elMin'))
+        # Check if we have the required form fields
+        if not all(key in request.form for key in ["uploadId", "chunkIndex", "totalChunks"]):
+            missing_fields = [key for key in ["uploadId", "chunkIndex", "totalChunks"] if key not in request.form]
+            logger.error(f"Missing required fields: {missing_fields}")
+            return jsonify({"error": f"Missing required fields: {missing_fields}"}), 400
+
+        upload_id = request.form["uploadId"]
+        chunk_index = int(request.form["chunkIndex"])
+        total_chunks = int(request.form["totalChunks"])
         
-        # Get radio button values
-        EL0 = req.form.get('radioValueNull')
-        ELNN = req.form.get('radioValueNotNull')
+        logger.info(f"Processing chunk {chunk_index + 1}/{total_chunks} for upload {upload_id}")
+        
+        # Check if we have the file chunk
+        if 'fileChunk' not in request.files:
+            logger.error("No fileChunk in request.files")
+            return jsonify({"error": "No file chunk provided"}), 400
+            
+        file_chunk = request.files['fileChunk']
+        if file_chunk.filename == '':
+            logger.error("Empty filename in fileChunk")
+            return jsonify({"error": "Empty filename"}), 400
 
-        # Convert radio button values
-        EL0 = 1 if EL0 == "ja" else 0
-        ELNN = 1 if ELNN == "ja" else 0
+        # Read the chunk
+        chunk = file_chunk.read()
+        chunk_size = len(chunk)
+        logger.info(f"Received chunk size: {chunk_size} bytes")
+        
+        if chunk_size == 0:
+            logger.error("Received empty chunk")
+            return jsonify({"error": "Empty chunk received"}), 400
 
-        # If upload_id is provided, it's a chunk upload
-        if upload_id:
-            if 'fileChunk' not in req.files:
-                return jsonify({"error": "Chunk file not found"}), 400
+        # Create upload directory
+        upload_dir = os.path.join(UPLOAD_FOLDER, upload_id)
+        os.makedirs(upload_dir, exist_ok=True)
+        chunk_path = os.path.join(upload_dir, f"chunk_{chunk_index:04d}.part")
+        
+        # Save the chunk
+        with open(chunk_path, "wb") as f:
+            f.write(chunk)
+            
+        logger.info(f"Saved chunk to {chunk_path}")
 
-            chunk = req.files['fileChunk']
-            if not chunk:
-                return jsonify({"error": "Empty chunk received"}), 400
+        if chunk_index < total_chunks - 1:
+            logger.info(f"Chunk {chunk_index + 1}/{total_chunks} processed successfully")
+            return jsonify({"status": "chunk received", "chunkIndex": chunk_index})
 
-            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-            chunk_filename = os.path.join(UPLOAD_FOLDER, f"{upload_id}_{chunk_index}.chunk")
-            chunk.save(chunk_filename)
-            received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith(upload_id + "_")]
-            if len(received_chunks) == total_chunks:
-                chunks_sorted = sorted(received_chunks, key=lambda x: int(x.split("_")[1].split(".")[0]))
-                full_content = ""
-                try:
-                    for chunk_file in chunks_sorted:
-                        chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
-                        with open(chunk_path, 'rb') as f:
-                            full_content += f.read().decode('utf-8')
-                        os.remove(chunk_path)
-                except Exception as e:
-                    for cf in chunks_sorted:
-                        try:
-                            os.remove(os.path.join(UPLOAD_FOLDER, cf))
-                        except Exception:
-                            pass
-                    return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+        # Combine all chunks
+        logger.info("Starting to combine all chunks")
+        all_bytes = bytearray()
+        total_size = 0
+        
+        for i in range(total_chunks):
+            part_path = os.path.join(upload_dir, f"chunk_{i:04d}.part")
+            if not os.path.exists(part_path):
+                logger.error(f"Missing chunk file: {part_path}")
+                return jsonify({"error": f"Missing chunk file: {i}"}), 400
+                
+            with open(part_path, "rb") as f:
+                chunk_data = f.read()
+                all_bytes.extend(chunk_data)
+                total_size += len(chunk_data)
+                logger.info(f"Read chunk {i+1}/{total_chunks}, size: {len(chunk_data)} bytes")
 
-                form_params = {
-                    'eqMax': str(EQ_MAX),
-                    'chgMax': str(CHG_MAX),
-                    'lgMax': str(LG_MAX),
-                    'gapMax': str(GAP_MAX),
-                    'elMax': str(ELMAX),
-                    'elMin': str(ELMIN),
-                    'radioValueNull': 'ja' if EL0 == 1 else 'nein',
-                    'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
-                }
-                mock_request = create_mock_request(form_params, full_content, 'combined_chunks.csv')
+        logger.info(f"Total combined size: {total_size} bytes")
+        
+        if total_size == 0:
+            logger.error("No data in combined chunks")
+            return jsonify({"error": "No data in combined chunks"}), 400
 
-                try:
-                    result = zweite_bearbeitung(mock_request)
-                    return result
-                except Exception as e:
-                    for cf in chunks_sorted:
-                        try:
-                            os.remove(os.path.join(UPLOAD_FOLDER, cf))
-                        except Exception:
-                            pass
-                    return jsonify({"error": f"Error processing chunks: {str(e)}"}), 400
+        # Process the combined data
+        try:
+            content = all_bytes.decode("utf-8")
+            lines = content.splitlines()
+            logger.info(f"Number of lines in file: {len(lines)}")
+            
+            if len(lines) < 2:
+                logger.error("File has less than 2 lines")
+                return jsonify({"error": "Invalid file format"}), 400
 
-            # Not all chunks received yet; return status
-            return jsonify({
-                "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
-                "uploadId": upload_id,
-                "chunkIndex": chunk_index,
-                "totalChunks": total_chunks,
-                "remainingChunks": total_chunks - len(received_chunks)
-            }), 200
+            separator = ";" if ";" in lines[0] else ","
+            header = lines[0].split(separator)
+            
+            if len(header) < 2:
+                logger.error("Invalid header format")
+                return jsonify({"error": "Invalid header format"}), 400
+                
+            value_column = header[1].strip()
+            data = [line.split(separator) for line in lines[1:] if line.strip()]
+            
+            if not data:
+                logger.error("No data rows found")
+                return jsonify({"error": "No data rows found"}), 400
 
-        else:
-            # Direct upload
-            if 'file' not in req.files:
-                return jsonify({"error": "Keine Datei gefunden"}), 400
-            file = req.files['file']
-            if not file:
-                return jsonify({"error": "Keine Datei gefunden"}), 400
-            file_content = file.stream.read().decode('utf-8')
-            const_form_params = {
-                'eqMax': str(EQ_MAX),
-                'chgMax': str(CHG_MAX),
-                'lgMax': str(LG_MAX),
-                'gapMax': str(GAP_MAX),
-                'elMax': str(ELMAX),
-                'elMin': str(ELMIN),
-                'radioValueNull': 'ja' if EL0 == 1 else 'nein',
-                'radioValueNotNull': 'ja' if ELNN == 1 else 'nein'
+            df = pd.DataFrame(data, columns=["UTC", value_column])
+            df[value_column] = pd.to_numeric(df[value_column].str.replace(",", "."), errors='coerce')
+
+            params = {
+                "eqMax": request.form.get("eqMax"),
+                "elMax": request.form.get("elMax"),
+                "elMin": request.form.get("elMin"),
+                "chgMax": request.form.get("chgMax"),
+                "lgMax": request.form.get("lgMax"),
+                "gapMax": request.form.get("gapMax"),
+                "radioValueNull": request.form.get("radioValueNull"),
+                "radioValueNotNull": request.form.get("radioValueNotNull")
             }
-            mock_request = create_mock_request(const_form_params, file_content, file.filename)
-            try:
-                result = zweite_bearbeitung(mock_request)
-                return result
-            except Exception as e:
-                return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
 
-    except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
+            logger.info("Processing parameters: %s", params)
+            logger.info(f"DataFrame shape: {df.shape}")
 
-def zweite_bearbeitung(req):
-    try:
-        file_key = 'file' if 'file' in req.files else 'fileChunk' if 'fileChunk' in req.files else None
-        if not file_key:
-            return jsonify({"error": "No file uploaded (neither 'file' nor 'fileChunk' found)"}), 400
+            df_clean = clean_data(df, value_column, params)
 
-        file = req.files[file_key]
-        file_content = file.stream.read().decode('utf-8')
-        if not file_content.strip():
-            return jsonify({"error": "Empty file content"}), 400
-
-        def safe_float(value):
-            if value and value.strip():
-                try:
-                    return float(value)
-                except ValueError:
-                    return None
-            return None
-
-        EQ_MAX = safe_float(req.form.get('eqMax'))
-        CHG_MAX = safe_float(req.form.get('chgMax'))
-        LG_MAX = safe_float(req.form.get('lgMax'))
-        GAP_MAX = safe_float(req.form.get('gapMax'))
-        ELMAX = safe_float(req.form.get('elMax'))
-        ELMIN = safe_float(req.form.get('elMin'))
-        EL0 = req.form.get('radioValueNull')
-        ELNN = req.form.get('radioValueNotNull')
-        EL0 = 1 if EL0 == "ja" else 0
-        ELNN = 1 if ELNN == "ja" else 0
-
-
-        content_lines = file_content.splitlines()
-        if not content_lines:
-            return jsonify({"error": "No data received"}), 400
-
-        first_line = content_lines[0].strip()
-        if not first_line:
-            return jsonify({"error": "Empty first line"}), 400
-
-        if ';' in first_line:
-            delimiter = ';'
-        elif ',' in first_line:
-            delimiter = ','
-        else:
-            return jsonify({"error": "No valid delimiter (comma or semicolon) found in data"}), 400
-
-        try:
-            cleaned_content = file_content.replace('\r', '').strip()
-            df = pd.read_csv(StringIO(cleaned_content),
-                             delimiter=delimiter,
-                             header=0,
-                             skipinitialspace=True,
-                             skip_blank_lines=True)
-            if df.empty:
-                return jsonify({"error": "No data found in file"}), 400
-            if len(df.columns) < 2:
-                return jsonify({"error": f"Data must have at least 2 columns, but found only {len(df.columns)}"}), 400
-
-            time_column = df.columns[0]
-            data_column = df.columns[1]
-
-            
-            # Convert to string and clean
-            df[data_column] = df[data_column].astype(str)
-            
-            
-            # Clean the data
-            df[data_column] = (df[data_column]
-                               .str.strip()
-                               .str.replace('\r', '')
-                               .str.replace('\n', '')
-                               .str.replace(',', '.'))
-            
-            # Convert to numeric
-            df[data_column] = pd.to_numeric(df[data_column], errors='coerce'    )
-            if df[data_column].isna().all():
-                return jsonify({"error": "Could not convert any values to numeric format"}), 400
-        except Exception as e:
-            err_msg = f"Error processing data: {str(e)}\n{traceback.format_exc()}"
-            return jsonify({"error": err_msg}), 400
-
-        # Konvertiraj stupac u numerički format (potrebno za daljnju obradu)
-        df.iloc[:, 1] = pd.to_numeric(df.iloc[:, 1], errors='coerce')
-
-        # Primjeni gornju i donju granicu samo ako su definirane (veće od 0)
-        try:
-            if ELMAX > 0:
-                df.iloc[:, 1] = df.iloc[:, 1].mask(df.iloc[:, 1] > ELMAX, np.nan)
+            def generate():
+                # First send total rows
+                yield json.dumps({"total_rows": len(df_clean)}) + "\n"
                 
-            if ELMIN > 0:
-                df.iloc[:, 1] = df.iloc[:, 1].mask(df.iloc[:, 1] < ELMIN, np.nan)
-        except Exception as e:
-            df.iloc[:, 1] = np.nan
-
-
-        if EQ_MAX is not None and EQ_MAX > 0:
-            
-            # Status des Identifikationsrahmens (frm...frame)
-            frm = 0
-            """
-                0...Im aktuellen Zeitschritt ist kein Identifikationsrahmen für
-                    gleichbleibende Messwerte offen
-                1...Im aktuellen Zeitschritt ist ein Identifikationsrahmen für 
-                    gleichbleibende Messwerte offen
-            """
-            
-            # Konvertuj vremenske kolone u datetime format za brže procesiranje
-            df[time_column] = pd.to_datetime(df[time_column])
-            
-            # Kreiraj masku za konstantne vrednosti
-            constant_mask = df[data_column].eq(df[data_column].shift())
-            
-            # Nađi početke konstantnih segmenata
-            segment_starts = constant_mask & ~constant_mask.shift(1, fill_value=False)
-            start_indices = segment_starts[segment_starts].index.tolist()
-            
-            # Ako postoje konstantni segmenti
-            if start_indices:
-                for start_idx in start_indices:
-                    # Nađi kraj trenutnog konstantnog segmenta
-                    end_mask = ~constant_mask[start_idx:]
-                    if end_mask.any():
-                        end_idx = end_mask.idxmax()
-                    else:
-                        end_idx = len(df) - 1
-                    
-                    # Izračunaj širinu segmenta u minutama
-                    segment_width = (df.loc[end_idx, time_column] - 
-                                   df.loc[start_idx, time_column]).total_seconds() / 60
-                    
-                    # Ako je segment prevelik, postavi vrednosti na NaN
-                    if segment_width >= EQ_MAX:
-                        df.loc[start_idx:end_idx, data_column] = np.nan
-                        
-            # Interpolacija se ne primenjuje na konstantne segmente
-            # Samo interpoliramo ostale praznine
-            non_constant_mask = ~constant_mask
-            if non_constant_mask.any():
-                df.loc[non_constant_mask, data_column] = df.loc[non_constant_mask, data_column].interpolate(
-                    method='linear',
-                    limit=10,
-                    limit_direction='both'
-                )
-
-
-
-       
-        ##############################################################################
-        # ELIMINIERUNG VON NULLWERTEN #################################################
-        ##############################################################################
-
-        if EL0 == 1:
-            
-            # Durchlauf des gesamten Datenrahmens
-            df.loc[df[data_column] == 0, data_column] = np.nan
-
-
-        ##############################################################################
-        # ELIMINIERUNG VON NICHT NUMERISCHEN WERTEN ###################################
-        ##############################################################################
-
-        if ELNN == 1:
-            
-            # Konvertuj kolonu u numerički format, nevalidne vrijednosti postaju NaN
-            df[data_column] = pd.to_numeric(df[data_column], errors='coerce')
-
-        ##############################################################################
-        # ELIMINIERUNG VON EXTREMEN ###################################################
-        ##############################################################################
-
-        if all(x is not None and x > 0 for x in [CHG_MAX, LG_MAX]):
-            
-            # Konvertuj vremenske kolone u datetime format
-            df[time_column] = pd.to_datetime(df[time_column])
-            
-            # Izračunaj promjene vrijednosti po jedinici vremena (rate of change)
-            value_changes = df[data_column].diff().abs()
-            time_diffs = df[time_column].diff().dt.total_seconds() / 60
-            change_rates = value_changes / time_diffs
-            
-            # Inicijaliziraj masku za označavanje NaN vrijednosti
-            nan_mask = pd.Series(False, index=df.index)
-            
-            # Nađi tačke gdje je rate of change veći od CHG_MAX
-            extreme_points = change_rates > CHG_MAX
-            
-            if extreme_points.any():
-                # Nađi početke segmenata sa ekstremnim promjenama
-                segment_starts = extreme_points & ~extreme_points.shift(1, fill_value=False)
-                start_indices = segment_starts[segment_starts].index.tolist()
+                # Process data in chunks of 1000 rows
+                chunk_size = 1000
+                for i in range(0, len(df_clean), chunk_size):
+                    chunk = df_clean.iloc[i:i + chunk_size].copy()
+                    # Convert UTC to string format
+                    chunk['UTC'] = chunk['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    # Log first 10 rows of the first chunk
+                    if i == 0:
+                        logger.info("First 10 rows of processed data:")
+                        # Create a copy for logging with string timestamps
+                        log_chunk = chunk.copy()
+                        logger.info(log_chunk.head(10).to_string())
+                    # Convert to dict and ensure all values are JSON serializable
+                    chunk_data = []
+                    for _, row in chunk.iterrows():
+                        record = {
+                            'UTC': row['UTC'],
+                            value_column: row[value_column] if pd.notnull(row[value_column]) else None
+                        }
+                        chunk_data.append(record)
+                    for record in chunk_data:
+                        yield json.dumps(record) + "\n"
                 
-                for start_idx in start_indices:
-                    # Nađi kraj trenutnog segmenta
-                    segment_end = (~extreme_points[start_idx:]).idxmax() if (~extreme_points[start_idx:]).any() else len(df) - 1
-                    
-                    # Izračunaj širinu segmenta u minutama
-                    segment_width = (df.loc[segment_end, time_column] - 
-                                   df.loc[start_idx, time_column]).total_seconds() / 60
-                    
-                    # Ako je segment širi od LG_MAX, označi ga za NaN
-                    if segment_width > LG_MAX:
-                        nan_mask.loc[start_idx:segment_end] = True
-                    
-                    # Ako nije širi od LG_MAX, ali ima ekstremne promjene,
-                    # označi samo tačke s ekstremnim promjenama
-                    else:
-                        nan_mask.loc[start_idx:segment_end] = extreme_points.loc[start_idx:segment_end]
-            
-            # Primijeni NaN masku na podatke
-            df.loc[nan_mask, data_column] = np.nan
+                # Send completion status
+                yield json.dumps({"status": "complete"}) + "\n"
 
-        ##############################################################################
-        # ELIMINIERUNG VON GAPS ######################################################
-        ##############################################################################
-
-        if GAP_MAX is not None and GAP_MAX > 0:
-
-            # Status des Identifikationsrahmens (frm...frame)
-            frm = 0
-            """
-                0...Im aktuellen Zeitschritt ist kein Identifikationsrahmen für
-                    Messlücken offen
-                1...Im aktuellen Zeitschritt ist ein Identifikationsrahmen für 
-                    Messlücken offen
-            """
-            
-            # Konvertuj vremenske kolone u datetime format za brže procesiranje
-            df[time_column] = pd.to_datetime(df[time_column], format=UTC_fmt)
-            
-            # Identifikuj početke praznina (gdje vrijednost postaje NaN)
-            gap_starts = df[data_column].isna() & df[data_column].shift(1).notna()
-            gap_start_indices = gap_starts[gap_starts].index
-            
-            # Identifikuj krajeve praznina (gdje vrijednost prestaje biti NaN)
-            gap_ends = df[data_column].notna() & df[data_column].shift(1).isna()
-            gap_end_indices = gap_ends[gap_ends].index
-            
-            # Procesiraj svaku prazninu
-            for start, end in zip(gap_start_indices, gap_end_indices):
-                if start >= end:
-                    continue
-                    
-                # Izračunaj širinu praznine u minutama
-                frm_width = (df.loc[end, time_column] - df.loc[start-1, time_column]).total_seconds() / 60
-                
-                # Primijeni linearnu interpolaciju ako je praznina dovoljno mala
-                if frm_width <= GAP_MAX:
-                    # Uzmi vrijednosti prije i poslije praznine
-                    start_val = df.loc[start-1, data_column]
-                    end_val = df.loc[end, data_column]
-                    
-                    # Izračunaj vremensku razliku za svaku tačku u praznini
-                    time_deltas = (df.loc[start:end-1, time_column] - df.loc[start-1, time_column]).dt.total_seconds() / 60
-                    
-                    # Izračunaj i primijeni linearnu interpolaciju
-                    slope = (end_val - start_val) / frm_width
-                    df.loc[start:end-1, data_column] = start_val + time_deltas * slope
-
-                    # Ende des Datensatzes ist erreicht und Identifikationsrahmen ist offen
+            return Response(generate(), mimetype="application/x-ndjson")
         
-        # === TIME-BASED INTERPOLATION ON A REGULAR GRID ===
-        # Parameters for the time grid
-        tss = float(req.form.get('tss', 1))  # Time step in minutes, provided by the user
-        intrpl_max = float(req.form.get('intrplMax', 10))  # Max gap (in minutes) for interpolation, provided by the user
 
-        # Prepare a regular time grid from the minimum to the maximum timestamp
-        df[time_column] = pd.to_datetime(df[time_column])
-        start_time = df[time_column].min()
-        end_time = df[time_column].max()
-        utc_grid = pd.date_range(start=start_time, end=end_time, freq=f'{int(tss)}min')
-        df_utc = pd.DataFrame({time_column: utc_grid})
-
-        # Merge the original data onto the regular time grid using nearest match within half the step size
-        df_for_merge = df[[time_column, data_column]].copy()
-        df_for_merge = df_for_merge.sort_values(time_column)
-        df_resampled = pd.merge_asof(
-            df_utc,
-            df_for_merge,
-            left_on=time_column,
-            right_on=time_column,
-            direction='nearest',
-            tolerance=pd.Timedelta(minutes=tss/2)
-        )
-        df_resampled.set_index(time_column, inplace=True)
-
-        # Perform time-based interpolation on the resampled data
-        df_resampled[data_column] = df_resampled[data_column].interpolate(
-            method='time',
-            limit=int(intrpl_max/tss)
-        )
-        df_resampled.reset_index(inplace=True)
-        df_resampled[time_column] = df_resampled[time_column].dt.strftime(UTC_fmt)
-        df_resampled = df_resampled.replace({np.nan: None})
-
-        def generate_chunks():
-            CHUNK_SIZE = 1000  # Number of rows per chunk in the stream
-            total_rows = len(df_resampled)
-            total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
-            # Send metadata as the first JSON object
-            yield json.dumps({
-                'total_rows': total_rows,
-                'total_chunks': total_chunks,
-                'chunk_size': CHUNK_SIZE,
-                'message': 'Daten werden gestreamt',
-                'type': 'metadata'
-            }, separators=(',', ':')) + '\n'
-            # Stream each chunk of data as a separate JSON line
-            for chunk_idx in range(total_chunks):
-                start_idx = chunk_idx * CHUNK_SIZE
-                end_idx = min(start_idx + CHUNK_SIZE, total_rows)
-                chunk_data = {
-                    'chunk_index': chunk_idx,
-                    'data': df_resampled.iloc[start_idx:end_idx].to_dict('records'),
-                    'type': 'data'
-                }
-                json_line = json.dumps(chunk_data, separators=(',', ':')) + '\n'
-                yield json_line
-            # Send a final message to indicate completion
-            yield json.dumps({
-                'message': 'Daten wurden erfolgreich verarbeitet',
-                'status': 'complete',
-                'type': 'complete'
-            }, separators=(',', ':')) + '\n'
-
-        return Response(
-            generate_chunks(),
-            mimetype='application/x-ndjson'
-        )
+        except Exception as e:
+            logger.error(f"Error processing data: {str(e)}")
+            return jsonify({"error": f"Error processing data: {str(e)}"}), 500
+            
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        logger.error(f"Error in upload_chunk: {str(e)}")
+        return jsonify({"error": f"Error in upload: {str(e)}"}), 500
 
-@bp.route('/prepare-save', methods=['POST'])
+@bp.route("/api/dataProcessingMain/prepare-save", methods=["POST"])
 def prepare_save():
     try:
-        data = request.json
-        if not data or 'data' not in data:
-            return jsonify({"error": "No data received"}), 400
-        data_wrapper = data['data']
-        save_data = data_wrapper.get('data', [])
-        file_name = data_wrapper.get('fileName', '')
-        if not save_data:
-            return jsonify({"error": "Empty data"}), 400
+        data = request.json.get("data")
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
 
-        # Kreiraj privremeni fajl i zapiši CSV podatke
-        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
-        writer = csv.writer(temp_file, delimiter=';')
-        for row in save_data:
-            writer.writerow(row)
-        temp_file.close()
+        file_name = data.get("fileName", "output.csv")
+        rows = data.get("data", [])
+        
+        if not rows:
+            return jsonify({"error": "No rows provided"}), 400
 
-         # Generiši jedinstveni ID na osnovu trenutnog vremena
-        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-        temp_files[file_id] = {
-            'path': temp_file.name,
-            'fileName': file_name or f"data_{file_id}.csv",  # Koristi poslato ime ili default
-            'timestamp': time.time()
-        }
-        return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
+        logger.info(f"Preparing to save file: {file_name} with {len(rows)} rows")
+
+        # Sanitize filename
+        safe_file_name = os.path.basename(file_name)
+        safe_file_name = safe_file_name.replace(" ", "_")
+        file_path = os.path.join(tempfile.gettempdir(), safe_file_name)
+
+        # Write CSV
+        with open(file_path, "w", newline='', encoding='utf-8') as f:
+            writer = csv.writer(f, delimiter=";")
+            for row in rows:
+                writer.writerow(row)
+
+        logger.info(f"File prepared successfully with ID: {safe_file_name}")
+        return jsonify({"fileId": safe_file_name})
+
     except Exception as e:
-        print(f"Error in prepare_save: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error preparing save: {str(e)}")
+        return jsonify({"error": f"Error preparing file: {str(e)}"}), 500
 
-@bp.route('/download/<file_id>', methods=['GET'])
+
+@bp.route("/api/dataProcessingMain/download/<file_id>", methods=["GET"])
 def download_file(file_id):
-    if file_id not in temp_files:
-        return jsonify({"error": "File not found"}), 404
-    file_info = temp_files[file_id]
-    file_path = file_info['path']
-    if not os.path.exists(file_path):
-        del temp_files[file_id]
-        return jsonify({"error": "File not found"}), 404
     try:
-        download_name = file_info['fileName']
-        response = send_file(
-            file_path,
+        path = os.path.join(tempfile.gettempdir(), file_id)
+        if not os.path.exists(path):
+            return jsonify({"error": "File not found"}), 404
+
+        logger.info(f"Sending file: {path}")
+        return send_file(
+            path,
             as_attachment=True,
-            download_name=download_name,
-            mimetype='text/csv'
+            download_name=file_id,
+            mimetype="text/csv"
         )
-        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
-        return response
+
     except Exception as e:
+        logger.error(f"Error downloading file: {str(e)}")
         return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
-    finally:
-        try:
-            os.unlink(file_path)
-            del temp_files[file_id]
-        except Exception as e:
-            return jsonify({"error": f"Error cleaning up temp file: {str(e)}"}), 500
-
-def create_mock_request(form_params, file_content, filename):
-    from werkzeug.datastructures import FileStorage
-    from io import BytesIO
-
-    class MockRequest:
-        def __init__(self):
-            self.files = {}
-            self.form = {}
-
-    mock_request = MockRequest()
-    mock_request.form = form_params
-    mock_request.files['file'] = FileStorage(
-        stream=BytesIO(file_content.encode('utf-8')),
-        filename=filename,
-        content_type='text/csv'
-    )
-    return mock_request
