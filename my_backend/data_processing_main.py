@@ -141,15 +141,9 @@ def clean_data(df, value_column, params):
 @bp.route("/api/dataProcessingMain/upload-chunk", methods=["POST"])
 def upload_chunk():
     try:
-        # Log the entire request for debugging
-        logger.info("=== Upload Chunk Request Details ===")
-        logger.info(f"Request method: {request.method}")
-        logger.info(f"Request headers: {dict(request.headers)}")
-        logger.info(f"Request form keys: {list(request.form.keys())}")
-        logger.info(f"Request files keys: {list(request.files.keys())}")
-        logger.info(f"Request content type: {request.content_type}")
-        
-        # Check if we have the required form fields
+        # Minimal logging for performance
+        logger.info(f"Processing chunk {request.form.get('chunkIndex')}/{request.form.get('totalChunks')}")
+
         if not all(key in request.form for key in ["uploadId", "chunkIndex", "totalChunks"]):
             missing_fields = [key for key in ["uploadId", "chunkIndex", "totalChunks"] if key not in request.form]
             logger.error(f"Missing required fields: {missing_fields}")
@@ -159,9 +153,6 @@ def upload_chunk():
         chunk_index = int(request.form["chunkIndex"])
         total_chunks = int(request.form["totalChunks"])
         
-        logger.info(f"Processing chunk {chunk_index + 1}/{total_chunks} for upload {upload_id}")
-        
-        # Check if we have the file chunk
         if 'fileChunk' not in request.files:
             logger.error("No fileChunk in request.files")
             return jsonify({"error": "No file chunk provided"}), 400
@@ -174,7 +165,6 @@ def upload_chunk():
         # Read the chunk
         chunk = file_chunk.read()
         chunk_size = len(chunk)
-        logger.info(f"Received chunk size: {chunk_size} bytes")
         
         if chunk_size == 0:
             logger.error("Received empty chunk")
@@ -188,11 +178,8 @@ def upload_chunk():
         # Save the chunk
         with open(chunk_path, "wb") as f:
             f.write(chunk)
-            
-        logger.info(f"Saved chunk to {chunk_path}")
 
         if chunk_index < total_chunks - 1:
-            logger.info(f"Chunk {chunk_index + 1}/{total_chunks} processed successfully")
             return jsonify({"status": "chunk received", "chunkIndex": chunk_index})
 
         # Combine all chunks
@@ -210,10 +197,7 @@ def upload_chunk():
                 chunk_data = f.read()
                 all_bytes.extend(chunk_data)
                 total_size += len(chunk_data)
-                logger.info(f"Read chunk {i+1}/{total_chunks}, size: {len(chunk_data)} bytes")
 
-        logger.info(f"Total combined size: {total_size} bytes")
-        
         if total_size == 0:
             logger.error("No data in combined chunks")
             return jsonify({"error": "No data in combined chunks"}), 400
@@ -222,7 +206,6 @@ def upload_chunk():
         try:
             content = all_bytes.decode("utf-8")
             lines = content.splitlines()
-            logger.info(f"Number of lines in file: {len(lines)}")
             
             if len(lines) < 2:
                 logger.error("File has less than 2 lines")
@@ -256,27 +239,24 @@ def upload_chunk():
                 "radioValueNotNull": request.form.get("radioValueNotNull")
             }
 
-            logger.info("Processing parameters: %s", params)
-            logger.info(f"DataFrame shape: {df.shape}")
-
             df_clean = clean_data(df, value_column, params)
 
             def generate():
                 # First send total rows
                 yield json.dumps({"total_rows": len(df_clean)}) + "\n"
                 
-                # Process data in chunks of 1000 rows
-                chunk_size = 1000
+                # Process data in larger chunks of 50000 rows
+                chunk_size = 50000
                 for i in range(0, len(df_clean), chunk_size):
+                    # Create a copy of the chunk and convert UTC in one step
                     chunk = df_clean.iloc[i:i + chunk_size].copy()
-                    # Convert UTC to string format
-                    chunk['UTC'] = chunk['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    chunk.loc[:, 'UTC'] = chunk['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    
                     # Log first 10 rows of the first chunk
                     if i == 0:
                         logger.info("First 10 rows of processed data:")
-                        # Create a copy for logging with string timestamps
-                        log_chunk = chunk.copy()
-                        logger.info(log_chunk.head(10).to_string())
+                        logger.info(chunk.head(10).to_string())
+                    
                     # Convert to dict and ensure all values are JSON serializable
                     chunk_data = []
                     for _, row in chunk.iterrows():
@@ -285,12 +265,14 @@ def upload_chunk():
                             value_column: row[value_column] if pd.notnull(row[value_column]) else None
                         }
                         chunk_data.append(record)
+                    
+                    # Yield all records in the chunk at once
                     for record in chunk_data:
                         yield json.dumps(record) + "\n"
                 
                 # Send completion status
                 yield json.dumps({"status": "complete"}) + "\n"
-
+                        
             return Response(generate(), mimetype="application/x-ndjson")
         
 
