@@ -657,221 +657,140 @@ def get_method_for_file(methods, filename):
     return None
 
 def apply_processing_method(df, col, method, time_step, offset, start_time, end_time, intrpl_max):
-    """Primena metode obrade na podatke"""
-    non_numeric_mask = ~pd.to_numeric(df[col], errors='coerce').notna() & ~df[col].isna()
-    if non_numeric_mask.any():
-        non_numeric_values = df.loc[non_numeric_mask, col].unique()
-    
-    # Ako nemamo time_step, vraćamo originalne podatke
-    if not time_step:
-        return df
-        
-    # Ako je metoda prazna, generiramo sve vremenske korake ali zadržavamo originalne podatke
-    if not method:
-        
-        # Određivanje vremenskog raspona
-        if start_time is None:
-            start_time = df_indexed.index.min()
-        else:
-            start_time = pd.to_datetime(start_time)
-            
-        if end_time is None:
-            end_time = df_indexed.index.max()
-        else:
-            end_time = pd.to_datetime(end_time)
-        
-        # Primena offseta ako je obezbeđen
-        if offset:
-            start_time = start_time + pd.Timedelta(minutes=offset)
-        
-        # Kreiranje novog indeksa sa zadatim time step-om
-        new_index = pd.date_range(start=start_time, end=end_time, freq=f'{time_step}min')
-    
-    # Izdvajamo UTC, relevantnu kolonu merenja i originalnu vrednost ako postoji
-    original_col = f"{col}_original"
-    columns_to_extract = ['UTC', col]
-    if original_col in df.columns:
-        columns_to_extract.append(original_col)
-    
-    df_single_col = df[columns_to_extract].copy()
-    
-    # Postavljamo UTC kao indeks
-    df_indexed = df_single_col.set_index('UTC')
-    
-    # Rešavanje duplikata u indeksu
-    if df_indexed.index.duplicated().any():
-        if method in ['mean', 'nearest (mean)']:
-            # Za metode koje koriste mean, grupišemo po UTC
-            df_indexed = df_indexed.groupby(level=0).mean()
-        else:
-            # Za ostale metode, uzimamo prvi zapis za svaki timestamp
-            df_indexed = df_indexed.loc[~df_indexed.index.duplicated(keep='first')]
-    
-    # Sortiranje indeksa
-    df_indexed = df_indexed.sort_index()
-    
-    # Određivanje vremenskog raspona
-    if start_time is None:
-        start_time = df_indexed.index.min()
-    else:
-        start_time = pd.to_datetime(start_time)
-        
-    if end_time is None:
-        end_time = df_indexed.index.max()
-    else:
-        end_time = pd.to_datetime(end_time)
-    
-    # Primena offseta ako je obezbeđen
-    if offset:
-        start_time = start_time + pd.Timedelta(minutes=offset)
-    
-    # Kreiranje novog indeksa sa zadatim time step-om
-    new_index = pd.date_range(start=start_time, end=end_time, freq=f'{time_step}min')
-    
-    # Primena odgovarajuće metode
-    if method == 'mean':
-        # Resample sa offsetom
-        resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[col].mean()
-        result_df = pd.DataFrame({
-            'UTC': resampled.index,
-            col: resampled.values
-        })
-        
-    elif method == 'max':
-        # Resample sa offsetom
-        resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[col].max()
-        result_df = pd.DataFrame({
-            'UTC': resampled.index,
-            col: resampled.values
-        })
-        
-    elif method == 'min':
-        # Resample sa offsetom
-        resampled = df_indexed.resample(f'{time_step}min', offset=f'{offset}min')[col].min()
-        result_df = pd.DataFrame({
-            'UTC': resampled.index,
-            col: resampled.values
-        })
-        
-    elif method == 'intrpl':
-        # === TIME-BASED INTERPOLATION ON A REGULAR GRID (like data_processing_main.py) ===
-        # Prepare UTC as datetime
-        df_indexed = df_single_col.set_index('UTC')
-        df_indexed.index = pd.to_datetime(df_indexed.index)
+    """
+    Refaktorisana verzija funkcije za primenu metoda obrade koja daje identične rezultate kao data_adapt4.py
+    """
+    import math
+    import statistics
+    import datetime
+    import numpy as np
+    import pandas as pd
 
-        # Prepare a regular time grid from start_time to end_time
-        if start_time is None:
-            start_time_grid = df_indexed.index.min()
-        else:
-            start_time_grid = pd.to_datetime(start_time)
-        if end_time is None:
-            end_time_grid = df_indexed.index.max()
-        else:
-            end_time_grid = pd.to_datetime(end_time)
-        utc_grid = pd.date_range(start=start_time_grid, end=end_time_grid, freq=f'{int(time_step)}min')
-        df_utc = pd.DataFrame({'UTC': utc_grid})
+    df['UTC'] = pd.to_datetime(df['UTC'])
+    df = df.sort_values('UTC').reset_index(drop=True)
 
-        # Merge the original data onto the regular time grid using nearest match within half the step size
-        df_for_merge = df_single_col.copy()
-        df_for_merge['UTC'] = pd.to_datetime(df_for_merge['UTC'])
-        df_for_merge = df_for_merge.sort_values('UTC')
-        df_resampled = pd.merge_asof(
-            df_utc,
-            df_for_merge,
-            left_on='UTC',
-            right_on='UTC',
-            direction='nearest',
-            tolerance=pd.Timedelta(minutes=time_step/2)
-        )
-        df_resampled.set_index('UTC', inplace=True)
+    t_strt = pd.to_datetime(start_time) if start_time else df['UTC'].min()
+    t_end = pd.to_datetime(end_time) if end_time else df['UTC'].max()
 
-        # Interpolate using method='time'
-        if intrpl_max is None:
-            logger.warning(f"'intrpl' method requires intrpl_max parameter. Using unlimited interpolation")
-            interpolated = df_resampled.interpolate(method='time', limit_direction='both')
+    tss = float(time_step)
+    ofst = float(offset)
+    t_ref = t_strt.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(minutes=ofst)
+    while t_ref < t_strt:
+        t_ref += datetime.timedelta(minutes=tss)
+
+    t_list = []
+    while t_ref <= t_end:
+        t_list.append(t_ref)
+        t_ref += datetime.timedelta(minutes=tss)
+
+    value_list = []
+    i2 = 0
+    direct = 1
+
+    for t_curr in t_list:
+        if method == 'mean':
+            print(f"Processing mean")
+            t_min = t_curr - datetime.timedelta(minutes=tss / 2)
+            t_max = t_curr + datetime.timedelta(minutes=tss / 2)
+            values = []
+            while i2 < len(df) and df['UTC'][i2] < t_min:
+                i2 += 1
+            idx_start = i2
+            while i2 < len(df) and df['UTC'][i2] <= t_max:
+                val = df.iloc[i2][col]
+                if pd.notna(val):
+                    values.append(val)
+                i2 += 1
+            value_list.append(statistics.mean(values) if values else float('nan'))
+
+        elif method in ['nearest', 'nearest (mean)']:
+            print(f"Processing nearest")
+            t_min = t_curr - datetime.timedelta(minutes=tss / 2)
+            t_max = t_curr + datetime.timedelta(minutes=tss / 2)
+            timestamps, values, deltas = [], [], []
+            while i2 < len(df) and df['UTC'][i2] < t_min:
+                i2 += 1
+            idx_start = i2
+            while i2 < len(df) and df['UTC'][i2] <= t_max:
+                val = df.iloc[i2][col]
+                if pd.notna(val):
+                    ts = df.iloc[i2]['UTC']
+                    delta = abs((t_curr - ts).total_seconds())
+                    timestamps.append(ts)
+                    values.append(val)
+                    deltas.append(delta)
+                i2 += 1
+            if values:
+                deltas_np = np.array(deltas)
+                min_delta = deltas_np.min()
+                idx_all = np.where(deltas_np == min_delta)[0]
+                if method == 'nearest':
+                    value_list.append(values[idx_all[0]])
+                else:
+                    grouped = [values[idx] for idx in idx_all]
+                    value_list.append(statistics.mean(grouped))
+            else:
+                value_list.append(float('nan'))
+
+        elif method in ['intrpl', 'nearest (max. delta)']:
+            print(f"Processing intrpl")
+            if direct == 1:
+                while i2 < len(df):
+                    if df['UTC'][i2] >= t_curr:
+                        if pd.notna(df.iloc[i2][col]):
+                            time_next = df.iloc[i2]['UTC']
+                            value_next = df.iloc[i2][col]
+                            break
+                    i2 += 1
+                else:
+                    value_list.append(float('nan'))
+                    i2 = 0
+                    direct = 1
+                    continue
+                direct = -1
+            if direct == -1:
+                j = i2
+                while j >= 0:
+                    if df['UTC'][j] <= t_curr:
+                        if pd.notna(df.iloc[j][col]):
+                            time_prior = df.iloc[j]['UTC']
+                            value_prior = df.iloc[j][col]
+                            break
+                    j -= 1
+                else:
+                    value_list.append(float('nan'))
+                    i2 = 0
+                    direct = 1
+                    continue
+                delta_t = (time_next - time_prior).total_seconds()
+                if delta_t == 0 or (value_prior == value_next and delta_t <= intrpl_max * 60):
+                    value_list.append(value_prior)
+                elif method == 'intrpl':
+                    if intrpl_max is not None and delta_t > intrpl_max * 60:
+                        value_list.append(float('nan'))
+                    else:
+                        delta_val = value_prior - value_next
+                        delta_prior = (t_curr - time_prior).total_seconds()
+                        value_list.append(value_prior - (delta_val / delta_t) * delta_prior)
+                elif method == 'nearest (max. delta)':
+                    if intrpl_max is not None and delta_t > intrpl_max * 60:
+                        value_list.append(float('nan'))
+                    else:
+                        d_prior = (t_curr - time_prior).total_seconds()
+                        d_next = (time_next - t_curr).total_seconds()
+                        value_list.append(value_prior if d_prior < d_next else value_next)
+                direct = 1
+
         else:
-            limit_periods = int(intrpl_max / time_step)
-            interpolated = df_resampled.interpolate(
-                method='time',
-                limit=limit_periods,
-                limit_direction='both'
-            )
-        interpolated.reset_index(inplace=True)
-        interpolated['UTC'] = interpolated['UTC'].dt.strftime(UTC_fmt)
-        result_df = interpolated[['UTC', col]]
-        
-    elif method == 'nearest':
-        # Prvo agregiramo duplikate
-        df_aggregated = df_indexed.groupby(level=0)[col].mean()
-        # Zatim reindex sa nearest metodom
-        resampled = df_aggregated.reindex(new_index, method='nearest')
-        result_df = pd.DataFrame({
-            'UTC': new_index,
-            col: resampled.values
-        })
-        
-    elif method == 'nearest (mean)':
-        # Prvo agregiramo duplikate
-        df_aggregated = df_indexed.groupby(level=0)[col].mean()
-        # Zatim reindex sa nearest metodom
-        nearest_vals = df_aggregated.reindex(new_index, method='nearest')
-        rolling_mean = nearest_vals.rolling(window=2, min_periods=1).mean()
-        result_df = pd.DataFrame({
-            'UTC': new_index,
-            col: rolling_mean.values
-        })
-        
-    elif method == 'nearest (max. delta)':
-        # Prvo agregiramo duplikate
-        df_aggregated = df_indexed.groupby(level=0)[col].mean()
-        
-        # Parametri za reindex
-        reindex_params = {'method': 'nearest'}
-        
-        # Dodajemo tolerance ako je intrpl_max definisan
-        if intrpl_max is not None:
-            reindex_params['tolerance'] = pd.Timedelta(minutes=intrpl_max)
-        
-        # Reindex sa nearest metodom i tolerancijom
-        nearest_vals = df_aggregated.reindex(new_index, **reindex_params)
-        
-        # Jednostavnija implementacija koja koristi tolerance parametar
-        # Vrednosti koje su dalje od tolerance će biti NaN
-        result_df = pd.DataFrame({
-            'UTC': new_index,
-            col: nearest_vals.values
-        })
-        
-    elif not method:
-        # Ako je metoda prazna, generiramo sve vremenske korake s originalnim podacima
-        
-        # Kreiramo novi DataFrame s pravilnim vremenskim koracima
-        result_df = pd.DataFrame(index=new_index)
-        result_df['UTC'] = result_df.index
-        
-        # Reindeksiramo originalne podatke na novi indeks
-        # Koristimo nearest metodu za reindeksiranje kako bismo sačuvali originalne vrijednosti
-        # ali ne popunjavamo praznine između - one ostaju NaN
-        if col in df_indexed.columns:
-            # Koristimo reindex bez metode kako bismo dobili NaN za nedostajuće vrijednosti
-            resampled = df_indexed[col].reindex(new_index)
-            result_df[col] = resampled
-        
-        # Ako imamo originalnu kolonu, također je reindeksiramo
-        original_col = f"{col}_original"
-        if original_col in df_indexed.columns:
-            original_resampled = df_indexed[original_col].reindex(new_index)
-            result_df[original_col] = original_resampled
-    else:
-        # Ako metoda nije prepoznata, vraćamo originalne podatke
-        result_df = df_single_col
-    
-    # Osiguravamo da imamo UTC kolonu
-    if 'index' in result_df.columns and 'UTC' not in result_df.columns:
-        result_df.rename(columns={'index': 'UTC'}, inplace=True)
-    
+            match = df[df['UTC'] == t_curr]
+            if not match.empty:
+                val = match.iloc[0][col]
+                value_list.append(val if pd.notna(val) else float('nan'))
+            else:
+                value_list.append(float('nan'))
+
+    result_df = pd.DataFrame({'UTC': t_list, col: value_list})
     return result_df
-
 # Kreiranje info zapisa za rezultate
 def create_info_record(df, col, filename, time_step, offset):
     """Kreiranje info zapisa za rezultate"""
