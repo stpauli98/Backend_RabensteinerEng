@@ -19,6 +19,8 @@ matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.patches import Polygon
+from datetime import datetime as dat
+
 
 # Create blueprint
 bp = Blueprint('cloud', __name__)
@@ -253,63 +255,43 @@ def complete_redirect():
         return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
 def interpolate_data(df1, df2, x_col, y_col, max_time_span):
-    """
-    Perform linear interpolation on the data within the specified time span.
-    Vraća interpolirani DataFrame i broj interpoliranih tačaka.
-    Svi logovi idu kroz logger, ne koristi se print.
-    """
-    try:
-        # Kombinuj podatke iz oba DataFrame-a
-        cld = pd.DataFrame()
-        cld['UTC'] = df1['UTC']
-        cld[x_col] = df1[x_col]
-        cld[y_col] = df2[y_col]
+    from datetime import datetime as dat
 
-        # Originalan broj tačaka
-        original_points = len(cld)
+    df = pd.DataFrame()
+    df['UTC'] = pd.to_datetime(df1['UTC'])
+    df['value'] = pd.to_numeric(df2[y_col], errors='coerce')
 
-        # Izbaci redove sa NaN vrednostima
-        cld = cld.dropna()
-        if cld.empty:
-            logger.error('No valid data points after combining datasets')
-            raise ValueError('No valid data points after combining datasets')
+    df = df.sort_values('UTC').reset_index(drop=True)
+    df_final = df.copy()
 
-        logger.info(f"Combined data shape: {cld.shape}")
+    # Identifikuj sve NaN blokove
+    i = 0
+    while i < len(df_final):
+        if pd.isna(df_final.at[i, 'value']):
+            i_start = i - 1
+            # Idi do kraja NaN bloka
+            while i < len(df_final) and pd.isna(df_final.at[i, 'value']):
+                i += 1
+            i_end = i
 
-        # Izračunaj vremenske razlike između tačaka
-        cld['time_diff'] = cld['UTC'].diff().dt.total_seconds() / 60  # u minutima
+            if i_start >= 0 and i < len(df_final):
+                t0 = df_final.at[i_start, 'UTC']
+                t1 = df_final.at[i, 'UTC']
+                delta_min = (t1 - t0).total_seconds() / 60
 
-        # Pronađi velike praznine (gaps)
-        large_gaps = cld[cld['time_diff'] > max_time_span].index
-        interpolated_points = 0
+                if delta_min <= max_time_span:
+                    y0 = df_final.at[i_start, 'value']
+                    y1 = df_final.at[i, 'value']
+                    dif_per_min = (y1 - y0) / delta_min
 
-        if len(large_gaps) > 0:
-            logger.info(f"Found {len(large_gaps)} gaps larger than {max_time_span} minutes")
-            # Podeli podatke na segmente gde su praznine prevelike
-            chunks = []
-            start_idx = 0
-            for gap_idx in large_gaps:
-                if gap_idx > start_idx:
-                    chunk = cld.loc[start_idx:gap_idx-1].copy()
-                    # Linearna interpolacija unutar segmenta
-                    interpolated_chunk = chunk.set_index('UTC').resample('1min').interpolate(method='linear')
-                    chunks.append(interpolated_chunk)
-                start_idx = gap_idx
-            # Dodaj poslednji segment
-            if start_idx < len(cld):
-                chunk = cld.loc[start_idx:].copy()
-                chunk = chunk.set_index('UTC').resample('1min').interpolate(method='linear')
-                chunks.append(chunk)
-            # Kombinuj sve segmente
-            cld_interpolated = pd.concat(chunks)
-            cld = cld_interpolated.reset_index()
-            interpolated_points = len(cld) - original_points
-            logger.info(f"After interpolation: {len(cld)} points (Added {interpolated_points} points)")
+                    for j in range(i_start + 1, i):
+                        dt_min = (df_final.at[j, 'UTC'] - t0).total_seconds() / 60
+                        df_final.at[j, 'value'] = y0 + dt_min * dif_per_min
+        else:
+            i += 1
 
-        return cld, interpolated_points
-    except Exception as e:
-        logger.error(f"Error in interpolation: {str(e)}")
-        raise
+    added_points = df_final['value'].isna().sum() - df['value'].isna().sum()
+    return df_final, added_points
 
 
 def _process_data_frames(df1, df2, data):
@@ -342,12 +324,20 @@ def _process_data_frames(df1, df2, data):
             return jsonify({'success': False, 'data': {'error': f'No valid load column found. Available columns: {df2.columns.tolist()}'}}), 400
 
         # Pretvori vreme u datetime i sortiraj
-        df1['UTC'] = pd.to_datetime(df1['UTC'], format="%Y-%m-%d %H:%M:%S")
-        df2['UTC'] = pd.to_datetime(df2['UTC'], format="%Y-%m-%d %H:%M:%S")
+        try:
+            df1['UTC'] = pd.to_datetime(df1['UTC'], format="%Y-%m-%d %H:%M:%S")
+            df2['UTC'] = pd.to_datetime(df2['UTC'], format="%Y-%m-%d %H:%M:%S")
+        except Exception as e:
+            logger.error(f"Error converting timestamps: {str(e)}")
+            return jsonify({'success': False, 'data': {'error': f'Error converting timestamps: {str(e)}'}}), 400
 
         # Pretvori podatke u numeričke vrednosti
-        df1[x] = pd.to_numeric(df1[x], errors='coerce')
-        df2[y] = pd.to_numeric(df2[y], errors='coerce')
+        try:
+            df1[x] = pd.to_numeric(df1[x], errors='coerce')
+            df2[y] = pd.to_numeric(df2[y], errors='coerce')
+        except Exception as e:
+            logger.error(f"Error converting numeric values: {str(e)}")
+            return jsonify({'success': False, 'data': {'error': f'Error converting numeric values: {str(e)}'}}), 400
 
         # Sortiraj po vremenu
         df1 = df1.sort_values('UTC')
@@ -357,18 +347,26 @@ def _process_data_frames(df1, df2, data):
         logger.info(f"Temperature range: {df1[x].min():.2f} to {df1[x].max():.2f} °C")
         logger.info(f"Load range before conversion: {df2[y].min():.2f} to {df2[y].max():.2f} kW")
 
-        # Ako je potrebno, konvertuj kW u W
-        if 'kw' in y.lower():
-            logger.info("Converting kW to W")
-            df2[y] = df2[y] * 1000
-            logger.info(f"Load range after conversion: {df2[y].min():.2f} to {df2[y].max():.2f} W")
+        # Merge instead of requiring identical timestamp sequences
+        try:
+            df_merged = pd.merge(df1[['UTC', x]], df2[['UTC', y]], on='UTC', how='inner')
+            if df_merged.empty:
+                logger.error("No matching timestamps found between files")
+                return jsonify({'success': False, 'data': {'error': 'No matching timestamps found between files. Please ensure both files have matching timestamps.'}}), 400
+        except Exception as e:
+            logger.error(f"Error merging dataframes: {str(e)}")
+            return jsonify({'success': False, 'data': {'error': f'Error merging dataframes: {str(e)}'}}), 400
 
-        # Proveri da li se vremena poklapaju
-        if not df1['UTC'].equals(df2['UTC']):
-            logger.warning("Time stamps don't match exactly")
-            logger.warning(f"Temperature times: {df1['UTC'].tolist()}")
-            logger.warning(f"Load times: {df2['UTC'].tolist()}")
-            return jsonify({'success': False, 'data': {'error': 'Time stamps in files do not match'}}), 400
+        # Log prvih nekoliko vremenskih oznaka iz oba fajla
+        logger.info(f"First few timestamps in first file: {df1['UTC'].head().tolist()}")
+        logger.info(f"First few timestamps in second file: {df2['UTC'].head().tolist()}")
+        
+        # Provera duplikata
+        df1_duplicates = df1['UTC'].duplicated().sum()
+        df2_duplicates = df2['UTC'].duplicated().sum()
+        if df1_duplicates > 0 or df2_duplicates > 0:
+            logger.error(f"Found duplicate timestamps: df1={df1_duplicates}, df2={df2_duplicates}")
+            return jsonify({'success': False, 'data': {'error': 'Duplicate timestamps found in data'}}), 400
 
         # Čišćenje i validacija podataka
         try:
@@ -414,10 +412,26 @@ def _process_data_frames(df1, df2, data):
 
         # Dohvati tolerancije
         try:
-            TOL_CNT = float(data.get('TOL_CNT', default_tol))
-            TOL_DEP = float(data.get('TOL_DEP', 0.1))  # 10% default za zavisnu toleranciju
-        except ValueError:
-            logger.warning("Using default tolerances due to invalid input")
+            # Konvertuj string u float i validiraj
+            TOL_CNT = float(data.get('TOL_CNT', str(default_tol)))
+            TOL_DEP = float(data.get('TOL_DEP', '0.1'))  # 10% default za zavisnu toleranciju
+            
+            # Match behavior of cloudOG.py (which halves TOL_CNT)
+            TOL_CNT = TOL_CNT / 2
+            
+            # Logiraj primljene vrijednosti
+            logger.info(f"Received tolerance values - TOL_CNT: {TOL_CNT}, TOL_DEP: {TOL_DEP}")
+            
+            # Validiraj da su vrijednosti pozitivne
+            if TOL_CNT <= 0:
+                logger.warning(f"Invalid TOL_CNT value: {TOL_CNT}, using default")
+                TOL_CNT = default_tol
+            if TOL_DEP <= 0:
+                logger.warning(f"Invalid TOL_DEP value: {TOL_DEP}, using default")
+                TOL_DEP = 0.1
+                
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Error parsing tolerance values: {str(e)}, using defaults")
             TOL_CNT = default_tol
             TOL_DEP = 0.1
         
@@ -426,7 +440,7 @@ def _process_data_frames(df1, df2, data):
             TOL_CNT = y_range * 0.1  # Postavi na 10% opsega
             logger.info(f"Adjusted tolerance to {TOL_CNT:.2f} (10% of data range)")
         
-        logger.info(f"Parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}")
+        logger.info(f"Final parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}")
         
         # Izvrši regresiju
         if REG == "lin":
@@ -438,15 +452,17 @@ def _process_data_frames(df1, df2, data):
                 lin_fcn = f"y = {lin_mdl.coef_[0]:.2f}x + {lin_mdl.intercept_:.2f}"
                 logger.info(f"Linearna regresija: {lin_fcn}")
 
-                # Tolerancije i maskiranje kao u cloudOG.py
+                # Tolerancije i maskiranje
                 if TR == "cnt":
                     upper_bound = lin_prd + TOL_CNT
                     lower_bound = lin_prd - TOL_CNT
                     mask = np.abs(cld_srt[y] - lin_prd) <= TOL_CNT
+                    logger.info(f"Using constant tolerance: {TOL_CNT}")
                 elif TR == "dep":
-                    upper_bound = lin_prd + TOL_DEP * np.abs(lin_prd) + TOL_CNT
-                    lower_bound = lin_prd - TOL_DEP * np.abs(lin_prd) - TOL_CNT
+                    upper_bound = lin_prd * (1 + TOL_DEP) + TOL_CNT
+                    lower_bound = lin_prd * (1 - TOL_DEP) - TOL_CNT
                     mask = np.abs(cld_srt[y] - lin_prd) <= (np.abs(lin_prd) * TOL_DEP + TOL_CNT)
+                    logger.info(f"Using dependent tolerance: {TOL_DEP} + {TOL_CNT}")
                 else:
                     logger.error(f"Unknown tolerance type: {TR}")
                     return jsonify({'success': False, 'data': {'error': f'Unknown tolerance type: {TR}'}}), 400
@@ -457,11 +473,14 @@ def _process_data_frames(df1, df2, data):
                     logger.warning(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
                     logger.warning(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
                     return jsonify({
-                        'error': 'No points within tolerance bounds. Try increasing the tolerance values.',
-                        'min_y': float(cld_srt[y].min()),
-                        'max_y': float(cld_srt[y].max()),
-                        'min_bound': float(lower_bound.min()),
-                        'max_bound': float(upper_bound.max())
+                        'success': False,
+                        'data': {
+                            'error': 'No points within tolerance bounds. Try increasing the tolerance values.',
+                            'min_y': float(cld_srt[y].min()),
+                            'max_y': float(cld_srt[y].max()),
+                            'min_bound': float(lower_bound.min()),
+                            'max_bound': float(upper_bound.max())
+                        }
                     }), 400
 
                 result_data = {
@@ -476,10 +495,10 @@ def _process_data_frames(df1, df2, data):
                     'removed_points': len(cld_srt) - len(cld_srt_flt)
                 }
             except ValueError as ve:
-                return jsonify({'error': str(ve)}), 400
+                return jsonify({'success': False, 'data': {'error': str(ve)}}), 400
             except Exception as e:
                 logger.error(f"Error in linear regression: {str(e)}")
-                return jsonify({'error': f'Error in linear regression: {str(e)}'}), 500
+                return jsonify({'success': False, 'data': {'error': f'Error in linear regression: {str(e)}'}}), 500
         else:  # REG == "poly"
             try:
                 # Polynomial regression (degree 2)
@@ -511,11 +530,14 @@ def _process_data_frames(df1, df2, data):
                     logger.warning(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
                     logger.warning(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
                     return jsonify({
-                        'error': 'No points within tolerance bounds. Try increasing the tolerance values.',
-                        'min_y': float(cld_srt[y].min()),
-                        'max_y': float(cld_srt[y].max()),
-                        'min_bound': float(lower_bound.min()),
-                        'max_bound': float(upper_bound.max())
+                        'success': False,
+                        'data': {
+                            'error': 'No points within tolerance bounds. Try increasing the tolerance values.',
+                            'min_y': float(cld_srt[y].min()),
+                            'max_y': float(cld_srt[y].max()),
+                            'min_bound': float(lower_bound.min()),
+                            'max_bound': float(upper_bound.max())
+                        }
                     }), 400
 
                 result_data = {
@@ -530,19 +552,19 @@ def _process_data_frames(df1, df2, data):
                     'removed_points': len(cld_srt) - len(cld_srt_flt)
                 }
             except ValueError as ve:
-                return jsonify({'error': str(ve)}), 400
+                return jsonify({'success': False, 'data': {'error': str(ve)}}), 400
             except Exception as e:
                 logger.error(f"Error in polynomial regression: {str(e)}")
-                return jsonify({'error': f'Error in polynomial regression: {str(e)}'}), 500
+                return jsonify({'success': False, 'data': {'error': f'Error in polynomial regression: {str(e)}'}}), 500
 
         # Send response
         logger.info("Sending response:")
         return jsonify({'success': True, 'data': result_data})
         
     except Exception as e:
-        print(f"Error in data processing: {str(e)}")
+        logger.error(f"Error in data processing: {str(e)}")
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
 # Route for handling chunked upload completion
 @bp.route('/clouddata', methods=['POST'])
@@ -611,57 +633,6 @@ def _process_data():
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
-
-    try:
-        logger.info("Received prepare_save request")
-        data = request.json
-        if not data or 'data' not in data:
-            logger.error("No data received in request")
-            return jsonify({"success": False, "error": "No data received"}), 400
-            
-        save_data = data['data']
-        if not save_data:
-            logger.error("Empty data received")
-            return jsonify({"success": False, "error": "Empty data"}), 400
-
-        # Get filename if provided, otherwise use default
-        filename = data.get('filename', 'interpolated_data')
-        logger.info(f"Using filename: {filename}")
-        logger.info(f"Processing {len(save_data)} rows of data")
-
-        # Create temporary file and write CSV data
-        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
-        writer = csv.writer(temp_file, delimiter=';')
-        
-        try:
-            for row in save_data:
-                writer.writerow(row)
-        except Exception as e:
-            logger.error(f"Error writing to CSV: {str(e)}")
-            os.unlink(temp_file.name)  # Clean up the file
-            raise
-            
-        temp_file.close()
-        logger.info(f"Successfully wrote data to temporary file: {temp_file.name}")
-
-        # Generate unique ID based on current time
-        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-        # Store both the file path and the custom filename
-        temp_files[file_id] = {
-            'path': temp_file.name,
-            'filename': filename
-        }
-        logger.info(f"Generated file ID: {file_id} for filename: {filename}")
-
-        return jsonify({
-            "success": True,
-            "message": "File prepared for download", 
-            "fileId": file_id
-        }), 200
-    except Exception as e:
-        logger.error(f"Error in prepare_save: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({"success": False, "error": str(e)}), 500
 
 # Route for handling chunked upload for interpolation
 @bp.route('/interpolate-chunked', methods=['POST'])
@@ -742,6 +713,8 @@ def interpolate_chunked():
                              sep=sep,
                              decimal=',',
                              engine='c')   # Brži C engine
+            
+            
         except Exception as e:
             logger.error(f"Error reading CSV file: {str(e)}")
             # Error: CSV parsiranje nije uspelo
