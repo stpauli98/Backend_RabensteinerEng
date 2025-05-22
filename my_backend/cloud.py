@@ -257,42 +257,80 @@ def complete_redirect():
 def interpolate_data(df1, df2, x_col, y_col, max_time_span):
     from datetime import datetime as dat
 
+    # Create a copy of the input data
     df = pd.DataFrame()
     df['UTC'] = pd.to_datetime(df1['UTC'])
     df['value'] = pd.to_numeric(df2[y_col], errors='coerce')
-
     df = df.sort_values('UTC').reset_index(drop=True)
+    
+    # Initialize final dataframe
     df_final = df.copy()
-
-    # Identifikuj sve NaN blokove
+    
+    # Find first non-NaN value
     i = 0
     while i < len(df_final):
         if pd.isna(df_final.at[i, 'value']):
-            i_start = i - 1
-            # Idi do kraja NaN bloka
-            while i < len(df_final) and pd.isna(df_final.at[i, 'value']):
-                i += 1
-            i_end = i
-
-            if i_start >= 0 and i < len(df_final):
-                t0 = df_final.at[i_start, 'UTC']
-                t1 = df_final.at[i, 'UTC']
-                delta_min = (t1 - t0).total_seconds() / 60
-
-                if delta_min <= max_time_span:
-                    y0 = df_final.at[i_start, 'value']
+            i += 1
+        else:
+            break
+    
+    if i == len(df_final):
+        logger.warning("No numeric data found for interpolation")
+        return df_final, 0
+    
+    # Initialize variables
+    frame = "non"
+    i_start = 0
+    
+    # Main processing loop
+    i = 0
+    while i < len(df_final):
+        # No frame open - look for NaN to start a frame
+        if frame == "non":
+            if pd.isna(df_final.at[i, 'value']):
+                i_start = i
+                frame = "open"
+            i += 1
+        # Frame is open - look for a number to close it
+        elif frame == "open":
+            if not pd.isna(df_final.at[i, 'value']):
+                # Calculate frame width in minutes
+                frame_width = (df_final.at[i, 'UTC'] - df_final.at[i_start-1, 'UTC']).total_seconds() / 60
+                
+                # Only interpolate if the gap is within max_time_span
+                if frame_width <= max_time_span:
+                    # Get the values for interpolation
+                    y0 = df_final.at[i_start-1, 'value']
                     y1 = df_final.at[i, 'value']
-                    dif_per_min = (y1 - y0) / delta_min
-
-                    for j in range(i_start + 1, i):
-                        dt_min = (df_final.at[j, 'UTC'] - t0).total_seconds() / 60
-                        df_final.at[j, 'value'] = y0 + dt_min * dif_per_min
+                    t0 = df_final.at[i_start-1, 'UTC']
+                    t1 = df_final.at[i, 'UTC']
+                    
+                    # Calculate the difference and rate of change
+                    y_diff = y1 - y0
+                    diff_per_min = y_diff / frame_width
+                    
+                    # Perform linear interpolation for each point in the gap
+                    for j in range(i_start, i):
+                        gap_min = (df_final.at[j, 'UTC'] - t0).total_seconds() / 60
+                        df_final.at[j, 'value'] = y0 + (gap_min * diff_per_min)
+                
+                frame = "non"
+                i += 1
+            else:
+                i += 1
         else:
             i += 1
-
-    added_points = df_final['value'].isna().sum() - df['value'].isna().sum()
+        
+        # Safety check to prevent infinite loops
+        if i >= len(df_final):
+            break
+    
+    # Calculate how many points were added (interpolated)
+    original_nans = df['value'].isna().sum()
+    final_nans = df_final['value'].isna().sum()
+    added_points = original_nans - final_nans
+    
     return df_final, added_points
-
 
 def _process_data_frames(df1, df2, data):
     """
@@ -807,15 +845,19 @@ def interpolate_chunked():
             resample_interval = '1min'  # Standardni 1-minutni interval
             logger.info(f"Using standard 1-minute intervals")
         
-        # Ensure load column is numeric before interpolation
+        # Replace the resampling section with this:
         if not pd.api.types.is_numeric_dtype(df_load['load']):
             logger.info("Converting load column to numeric before interpolation")
             df_load['load'] = pd.to_numeric(df_load['load'], errors='coerce')
-            
-        # Resample i interpolacija
-        limit = int(max_time_span)  # Convert to integer number of minutes
-        df2_resampled = df_load.resample(resample_interval).interpolate(method='linear', limit=limit)
         
+        # Define limit for interpolation
+        limit = int(max_time_span)  # Convert to integer number of minutes
+        logger.info(f"Using interpolation limit of {limit} minutes")
+            
+        # Instead of resampling, just interpolate at existing points
+        df2_resampled = df_load.copy()
+        df2_resampled['load'] = df_load['load'].interpolate(method='linear', limit=limit)
+
         # Reset index to get UTC back as a column
         df2_resampled.reset_index(inplace=True)
         
