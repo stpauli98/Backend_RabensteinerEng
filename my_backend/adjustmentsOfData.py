@@ -689,7 +689,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
 
     for t_curr in t_list:
         if method == 'mean':
-            print(f"Processing mean")
             t_min = t_curr - datetime.timedelta(minutes=tss / 2)
             t_max = t_curr + datetime.timedelta(minutes=tss / 2)
             values = []
@@ -704,7 +703,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
             value_list.append(statistics.mean(values) if values else float('nan'))
 
         elif method in ['nearest', 'nearest (mean)']:
-            print(f"Processing nearest")
             t_min = t_curr - datetime.timedelta(minutes=tss / 2)
             t_max = t_curr + datetime.timedelta(minutes=tss / 2)
             timestamps, values, deltas = [], [], []
@@ -733,7 +731,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
                 value_list.append(float('nan'))
 
         elif method in ['intrpl', 'nearest (max. delta)']:
-            print(f"Processing intrpl")
             if direct == 1:
                 while i2 < len(df):
                     if df['UTC'][i2] >= t_curr:
