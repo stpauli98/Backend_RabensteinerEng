@@ -68,8 +68,18 @@ def index():
 
 # Initialize the scheduler
 scheduler = BackgroundScheduler(daemon=True)
-# Schedule cleanup_old_files to run every 15 minutes
-scheduler.add_job(cleanup_old_files, 'interval', minutes=15, id='cleanup_job')
+
+# Create a wrapper function that runs cleanup_old_files within the app context
+def run_cleanup_with_app_context():
+    with app.app_context():
+        try:
+            result = cleanup_old_files()
+            logger.info(f"Scheduled cleanup completed: {result.get('message', 'No message')}")
+        except Exception as e:
+            logger.error(f"Error in scheduled cleanup: {str(e)}")
+
+# Schedule the wrapper function to run every 15 minutes
+scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=15, id='cleanup_job')
 # Start the scheduler
 scheduler.start()
 
