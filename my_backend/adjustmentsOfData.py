@@ -15,9 +15,6 @@ import json
 # Create Blueprint
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 
-# API prefix
-#API_PREFIX_ADJUSTMENTS_OF_DATA = '/api/adjustmentsOfData'
-
 # Configure temp upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -617,7 +614,7 @@ def complete_adjustment():
 
 # Pomoćne funkcije za obradu podataka
 def prepare_data(data, filename):
-    """Priprema podataka za obradu"""
+    """Priprema podataka za obraduuu"""
     # Kopiranje DataFrame-a
     df = data.copy()
     
