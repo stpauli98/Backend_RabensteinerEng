@@ -242,8 +242,15 @@ def upload_chunk():
             df_clean = clean_data(df, value_column, params)
 
             def generate():
+                # Create a custom JSON encoder to handle Pandas Timestamp objects
+                class CustomJSONEncoder(json.JSONEncoder):
+                    def default(self, obj):
+                        if isinstance(obj, pd.Timestamp):
+                            return obj.strftime('%Y-%m-%d %H:%M:%S')
+                        return super().default(obj)
+                
                 # First send total rows
-                yield json.dumps({"total_rows": len(df_clean)}) + "\n"
+                yield json.dumps({"total_rows": len(df_clean)}, cls=CustomJSONEncoder) + "\n"
                 
                 # Process data in larger chunks of 50000 rows
                 chunk_size = 50000
@@ -260,18 +267,23 @@ def upload_chunk():
                     # Convert to dict and ensure all values are JSON serializable
                     chunk_data = []
                     for _, row in chunk.iterrows():
+                        # Ensure UTC is a string, not a Timestamp object
+                        utc_value = row['UTC']
+                        if isinstance(utc_value, pd.Timestamp):
+                            utc_value = utc_value.strftime('%Y-%m-%d %H:%M:%S')
+                            
                         record = {
-                            'UTC': row['UTC'],
+                            'UTC': utc_value,
                             value_column: row[value_column] if pd.notnull(row[value_column]) else None
                         }
                         chunk_data.append(record)
                     
                     # Yield all records in the chunk at once
                     for record in chunk_data:
-                        yield json.dumps(record) + "\n"
+                        yield json.dumps(record, cls=CustomJSONEncoder) + "\n"
                 
                 # Send completion status
-                yield json.dumps({"status": "complete"}) + "\n"
+                yield json.dumps({"status": "complete"}, cls=CustomJSONEncoder) + "\n"
                         
             return Response(generate(), mimetype="application/x-ndjson")
         
