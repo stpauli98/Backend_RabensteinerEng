@@ -82,16 +82,20 @@ def cleanup_old_files():
             if not os.path.exists(file_info['path']):
                 del temp_files[file_id]
     
-        return jsonify({
+        # When called from scheduler, don't try to return a response
+        # Just log the results
+        logger.info(f"Cleaned up {deleted_count} files older than 5 minutes")
+        return {
             "success": success,
             "message": f"Cleaned up {deleted_count} files older than 5 minutes",
             "deleted_count": deleted_count,
             "errors": errors if errors else None
-        }), 200 if success else 500
+        }
                 
     except Exception as e:
         logger.error(f"Error in cleanup_old_files: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        # Don't use jsonify here as it requires app context
+        return {"error": str(e)}
 
 def allowed_file(filename):
     """Check if file has .csv extension"""
@@ -1039,6 +1043,3 @@ def download_file(file_id):
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        # Pokušaj očistiti privremeni fajl
-        cleanup_old_files()
