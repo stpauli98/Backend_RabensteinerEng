@@ -3,6 +3,7 @@ import logging
 from datetime import datetime as dat
 from flask import Flask, jsonify
 from flask_cors import CORS
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from firstProcessing import bp as first_processing_bp
 from load_row_data import bp as load_row_data_bp
@@ -10,6 +11,7 @@ from load_row_data import bp as load_row_data_bp
 from data_processing_main import bp as data_processing_bp
 
 from adjustmentsOfData import bp as adjustmentsOfData_bp
+from adjustmentsOfData import cleanup_old_files
 from cloud import bp as cloud_bp
 
 # Configure logging
@@ -63,6 +65,13 @@ def index():
         logger.error(f"Error in index route: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+# Initialize the scheduler
+scheduler = BackgroundScheduler(daemon=True)
+# Schedule cleanup_old_files to run every 15 minutes
+scheduler.add_job(cleanup_old_files, 'interval', minutes=15, id='cleanup_job')
+# Start the scheduler
+scheduler.start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)

@@ -549,11 +549,16 @@ def complete_adjustment():
             # Check if parameters match
             needs_processing = file_time_step != time_step or file_offset != offset
             
+            # Detaljno logovanje za dijagnostiku
+            logger.info(f"File: {filename}, needs_processing: {needs_processing}, file_time_step: {file_time_step}, requested_time_step: {time_step}, file_offset: {file_offset}, requested_offset: {offset}")
+            
             # Ako file treba obradu, provjerimo ima li metodu
             if needs_processing:
-                method = methods.get(filename, {})
-                method = method.get('method', '').strip() if isinstance(method, dict) else ''
+                method_info = methods.get(filename, {})
+                method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
                 has_valid_method = method and method in VALID_METHODS
+                
+                logger.info(f"File: {filename}, method: {method}, has_valid_method: {has_valid_method}")
                 
                 if not has_valid_method:
                     # Ako nemamo validnu metodu, tražimo je od korisnika
@@ -578,20 +583,30 @@ def complete_adjustment():
             # Get intrplMax for this file if available
             intrpl_max = intrpl_max_values.get(filename)
             
-            # Process the data - koristimo originalne parametre ako ne treba obradu
-            process_time_step = time_step if needs_processing else file_time_step
-            process_offset = offset if needs_processing else file_offset
-            
-            result_data, info_record = process_data_detailed(
-                dataframes[filename],
-                filename,
-                start_time,
-                end_time,
-                process_time_step,
-                process_offset,
-                methods,
-                intrpl_max
-            )
+            # Ako nema potrebe za obradom, direktno vrati podatke bez obrade
+            if not needs_processing:
+                logger.info(f"Skipping processing for {filename} as parameters match (timestep: {file_time_step}, offset: {file_offset})")
+                result_data, info_record = convert_data_without_processing(
+                    dataframes[filename],
+                    filename,
+                    file_time_step,
+                    file_offset
+                )
+            else:
+                # Process the data - koristimo originalne parametre ako ne treba obradu
+                process_time_step = time_step if needs_processing else file_time_step
+                process_offset = offset if needs_processing else file_offset
+                
+                result_data, info_record = process_data_detailed(
+                    dataframes[filename],
+                    filename,
+                    start_time,
+                    end_time,
+                    process_time_step,
+                    process_offset,
+                    methods,
+                    intrpl_max
+                )
             
             if result_data is not None:
                 all_results.extend(result_data)
@@ -846,6 +861,55 @@ def create_records(df, col, filename):
     
     return records
 
+def convert_data_without_processing(df, filename, time_step, offset):
+    """
+    Direktna konverzija podataka bez obrade kada su parametri isti.
+    Ova funkcija preskače kompletan proces obrade i samo konvertuje podatke u format
+    koji frontend očekuje, što značajno ubrzava proces kada nema potrebe za transformacijom.
+    """
+    try:
+        logger.info(f"Direct conversion without processing for {filename}")
+        
+        # Kopiranje DataFrame-a
+        df = df.copy()
+        
+        # Konverzija UTC kolone u datetime ako već nije
+        df['UTC'] = pd.to_datetime(df['UTC'])
+        
+        # Identifikacija kolona merenja
+        measurement_cols = [col for col in df.columns if col != 'UTC']
+        
+        # Ako nemamo kolone merenja, vratimo prazne rezultate
+        if not measurement_cols:
+            logger.warning(f"No measurement columns found for {filename}")
+            return [], None
+        
+        all_records = []
+        
+        # Obrada za svaku kolonu merenja
+        for col in measurement_cols:
+            # Direktno kreiranje zapisa bez transformacije podataka
+            records = create_records(df, col, filename)
+            all_records.extend(records)
+            
+            # Kreiranje info zapisa za prvu kolonu
+            if len(all_records) > 0 and not any(r.get('info_created') for r in all_records):
+                info_record = create_info_record(df, col, filename, time_step, offset)
+                return all_records, info_record
+        
+        # Ako nemamo zapise, vratimo prazne rezultate
+        if not all_records:
+            return [], None
+            
+        # Ako imamo više kolona, vratimo samo prvi info_record
+        info_record = create_info_record(df, measurement_cols[0], filename, time_step, offset)
+        return all_records, info_record
+        
+    except Exception as e:
+        logger.error(f"Error in convert_data_without_processing: {str(e)}")
+        traceback.print_exc()
+        return [], None
+
 # Glavna funkcija za obradu podataka sa detaljnim logovanjem
 def process_data_detailed(data, filename, start_time=None, end_time=None, time_step=None, offset=None, methods={}, intrpl_max=None):
     try:
@@ -858,12 +922,13 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         # 3. Dobijanje metode obrade za ovaj fajl
         method = get_method_for_file(methods, filename)
         
-        # Ako nemamo metodu, koristimo praznu metodu za generiranje svih vremenskih koraka
+        # Ako nemamo metodu, to je greška jer ako fajl treba obradu mora imati metodu
         if not method:
-            method = ''  # Prazna metoda će generirati sve vremenske korake
+            logger.warning(f"No processing method specified for {filename} but processing is required")
+            # Vraćamo prazne rezultate umesto da koristimo praznu metodu
+            return [], None
         
         # 4. Obrada podataka za svaku kolonu merenja
-        all_records = []
         all_info_records = []
         
         # Ako imamo samo jednu kolonu merenja, obrađujemo je direktno
