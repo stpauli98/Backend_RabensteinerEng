@@ -78,8 +78,8 @@ def run_cleanup_with_app_context():
         except Exception as e:
             logger.error(f"Error in scheduled cleanup: {str(e)}")
 
-# Schedule the wrapper function to run every 15 minutes
-scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=15, id='cleanup_job')
+# Schedule the wrapper function to run every 30 minutes
+scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='cleanup_job')
 # Start the scheduler
 scheduler.start()
 
