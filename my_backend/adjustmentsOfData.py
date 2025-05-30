@@ -48,7 +48,7 @@ def cleanup_old_files():
     errors = []
     deleted_count = 0
     current_time = time.time()
-    EXPIRY_TIME = 5 * 60  # 5 minutes in seconds
+    EXPIRY_TIME = 30 * 60  # 30 minutes in seconds
     
     # Get temp_uploads directory path
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp_uploads')
