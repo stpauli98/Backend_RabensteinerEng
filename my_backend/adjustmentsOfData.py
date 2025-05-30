@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
 # Constants
-UPLOAD_EXPIRY_TIME = 5 * 60  # 10 minuta u sekundama
+UPLOAD_EXPIRY_TIME = 60 * 60  # 10 minuta u sekundama
 
 
 # Dictionary to store DataFrames
@@ -48,7 +48,7 @@ def cleanup_old_files():
     errors = []
     deleted_count = 0
     current_time = time.time()
-    EXPIRY_TIME = 30 * 60  # 30 minutes in seconds
+    EXPIRY_TIME = 60 * 60  # 60 minutes in seconds
     
     # Get temp_uploads directory path
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp_uploads')
@@ -84,10 +84,10 @@ def cleanup_old_files():
     
         # When called from scheduler, don't try to return a response
         # Just log the results
-        logger.info(f"Cleaned up {deleted_count} files older than 5 minutes")
+        logger.info(f"Cleaned up {deleted_count} files older than 60 minutes")
         return {
             "success": success,
-            "message": f"Cleaned up {deleted_count} files older than 5 minutes",
+            "message": f"Cleaned up {deleted_count} files older than 60 minutes",
             "deleted_count": deleted_count,
             "errors": errors if errors else None
         }
