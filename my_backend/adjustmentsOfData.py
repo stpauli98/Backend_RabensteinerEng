@@ -633,7 +633,7 @@ def complete_adjustment():
 
 # Pomoćne funkcije za obradu podataka
 def prepare_data(data, filename):
-    """Priprema podataka za obraduuu"""
+    """Priprema podataka za obradu"""
     # Kopiranje DataFrame-a
     df = data.copy()
     
