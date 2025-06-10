@@ -9,6 +9,7 @@ from firstProcessing import bp as first_processing_bp
 from load_row_data import bp as load_row_data_bp
 #from data_processing_main import bp as data_processing_main_bp
 from data_processing_main import bp as data_processing_bp
+from training import bp as training_bp
 
 from adjustmentsOfData import bp as adjustmentsOfData_bp
 from adjustmentsOfData import cleanup_old_files
@@ -43,6 +44,8 @@ app.register_blueprint(load_row_data_bp, url_prefix='/api/loadRowData')
 app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
+
+app.register_blueprint(training_bp, url_prefix='/api/training')
 
 # Health check endpoint
 @app.route('/health')
