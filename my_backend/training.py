@@ -11,6 +11,7 @@ from werkzeug.utils import secure_filename
 import tempfile
 import glob
 import shutil
+from supabase_client import save_session_to_supabase
 
 # Configure logging
 logging.basicConfig(
@@ -532,6 +533,16 @@ def finalize_session():
         
         logger.info(f"Session {session_id} finalized with {file_count} files")
 
+        # Sačuvaj podatke sesije u Supabase
+        try:
+            supabase_result = save_session_to_supabase(session_id)
+            if supabase_result:
+                logger.info(f"Session {session_id} data saved to Supabase successfully")
+            else:
+                logger.warning(f"Failed to save session {session_id} data to Supabase")
+        except Exception as e:
+            logger.error(f"Error saving session data to Supabase: {str(e)}")
+            # Nastavi čak i ako Supabase spremanje ne uspije - ne blokiraj odgovor
         
         return jsonify({
             'success': True,
@@ -774,11 +785,23 @@ def init_session():
             'lastUpdated': datetime.now().isoformat()
         }
         
-        # Spremi metapodatke u datoteku
-        metadata_path = os.path.join(upload_dir, 'session_metadata.json')
-        with open(metadata_path, 'w') as f:
+        # Save session metadata
+        session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
+        with open(session_metadata_path, 'w') as f:
             json.dump(session_metadata, f, indent=2)
-        
+            
+        # Save session data to Supabase
+        try:
+            supabase_result = save_session_to_supabase(session_id)
+            if supabase_result:
+                logger.info(f"Session {session_id} data saved to Supabase successfully")
+            else:
+                logger.warning(f"Failed to save session {session_id} data to Supabase")
+        except Exception as e:
+            logger.error(f"Error saving session data to Supabase: {str(e)}")
+            # Continue even if Supabase save fails - don't block the response
+            
+        logger.info(f"Session {session_id} initialized successfully")
         return jsonify({
             'success': True,
             'sessionId': session_id,
