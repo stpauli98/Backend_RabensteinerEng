@@ -9,3 +9,5 @@ scikit-learn==1.4.0
 gunicorn==21.2.0
 matplotlib==3.8.2
 APScheduler==3.10.4
+supabase==2.3.3
+python-dotenv==1.0.1
