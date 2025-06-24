@@ -198,8 +198,8 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             "datenform": file_info.get("datenform", ""),
             "datenanpassung": file_info.get("datenanpassung", ""),
             "zeitschrittweite": file_info.get("zeitschrittweite", ""),
-            "zeitschrittweite_mittelwert": file_info.get("zeitschrittweiteMittelwert", ""),
-            "zeitschrittweite_min": file_info.get("zeitschrittweiteMin", ""),
+            "zeitschrittweite_mittelwert": file_info.get("zeitschrittweiteAvgValue", file_info.get("zeitschrittweiteMittelwert", "")),
+            "zeitschrittweite_min": file_info.get("zeitschrittweiteMinValue", file_info.get("zeitschrittweiteMin", "")),
             "skalierung": file_info.get("skalierung", "nein"),
             "skalierung_max": file_info.get("skalierungMax", ""),
             "skalierung_min": file_info.get("skalierungMin", ""),
@@ -242,6 +242,12 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
         # Log data being sent to Supabase
         logger.info(f"Attempting to save file data with ID {valid_uuid} to files table")
         logger.info(f"Data being sent: {json.dumps(data, default=str)}")
+        
+        # Posebno logiranje za zeitschrittweite vrijednosti
+        logger.info(f"zeitschrittweite_mittelwert value: {data['zeitschrittweite_mittelwert']}")
+        logger.info(f"zeitschrittweite_min value: {data['zeitschrittweite_min']}")
+        logger.info(f"Original values from frontend - zeitschrittweiteAvgValue: {file_info.get('zeitschrittweiteAvgValue', '')}, zeitschrittweiteMinValue: {file_info.get('zeitschrittweiteMinValue', '')}")
+        
         
         # Provjeri da li postoji kolona 'zeithorizont' u podacima
         if 'zeithorizont' in data:
