@@ -3,6 +3,7 @@ import json
 import logging
 import uuid
 import base64
+from datetime import datetime
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
@@ -54,16 +55,32 @@ def save_time_info(session_id: str, time_info: dict) -> bool:
         if not supabase:
             return False
             
-        # Prepare data for insertion
+        # Prepare data for insertion with all fields from the new schema - točno prema shemi tabele
         data = {
             "session_id": session_id,
+            # Vremenske komponente
             "jahr": time_info.get("jahr", False),
             "woche": time_info.get("woche", False),
             "monat": time_info.get("monat", False),
             "feiertag": time_info.get("feiertag", False),
             "lokalzeit": time_info.get("lokalzeit", False),
-            "land": time_info.get("land", ""),
-            "zeitzone": time_info.get("zeitzone", "")
+            
+            # Lokalizacija
+            "land": time_info.get("land"),
+            "zeitzone": time_info.get("zeitzone"),
+            
+            # Napredne opcije
+            "detaillierteberechnung": time_info.get("detaillierteBerechnung", False),
+            "datenform": time_info.get("datenform"),
+            
+            # Vremenski horizont
+            "zeithorizontstart": time_info.get("zeithorizontStart"),
+            "zeithorizontend": time_info.get("zeithorizontEnd"),
+            
+            # Skaliranje
+            "skalierung": time_info.get("skalierung"),
+            "skalierungmin": time_info.get("skalierungMin"),
+            "skalierungmax": time_info.get("skalierungMax")
         }
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
@@ -109,7 +126,9 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
         data = {
             "session_id": session_id,
             "eingabe": zeitschritte.get("eingabe", ""),
-            "ausgabe": zeitschritte.get("ausgabe", "")
+            "ausgabe": zeitschritte.get("ausgabe", ""),
+            "zeitschrittweite": zeitschritte.get("zeitschrittweite", ""),
+            "offset": zeitschritte.get("offset", "")
         }
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
@@ -163,31 +182,77 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             valid_uuid = str(uuid.uuid4())
             logger.info(f"Generated new UUID {valid_uuid} for file {file_info.get('fileName')}")
             
-        # Prepare data for insertion
+        # Prepare data for insertion/update - strogo prema shemi tabele files
+        # Pripremamo podatke točno prema shemi tabele files
         data = {
-            "id": valid_uuid,  # Koristimo validiran ili novi UUID
+            "id": valid_uuid,
             "session_id": session_id,
             "file_name": file_info.get("fileName", ""),
             "bezeichnung": file_info.get("bezeichnung", ""),
-            "utc_min": file_info.get("utcMin", None),
-            "utc_max": file_info.get("utcMax", None),
-            "zeitschrittweite": file_info.get("zeitschrittweite", ""),
             "min": file_info.get("min", ""),
             "max": file_info.get("max", ""),
-            "offsett": file_info.get("offset", ""),  # Ispravljena kolona iz offset u offsett
-            "datenpunkte": file_info.get("datenpunkte", ""),
+            "offsett": file_info.get("offset", ""),  # Ispravljen naziv
+            "datenpunkte": file_info.get("datenpunkte", ""), 
             "numerische_datenpunkte": file_info.get("numerischeDatenpunkte", ""),
             "numerischer_anteil": file_info.get("numerischerAnteil", ""),
             "datenform": file_info.get("datenform", ""),
-            "zeithorizont": file_info.get("zeithorizont", ""),
             "datenanpassung": file_info.get("datenanpassung", ""),
+            "zeitschrittweite": file_info.get("zeitschrittweite", ""),
             "zeitschrittweite_mittelwert": file_info.get("zeitschrittweiteMittelwert", ""),
             "zeitschrittweite_min": file_info.get("zeitschrittweiteMin", ""),
             "skalierung": file_info.get("skalierung", "nein"),
             "skalierung_max": file_info.get("skalierungMax", ""),
             "skalierung_min": file_info.get("skalierungMin", ""),
+            "zeithorizont_start": file_info.get("zeithorizontStart", ""),
+            "zeithorizont_end": file_info.get("zeithorizontEnd", ""),
+            "zeitschrittweite_transferierten_daten": file_info.get("zeitschrittweiteTransferiertenDaten", ""),
+            "offset_transferierten_daten": file_info.get("offsetTransferiertenDaten", ""),
+            "mittelwertbildung_uber_den_zeithorizont": file_info.get("mittelwertbildungÜberDenZeithorizont", "nein"),
+            "storage_path": file_info.get("storagePath", ""),
             "type": file_info.get("type", "")
         }
+        
+        # Posebno rukovanje timestamp poljima
+        utc_min = file_info.get("utcMin")
+        utc_max = file_info.get("utcMax")
+        if utc_min:
+            try:
+                # Parsiramo datetime objekt
+                dt_obj = datetime.fromisoformat(utc_min)
+                # Pretvaramo ga u string format koji PostgreSQL razumije
+                data["utc_min"] = dt_obj.isoformat(sep=' ', timespec='seconds')
+                logger.info(f"Successfully parsed utc_min: {data['utc_min']}")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid utcMin format: {utc_min}, error: {str(e)}")
+        else:
+            logger.info("No utc_min provided")
+            
+        if utc_max:
+            try:
+                # Parsiramo datetime objekt
+                dt_obj = datetime.fromisoformat(utc_max)
+                # Pretvaramo ga u string format koji PostgreSQL razumije
+                data["utc_max"] = dt_obj.isoformat(sep=' ', timespec='seconds')
+                logger.info(f"Successfully parsed utc_max: {data['utc_max']}")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid utcMax format: {utc_max}, error: {str(e)}")
+        else:
+            logger.info("No utc_max provided")
+            
+        # Log data being sent to Supabase
+        logger.info(f"Attempting to save file data with ID {valid_uuid} to files table")
+        logger.info(f"Data being sent: {json.dumps(data, default=str)}")
+        
+        # Provjeri da li postoji kolona 'zeithorizont' u podacima
+        if 'zeithorizont' in data:
+            logger.warning(f"Found 'zeithorizont' key in data which might cause issues")
+        
+        # Ispiši sve ključeve u podacima
+        logger.info(f"All keys in data: {list(data.keys())}")
+        
+        # Provjeri da li postoji kolona 'zeithorizont_start' i 'zeithorizont_end'
+        if 'zeithorizont_start' in data and 'zeithorizont_end' in data:
+            logger.info(f"Found both 'zeithorizont_start' and 'zeithorizont_end' keys in data")
         
         # Insert data into files table
         response = supabase.table("files").insert(data).execute()
