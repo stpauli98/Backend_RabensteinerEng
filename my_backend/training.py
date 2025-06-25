@@ -23,6 +23,39 @@ logger = logging.getLogger(__name__)
 # Create blueprint
 bp = Blueprint('training', __name__)
 
+def extract_file_metadata_fields(file_metadata):
+    """
+    Helper function to extract standardized file metadata fields from a file metadata dictionary.
+    
+    Args:
+        file_metadata: Dictionary containing file metadata
+        
+    Returns:
+        dict: Dictionary containing standardized file metadata fields
+    """
+    return {
+        'id': file_metadata.get('id', ''),
+        'fileName': file_metadata.get('fileName', ''),
+        'bezeichnung': file_metadata.get('bezeichnung', ''),
+        'utcMin': file_metadata.get('utcMin', ''),
+        'utcMax': file_metadata.get('utcMax', ''),
+        'zeitschrittweite': file_metadata.get('zeitschrittweite', ''),
+        'min': file_metadata.get('min', ''),
+        'max': file_metadata.get('max', ''),
+        'offset': file_metadata.get('offset', ''),
+        'datenpunkte': file_metadata.get('datenpunkte', ''),
+        'numerischeDatenpunkte': file_metadata.get('numerischeDatenpunkte', ''),
+        'numerischerAnteil': file_metadata.get('numerischerAnteil', ''),
+        'datenform': file_metadata.get('datenform', ''),
+        'zeithorizont': file_metadata.get('zeithorizont', ''),
+        'datenanpassung': file_metadata.get('datenanpassung', ''),
+        'zeitschrittweiteMittelwert': file_metadata.get('zeitschrittweiteMittelwert', ''),
+        'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
+        'skalierung': file_metadata.get('skalierung', ''),
+        'skalierungMax': file_metadata.get('skalierungMax', ''),
+        'skalierungMin': file_metadata.get('skalierungMin', '')
+    }
+
 def extract_file_metadata(session_id):
     """
     Extracts file metadata from session metadata.
@@ -50,30 +83,7 @@ def extract_file_metadata(session_id):
         for chunk in metadata:
             if 'params' in chunk and 'fileMetadata' in chunk['params']:
                 file_metadata = chunk['params']['fileMetadata']
-                
-                # Extract the fields we need
-                return {
-                    'id': file_metadata.get('id', ''),
-                    'fileName': file_metadata.get('fileName', ''),
-                    'bezeichnung': file_metadata.get('bezeichnung', ''),
-                    'utcMin': file_metadata.get('utcMin', ''),
-                    'utcMax': file_metadata.get('utcMax', ''),
-                    'zeitschrittweite': file_metadata.get('zeitschrittweite', ''),
-                    'min': file_metadata.get('min', ''),
-                    'max': file_metadata.get('max', ''),
-                    'offset': file_metadata.get('offset', ''),
-                    'datenpunkte': file_metadata.get('datenpunkte', ''),
-                    'numerischeDatenpunkte': file_metadata.get('numerischeDatenpunkte', ''),
-                    'numerischerAnteil': file_metadata.get('numerischerAnteil', ''),
-                    'datenform': file_metadata.get('datenform', ''),
-                    'zeithorizont': file_metadata.get('zeithorizont', ''),
-                    'datenanpassung': file_metadata.get('datenanpassung', ''),
-                    'zeitschrittweiteMittelwert': file_metadata.get('zeitschrittweiteMittelwert', ''),
-                    'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
-                    'skalierung': file_metadata.get('skalierung', ''),
-                    'skalierungMax': file_metadata.get('skalierungMax', ''),
-                    'skalierungMin': file_metadata.get('skalierungMin', '')
-                }
+                return extract_file_metadata_fields(file_metadata)
                 
         logger.error(f"No file metadata found for session {session_id}")
         return None
@@ -476,6 +486,94 @@ def upload_chunk():
         logger.error(f"Error processing chunk upload: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def update_session_metadata(session_id, data):
+    """
+    Update session metadata with finalization info from request data.
+    
+    Args:
+        session_id: ID of the session
+        data: Request data containing timeInfo and zeitschritte
+        
+    Returns:
+        dict: Updated metadata
+    """
+    existing_metadata = get_session_metadata_locally(session_id)
+    
+    finalization_metadata = {
+        **existing_metadata,  # Keep existing metadata
+        'finalized': True,
+        'finalizationTime': datetime.now().isoformat(),
+        'timeInfo': data.get('timeInfo', existing_metadata.get('timeInfo', {})),
+        'zeitschritte': data.get('zeitschritte', existing_metadata.get('zeitschritte', {}))
+    }
+    
+    save_session_metadata_locally(session_id, finalization_metadata)
+    return finalization_metadata
+
+def verify_session_files(session_id, metadata):
+    """
+    Verify files in the session directory and update metadata accordingly.
+    
+    Args:
+        session_id: ID of the session
+        metadata: Session metadata
+        
+    Returns:
+        tuple: (updated_metadata, file_count)
+    """
+    upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+    file_count = 0
+    files_metadata = metadata.get('files', [])
+    
+    # Ako nema metapodataka o datotekama, pokušaj ih pronaći u direktoriju
+    if not files_metadata:
+        for file_name in os.listdir(upload_dir):
+            if os.path.isfile(os.path.join(upload_dir, file_name)) and not file_name.endswith(('_metadata.json', '.json')) and '_' not in file_name:
+                file_count += 1
+                # Dodaj osnovne metapodatke o datoteci
+                files_metadata.append({
+                    'fileName': file_name,
+                    'createdAt': datetime.now().isoformat()
+                })
+    else:
+        # Provjeri postoje li datoteke navedene u metapodacima
+        for file_info in files_metadata:
+            filename = file_info.get('fileName')
+            if filename:
+                file_path = os.path.join(upload_dir, filename)
+                if os.path.exists(file_path):
+                    file_count += 1
+    
+    # Ažuriraj metapodatke o datotekama
+    metadata['files'] = files_metadata
+    
+    # Spremi ažurirane metapodatke
+    save_session_metadata_locally(session_id, metadata)
+    
+    return metadata, file_count
+
+def save_session_to_database(session_id):
+    """
+    Save session data to Supabase database.
+    
+    Args:
+        session_id: ID of the session
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        supabase_result = save_session_to_supabase(session_id)
+        if supabase_result:
+            logger.info(f"Session {session_id} data saved to Supabase successfully")
+            return True
+        else:
+            logger.warning(f"Failed to save session {session_id} data to Supabase")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving session data to Supabase: {str(e)}")
+        return False
+
 @bp.route('/finalize-session', methods=['POST'])
 def finalize_session():
     """Finalize a session after all files have been uploaded."""
@@ -486,63 +584,17 @@ def finalize_session():
             
         session_id = data['sessionId']
         
-        # Update session metadata with finalization info
-        existing_metadata = get_session_metadata_locally(session_id)
+        # 1. Update session metadata with finalization info
+        updated_metadata = update_session_metadata(session_id, data)
         
-        finalization_metadata = {
-            **existing_metadata,  # Keep existing metadata
-            'finalized': True,
-            'finalizationTime': datetime.now().isoformat(),
-            'timeInfo': data.get('timeInfo', existing_metadata.get('timeInfo', {})),
-            'zeitschritte': data.get('zeitschritte', existing_metadata.get('zeitschritte', {}))
-        }
-        
-        save_session_metadata_locally(session_id, finalization_metadata)
-        
-        # Logiraj osnovne informacije o sesiji
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-        
-        # Provjeri postoje li lokalno sastavljene datoteke i logiraj njihov broj
-        file_count = 0
-        files_metadata = finalization_metadata.get('files', [])
-        
-        # Ako nema metapodataka o datotekama, pokušaj ih pronaći u direktoriju
-        if not files_metadata:
-            for file_name in os.listdir(upload_dir):
-                if os.path.isfile(os.path.join(upload_dir, file_name)) and not file_name.endswith(('_metadata.json', '.json')) and '_' not in file_name:
-                    file_count += 1
-                    # Dodaj osnovne metapodatke o datoteci
-                    files_metadata.append({
-                        'fileName': file_name,
-                        'createdAt': datetime.now().isoformat()
-                    })
-        else:
-            # Provjeri postoje li datoteke navedene u metapodacima
-            for file_info in files_metadata:
-                filename = file_info.get('fileName')
-                if filename:
-                    file_path = os.path.join(upload_dir, filename)
-                    if os.path.exists(file_path):
-                        file_count += 1
-        
-        # Ažuriraj metapodatke o datotekama
-        finalization_metadata['files'] = files_metadata
-        
-        # Spremi ažurirane metapodatke
-        save_session_metadata_locally(session_id, finalization_metadata)
+        # 2. Verify files and update metadata
+        final_metadata, file_count = verify_session_files(session_id, updated_metadata)
         
         logger.info(f"Session {session_id} finalized with {file_count} files")
 
-        # Sačuvaj podatke sesije u Supabase
-        try:
-            supabase_result = save_session_to_supabase(session_id)
-            if supabase_result:
-                logger.info(f"Session {session_id} data saved to Supabase successfully")
-            else:
-                logger.warning(f"Failed to save session {session_id} data to Supabase")
-        except Exception as e:
-            logger.error(f"Error saving session data to Supabase: {str(e)}")
-            # Nastavi čak i ako Supabase spremanje ne uspije - ne blokiraj odgovor
+        # 3. Save session data to Supabase
+        # Nastavi čak i ako Supabase spremanje ne uspije - ne blokiraj odgovor
+        save_session_to_database(session_id)
         
         return jsonify({
             'success': True,
@@ -839,29 +891,8 @@ def get_all_files_metadata(session_id):
                         file_path = os.path.join(upload_dir, file_name) if file_name else None
                         
                         if file_path and os.path.exists(file_path):
-                            # Formatiraj metapodatke za frontend
-                            result.append({
-                                'id': file_metadata.get('id', ''),
-                                'fileName': file_metadata.get('fileName', ''),
-                                'bezeichnung': file_metadata.get('bezeichnung', ''),
-                                'utcMin': file_metadata.get('utcMin', ''),
-                                'utcMax': file_metadata.get('utcMax', ''),
-                                'zeitschrittweite': file_metadata.get('zeitschrittweite', ''),
-                                'min': file_metadata.get('min', ''),
-                                'max': file_metadata.get('max', ''),
-                                'offset': file_metadata.get('offset', ''),
-                                'datenpunkte': file_metadata.get('datenpunkte', ''),
-                                'numerischeDatenpunkte': file_metadata.get('numerischeDatenpunkte', ''),
-                                'numerischerAnteil': file_metadata.get('numerischerAnteil', ''),
-                                'datenform': file_metadata.get('datenform', ''),
-                                'zeithorizont': file_metadata.get('zeithorizont', ''),
-                                'datenanpassung': file_metadata.get('datenanpassung', ''),
-                                'zeitschrittweiteMittelwert': file_metadata.get('zeitschrittweiteMittelwert', ''),
-                                'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
-                                'skalierung': file_metadata.get('skalierung', ''),
-                                'skalierungMax': file_metadata.get('skalierungMax', ''),
-                                'skalierungMin': file_metadata.get('skalierungMin', '')
-                            })
+                            # Formatiraj metapodatke za frontend koristeći pomoćnu funkciju
+                            result.append(extract_file_metadata_fields(file_metadata))
                 
                 return jsonify({
                     'success': True,
@@ -904,28 +935,7 @@ def get_all_files_metadata(session_id):
                 file_metadata = params.get('fileMetadata', {})
                 
                 if file_metadata:
-                    files_metadata[file_name] = {
-                        'id': file_metadata.get('id', ''),
-                        'fileName': file_metadata.get('fileName', ''),
-                        'bezeichnung': file_metadata.get('bezeichnung', ''),
-                        'utcMin': file_metadata.get('utcMin', ''),
-                        'utcMax': file_metadata.get('utcMax', ''),
-                        'zeitschrittweite': file_metadata.get('zeitschrittweite', ''),
-                        'min': file_metadata.get('min', ''),
-                        'max': file_metadata.get('max', ''),
-                        'offset': file_metadata.get('offset', ''),
-                        'datenpunkte': file_metadata.get('datenpunkte', ''),
-                        'numerischeDatenpunkte': file_metadata.get('numerischeDatenpunkte', ''),
-                        'numerischerAnteil': file_metadata.get('numerischerAnteil', ''),
-                        'datenform': file_metadata.get('datenform', ''),
-                        'zeithorizont': file_metadata.get('zeithorizont', ''),
-                        'datenanpassung': file_metadata.get('datenanpassung', ''),
-                        'zeitschrittweiteMittelwert': file_metadata.get('zeitschrittweiteMittelwert', ''),
-                        'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
-                        'skalierung': file_metadata.get('skalierung', ''),
-                        'skalierungMax': file_metadata.get('skalierungMax', ''),
-                        'skalierungMin': file_metadata.get('skalierungMin', '')
-                    }
+                    files_metadata[file_name] = extract_file_metadata_fields(file_metadata)
         
         # Pretvori u listu za lakši prikaz u tablici
         result = list(files_metadata.values())
