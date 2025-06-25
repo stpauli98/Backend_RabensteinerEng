@@ -54,44 +54,122 @@ def save_time_info(session_id: str, time_info: dict) -> bool:
         supabase = get_supabase_client()
         if not supabase:
             return False
+        
+        logger.info(f"Processing time_info for session {session_id}")
+        logger.info(f"time_info keys: {list(time_info.keys())}")
             
-        # Prepare data for insertion with all fields from the new schema - točno prema shemi tabele
+        # Prepare data for insertion with the new JSONB structure
         data = {
             "session_id": session_id,
-            # Vremenske komponente
+            # Boolean flags for active categories
             "jahr": time_info.get("jahr", False),
             "woche": time_info.get("woche", False),
             "monat": time_info.get("monat", False),
             "feiertag": time_info.get("feiertag", False),
-            "lokalzeit": time_info.get("lokalzeit", False),
+            "tag": time_info.get("tag", False),  # New tag category
             
-            # Lokalizacija
-            "land": time_info.get("land"),
+            # Global timezone setting
             "zeitzone": time_info.get("zeitzone"),
             
-            # Napredne opcije
-            "detaillierteberechnung": time_info.get("detaillierteBerechnung", False),
-            "datenform": time_info.get("datenform"),
-            
-            # Vremenski horizont
-            "zeithorizontstart": time_info.get("zeithorizontStart"),
-            "zeithorizontend": time_info.get("zeithorizontEnd"),
-            
-            # Skaliranje
-            "skalierung": time_info.get("skalierung"),
-            "skalierungmin": time_info.get("skalierungMin"),
-            "skalierungmax": time_info.get("skalierungMax")
+            # JSONB structure for category-specific data
+            "category_data": {}
         }
+        
+        # Check if the time_info already has category_data structure
+        if "category_data" in time_info:
+            logger.info("Using existing category_data structure from input")
+            data["category_data"] = time_info["category_data"]
+            # Make sure boolean flags match the category_data
+            for category in time_info["category_data"]:
+                if category in ["jahr", "woche", "monat", "feiertag", "tag"]:
+                    data[category] = True
+        else:
+            # Build the category_data JSONB structure from old format
+            logger.info("Building category_data structure from old format")
+            category_data = {}
+            
+            # Only add data for active categories
+            if time_info.get("jahr", False):
+                category_data["jahr"] = {
+                    "detaillierteBerechnung": time_info.get("jahr_detaillierteBerechnung", False),
+                    "datenform": time_info.get("jahr_datenform", ""),
+                    "zeithorizontStart": time_info.get("jahr_zeithorizontStart", ""),
+                    "zeithorizontEnd": time_info.get("jahr_zeithorizontEnd", ""),
+                    "skalierung": time_info.get("jahr_skalierung", "nein"),
+                    "skalierungMin": time_info.get("jahr_skalierungMin", ""),
+                    "skalierungMax": time_info.get("jahr_skalierungMax", "")
+                }
+            
+            if time_info.get("monat", False):
+                category_data["monat"] = {
+                    "detaillierteBerechnung": time_info.get("monat_detaillierteBerechnung", False),
+                    "datenform": time_info.get("monat_datenform", ""),
+                    "zeithorizontStart": time_info.get("monat_zeithorizontStart", ""),
+                    "zeithorizontEnd": time_info.get("monat_zeithorizontEnd", ""),
+                    "skalierung": time_info.get("monat_skalierung", "nein"),
+                    "skalierungMin": time_info.get("monat_skalierungMin", ""),
+                    "skalierungMax": time_info.get("monat_skalierungMax", "")
+                }
+            
+            if time_info.get("woche", False):
+                category_data["woche"] = {
+                    "detaillierteBerechnung": time_info.get("woche_detaillierteBerechnung", False),
+                    "datenform": time_info.get("woche_datenform", ""),
+                    "zeithorizontStart": time_info.get("woche_zeithorizontStart", ""),
+                    "zeithorizontEnd": time_info.get("woche_zeithorizontEnd", ""),
+                    "skalierung": time_info.get("woche_skalierung", "nein"),
+                    "skalierungMin": time_info.get("woche_skalierungMin", ""),
+                    "skalierungMax": time_info.get("woche_skalierungMax", "")
+                }
+            
+            if time_info.get("tag", False):
+                category_data["tag"] = {
+                    "detaillierteBerechnung": time_info.get("tag_detaillierteBerechnung", False),
+                    "datenform": time_info.get("tag_datenform", ""),
+                    "zeithorizontStart": time_info.get("tag_zeithorizontStart", ""),
+                    "zeithorizontEnd": time_info.get("tag_zeithorizontEnd", ""),
+                    "skalierung": time_info.get("tag_skalierung", "nein"),
+                    "skalierungMin": time_info.get("tag_skalierungMin", ""),
+                    "skalierungMax": time_info.get("tag_skalierungMax", "")
+                }
+            
+            if time_info.get("feiertag", False):
+                category_data["feiertag"] = {
+                    "detaillierteBerechnung": time_info.get("feiertag_detaillierteBerechnung", False),
+                    "datenform": time_info.get("feiertag_datenform", ""),
+                    "zeithorizontStart": time_info.get("feiertag_zeithorizontStart", ""),
+                    "zeithorizontEnd": time_info.get("feiertag_zeithorizontEnd", ""),
+                    "skalierung": time_info.get("feiertag_skalierung", "nein"),
+                    "skalierungMin": time_info.get("feiertag_skalierungMin", ""),
+                    "skalierungMax": time_info.get("feiertag_skalierungMax", ""),
+                    "land": time_info.get("feiertag_land", "Deutschland")  # Special field for Feiertag
+                }
+            
+            # Add the category_data to the main data object
+            data["category_data"] = category_data
+        
+        # Detaljni logovi za praćenje podataka koji se šalju u bazu
+        logger.info(f"Sending time_info data to database for session {session_id}:")
+        logger.info(f"Boolean flags: jahr={data['jahr']}, monat={data['monat']}, woche={data['woche']}, tag={data['tag']}, feiertag={data['feiertag']}")
+        logger.info(f"Zeitzone: {data['zeitzone']}")
+        
+        # Log category_data structure
+        for category, category_values in data['category_data'].items():
+            logger.info(f"Category '{category}' data:")
+            for key, value in category_values.items():
+                logger.info(f"  - {key}: {value}")
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
         existing = supabase.table("time_info").select("*").eq("session_id", session_id).execute()
         
         if existing.data and len(existing.data) > 0:
             # Ako postoji, ažuriramo postojeći zapis
+            logger.info(f"Found existing time_info record for session {session_id}, updating...")
             response = supabase.table("time_info").update(data).eq("session_id", session_id).execute()
             logger.info(f"Updated existing time_info for session {session_id}")
         else:
             # Ako ne postoji, dodajemo novi zapis
+            logger.info(f"No existing time_info record found for session {session_id}, inserting new record...")
             response = supabase.table("time_info").insert(data).execute()
             logger.info(f"Inserted new time_info for session {session_id}")
         
@@ -357,6 +435,111 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
         logger.error(f"Error saving CSV file content: {str(e)}")
         return False
 
+def transform_time_info_to_new_format(time_info: dict) -> dict:
+    """
+    Transform old time information format to the new JSONB structure format.
+    
+    Args:
+        time_info: Dictionary containing time information in the old format
+        
+    Returns:
+        dict: Time information in the new format with category_data JSONB structure
+    """
+    logger.info("Starting transformation of time_info to new JSONB format")
+    logger.info(f"Input time_info keys: {list(time_info.keys())}")
+    
+    # Create a new dictionary with the base structure
+    new_time_info = {
+        "jahr": time_info.get("jahr", False),
+        "monat": time_info.get("monat", False),
+        "woche": time_info.get("woche", False),
+        "feiertag": time_info.get("feiertag", False),
+        "tag": time_info.get("tag", False),  # New category, default to False
+        "zeitzone": time_info.get("zeitzone", "")
+    }
+    
+    logger.info(f"Base structure created with flags: jahr={new_time_info['jahr']}, monat={new_time_info['monat']}, "
+               f"woche={new_time_info['woche']}, feiertag={new_time_info['feiertag']}, tag={new_time_info['tag']}")
+    
+    # Check if the time_info already has the new structure
+    if "category_data" in time_info:
+        logger.info("Input data already has category_data structure, using it directly")
+        new_time_info["category_data"] = time_info["category_data"]
+        logger.info(f"Categories in existing category_data: {list(time_info['category_data'].keys())}")
+        return new_time_info
+    
+    logger.info("Input data uses old format, transforming to new JSONB structure")
+    
+    # Build category_data for each active category using the old format
+    category_data = {}
+    
+    # Common fields from the old format
+    detaillierte_berechnung = time_info.get("detaillierteBerechnung", False)
+    datenform = time_info.get("datenform", "")
+    zeithorizont_start = time_info.get("zeithorizontStart", "")
+    zeithorizont_end = time_info.get("zeithorizontEnd", "")
+    skalierung = time_info.get("skalierung", "nein")
+    skalierung_min = time_info.get("skalierungMin", "")
+    skalierung_max = time_info.get("skalierungMax", "")
+    
+    logger.info(f"Common fields from old format: detaillierteBerechnung={detaillierte_berechnung}, "
+               f"datenform='{datenform}', zeithorizont_start='{zeithorizont_start}', "
+               f"zeithorizont_end='{zeithorizont_end}', skalierung='{skalierung}'")
+    
+    
+    # For each active category, create a category-specific entry
+    if new_time_info["jahr"]:
+        category_data["jahr"] = {
+            "detaillierteBerechnung": detaillierte_berechnung,
+            "datenform": datenform,
+            "zeithorizontStart": zeithorizont_start,
+            "zeithorizontEnd": zeithorizont_end,
+            "skalierung": skalierung,
+            "skalierungMin": skalierung_min,
+            "skalierungMax": skalierung_max
+        }
+    
+    if new_time_info["monat"]:
+        category_data["monat"] = {
+            "detaillierteBerechnung": detaillierte_berechnung,
+            "datenform": datenform,
+            "zeithorizontStart": zeithorizont_start,
+            "zeithorizontEnd": zeithorizont_end,
+            "skalierung": skalierung,
+            "skalierungMin": skalierung_min,
+            "skalierungMax": skalierung_max
+        }
+    
+    if new_time_info["woche"]:
+        category_data["woche"] = {
+            "detaillierteBerechnung": detaillierte_berechnung,
+            "datenform": datenform,
+            "zeithorizontStart": zeithorizont_start,
+            "zeithorizontEnd": zeithorizont_end,
+            "skalierung": skalierung,
+            "skalierungMin": skalierung_min,
+            "skalierungMax": skalierung_max
+        }
+    
+    # Tag is a new category, so it won't have data in the old format
+    
+    if new_time_info["feiertag"]:
+        category_data["feiertag"] = {
+            "detaillierteBerechnung": detaillierte_berechnung,
+            "datenform": datenform,
+            "zeithorizontStart": zeithorizont_start,
+            "zeithorizontEnd": zeithorizont_end,
+            "skalierung": skalierung,
+            "skalierungMin": skalierung_min,
+            "skalierungMax": skalierung_max,
+            "land": time_info.get("land", "Deutschland")  # Special field for Feiertag
+        }
+    
+    # Add the category_data to the new time_info
+    new_time_info["category_data"] = category_data
+    
+    return new_time_info
+
 def save_session_to_supabase(session_id: str) -> bool:
     """
     Save all session data to Supabase.
@@ -389,9 +572,19 @@ def save_session_to_supabase(session_id: str) -> bool:
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
             
-        # Save time info
+        # Save time info - transform to new format first
         if 'timeInfo' in metadata:
-            save_time_info(session_id, metadata['timeInfo'])
+            # Log the original structure for debugging
+            logger.info(f"Original timeInfo structure: {json.dumps(metadata['timeInfo'], indent=2)}")
+            
+            # Check if the timeInfo already has the new structure with category_data
+            if 'category_data' in metadata['timeInfo']:
+                logger.info("Using direct category_data structure from frontend")
+                save_time_info(session_id, metadata['timeInfo'])
+            else:
+                # Transform old format to new format with JSONB structure
+                transformed_time_info = transform_time_info_to_new_format(metadata['timeInfo'])
+                save_time_info(session_id, transformed_time_info)
             
         # Save zeitschritte
         if 'zeitschritte' in metadata:
