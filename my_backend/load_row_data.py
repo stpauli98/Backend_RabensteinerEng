@@ -270,13 +270,6 @@ def convert_to_utc(df, date_column, timezone='UTC'):
 @bp.route('/upload-chunk', methods=['POST'])
 def upload_chunk():
     try:
-        print("\n=== Request Form Data ===")
-        print(f"All form data: {dict(request.form)}")
-        
-        # Debug request.files
-        print("Files in request:", request.files)
-        print("fileChunk in request.files:", 'fileChunk' in request.files)
-        
         if 'fileChunk' not in request.files:
             return jsonify({"error": "Chunk file not found"}), 400
         
@@ -292,11 +285,9 @@ def upload_chunk():
         if upload_id not in chunk_storage:
             try:
                 selected_columns_str = request.form.get('selected_columns')
-                print(f"\nRaw selected_columns from form: {selected_columns_str}")
                 if not selected_columns_str:
                     return jsonify({"error": "selected_columns parameter is required"}), 400
                 selected_columns = json.loads(selected_columns_str)
-                print(f"Parsed selected_columns: {selected_columns}")
                 if not isinstance(selected_columns, dict):
                     return jsonify({"error": "selected_columns must be a JSON object"}), 400
                 
@@ -308,7 +299,7 @@ def upload_chunk():
                     'parameters': {
                         'delimiter': request.form.get('delimiter'),
                         'timezone': request.form.get('timezone', 'UTC'),
-                        'has_header': request.form.get('hasHeader', 'nein'),  # Direktno koristimo string vrijednost
+                        'has_header': request.form.get('hasHeader', 'nein'),
                         'selected_columns': selected_columns,
                         'custom_date_format': request.form.get('custom_date_format'),
                         'value_column_name': request.form.get('valueColumnName', '').strip(),
@@ -317,41 +308,25 @@ def upload_chunk():
                 }
             except json.JSONDecodeError as e:
                 return jsonify({"error": "Invalid JSON format for selected_columns"}), 400
-
         else:
-            # Update total_chunks if it has changed (frontend may recalculate)
             chunk_storage[upload_id]['total_chunks'] = max(chunk_storage[upload_id]['total_chunks'], total_chunks)
 
         file_chunk = request.files['fileChunk']
-        
-        # Debug fileChunk details
-        print("fileChunk filename:", request.files['fileChunk'].filename)
-        print("fileChunk content type:", request.files['fileChunk'].content_type)
-        
         chunk_content = file_chunk.read()
         chunk_storage[upload_id]['chunks'][chunk_index] = chunk_content
         chunk_storage[upload_id]['received_chunks'] += 1
         chunk_storage[upload_id]['last_activity'] = time.time()
         
-        # Emit upload progress after processing each chunk
         progress_percentage = int((chunk_index + 1) / chunk_storage[upload_id]['total_chunks'] * 100)
-        try:
-            socketio = get_socketio()
-            print("socketio object:", socketio)
-            print("socketio type:", type(socketio))
-            
-            socketio.emit('upload_progress', {
-                'uploadId': upload_id,
-                'fileName': request.files['fileChunk'].filename if 'fileChunk' in request.files else 'unknown',
-                'progress': progress_percentage,
-                'status': 'uploading',
-                'message': f'Processing chunk {chunk_index + 1}/{chunk_storage[upload_id]["total_chunks"]}'
-            }, room=upload_id)
-            print("Event emitted successfully")
-        except Exception as e:
-            print(f"Error emitting event: {str(e)}")
+        socketio = get_socketio()
+        socketio.emit('upload_progress', {
+            'uploadId': upload_id,
+            'fileName': file_chunk.filename or 'unknown',
+            'progress': progress_percentage,
+            'status': 'uploading',
+            'message': f'Processing chunk {chunk_index + 1}/{chunk_storage[upload_id]["total_chunks"]}'
+        }, room=upload_id)
         
-        # Don't process chunks here, just notify that all chunks are received if this is the last one
         if chunk_storage[upload_id]['received_chunks'] == chunk_storage[upload_id]['total_chunks']:
             socketio.emit('upload_progress', {
                 'uploadId': upload_id,
@@ -366,107 +341,65 @@ def upload_chunk():
             "remainingChunks": chunk_storage[upload_id]['total_chunks'] - chunk_storage[upload_id]['received_chunks']
         }), 200
     except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
+        return jsonify({"error": str(e)}), 400
 
 @bp.route('/finalize-upload', methods=['POST'])
 def finalize_upload():
-    print("\n=== Finalize Upload Endpoint Called ===")
-    print(f"Request method: {request.method}")
-    print(f"Request path: {request.path}")
-    print(f"Request headers: {dict(request.headers)}")
-    
     try:
-        # Get upload_id from request
-        print("Attempting to get JSON data from request...")
         data = request.get_json(force=True, silent=True)
-        print(f"Received data: {data}")
         
         if not data or 'uploadId' not in data:
-            print("Error: uploadId is missing from request data")
             return jsonify({"error": "uploadId is required"}), 400
             
         upload_id = data['uploadId']
-        print(f"Processing upload with ID: {upload_id}")
         
-        # Check if upload exists
-        print(f"Available uploads in storage: {list(chunk_storage.keys())}")
         if upload_id not in chunk_storage:
-            print(f"Error: Upload ID {upload_id} not found in chunk_storage")
             return jsonify({"error": "Upload not found or already processed"}), 404
             
-        # Verify all chunks are received
         if chunk_storage[upload_id]['received_chunks'] != chunk_storage[upload_id]['total_chunks']:
             remaining = chunk_storage[upload_id]['total_chunks'] - chunk_storage[upload_id]['received_chunks']
-            print(f"Error: Not all chunks received. Missing {remaining} chunks.")
             return jsonify({
                 "error": f"Not all chunks received. Missing {remaining} chunks.",
                 "received": chunk_storage[upload_id]['received_chunks'],
                 "total": chunk_storage[upload_id]['total_chunks']
             }), 400
             
-        # Process chunks for this upload
-        print("Calling process_chunks function...")
         return process_chunks(upload_id)
     except Exception as e:
-        print(f"Error finalizing upload: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(traceback.format_exc())
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
-
+        return jsonify({"error": str(e)}), 400
 
 @bp.route('/cancel-upload', methods=['POST'])
 def cancel_upload():
-    print("\n=== Cancel Upload Endpoint Called ===")
-    print(f"Request method: {request.method}")
-    print(f"Request path: {request.path}")
-    print(f"Request headers: {dict(request.headers)}")
-    
     try:
-        # Get upload_id from request
-        print("Attempting to get JSON data from request...")
         data = request.get_json(force=True, silent=True)
-        print(f"Received data: {data}")
         
         if not data or 'uploadId' not in data:
-            print("Error: uploadId is missing from request data")
             return jsonify({"error": "uploadId is required"}), 400
             
         upload_id = data['uploadId']
-        print(f"Canceling upload with ID: {upload_id}")
         
-        # Check if upload exists and remove it
         if upload_id in chunk_storage:
             del chunk_storage[upload_id]
-            print(f"Upload ID {upload_id} removed from storage")
             
-            # Notify clients that upload was canceled
-            try:
-                socketio = get_socketio()
-                socketio.emit('upload_progress', {
-                    'uploadId': upload_id,
-                    'progress': 0,
-                    'status': 'error',
-                    'message': 'Upload canceled by user'
-                }, room=upload_id)
-                print("Cancellation event emitted successfully")
-            except Exception as e:
-                print(f"Error emitting cancellation event: {str(e)}")
+            socketio = get_socketio()
+            socketio.emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 0,
+                'status': 'error',
+                'message': 'Upload canceled by user'
+            }, room=upload_id)
         
         return jsonify({
             "success": True,
             "message": "Upload canceled successfully"
         }), 200
     except Exception as e:
-        print(f"Error canceling upload: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(traceback.format_exc())
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
-
+        return jsonify({"error": str(e)}), 400
 
 def process_chunks(upload_id):
     try:
-        # Emitirajte da je počela obrada
-        get_socketio().emit('upload_progress', {
+        socketio = get_socketio()
+        socketio.emit('upload_progress', {
             'uploadId': upload_id,
             'progress': 50,
             'status': 'processing',
@@ -475,7 +408,6 @@ def process_chunks(upload_id):
         
         chunks = [chunk_storage[upload_id]['chunks'][i] for i in range(chunk_storage[upload_id]['total_chunks'])]
         
-        # Try different encodings
         encodings = ['utf-8', 'utf-16', 'utf-16le', 'utf-16be', 'latin1', 'cp1252']
         full_content = None
         
@@ -488,8 +420,7 @@ def process_chunks(upload_id):
                 continue
         
         if full_content is None:
-            # Emitirajte grešku
-            get_socketio().emit('upload_progress', {
+            socketio.emit('upload_progress', {
                 'uploadId': upload_id,
                 'progress': 0,
                 'status': 'error',
@@ -499,11 +430,10 @@ def process_chunks(upload_id):
 
         num_lines = len(full_content.split('\n'))
         params = chunk_storage[upload_id]['parameters']
-        params['uploadId'] = upload_id  # Add upload_id to params for socketio room
+        params['uploadId'] = upload_id
         del chunk_storage[upload_id]
         
-        # Emitirajte da je obrada završena
-        get_socketio().emit('upload_progress', {
+        socketio.emit('upload_progress', {
             'uploadId': upload_id,
             'progress': 100,
             'status': 'completed',
@@ -537,18 +467,14 @@ def upload_files(file_content, params):
     try:
         upload_id = params.get('uploadId')
         
-        # Emitirajte početak parsiranja
-        if upload_id:
-            get_socketio().emit('upload_progress', {
-                'uploadId': upload_id,
-                'progress': 60,
-                'status': 'processing',
-                'message': 'Parsing CSV data...'
-            }, room=upload_id)
+        socketio = get_socketio()
+        socketio.emit('upload_progress', {
+            'uploadId': upload_id,
+            'progress': 60,
+            'status': 'processing',
+            'message': 'Parsing CSV data...'
+        }, room=upload_id)
         
-        print("\n=== Processing Upload ===")
-        print(f"Received params: {json.dumps(params, indent=2)}")
-        # Preuzimanje parametara iz memorije umesto request.form
         delimiter = params.get('delimiter')
         if not delimiter:
             return jsonify({"error": "Delimiter not provided"}), 400
@@ -560,126 +486,61 @@ def upload_files(file_content, params):
         has_separate_date_time = dropdown_count == 3
         has_header = params.get('has_header', False)
 
-        print(f"\nSelected columns from frontend:")
-        print(f"selected_columns: {selected_columns}")
-        print(f"has_header: {has_header}")
+        date_column = selected_columns.get('column1')  # npr. 'Datum'
+        time_column = selected_columns.get('column2') if has_separate_date_time else None
+        value_column = selected_columns.get('column3') if has_separate_date_time else selected_columns.get('column2') 
 
-        # Postavi kolone prema odabiru s frontenda
-        if has_header == 'ja':
-            # Kad ima header, koristi točno ona imena kolona koja je korisnik odabrao
-            date_column = selected_columns.get('column1')  # npr. 'Datum'
-            time_column = selected_columns.get('column2') if has_separate_date_time else None
-            value_column = selected_columns.get('column3') if has_separate_date_time else selected_columns.get('column2') 
-        else:
-            # Kad nema header, koristi indekse kolona koje je korisnik odabrao
-            # Frontend šalje indeks kolone (npr. '4' za petu kolonu)
-            date_column = selected_columns.get('column1', '0')
-            time_column = selected_columns.get('column2', '1')  if has_separate_date_time else None
-            value_column = selected_columns.get('column3', '2') if has_separate_date_time else selected_columns.get('column2') 
 
-            
-        print(f"\nSelected columns from frontend:")
-        print(f"date_column: {date_column}")
-        print(f"time_column: {time_column}")
-        print(f"value_column: {value_column}")
-        print(f"has_separate_date_time: {has_separate_date_time}")
-        
-        print(f"Using columns - Date: {date_column}, Time: {time_column}, Value: {value_column}")
-
-        # Pročitaj CSV sadržaj iz primljenog stringa
         detected_delimiter = detect_delimiter(file_content)
         if delimiter != detected_delimiter:
             return jsonify({"error": f"Incorrect delimiter! Detected: '{detected_delimiter}', provided: '{delimiter}'"}), 400
 
-        # Očisti sadržaj i učitaj u DataFrame
         cleaned_content = clean_file_content(file_content, delimiter)
         try:
-            print(f"\n=== Reading CSV with parameters ===\ndelimiter: {delimiter}, has_header: {has_header}")
-            print(f"\nReading CSV file...")
+            df = pd.read_csv(StringIO(cleaned_content),
+                delimiter=delimiter,
+                header=0 if has_header == 'ja' else None)
             
-            # Pročitaj prvu liniju da vidimo je li header
-            with StringIO(cleaned_content) as f:
-                first_line = f.readline().strip()
-                first_line_values = first_line.split(delimiter)
-                # Provjeri izgleda li prvi red kao header
-                looks_like_header = all(not val.replace('.', '').replace(',', '').replace('-', '').isdigit() 
-                                       for val in first_line_values if val.strip())
-                
-                if looks_like_header and has_header == 'nein':
-                    
-                    # Ponovno učitaj CSV bez prve linije
-                    df = pd.read_csv(StringIO(cleaned_content),
-                        delimiter=delimiter,
-                        header=None,
-                        skiprows=1)
-                    print("First line looks like header but has_header is 'nein'. Skipping first line.")
-                else:
-                    df = pd.read_csv(StringIO(cleaned_content),
-                        delimiter=delimiter,
-                        header=0 if has_header == 'ja' else None)
-            
-            print(f"Original columns: {df.columns.tolist()}")
-            print(f"Column types: {df.dtypes}")
-
             if has_header == 'nein':
                 df.columns = [str(i) for i in range(len(df.columns))]
             else:
                 df.columns = [col.strip() for col in df.columns]
             
-            # Očisti prazne kolone
             df = df.dropna(axis=1, how='all')
             
-            # Konvertiraj imena kolona u stringove ako nisu
             df.columns = df.columns.astype(str)
             
-            # Očisti whitespace iz imena kolona
             df.columns = [col.strip() for col in df.columns]
-            
-            print(f"Cleaned columns: {df.columns.tolist()}")
-            
-            print(f"\nDetected columns: {df.columns.tolist()}")
-            print(f"First row sample: {df.iloc[0].to_dict()}")
         except Exception as e:
             return jsonify({"error": f"Error processing CSV: {str(e)}"}), 400
 
         if df.empty:
             return jsonify({"error": "No data loaded from file"}), 400
 
-        # Pretvaranje vrijednosti u numerički tip ako je moguće
         if value_column and value_column in df.columns:
             df[value_column] = pd.to_numeric(df[value_column], errors='coerce')
 
-        # Parsiranje datuma i vremena
         try:
             datetime_col = date_column or df.columns[0]
             
             if has_separate_date_time and date_column and time_column:
-                try:
-                    # Clean time format first
-                    df[time_column] = df[time_column].apply(clean_time)
-                    
-                    # Clean date format
-                    df[date_column] = df[date_column].apply(clean_time)
-                    
-                    # Combine date and time columns
-                    df['datetime'] = df[date_column].astype(str) + ' ' + df[time_column].astype(str)
-                    
-                    # Try parsing with default formats first
-                    success, parsed_dates, err = parse_datetime_column(df, 'datetime')
-                    
-                    # If that fails and we have a custom format, try that
-                    if not success and custom_date_format:
-                        success, parsed_dates, err = parse_datetime_column(df, 'datetime', custom_format=custom_date_format)
-                    
-                    if not success:
-                        return jsonify({
-                            "error": "UNSUPPORTED_DATE_FORMAT",
-                            "message": f"Format nicht unterstützt. Beispielwert: %d.%m.%Y %H:%M:%S"
-                        }), 400
-                except Exception as e:
-                    return jsonify({"error": f"Error parsing date/time: {str(e)}"}), 400
+                df[time_column] = df[time_column].apply(clean_time)
+                
+                df[date_column] = df[date_column].apply(clean_time)
+                
+                df['datetime'] = df[date_column].astype(str) + ' ' + df[time_column].astype(str)
+                
+                success, parsed_dates, err = parse_datetime_column(df, 'datetime')
+                
+                if not success and custom_date_format:
+                    success, parsed_dates, err = parse_datetime_column(df, 'datetime', custom_format=custom_date_format)
+                
+                if not success:
+                    return jsonify({
+                        "error": "UNSUPPORTED_DATE_FORMAT",
+                        "message": f"Format nicht unterstützt. Beispielwert: %d.%m.%Y %H:%M:%S"
+                    }), 400
             else:
-                # Try to parse as a combined datetime
                 success, parsed_dates, err = parse_datetime_column(df, datetime_col, custom_format=custom_date_format)
                 if not success:
                     return jsonify({
@@ -691,34 +552,28 @@ def upload_files(file_content, params):
         except Exception as e:
             return jsonify({"error": f"Error parsing date/time: {str(e)}"}), 400
 
-        # Konverzija u UTC
         try:
-            # Emitirajte napredak nakon parsiranja datuma
-            if upload_id:
-                get_socketio().emit('upload_progress', {
-                    'uploadId': upload_id,
-                    'progress': 80,
-                    'status': 'processing',
-                    'message': 'Converting to UTC...'
-                }, room=upload_id)
+            socketio.emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 80,
+                'status': 'processing',
+                'message': 'Converting to UTC...'
+            }, room=upload_id)
                 
             df = convert_to_utc(df, 'datetime', timezone)
         except Exception as e:
-            # Emitirajte grešku
-            if upload_id:
-                get_socketio().emit('upload_progress', {
-                    'uploadId': upload_id,
-                    'progress': 0,
-                    'status': 'error',
-                    'message': f'Error: {str(e)}'
-                }, room=upload_id)
+            socketio.emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 0,
+                'status': 'error',
+                'message': f'Error: {str(e)}'
+            }, room=upload_id)
                 
             return jsonify({
                 "error": "Überprüfe dein Datumsformat eingabe",
                 "message": f"Fehler bei der Konvertierung in UTC: {str(e)}"
             }), 400
 
-        # Provera postojanja value kolone
         if not value_column or value_column not in df.columns:
             return jsonify({"error": f"Datum, Wert 1 oder Wert 2 nicht ausgewählt"}), 400
 
@@ -729,29 +584,24 @@ def upload_files(file_content, params):
         result_df.dropna(subset=['UTC'], inplace=True)
         result_df.sort_values('UTC', inplace=True)
 
-        # Pretvori DataFrame u listu listi (prvi red su headeri)
         headers = result_df.columns.tolist()
         data_list = [headers] + result_df.values.tolist()
         
-        # Emitirajte završetak
-        if upload_id:
-            get_socketio().emit('upload_progress', {
-                'uploadId': upload_id,
-                'progress': 100,
-                'status': 'completed',
-                'message': 'Data processing completed'
-            }, room=upload_id)
+        socketio.emit('upload_progress', {
+            'uploadId': upload_id,
+            'progress': 100,
+            'status': 'completed',
+            'message': 'Data processing completed'
+        }, room=upload_id)
             
         return jsonify({"data": data_list, "fullData": data_list})
     except Exception as e:
-        # Emitirajte grešku
-        if 'uploadId' in params:
-            get_socketio().emit('upload_progress', {
-                'uploadId': params['uploadId'],
-                'progress': 0,
-                'status': 'error',
-                'message': f'Error: {str(e)}'
-            }, room=params['uploadId'])
+        socketio.emit('upload_progress', {
+            'uploadId': params['uploadId'],
+            'progress': 0,
+            'status': 'error',
+            'message': f'Error: {str(e)}'
+        }, room=params['uploadId'])
             
         return jsonify({"error": str(e)}), 400
 
@@ -763,7 +613,6 @@ def prepare_save():
         if not data or 'data' not in data:
             return jsonify({"error": "No data received"}), 400
         
-        # Izvuci podatke iz ugnježđenog objekta
         data_wrapper = data['data']
         save_data = data_wrapper.get('data', [])
         file_name = data_wrapper.get('fileName', '')
@@ -773,25 +622,21 @@ def prepare_save():
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
 
-        # Kreiraj privremeni fajl i zapiši CSV podatke
         temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
         writer = csv.writer(temp_file, delimiter=';')
         for row in save_data:
             writer.writerow(row)
         temp_file.close()
 
-        # Generiši jedinstveni ID na osnovu trenutnog vremena
         file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = {
             'path': temp_file.name,
-            'fileName': file_name or f"data_{file_id}.csv",  # Koristi poslato ime ili default
+            'fileName': file_name or f"data_{file_id}.csv",  
             'timestamp': time.time()
         }
 
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        print(f"Error in prepare_save: {str(e)}")
-        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @bp.route('/download/<file_id>', methods=['GET'])
@@ -804,7 +649,6 @@ def download_file(file_id):
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
 
-        # Koristi sačuvano ime fajla
         download_name = file_info['fileName']
         return send_file(
             file_path,
@@ -813,13 +657,11 @@ def download_file(file_id):
             mimetype='text/csv'
         )
     except Exception as e:
-        print(f"Error in download_file: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
-        # Pokušaj očistiti privremeni fajl
         if file_id in temp_files:
             try:
                 os.unlink(file_info['path'])
                 del temp_files[file_id]
             except Exception as ex:
-                print(f"Error cleaning up temp file: {ex}")
+                return jsonify({"error": str(ex)}), 500
