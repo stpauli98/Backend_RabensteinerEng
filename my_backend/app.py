@@ -1,5 +1,9 @@
 import os
 import logging
+
+# Dodajte import za Flask-SocketIO
+from flask_socketio import SocketIO
+
 from datetime import datetime as dat
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -24,12 +28,16 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Nakon inicijalizacije Flask aplikacije i CORS-a, dodajte:
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
+
 # Configure CORS with more permissive settings
 CORS(app, resources={
     r"/*": {
-        "origins": ["*"],
+        "origins": ["http://localhost:3000", "*"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
         "expose_headers": ["Content-Disposition", "Content-Length"],
         "supports_credentials": True,
         "max_age": 3600
@@ -51,6 +59,28 @@ app.register_blueprint(training_bp, url_prefix='/api/training')
 @app.route('/health')
 def health():
     return jsonify(status="ok"), 200
+
+
+@socketio.on('connect')
+def handle_connect():
+    logger.info("Client connected")
+    print('Client connected')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.info("Client disconnected")
+    print('Client disconnected')
+    
+@socketio.on('join')
+def handle_join(data):
+    """Client joins a room based on uploadId"""
+    if 'uploadId' in data:
+        upload_id = data['uploadId']
+        from flask_socketio import join_room
+        join_room(upload_id)
+        socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
+        print(f"Client joined room: {upload_id}")
+
 
 @app.route('/')
 def index():
@@ -74,7 +104,7 @@ scheduler = BackgroundScheduler(daemon=True)
 
 # Create a wrapper function that runs cleanup_old_files within the app context
 def run_cleanup_with_app_context():
-    with app.app_context():
+    with socketio.app_context():
         try:
             result = cleanup_old_files()
             logger.info(f"Scheduled cleanup completed: {result.get('message', 'No message')}")
@@ -87,4 +117,4 @@ scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='clea
 scheduler.start()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    socketio.run(app, host='0.0.0.0', port=8080, debug=False)

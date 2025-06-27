@@ -7,8 +7,15 @@ import csv
 import time
 from io import StringIO
 from datetime import datetime
-from flask import request, jsonify, send_file, Blueprint
+from flask import Blueprint, request, jsonify, send_file, current_app
 import pandas as pd
+from flask_socketio import join_room
+
+# Helper function to get socketio instance
+def get_socketio():
+    return current_app.extensions['socketio']
+
+# Socket.IO event handlers will be registered in app.py
 
 # Create Blueprint
 bp = Blueprint('load_row_data', __name__)
@@ -265,6 +272,11 @@ def upload_chunk():
     try:
         print("\n=== Request Form Data ===")
         print(f"All form data: {dict(request.form)}")
+        
+        # Debug request.files
+        print("Files in request:", request.files)
+        print("fileChunk in request.files:", 'fileChunk' in request.files)
+        
         if 'fileChunk' not in request.files:
             return jsonify({"error": "Chunk file not found"}), 400
         
@@ -276,7 +288,6 @@ def upload_chunk():
         upload_id = request.form['uploadId']
         chunk_index = int(request.form['chunkIndex'])
         total_chunks = int(request.form['totalChunks'])
-        file_chunk = request.files['fileChunk']
         
         if upload_id not in chunk_storage:
             try:
@@ -307,24 +318,161 @@ def upload_chunk():
             except json.JSONDecodeError as e:
                 return jsonify({"error": "Invalid JSON format for selected_columns"}), 400
 
+        else:
+            # Update total_chunks if it has changed (frontend may recalculate)
+            chunk_storage[upload_id]['total_chunks'] = max(chunk_storage[upload_id]['total_chunks'], total_chunks)
+
+        file_chunk = request.files['fileChunk']
+        
+        # Debug fileChunk details
+        print("fileChunk filename:", request.files['fileChunk'].filename)
+        print("fileChunk content type:", request.files['fileChunk'].content_type)
+        
         chunk_content = file_chunk.read()
         chunk_storage[upload_id]['chunks'][chunk_index] = chunk_content
         chunk_storage[upload_id]['received_chunks'] += 1
         chunk_storage[upload_id]['last_activity'] = time.time()
         
-        if chunk_storage[upload_id]['received_chunks'] == total_chunks:
-            return process_chunks(upload_id)
+        # Emit upload progress after processing each chunk
+        progress_percentage = int((chunk_index + 1) / chunk_storage[upload_id]['total_chunks'] * 100)
+        try:
+            socketio = get_socketio()
+            print("socketio object:", socketio)
+            print("socketio type:", type(socketio))
+            
+            socketio.emit('upload_progress', {
+                'uploadId': upload_id,
+                'fileName': request.files['fileChunk'].filename if 'fileChunk' in request.files else 'unknown',
+                'progress': progress_percentage,
+                'status': 'uploading',
+                'message': f'Processing chunk {chunk_index + 1}/{chunk_storage[upload_id]["total_chunks"]}'
+            }, room=upload_id)
+            print("Event emitted successfully")
+        except Exception as e:
+            print(f"Error emitting event: {str(e)}")
+        
+        # Don't process chunks here, just notify that all chunks are received if this is the last one
+        if chunk_storage[upload_id]['received_chunks'] == chunk_storage[upload_id]['total_chunks']:
+            socketio.emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 100,
+                'status': 'uploading',
+                'message': 'All chunks received, waiting for finalization...'
+            }, room=upload_id)
         
         return jsonify({
-            "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
+            "message": f"Chunk {chunk_index + 1}/{chunk_storage[upload_id]['total_chunks']} received",
             "uploadId": upload_id,
-            "remainingChunks": total_chunks - chunk_storage[upload_id]['received_chunks']
+            "remainingChunks": chunk_storage[upload_id]['total_chunks'] - chunk_storage[upload_id]['received_chunks']
         }), 200
     except Exception as e:
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
 
+@bp.route('/finalize-upload', methods=['POST'])
+def finalize_upload():
+    print("\n=== Finalize Upload Endpoint Called ===")
+    print(f"Request method: {request.method}")
+    print(f"Request path: {request.path}")
+    print(f"Request headers: {dict(request.headers)}")
+    
+    try:
+        # Get upload_id from request
+        print("Attempting to get JSON data from request...")
+        data = request.get_json(force=True, silent=True)
+        print(f"Received data: {data}")
+        
+        if not data or 'uploadId' not in data:
+            print("Error: uploadId is missing from request data")
+            return jsonify({"error": "uploadId is required"}), 400
+            
+        upload_id = data['uploadId']
+        print(f"Processing upload with ID: {upload_id}")
+        
+        # Check if upload exists
+        print(f"Available uploads in storage: {list(chunk_storage.keys())}")
+        if upload_id not in chunk_storage:
+            print(f"Error: Upload ID {upload_id} not found in chunk_storage")
+            return jsonify({"error": "Upload not found or already processed"}), 404
+            
+        # Verify all chunks are received
+        if chunk_storage[upload_id]['received_chunks'] != chunk_storage[upload_id]['total_chunks']:
+            remaining = chunk_storage[upload_id]['total_chunks'] - chunk_storage[upload_id]['received_chunks']
+            print(f"Error: Not all chunks received. Missing {remaining} chunks.")
+            return jsonify({
+                "error": f"Not all chunks received. Missing {remaining} chunks.",
+                "received": chunk_storage[upload_id]['received_chunks'],
+                "total": chunk_storage[upload_id]['total_chunks']
+            }), 400
+            
+        # Process chunks for this upload
+        print("Calling process_chunks function...")
+        return process_chunks(upload_id)
+    except Exception as e:
+        print(f"Error finalizing upload: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
+
+
+@bp.route('/cancel-upload', methods=['POST'])
+def cancel_upload():
+    print("\n=== Cancel Upload Endpoint Called ===")
+    print(f"Request method: {request.method}")
+    print(f"Request path: {request.path}")
+    print(f"Request headers: {dict(request.headers)}")
+    
+    try:
+        # Get upload_id from request
+        print("Attempting to get JSON data from request...")
+        data = request.get_json(force=True, silent=True)
+        print(f"Received data: {data}")
+        
+        if not data or 'uploadId' not in data:
+            print("Error: uploadId is missing from request data")
+            return jsonify({"error": "uploadId is required"}), 400
+            
+        upload_id = data['uploadId']
+        print(f"Canceling upload with ID: {upload_id}")
+        
+        # Check if upload exists and remove it
+        if upload_id in chunk_storage:
+            del chunk_storage[upload_id]
+            print(f"Upload ID {upload_id} removed from storage")
+            
+            # Notify clients that upload was canceled
+            try:
+                socketio = get_socketio()
+                socketio.emit('upload_progress', {
+                    'uploadId': upload_id,
+                    'progress': 0,
+                    'status': 'error',
+                    'message': 'Upload canceled by user'
+                }, room=upload_id)
+                print("Cancellation event emitted successfully")
+            except Exception as e:
+                print(f"Error emitting cancellation event: {str(e)}")
+        
+        return jsonify({
+            "success": True,
+            "message": "Upload canceled successfully"
+        }), 200
+    except Exception as e:
+        print(f"Error canceling upload: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 400
+
+
 def process_chunks(upload_id):
     try:
+        # Emitirajte da je počela obrada
+        get_socketio().emit('upload_progress', {
+            'uploadId': upload_id,
+            'progress': 50,
+            'status': 'processing',
+            'message': 'Processing file data...'
+        }, room=upload_id)
+        
         chunks = [chunk_storage[upload_id]['chunks'][i] for i in range(chunk_storage[upload_id]['total_chunks'])]
         
         # Try different encodings
@@ -340,11 +488,27 @@ def process_chunks(upload_id):
                 continue
         
         if full_content is None:
+            # Emitirajte grešku
+            get_socketio().emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 0,
+                'status': 'error',
+                'message': 'Could not decode file content with any supported encoding'
+            }, room=upload_id)
             return jsonify({"error": "Could not decode file content with any supported encoding"}), 400
 
         num_lines = len(full_content.split('\n'))
         params = chunk_storage[upload_id]['parameters']
+        params['uploadId'] = upload_id  # Add upload_id to params for socketio room
         del chunk_storage[upload_id]
+        
+        # Emitirajte da je obrada završena
+        get_socketio().emit('upload_progress', {
+            'uploadId': upload_id,
+            'progress': 100,
+            'status': 'completed',
+            'message': 'File processing completed'
+        }, room=upload_id)
         
         return upload_files(full_content, params)
     except Exception as e:
@@ -371,6 +535,17 @@ def check_upload_status(upload_id):
 
 def upload_files(file_content, params):
     try:
+        upload_id = params.get('uploadId')
+        
+        # Emitirajte početak parsiranja
+        if upload_id:
+            get_socketio().emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 60,
+                'status': 'processing',
+                'message': 'Parsing CSV data...'
+            }, room=upload_id)
+        
         print("\n=== Processing Upload ===")
         print(f"Received params: {json.dumps(params, indent=2)}")
         # Preuzimanje parametara iz memorije umesto request.form
@@ -518,8 +693,26 @@ def upload_files(file_content, params):
 
         # Konverzija u UTC
         try:
+            # Emitirajte napredak nakon parsiranja datuma
+            if upload_id:
+                get_socketio().emit('upload_progress', {
+                    'uploadId': upload_id,
+                    'progress': 80,
+                    'status': 'processing',
+                    'message': 'Converting to UTC...'
+                }, room=upload_id)
+                
             df = convert_to_utc(df, 'datetime', timezone)
         except Exception as e:
+            # Emitirajte grešku
+            if upload_id:
+                get_socketio().emit('upload_progress', {
+                    'uploadId': upload_id,
+                    'progress': 0,
+                    'status': 'error',
+                    'message': f'Error: {str(e)}'
+                }, room=upload_id)
+                
             return jsonify({
                 "error": "Überprüfe dein Datumsformat eingabe",
                 "message": f"Fehler bei der Konvertierung in UTC: {str(e)}"
@@ -539,8 +732,27 @@ def upload_files(file_content, params):
         # Pretvori DataFrame u listu listi (prvi red su headeri)
         headers = result_df.columns.tolist()
         data_list = [headers] + result_df.values.tolist()
+        
+        # Emitirajte završetak
+        if upload_id:
+            get_socketio().emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 100,
+                'status': 'completed',
+                'message': 'Data processing completed'
+            }, room=upload_id)
+            
         return jsonify({"data": data_list, "fullData": data_list})
     except Exception as e:
+        # Emitirajte grešku
+        if 'uploadId' in params:
+            get_socketio().emit('upload_progress', {
+                'uploadId': params['uploadId'],
+                'progress': 0,
+                'status': 'error',
+                'message': f'Error: {str(e)}'
+            }, room=params['uploadId'])
+            
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/prepare-save', methods=['POST'])

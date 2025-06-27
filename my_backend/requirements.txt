@@ -11,3 +11,6 @@ matplotlib==3.8.2
 APScheduler==3.10.4
 supabase==2.3.3
 python-dotenv==1.0.1
+apscheduler==3.10.1
+flask-socketio==5.3.4
+eventlet==0.33.3
