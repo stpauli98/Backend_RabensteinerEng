@@ -1,9 +1,7 @@
 import os
 import logging
 
-# Dodajte import za Flask-SocketIO
 from flask_socketio import SocketIO
-
 from datetime import datetime as dat
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -11,10 +9,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from firstProcessing import bp as first_processing_bp
 from load_row_data import bp as load_row_data_bp
-#from data_processing_main import bp as data_processing_main_bp
 from data_processing_main import bp as data_processing_bp
 from training import bp as training_bp
-
 from adjustmentsOfData import bp as adjustmentsOfData_bp
 from adjustmentsOfData import cleanup_old_files
 from cloud import bp as cloud_bp
@@ -31,7 +27,6 @@ app = Flask(__name__)
 # Nakon inicijalizacije Flask aplikacije i CORS-a, dodajte:
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
-
 # Configure CORS with more permissive settings
 CORS(app, resources={
     r"/*": {
@@ -45,14 +40,11 @@ CORS(app, resources={
 })
 
 # Register blueprints with correct prefixes
-#app.register_blueprint(data_processing_main_bp, url_prefix='/api/dataProcessingMain')
 app.register_blueprint(data_processing_bp)
-
 app.register_blueprint(load_row_data_bp, url_prefix='/api/loadRowData')
 app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
-
 app.register_blueprint(training_bp, url_prefix='/api/training')
 
 # Health check endpoint
@@ -60,17 +52,14 @@ app.register_blueprint(training_bp, url_prefix='/api/training')
 def health():
     return jsonify(status="ok"), 200
 
-
 @socketio.on('connect')
 def handle_connect():
     logger.info("Client connected")
-    print('Client connected')
 
 @socketio.on('disconnect')
 def handle_disconnect():
     logger.info("Client disconnected")
-    print('Client disconnected')
-    
+
 @socketio.on('join')
 def handle_join(data):
     """Client joins a room based on uploadId"""
@@ -79,8 +68,6 @@ def handle_join(data):
         from flask_socketio import join_room
         join_room(upload_id)
         socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
-        print(f"Client joined room: {upload_id}")
-
 
 @app.route('/')
 def index():
@@ -97,7 +84,6 @@ def index():
     except Exception as e:
         logger.error(f"Error in index route: {e}")
         return jsonify({'error': str(e)}), 500
-
 
 # Initialize the scheduler
 scheduler = BackgroundScheduler(daemon=True)
