@@ -599,9 +599,10 @@ def complete_adjustment():
                 emit('processing_progress', {
                     'uploadId': upload_id,
                     'progress': file_progress,
-                    'message': f'Processing file {file_index + 1}/{len(filenames)}: {filename}',
-                    'step': 'file_processing',
-                    'phase': 'data_processing'
+                    'message': f'Analyzing file {file_index + 1}/{len(filenames)}: {filename}',
+                    'step': 'file_analysis',
+                    'phase': 'data_processing',
+                    'detail': f'Checking time step configuration and processing requirements'
                 }, room=upload_id)
             except Exception:
                 pass
@@ -664,6 +665,18 @@ def complete_adjustment():
             
             # Ako nema potrebe za obradom, direktno vrati podatke bez obrade
             if not needs_processing:
+                try:
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 65 + (file_index / len(filenames)) * 20,
+                        'message': f'No processing needed for {filename}',
+                        'step': 'data_conversion',
+                        'phase': 'data_processing',
+                        'detail': f'Time step and offset match requirements - converting data directly'
+                    }, room=upload_id)
+                except Exception:
+                    pass
+                    
                 logger.info(f"Skipping processing for {filename} as parameters match (timestep: {file_time_step}, offset: {file_offset})")
                 result_data, info_record = convert_data_without_processing(
                     dataframes[filename],
@@ -672,6 +685,19 @@ def complete_adjustment():
                     file_offset
                 )
             else:
+                try:
+                    method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 65 + (file_index / len(filenames)) * 20,
+                        'message': f'Processing {filename} with {method_name} method',
+                        'step': 'data_adjustment',
+                        'phase': 'data_processing',
+                        'detail': f'Adjusting time step from {file_time_step}min to {time_step}min, offset from {file_offset}min to {offset}min'
+                    }, room=upload_id)
+                except Exception:
+                    pass
+                
                 # Process the data - koristimo originalne parametre ako ne treba obradu
                 process_time_step = time_step if needs_processing else file_time_step
                 process_offset = offset if needs_processing else file_offset
@@ -689,6 +715,18 @@ def complete_adjustment():
             
             if result_data is not None:
                 all_results.extend(result_data)
+                # Emit completion progress for this file
+                try:
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 70 + ((file_index + 1) / len(filenames)) * 15,
+                        'message': f'Completed processing {filename}',
+                        'step': 'file_complete',
+                        'phase': 'data_processing',
+                        'detail': f'Generated {len(result_data)} data points for {filename}'
+                    }, room=upload_id)
+                except Exception:
+                    pass
             if info_record is not None:
                 all_info_records.append(info_record)
                 
