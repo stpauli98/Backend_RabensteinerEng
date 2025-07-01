@@ -11,6 +11,7 @@ from io import StringIO
 from datetime import datetime
 import time
 from flask import request, jsonify, Response, send_file, Blueprint
+from flask_socketio import emit
 
 # Create blueprint
 bp = Blueprint('first_processing', __name__)
@@ -45,24 +46,104 @@ def clean_for_json(obj):
 UPLOAD_FOLDER = "chunk_uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def process_csv(file_content, tss, offset, mode_input, intrpl_max):
+def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=None):
     """
     Obradjuje CSV sadržaj te vraća rezultat kao gzip-komprimiran JSON odgovor.
     Koristi vektorizirane Pandas operacije za bolju performansu.
+    
+    Args:
+        upload_id: Optional upload ID for Socket.IO progress tracking
     """
+    def emit_progress(step, progress, message):
+        """Emit progress update via Socket.IO"""
+        if upload_id:
+            try:
+                emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'step': step,
+                    'progress': progress,
+                    'message': message
+                }, room=upload_id)
+            except Exception as e:
+                logger.error(f"Error emitting progress: {e}")
+    
     try:
+        emit_progress('parsing', 10, 'Parsing CSV data...')
+        
         try:
-            # Učitaj CSV podatke u DataFrame i konvertuj vremena
-            df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True)
-            df.columns = df.columns.str.strip()
-            value_col_name = df.columns[1]
+            # Dijagnostika - provjeri problematičnu liniju
+            lines = file_content.strip().split('\n')
+            logger.info(f"Total lines in CSV: {len(lines)}")
+            emit_progress('parsing', 20, f'Loaded {len(lines)} lines from CSV')
             
+            # Provjeri header
+            if len(lines) > 0:
+                header = lines[0]
+                logger.info(f"Header: '{header}'")
+                logger.info(f"Header fields: {header.split(';')}")
+            
+            # Provjeri liniju oko 264270 ako postoji
+            problem_line_num = 264270
+            if len(lines) > problem_line_num:
+                problem_line = lines[problem_line_num - 1]  # 0-indexed
+                logger.info(f"Line {problem_line_num}: '{problem_line}'")
+                logger.info(f"Line {problem_line_num} fields: {problem_line.split(';')}")
+                logger.info(f"Line {problem_line_num} field count: {len(problem_line.split(';'))}")
+                
+                # Provjeri i okolne linije
+                for offset in [-2, -1, 1, 2]:
+                    check_line_num = problem_line_num + offset
+                    if 0 <= check_line_num - 1 < len(lines):
+                        check_line = lines[check_line_num - 1]
+                        logger.info(f"Line {check_line_num}: '{check_line}' (fields: {len(check_line.split(';'))})")
+            
+            # Pokušaj parsiranje sa error_bad_lines=False da preskoči problematične linije
+            emit_progress('parsing', 30, 'Parsing CSV with pandas...')
+            try:
+                df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True, on_bad_lines='skip')
+                logger.info(f"Successfully parsed CSV with {len(df)} rows after skipping bad lines")
+                emit_progress('parsing', 40, f'Successfully parsed {len(df)} rows')
+            except Exception as pandas_error:
+                logger.error(f"Even with on_bad_lines='skip', pandas failed: {str(pandas_error)}")
+                # Pokušaj sa quoting=csv.QUOTE_NONE
+                import csv
+                try:
+                    df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True, 
+                                   quoting=csv.QUOTE_NONE, on_bad_lines='skip')
+                    logger.info(f"Successfully parsed CSV with QUOTE_NONE, {len(df)} rows")
+                except Exception as final_error:
+                    logger.error(f"All parsing attempts failed: {str(final_error)}")
+                    raise pandas_error
+            
+            df.columns = df.columns.str.strip()
+            
+            if len(df.columns) < 2:
+                raise ValueError(f"CSV must have at least 2 columns, found {len(df.columns)}: {list(df.columns)}")
+            
+            # Get column names
+            utc_col_name = df.columns[0]
+            value_col_name = df.columns[1]
+            logger.info(f"Using columns: UTC='{utc_col_name}', Value='{value_col_name}'")
+            
+            # Rename only UTC column to standard name, keep value column name flexible
+            df = df.rename(columns={utc_col_name: 'UTC'})
+            
+            emit_progress('preprocessing', 50, 'Converting data types...')
             # Konvertuj UTC kolonu u datetime i vrednosti u numerički format
             df['UTC'] = pd.to_datetime(df['UTC'], format='%Y-%m-%d %H:%M:%S')
             df[value_col_name] = pd.to_numeric(df[value_col_name], errors='coerce')
+            
+            # Ukloni redove sa NaN vrijednostima
+            initial_count = len(df)
+            df = df.dropna(subset=['UTC', value_col_name])
+            final_count = len(df)
+            
+            if initial_count != final_count:
+                logger.info(f"Removed {initial_count - final_count} rows with invalid data")
+                
         except Exception as e:
             logger.error(f"Error parsing CSV data: {str(e)}")
-            return jsonify({"error": "Invalid CSV format"}), 400
+            return jsonify({"error": f"CSV parsing failed: {str(e)}"}), 400
         
         # Očisti i sortiraj podatke
         df = df.drop_duplicates(subset=['UTC']).sort_values('UTC').reset_index(drop=True)
@@ -92,7 +173,10 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
         # Kreiraj DataFrame sa željenim vremenima
         df_utc = pd.DataFrame({'UTC': time_range})
         
+        emit_progress('processing', 60, f'Starting {mode_input} processing...')
+        
         if mode_input == "mean":
+            emit_progress('processing', 65, 'Calculating mean values...')
             # Optimizovana mean kalkulacija koristeći resample
             df.set_index('UTC', inplace=True)
             
@@ -111,6 +195,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
             df_resampled.reset_index(inplace=True)
             
         elif mode_input == "intrpl":
+            emit_progress('processing', 65, 'Starting interpolation...')
             # UTC als Index setzen für Originaldaten
             df.set_index("UTC", 
                         inplace = True)
@@ -173,6 +258,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
             df_resampled.reset_index(inplace=True)
             
         elif mode_input in ["nearest", "nearest (mean)"]:
+            emit_progress('processing', 65, f'Processing {mode_input}...')
             # Postavi UTC kao index za originalne podatke
             df.set_index('UTC', inplace=True)
             
@@ -210,6 +296,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
                     # Kreiraj finalni DataFrame
                     df_resampled = pd.DataFrame({'UTC': resampled.index, value_col_name: resampled.values})
         
+        emit_progress('finalizing', 85, 'Converting results to JSON...')
         # Konvertuj rezultate u JSON format sa specificnim formatom vremena
         result = df_resampled.apply(
             lambda row: {
@@ -219,9 +306,12 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max):
             axis=1
         ).tolist()
         
+        emit_progress('finalizing', 95, 'Compressing data...')
         # Kompresuj i vrati rezultat
         result_json = json.dumps(result)
         compressed_data = gzip.compress(result_json.encode('utf-8'))
+        
+        emit_progress('complete', 100, f'Processing complete! Generated {len(result)} data points.')
         
         response = Response(compressed_data)
         response.headers['Content-Encoding'] = 'gzip'
@@ -289,23 +379,87 @@ def upload_chunk():
         if len(received_chunks) == total_chunks:
             logger.info(f"All chunks received for upload {upload_id}, processing...")
             
+            # Sortiraj chunkove po indeksu - pravilno extractovani chunk index iz imena
+            def extract_chunk_index(filename):
+                try:
+                    # Format: {uploadId}_{chunkIndex}.chunk
+                    # uploadId format: fp_{timestamp}_{randomString}
+                    # Dakle tražimo poslednji deo pre .chunk
+                    parts = filename.split("_")
+                    # Poslednji deo je chunkIndex.chunk, uzmi samo brojčanu vrednost
+                    chunk_part = parts[-1].split(".")[0]
+                    return int(chunk_part)
+                except (ValueError, IndexError) as e:
+                    logger.error(f"Error parsing chunk filename {filename}: {e}")
+                    return 0  # Fallback vrednost
+            
+            chunks_sorted = sorted(received_chunks, key=extract_chunk_index)
+            
             try:
-                # Sortiraj chunkove po indeksu
-                chunks_sorted = sorted(received_chunks, 
-                                     key=lambda x: int(x.split("_")[1].split(".")[0]))
                 
-                # Spoji sve chunkove
+                # Spoji sve chunkove sa dijagnostikom
                 full_content = ""
-                for chunk_file in chunks_sorted:
+                logger.info(f"Assembling {len(chunks_sorted)} chunks: {chunks_sorted}")
+                
+                for i, chunk_file in enumerate(chunks_sorted):
                     chunk_path = os.path.join(UPLOAD_FOLDER, chunk_file)
+                    logger.info(f"Processing chunk {i+1}/{len(chunks_sorted)}: {chunk_file}")
+                    
                     with open(chunk_path, 'rb') as f:
-                        chunk_content = f.read().decode('utf-8')
+                        chunk_bytes = f.read()
+                        logger.info(f"Chunk {i+1} size: {len(chunk_bytes)} bytes")
+                        
+                        # Pokušaj dekodiranje
+                        try:
+                            chunk_content = chunk_bytes.decode('utf-8')
+                            logger.info(f"Chunk {i+1} decoded successfully, content length: {len(chunk_content)}")
+                            
+                            # Provjeri početak prvog chunk-a
+                            if i == 0:
+                                first_lines = chunk_content.split('\n')[:3]
+                                logger.info(f"First chunk first 3 lines: {first_lines}")
+                            
+                            # Provjeri kraj poslednjeg chunk-a
+                            if i == len(chunks_sorted) - 1:
+                                last_lines = chunk_content.split('\n')[-3:]
+                                logger.info(f"Last chunk last 3 lines: {last_lines}")
+                                
+                        except UnicodeDecodeError as decode_error:
+                            logger.error(f"Failed to decode chunk {i+1}: {decode_error}")
+                            # Pokušaj sa različitim encoding-ima
+                            for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
+                                try:
+                                    chunk_content = chunk_bytes.decode(encoding)
+                                    logger.info(f"Successfully decoded chunk {i+1} with {encoding}")
+                                    break
+                                except:
+                                    continue
+                            else:
+                                raise decode_error
+                        
+                        # Osiguraj da chunk završava sa newline ako je potrebno
+                        if i < len(chunks_sorted) - 1 and not chunk_content.endswith('\n'):
+                            chunk_content += '\n'
+                        
                         full_content += chunk_content
+                    
                     # Obriši chunk fajl nakon čitanja
                     os.remove(chunk_path)
+                
+                logger.info(f"Final assembled content length: {len(full_content)}")
+                
+                # Provjeri finalni sadržaj
+                final_lines = full_content.split('\n')
+                logger.info(f"Final content total lines: {len(final_lines)}")
+                if len(final_lines) > 0:
+                    logger.info(f"Final content first line: '{final_lines[0]}'")
+                if len(final_lines) > 1:
+                    logger.info(f"Final content second line: '{final_lines[1]}'")
+                if len(final_lines) > 2:
+                    logger.info(f"Final content third line: '{final_lines[2]}'")
 
-                # Obradi spojeni sadržaj
-                return process_csv(full_content, tss, offset, mode, intrpl_max)
+                # Obradi spojeni sadržaj sa upload_id za progress tracking
+                return process_csv(full_content, tss, offset, mode, intrpl_max, upload_id)
                 
             except Exception as e:
                 # U slučaju greške, obriši sve chunkove
