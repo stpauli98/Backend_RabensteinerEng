@@ -90,7 +90,7 @@ scheduler = BackgroundScheduler(daemon=True)
 
 # Create a wrapper function that runs cleanup_old_files within the app context
 def run_cleanup_with_app_context():
-    with socketio.app_context():
+    with app.app_context():
         try:
             result = cleanup_old_files()
             logger.info(f"Scheduled cleanup completed: {result.get('message', 'No message')}")

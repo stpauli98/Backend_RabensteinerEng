@@ -10,6 +10,7 @@ import traceback
 import time
 from io import StringIO
 from flask import request, jsonify, send_file, Blueprint
+from flask_socketio import emit
 import json
 
 # Create Blueprint
@@ -185,6 +186,18 @@ def upload_chunk():
         
         # If this was the last chunk and we have all chunks, combine them
         if len(received_chunks) == total_chunks:
+            # Emit progress update for file combination
+            try:
+                emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'progress': 25,
+                    'message': f'Combining {total_chunks} chunks for {filename}',
+                    'step': 'file_combination',
+                    'phase': 'file_upload'
+                }, room=upload_id)
+            except Exception:
+                pass  # Don't fail if socket emit fails
+            
             # Combine all chunks into final file with original filename
             final_path = os.path.join(upload_dir, filename)
             with open(final_path, 'w', encoding='utf-8') as outfile:
@@ -198,10 +211,35 @@ def upload_chunk():
                     except Exception as e:
                         return jsonify({"error": f"Error processing chunk {i}"}), 500
             
+            # Emit progress update for file analysis
+            try:
+                emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'progress': 28,
+                    'message': f'Analyzing file {filename}',
+                    'step': 'file_analysis',
+                    'phase': 'file_upload'
+                }, room=upload_id)
+            except Exception:
+                pass
+            
             # Process the complete file
             try:
                 # Analyze the complete file
                 result = analyse_data(final_path, upload_id)
+                
+                # Emit completion progress
+                try:
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 30,
+                        'message': f'File {filename} upload and analysis complete',
+                        'step': 'file_complete',
+                        'phase': 'file_upload'
+                    }, room=upload_id)
+                except Exception:
+                    pass
+                
                 response_data = {
                     'status': 'complete',
                     'message': 'File upload and analysis complete',
@@ -436,6 +474,18 @@ def adjust_data():
         # Get list of files being processed
         filenames = list(dataframes.keys())
         
+        # Emit progress update for data processing
+        try:
+            emit('processing_progress', {
+                'uploadId': upload_id,
+                'progress': 50,
+                'message': f'Processing parameters for {len(filenames)} files',
+                'step': 'parameter_processing',
+                'phase': 'data_processing'
+            }, room=upload_id)
+        except Exception:
+            pass
+        
         return jsonify({
             "message": "Parameters updated successfully",
             "files": filenames,
@@ -522,6 +572,18 @@ def complete_adjustment():
         # Get list of filenames from dataframes
         filenames = list(dataframes.keys())
         
+        # Emit progress update for data processing start
+        try:
+            emit('processing_progress', {
+                'uploadId': upload_id,
+                'progress': 60,
+                'message': f'Starting data processing for {len(filenames)} files',
+                'step': 'data_processing_start',
+                'phase': 'data_processing'
+            }, room=upload_id)
+        except Exception:
+            pass
+        
         # Clean up methods by stripping whitespace
         if methods:
             methods = {k: v.strip() if isinstance(v, str) else v for k, v in methods.items()}
@@ -530,7 +592,20 @@ def complete_adjustment():
         VALID_METHODS = {'mean', 'intrpl', 'nearest', 'nearest (mean)', 'nearest (max. delta)'}
         
         # Process each file separately
-        for filename in filenames:
+        for file_index, filename in enumerate(filenames):
+            # Emit progress for current file processing
+            try:
+                file_progress = 60 + (file_index / len(filenames)) * 25  # 60-85% range
+                emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'progress': file_progress,
+                    'message': f'Processing file {file_index + 1}/{len(filenames)}: {filename}',
+                    'step': 'file_processing',
+                    'phase': 'data_processing'
+                }, room=upload_id)
+            except Exception:
+                pass
+            
             # Get DataFrame for this file
             df = dataframes[filename]
             
@@ -617,6 +692,18 @@ def complete_adjustment():
             if info_record is not None:
                 all_info_records.append(info_record)
                 
+        # Emit final completion progress
+        try:
+            emit('processing_progress', {
+                'uploadId': upload_id,
+                'progress': 100,
+                'message': f'Data processing completed for all {len(filenames)} files',
+                'step': 'completion',
+                'phase': 'finalization'
+            }, room=upload_id)
+        except Exception:
+            pass
+            
         # Return processed results
         return jsonify({
             "success": True,
