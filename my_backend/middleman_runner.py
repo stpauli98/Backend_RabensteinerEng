@@ -74,6 +74,7 @@ def run_training_script(session_id):
         # 5. Download files and map original names to temp paths
         file_path_map = {}
         for file_meta in files_metadata:
+            print(f"Processing file_meta: {file_meta}")
             file_name = file_meta["fileName"]
             file_type = file_meta["type"] # 'input' or 'output'
             
@@ -81,6 +82,7 @@ def run_training_script(session_id):
             # e.g., "Netzlast [kW]", "Aussentemperatur Krumpendorf [GradC]", "a"
             original_script_name = file_meta.get("bezeichnung", os.path.splitext(file_name)[0]) # Fallback to filename without extension
 
+            print(f"Downloading {file_name} (type: {file_type}) for script name: {original_script_name}")
             downloaded_path = download_file(uuid_session_id, file_type, file_name, temp_dir)
             file_path_map[original_script_name] = downloaded_path
         print("All necessary files downloaded.")
