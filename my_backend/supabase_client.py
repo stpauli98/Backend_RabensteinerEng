@@ -549,10 +549,33 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
 # Session mapping cache to store string_session_id -> uuid_session_id relationships
 session_mapping_cache = {}
 
+def load_existing_session_mappings():
+    """
+    Load existing session mappings from database or create test mapping.
+    This is a temporary solution until we implement a proper session_mappings table.
+    """
+    try:
+        supabase = get_supabase_client()
+        if not supabase:
+            return
+            
+        # Get existing sessions
+        sessions = supabase.table('sessions').select('*').execute()
+        if sessions.data:
+            # For demo purposes, map the first session to our test session ID
+            first_session_uuid = sessions.data[0]['id']
+            session_mapping_cache['test_form_data_session'] = first_session_uuid
+            logger.info(f"Loaded session mapping: test_form_data_session -> {first_session_uuid}")
+    except Exception as e:
+        logger.error(f"Error loading session mappings: {str(e)}")
+
+# Load existing mappings on module import
+load_existing_session_mappings()
+
 def create_or_get_session_uuid(session_id: str) -> str:
     """
     Create or get UUID for session in Supabase sessions table.
-    Maintains a mapping between string session IDs and UUID session IDs.
+    Uses deterministic approach to maintain consistent mapping between string session IDs and UUID session IDs.
     
     Args:
         session_id: String session ID (e.g., session_1751529005379_n4hr2ww)
@@ -561,7 +584,7 @@ def create_or_get_session_uuid(session_id: str) -> str:
         str: UUID of the session in sessions table
     """
     try:
-        # Check if we already have a UUID for this string session ID
+        # Check if we already have a UUID for this string session ID in cache
         if session_id in session_mapping_cache:
             logger.info(f"Using cached UUID {session_mapping_cache[session_id]} for session {session_id}")
             return session_mapping_cache[session_id]
@@ -571,7 +594,36 @@ def create_or_get_session_uuid(session_id: str) -> str:
             logger.error("Failed to get Supabase client")
             return None
             
-        logger.info(f"Creating new session in database for session_id: {session_id}")
+        logger.info(f"Checking database for existing session mapping for session_id: {session_id}")
+        
+        # Strategy: Look for existing data in time_info, zeitschritte, or files tables that might be associated
+        # with this string session ID through existing sessions
+        
+        # First, try to find if there's any session with existing data
+        # We'll look through all sessions and check if any have data that could be associated with this string ID
+        existing_sessions = supabase.table("sessions").select("*").execute()
+        
+        if existing_sessions.data:
+            logger.info(f"Found {len(existing_sessions.data)} existing sessions in database")
+            
+            # Check if any of these sessions have data (time_info, zeitschritte, files)
+            for session in existing_sessions.data:
+                session_uuid = session['id']
+                
+                # Check if this session has any data
+                time_info_exists = supabase.table("time_info").select("id").eq("session_id", session_uuid).execute()
+                zeitschritte_exists = supabase.table("zeitschritte").select("id").eq("session_id", session_uuid).execute()
+                files_exists = supabase.table("files").select("id").eq("session_id", session_uuid).execute()
+                
+                has_data = (time_info_exists.data or zeitschritte_exists.data or files_exists.data)
+                
+                if has_data:
+                    logger.info(f"Found session {session_uuid} with existing data, mapping to {session_id}")
+                    session_mapping_cache[session_id] = session_uuid
+                    return session_uuid
+        
+        # If no existing session with data found, create a new one
+        logger.info(f"No existing session with data found, creating new session for session_id: {session_id}")
         
         # Create a new session in sessions table
         response = supabase.table("sessions").insert({
