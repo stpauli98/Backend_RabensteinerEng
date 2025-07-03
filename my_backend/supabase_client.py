@@ -39,6 +39,90 @@ def get_supabase_client() -> Client:
         logger.error(f"Error creating Supabase client: {str(e)}")
         return None
 
+def create_or_get_session_uuid(session_id: str) -> str:
+    """
+    Create or get UUID for a session from the session_mappings table.
+
+    Args:
+        session_id: The string-based session ID from the frontend.
+
+    Returns:
+        str: The UUID of the session.
+    """
+    if not session_id:
+        logger.error("session_id cannot be empty")
+        return None
+
+    supabase = get_supabase_client()
+    if not supabase:
+        return None
+
+    # 1. Check if a mapping already exists
+    try:
+        response = supabase.table('session_mappings').select('uuid_session_id').eq('string_session_id', session_id).single().execute()
+        if response.data:
+            uuid_session_id = response.data['uuid_session_id']
+            logger.info(f"Found existing mapping for {session_id}: {uuid_session_id}")
+            return uuid_session_id
+    except Exception as e:
+        logger.info(f"No existing mapping found for {session_id}, will create a new one. Error: {e}")
+
+
+    # 2. If no mapping exists, create a new session and a new mapping
+    try:
+        # Create a new session in the 'sessions' table
+        session_response = supabase.table('sessions').insert({}).execute()
+        
+        if getattr(session_response, 'error', None):
+            raise Exception(f"Error creating new session: {session_response.error}")
+        
+        if not session_response.data:
+            raise Exception("Insert operation into 'sessions' did not return data.")
+
+        new_uuid_session_id = session_response.data[0]['id']
+
+        # Create a new mapping in the 'session_mappings' table
+        mapping_response = supabase.table('session_mappings').insert({
+            'string_session_id': session_id,
+            'uuid_session_id': new_uuid_session_id
+        }).execute()
+
+        if getattr(mapping_response, 'error', None):
+            raise Exception(f"Error creating session mapping: {mapping_response.error}")
+
+        logger.info(f"Created new session and mapping for {session_id}: {new_uuid_session_id}")
+        return new_uuid_session_id
+
+    except Exception as e:
+        logger.error(f"Failed to create session and mapping for {session_id}: {e}")
+        return None
+
+def get_string_id_from_uuid(uuid_session_id: str) -> str:
+    """
+    Get the string session ID from a UUID.
+
+    Args:
+        uuid_session_id: The UUID of the session.
+
+    Returns:
+        str: The string-based session ID.
+    """
+    if not uuid_session_id:
+        return None
+
+    supabase = get_supabase_client()
+    if not supabase:
+        return None
+
+    try:
+        response = supabase.table('session_mappings').select('string_session_id').eq('uuid_session_id', uuid_session_id).single().execute()
+        if response.data:
+            return response.data['string_session_id']
+        return None
+    except Exception as e:
+        logger.error(f"Could not retrieve string_session_id for UUID {uuid_session_id}: {e}")
+        return None
+
 def save_time_info(session_id: str, time_info: dict) -> bool:
     """
     Save time information to the time_info table.
@@ -359,7 +443,7 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
         logger.error(f"Error saving file info: {str(e)}")
         return False, None
 
-def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_path: str) -> bool:
+def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_path: str, file_type: str) -> bool:
     """
     Save CSV file content to Supabase Storage and save reference in the database.
     
@@ -368,6 +452,7 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
         session_id: ID of the session
         file_name: Name of the file
         file_path: Path to the file
+        file_type: Type of the file ('input' or 'output')
         
     Returns:
         bool: True if successful, False otherwise
@@ -376,6 +461,10 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
         supabase = get_supabase_client()
         if not supabase:
             return False
+
+        # Determine the bucket name based on the file type
+        bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+        logger.info(f"Uploading {file_name} to bucket: {bucket_name}")
             
         # Read file content
         with open(file_path, 'rb') as f:
@@ -389,16 +478,11 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
         
         try:
             # Upload fajla u Supabase Storage
-            # Napomena: bucket 'csv-files' mora biti kreiran u Supabase konzoli
-            storage_response = supabase.storage.from_("csv-files").upload(
+            storage_response = supabase.storage.from_(bucket_name).upload(
                 path=storage_path,
                 file=file_content,
                 file_options={"content-type": "text/csv"}
             )
-            
-            # Dobijanje javnog URL-a za fajl (opciono)
-            # Ovo će raditi samo ako je bucket javni
-            # file_url = supabase.storage.from_("csv-files").get_public_url(storage_path)
             
             # Proveri da li je file_id u UUID formatu, ako nije generiši novi UUID
             try:
@@ -546,109 +630,6 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
     
     return new_time_info
 
-# Session mapping cache to store string_session_id -> uuid_session_id relationships
-session_mapping_cache = {}
-
-def load_existing_session_mappings():
-    """
-    Load existing session mappings from database or create test mapping.
-    This is a temporary solution until we implement a proper session_mappings table.
-    """
-    try:
-        supabase = get_supabase_client()
-        if not supabase:
-            return
-            
-        # Get existing sessions
-        sessions = supabase.table('sessions').select('*').execute()
-        if sessions.data:
-            # For demo purposes, map the first session to our test session ID
-            first_session_uuid = sessions.data[0]['id']
-            session_mapping_cache['test_form_data_session'] = first_session_uuid
-            logger.info(f"Loaded session mapping: test_form_data_session -> {first_session_uuid}")
-    except Exception as e:
-        logger.error(f"Error loading session mappings: {str(e)}")
-
-# Load existing mappings on module import
-load_existing_session_mappings()
-
-def create_or_get_session_uuid(session_id: str) -> str:
-    """
-    Create or get UUID for session in Supabase sessions table.
-    Uses deterministic approach to maintain consistent mapping between string session IDs and UUID session IDs.
-    
-    Args:
-        session_id: String session ID (e.g., session_1751529005379_n4hr2ww)
-        
-    Returns:
-        str: UUID of the session in sessions table
-    """
-    try:
-        # Check if we already have a UUID for this string session ID in cache
-        if session_id in session_mapping_cache:
-            logger.info(f"Using cached UUID {session_mapping_cache[session_id]} for session {session_id}")
-            return session_mapping_cache[session_id]
-        
-        supabase = get_supabase_client()
-        if not supabase:
-            logger.error("Failed to get Supabase client")
-            return None
-            
-        logger.info(f"Checking database for existing session mapping for session_id: {session_id}")
-        
-        # Strategy: Look for existing data in time_info, zeitschritte, or files tables that might be associated
-        # with this string session ID through existing sessions
-        
-        # First, try to find if there's any session with existing data
-        # We'll look through all sessions and check if any have data that could be associated with this string ID
-        existing_sessions = supabase.table("sessions").select("*").execute()
-        
-        if existing_sessions.data:
-            logger.info(f"Found {len(existing_sessions.data)} existing sessions in database")
-            
-            # Check if any of these sessions have data (time_info, zeitschritte, files)
-            for session in existing_sessions.data:
-                session_uuid = session['id']
-                
-                # Check if this session has any data
-                time_info_exists = supabase.table("time_info").select("id").eq("session_id", session_uuid).execute()
-                zeitschritte_exists = supabase.table("zeitschritte").select("id").eq("session_id", session_uuid).execute()
-                files_exists = supabase.table("files").select("id").eq("session_id", session_uuid).execute()
-                
-                has_data = (time_info_exists.data or zeitschritte_exists.data or files_exists.data)
-                
-                if has_data:
-                    logger.info(f"Found session {session_uuid} with existing data, mapping to {session_id}")
-                    session_mapping_cache[session_id] = session_uuid
-                    return session_uuid
-        
-        # If no existing session with data found, create a new one
-        logger.info(f"No existing session with data found, creating new session for session_id: {session_id}")
-        
-        # Create a new session in sessions table
-        response = supabase.table("sessions").insert({
-            "finalized": False,
-            "file_count": 0
-        }).execute()
-        
-        if hasattr(response, 'error') and response.error:
-            logger.error(f"Error creating session: {response.error}")
-            return None
-            
-        session_uuid = response.data[0]['id']
-        
-        # Store the mapping in cache
-        session_mapping_cache[session_id] = session_uuid
-        
-        logger.info(f"Created session UUID {session_uuid} for session {session_id} and stored mapping")
-        return session_uuid
-        
-    except Exception as e:
-        logger.error(f"Error creating session UUID: {str(e)}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        return None
-
 def save_session_to_supabase(session_id: str) -> bool:
     """
     Save all session data to Supabase.
@@ -719,11 +700,12 @@ def save_session_to_supabase(session_id: str) -> bool:
                 # Save file content only if file info was saved successfully
                 if success and valid_uuid:
                     file_name = file_info.get('fileName', '')
+                    file_type = file_info.get('type', 'input')  # Default to 'input' if not specified
                     file_path = os.path.join(session_dir, file_name)
                     
                     if os.path.exists(file_path):
                         # Koristi valid_uuid umesto originalnog file_id
-                        save_csv_file_content(valid_uuid, database_session_id, file_name, file_path)
+                        save_csv_file_content(valid_uuid, database_session_id, file_name, file_path, file_type)
                     else:
                         logger.warning(f"CSV file not found: {file_path}")
                 else:
