@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 import tempfile
 import glob
 import shutil
-from supabase_client import save_session_to_supabase
+from supabase_client import save_session_to_supabase, get_string_id_from_uuid
 
 # Configure logging
 logging.basicConfig(
@@ -679,16 +679,26 @@ def get_session(session_id):
     try:
         if not session_id:
             return jsonify({'success': False, 'error': 'No session ID provided'}), 400
-            
+
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
+        except (ValueError, TypeError):
+            string_session_id = session_id
+
         # Dohvati metapodatke o sesiji
-        session_metadata = get_session_metadata_locally(session_id)
+        session_metadata = get_session_metadata_locally(string_session_id)
         
         # Koristimo lokalne podatke
         if not session_metadata:
             return jsonify({'success': False, 'error': 'Session not found'}), 404
             
         # Dohvati informacije o datotekama
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         files = []
         
         if os.path.exists(upload_dir):
@@ -703,7 +713,7 @@ def get_session(session_id):
                     })
         
         session_info = {
-            'sessionId': session_id,
+            'sessionId': string_session_id,
             'files': files,
             'timeInfo': session_metadata.get('timeInfo', {}),
             'zeitschritte': session_metadata.get('zeitschritte', {}),
@@ -731,8 +741,20 @@ def session_status(session_id):
                 'message': 'Missing session ID'
             }), 400
             
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            # It's a UUID, get the original string ID for local file access
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                 return jsonify({'status': 'error', 'message': 'Session mapping not found for UUID'}), 404
+        except (ValueError, TypeError):
+            # It's a string ID, use it directly
+            string_session_id = session_id
+
         # Provjeri postoji li direktorij sesije
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         if not os.path.exists(upload_dir):
             return jsonify({
                 'status': 'error',
@@ -880,8 +902,18 @@ def init_session():
 def get_all_files_metadata(session_id):
     """Get metadata for all files in a session."""
     try:
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
+        except (ValueError, TypeError):
+            string_session_id = session_id
+
         # Provjeri postoji li direktorij sesije
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         if not os.path.exists(upload_dir):
             return jsonify({'success': False, 'error': 'Session not found'}), 404
             
@@ -1178,8 +1210,18 @@ def save_zeitschritte_endpoint():
 def delete_session(session_id):
     """Delete a specific session and all its files from local storage."""
     try:
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
+        except (ValueError, TypeError):
+            string_session_id = session_id
+
         # Definiraj putanju do lokalnog direktorija za upload
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         
         # Provjeri postoji li direktorij
         if not os.path.exists(upload_dir):
@@ -1217,7 +1259,7 @@ def delete_session(session_id):
         
         return jsonify({
             'success': True,
-            'message': f"Session {session_id} deleted successfully"
+            'message': f"Session {string_session_id} deleted successfully"
         })
         
     except Exception as e:
