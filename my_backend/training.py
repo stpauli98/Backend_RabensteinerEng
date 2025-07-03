@@ -53,7 +53,8 @@ def extract_file_metadata_fields(file_metadata):
         'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
         'skalierung': file_metadata.get('skalierung', ''),
         'skalierungMax': file_metadata.get('skalierungMax', ''),
-        'skalierungMin': file_metadata.get('skalierungMin', '')
+        'skalierungMin': file_metadata.get('skalierungMin', ''),
+        'type': file_metadata.get('type', '') # Dodajemo 'type' polje
     }
 
 def extract_file_metadata(session_id):
@@ -434,6 +435,7 @@ def upload_chunk():
             file_exists = False
             for i, existing_file in enumerate(session_metadata.get('files', [])):
                 if existing_file.get('fileName') == file_name:
+                    logger.debug(f"DEBUG: Updating existing file metadata for {file_name}: {file_metadata}")
                     # Ažuriraj postojeće metapodatke
                     session_metadata['files'][i] = file_metadata
                     file_exists = True
@@ -441,6 +443,7 @@ def upload_chunk():
                     
             # Ako datoteka ne postoji u metapodacima, dodaj je
             if not file_exists and file_metadata:
+                logger.debug(f"DEBUG: Adding new file metadata for {file_name}: {file_metadata}")
                 session_metadata['files'].append(file_metadata)
             
             # Ažuriraj vrijeme zadnje promjene

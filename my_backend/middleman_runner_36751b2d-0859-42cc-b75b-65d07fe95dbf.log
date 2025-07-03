@@ -1,0 +1,13 @@
+Getting UUID for session ID: 36751b2d-0859-42cc-b75b-65d07fe95dbf
+Fetching data from: http://127.0.0.1:8080/api/training/get-session-uuid/36751b2d-0859-42cc-b75b-65d07fe95dbf
+Resolved UUID for 36751b2d-0859-42cc-b75b-65d07fe95dbf: 36751b2d-0859-42cc-b75b-65d07fe95dbf
+Fetching time_info and zeitschritte...
+Fetching data from: http://127.0.0.1:8080/api/training/test-data-loading/36751b2d-0859-42cc-b75b-65d07fe95dbf
+Time info and Zeitschritte fetched.
+Fetching file metadata...
+Fetching data from: http://127.0.0.1:8080/api/training/get-all-files-metadata/36751b2d-0859-42cc-b75b-65d07fe95dbf
+Fetched 2 file metadata entries.
+Created temporary directory: /var/folders/4q/pzdyvwrn6fl9y4z7_hb_dn840000gp/T/tmp9w9xge1l
+Processing file_meta: {'bezeichnung': 'DF', 'fileName': 'DF.csv', 'id': 'dbeb3565-1101-4d27-9f68-c184774e6de0'}
+An unexpected error occurred: 'type'
+Cleaned up temporary directory: /var/folders/4q/pzdyvwrn6fl9y4z7_hb_dn840000gp/T/tmp9w9xge1l
