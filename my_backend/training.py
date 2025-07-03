@@ -1265,3 +1265,84 @@ def delete_session(session_id):
     except Exception as e:
         logger.error(f"Error deleting session {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/file/download/<session_id>/<file_type>/<file_name>', methods=['GET'])
+def download_file(session_id, file_type, file_name):
+    """
+    Downloads a file from Supabase Storage.
+    """
+    try:
+        from supabase_client import get_supabase_client, get_string_id_from_uuid
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Supabase client not available'}), 500
+
+        # Ensure session_id is UUID for Supabase calls
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = get_string_id_from_uuid(session_id)
+            if not uuid_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found'}), 404
+
+        bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+        storage_path = f"{uuid_session_id}/{file_name}"
+
+        logger.info(f"Attempting to download file {file_name} from bucket {bucket_name} at path {storage_path}")
+
+        try:
+            response = supabase.storage.from_(bucket_name).download(storage_path)
+            file_content = response.data
+        except Exception as e:
+            logger.error(f"Error downloading file from Supabase Storage: {e}")
+            return jsonify({'success': False, 'error': f'File download failed: {str(e)}'}), 500
+
+        # Return the file content
+        return current_app.response_class(
+            file_content,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename="{file_name}"'}
+        )
+
+    except Exception as e:
+        logger.error(f"Error in download_file endpoint: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/run-analysis/<session_id>', methods=['POST'])
+def run_analysis(session_id):
+    """
+    Triggers the execution of middleman_runner.py for a given session ID.
+    """
+    import subprocess
+    import sys
+
+    if not session_id:
+        return jsonify({'success': False, 'error': 'Missing session ID'}), 400
+
+    middleman_script_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        'middleman_runner.py'
+    )
+
+    if not os.path.exists(middleman_script_path):
+        return jsonify({'success': False, 'error': 'Middleman script not found'}), 500
+
+    try:
+        # Pokreni middleman_runner.py kao zaseban proces
+        # stdout i stderr se preusmeravaju u fajlove radi debagovanja
+        # Koristimo sys.executable da osiguramo da se koristi isti Python interpreter
+        with open(os.path.join(current_app.root_path, f"middleman_runner_{session_id}.log"), "w") as log_file:
+            subprocess.Popen(
+                [sys.executable, middleman_script_path, session_id],
+                stdout=log_file,
+                stderr=log_file,
+                # Optional: set cwd if middleman_runner.py expects it
+                # cwd=os.path.dirname(middleman_script_path)
+            )
+        logger.info(f"Analysis for session {session_id} triggered successfully.")
+        return jsonify({'success': True, 'message': f'Analysis for session {session_id} started in background.'}), 200
+    except Exception as e:
+        logger.error(f"Failed to trigger analysis for session {session_id}: {e}")
+        return jsonify({'success': False, 'error': f'Failed to start analysis: {str(e)}'}), 500
