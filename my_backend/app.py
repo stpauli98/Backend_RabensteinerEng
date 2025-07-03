@@ -3,7 +3,7 @@ import logging
 
 from flask_socketio import SocketIO
 from datetime import datetime as dat
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -24,13 +24,16 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Configure request size limits
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB limit
+
 # Nakon inicijalizacije Flask aplikacije i CORS-a, dodajte:
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Configure CORS with more permissive settings
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000", "*"],
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "*"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
         "expose_headers": ["Content-Disposition", "Content-Length"],
@@ -39,6 +42,19 @@ CORS(app, resources={
     }
 })
 
+# Add explicit OPTIONS handler for all routes
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = app.make_default_options_response()
+        headers = response.headers
+        headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+        headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, Origin, X-Requested-With'
+        headers['Access-Control-Allow-Credentials'] = 'true'
+        headers['Access-Control-Max-Age'] = '3600'
+        return response
+
 # Register blueprints with correct prefixes
 app.register_blueprint(data_processing_bp)
 app.register_blueprint(load_row_data_bp, url_prefix='/api/loadRowData')
@@ -46,6 +62,22 @@ app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
 app.register_blueprint(training_bp, url_prefix='/api/training')
+
+# Error handlers
+@app.errorhandler(400)
+def bad_request(error):
+    logger.error(f"Bad request (400): {error}")
+    return jsonify({'error': 'Bad Request', 'message': str(error)}), 400
+
+@app.errorhandler(413)
+def payload_too_large(error):
+    logger.error(f"Payload too large (413): {error}")
+    return jsonify({'error': 'Payload Too Large', 'message': 'Request entity is too large'}), 413
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal server error (500): {error}")
+    return jsonify({'error': 'Internal Server Error', 'message': str(error)}), 500
 
 # Health check endpoint
 @app.route('/health')
@@ -103,4 +135,4 @@ scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='clea
 scheduler.start()
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=8080, debug=False)
+    socketio.run(app, host='0.0.0.0', port=8080, debug=False, allow_unsafe_werkzeug=True)
