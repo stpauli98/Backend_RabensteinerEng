@@ -1038,6 +1038,50 @@ def create_database_session():
         logger.error(f"Error creating database session: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@bp.route('/test-data-loading/<session_id>', methods=['GET'])
+def test_data_loading(session_id):
+    """Test endpoint to check if data exists for a session ID."""
+    try:
+        # Get UUID for session
+        from supabase_client import create_or_get_session_uuid, get_supabase_client
+        session_uuid = create_or_get_session_uuid(session_id)
+        
+        if not session_uuid:
+            return jsonify({'success': False, 'error': 'Could not get session UUID'}), 400
+            
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Check for time_info
+        time_info = supabase.table('time_info').select('*').eq('session_id', session_uuid).execute()
+        
+        # Check for zeitschritte
+        zeitschritte = supabase.table('zeitschritte').select('*').eq('session_id', session_uuid).execute()
+        
+        # Check for files
+        files = supabase.table('files').select('*').eq('session_id', session_uuid).execute()
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'session_uuid': session_uuid,
+            'data_exists': {
+                'time_info': len(time_info.data) > 0,
+                'zeitschritte': len(zeitschritte.data) > 0,
+                'files': len(files.data) > 0
+            },
+            'data': {
+                'time_info': time_info.data[0] if time_info.data else None,
+                'zeitschritte': zeitschritte.data[0] if zeitschritte.data else None,
+                'files_count': len(files.data)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error testing data loading: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @bp.route('/get-session-uuid/<session_id>', methods=['GET'])
 def get_session_uuid(session_id):
     """Get the UUID session ID for a string session ID."""
