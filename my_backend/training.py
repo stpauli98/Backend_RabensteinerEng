@@ -593,8 +593,13 @@ def finalize_session():
         logger.info(f"Session {session_id} finalized with {file_count} files")
 
         # 3. Save session data to Supabase
-        # Nastavi čak i ako Supabase spremanje ne uspije - ne blokiraj odgovor
-        save_session_to_database(session_id)
+        try:
+            success = save_session_to_database(session_id)
+            if not success:
+                logger.warning(f"Failed to save session {session_id} to database, but continuing")
+        except Exception as e:
+            logger.error(f"Error saving session {session_id} to database: {str(e)}")
+            # Continue even if database save fails - don't block the response
         
         return jsonify({
             'success': True,
@@ -842,13 +847,21 @@ def init_session():
         with open(session_metadata_path, 'w') as f:
             json.dump(session_metadata, f, indent=2)
             
-        # Save session data to Supabase
+        # Create session in Supabase and save session data
         try:
-            supabase_result = save_session_to_supabase(session_id)
-            if supabase_result:
-                logger.info(f"Session {session_id} data saved to Supabase successfully")
+            from supabase_client import create_or_get_session_uuid
+            session_uuid = create_or_get_session_uuid(session_id)
+            if session_uuid:
+                logger.info(f"Created session UUID {session_uuid} for session {session_id}")
+                
+                # Save session data to Supabase
+                success = save_session_to_supabase(session_id)
+                if success:
+                    logger.info(f"Session {session_id} data saved to Supabase successfully")
+                else:
+                    logger.warning(f"Failed to save session {session_id} data to Supabase")
             else:
-                logger.warning(f"Failed to save session {session_id} data to Supabase")
+                logger.warning(f"Failed to create session UUID for {session_id}")
         except Exception as e:
             logger.error(f"Error saving session data to Supabase: {str(e)}")
             # Continue even if Supabase save fails - don't block the response
@@ -946,6 +959,175 @@ def get_all_files_metadata(session_id):
         })
     except Exception as e:
         logger.error(f"Error getting all files metadata for session {session_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/save-time-info', methods=['POST'])
+def save_time_info_endpoint():
+    """Save time information via API endpoint."""
+    try:
+        # Log the raw request data for debugging
+        logger.info(f"Received save-time-info request from {request.remote_addr}")
+        logger.info(f"Request headers: {dict(request.headers)}")
+        logger.info(f"Request content type: {request.content_type}")
+        logger.info(f"Request content length: {request.content_length}")
+        
+        # Check content type
+        if not request.is_json:
+            logger.error("Request is not JSON")
+            return jsonify({'success': False, 'error': 'Request must be JSON'}), 400
+        
+        # Get request data
+        try:
+            data = request.get_json(force=True)
+        except Exception as e:
+            logger.error(f"Failed to parse JSON: {str(e)}")
+            return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'}), 400
+        
+        # Log the parsed data
+        logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
+        
+        if not data or 'sessionId' not in data or 'timeInfo' not in data:
+            logger.error("Missing required fields in request")
+            return jsonify({'success': False, 'error': 'Missing sessionId or timeInfo'}), 400
+            
+        session_id = data['sessionId']
+        time_info = data['timeInfo']
+        
+        # Validate session_id format
+        if not session_id or not isinstance(session_id, str):
+            logger.error(f"Invalid session_id format: {session_id}")
+            return jsonify({'success': False, 'error': 'Invalid session_id format'}), 400
+        
+        logger.info(f"Processing time_info save for session: {session_id}")
+        logger.info(f"Time info keys: {list(time_info.keys()) if time_info else 'None'}")
+        
+        from supabase_client import save_time_info
+        success = save_time_info(session_id, time_info)
+        
+        if success:
+            logger.info(f"Successfully saved time_info for session {session_id}")
+            return jsonify({'success': True, 'message': 'Time info saved successfully'})
+        else:
+            logger.error(f"Failed to save time_info for session {session_id}")
+            return jsonify({'success': False, 'error': 'Failed to save time info'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving time info: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/create-database-session', methods=['POST'])
+def create_database_session():
+    """Create a new session in Supabase database and return UUID."""
+    try:
+        data = request.json
+        session_id = data.get('sessionId') if data else None
+        
+        from supabase_client import create_or_get_session_uuid
+        session_uuid = create_or_get_session_uuid(session_id)
+        
+        if session_uuid:
+            return jsonify({
+                'success': True, 
+                'sessionUuid': session_uuid,
+                'message': f'Database session created with UUID: {session_uuid}'
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Failed to create database session'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error creating database session: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/get-session-uuid/<session_id>', methods=['GET'])
+def get_session_uuid(session_id):
+    """Get the UUID session ID for a string session ID."""
+    try:
+        if not session_id:
+            return jsonify({'success': False, 'error': 'Missing session ID'}), 400
+        
+        # Check if it's already a UUID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            # It's already a UUID
+            return jsonify({
+                'success': True,
+                'sessionUuid': session_id,
+                'message': 'Session ID is already in UUID format'
+            })
+        except (ValueError, TypeError):
+            # It's a string session ID, get or create the UUID
+            from supabase_client import create_or_get_session_uuid
+            session_uuid = create_or_get_session_uuid(session_id)
+            
+            if session_uuid:
+                return jsonify({
+                    'success': True,
+                    'sessionUuid': session_uuid,
+                    'message': f'Found/created UUID for session: {session_uuid}'
+                })
+            else:
+                return jsonify({
+                    'success': False, 
+                    'error': f'Failed to get UUID for session {session_id}'
+                }), 404
+                
+    except Exception as e:
+        logger.error(f"Error getting session UUID: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/save-zeitschritte', methods=['POST'])
+def save_zeitschritte_endpoint():
+    """Save zeitschritte information via API endpoint."""
+    try:
+        # Log the raw request data for debugging
+        logger.info(f"Received save-zeitschritte request from {request.remote_addr}")
+        logger.info(f"Request headers: {dict(request.headers)}")
+        logger.info(f"Request content type: {request.content_type}")
+        logger.info(f"Request content length: {request.content_length}")
+        
+        # Check content type
+        if not request.is_json:
+            logger.error("Request is not JSON")
+            return jsonify({'success': False, 'error': 'Request must be JSON'}), 400
+        
+        # Get request data
+        try:
+            data = request.get_json(force=True)
+        except Exception as e:
+            logger.error(f"Failed to parse JSON: {str(e)}")
+            return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'}), 400
+        
+        # Log the parsed data
+        logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
+        
+        if not data or 'sessionId' not in data or 'zeitschritte' not in data:
+            logger.error("Missing required fields in request")
+            return jsonify({'success': False, 'error': 'Missing sessionId or zeitschritte'}), 400
+            
+        session_id = data['sessionId']
+        zeitschritte = data['zeitschritte']
+        
+        # Validate session_id format
+        if not session_id or not isinstance(session_id, str):
+            logger.error(f"Invalid session_id format: {session_id}")
+            return jsonify({'success': False, 'error': 'Invalid session_id format'}), 400
+        
+        logger.info(f"Processing zeitschritte save for session: {session_id}")
+        logger.info(f"Zeitschritte keys: {list(zeitschritte.keys()) if zeitschritte else 'None'}")
+        
+        from supabase_client import save_zeitschritte
+        success = save_zeitschritte(session_id, zeitschritte)
+        
+        if success:
+            logger.info(f"Successfully saved zeitschritte for session {session_id}")
+            return jsonify({'success': True, 'message': 'Zeitschritte saved successfully'})
+        else:
+            logger.error(f"Failed to save zeitschritte for session {session_id}")
+            return jsonify({'success': False, 'error': 'Failed to save zeitschritte'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving zeitschritte: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @bp.route('/session/<session_id>/delete', methods=['POST'])
