@@ -9,7 +9,7 @@ import pandas as pd
 
 # Configuration
 BACKEND_URL = "http://127.0.0.1:8080"
-ORIGINAL_SCRIPT_PATH = "/Users/posao/Documents/GitHub/Backend_RabensteinerEng/my_backend/training_backend_test_2.py"
+ORIGINAL_SCRIPT_PATH = "training_backend_test_2.py"
 
 def fetch_data(endpoint, session_id):
     """Fetches JSON data from the backend."""
@@ -72,125 +72,69 @@ def run_training_script(session_id):
         print(f"Created temporary directory: {temp_dir}")
 
         # 5. Download files and map original names to temp paths
-        file_path_map = {}
-        for file_meta in files_metadata:
-            print(f"Processing file_meta: {file_meta}")
-            file_name = file_meta["fileName"]
-            file_type = file_meta["type"] # 'input' or 'output'
-            
-            # The 'bezeichnung' field from your metadata seems to be the key used in the original script
-            # e.g., "Netzlast [kW]", "Aussentemperatur Krumpendorf [GradC]", "a"
-            original_script_name = file_meta.get("bezeichnung", os.path.splitext(file_name)[0]) # Fallback to filename without extension
+        downloaded_files_by_type = {
+            'input': [],
+            'output': []
+        }
 
-            print(f"Downloading {file_name} (type: {file_type}) for script name: {original_script_name}")
+        print(f"DEBUG: files_metadata received by middleman_runner: {files_metadata}")
+        for file_meta in files_metadata:
+            print(f"DEBUG: Processing individual file_meta: {file_meta}")
+            file_name = file_meta["fileName"]
+            file_type = file_meta["type"]
+            
             downloaded_path = download_file(uuid_session_id, file_type, file_name, temp_dir)
-            file_path_map[original_script_name] = downloaded_path
+            downloaded_files_by_type[file_type].append(downloaded_path)
         print("All necessary files downloaded.")
 
-        # 6. Read the original script content
-        with open(ORIGINAL_SCRIPT_PATH, 'r') as f:
-            script_content = f.read()
+        # Define the hardcoded paths in training_backend_test_2.py in order
+        # Based on manual inspection of training_backend_test_2.py
+        hardcoded_input_paths = [
+            "data/historical/grid load/data_4/load_grid_kW_Krumpendorf.csv", # First input file
+            "data/historical/solarthermics/data_4/Wert 1.csv", # Second input file (alternative path)
+            "data/historical/grid load/data_4/t_out_grad_C_Krumpendorf.csv", # Third input file
+            "data/historical/solarthermics/data_4/Wert 2.csv" # Fourth input file (alternative path)
+        ]
+        hardcoded_output_paths = [
+            "data/historical/grid load/data_4/load_grid_kW_Krumpendorf.csv", # First output file
+            "data/historical/solarthermics/data_4/Wert 2.csv", # Second output file (alternative path)
+            "data/historical/grid load/data_4/Wert 3.csv" # Third output file (alternative path)
+        ]
 
-        # 7. Modify the script content
-        modified_content = script_content
+        # Check for file quantity mismatch
+        if len(downloaded_files_by_type['input']) < len(hardcoded_input_paths):
+            print(f"WARNING: Expected at least {len(hardcoded_input_paths)} input files but only downloaded {len(downloaded_files_by_type['input'])}. Script may fail.")
+        if len(downloaded_files_by_type['output']) < len(hardcoded_output_paths):
+            print(f"WARNING: Expected at least {len(hardcoded_output_paths)} output files but only downloaded {len(downloaded_files_by_type['output'])}. Script may fail.")
 
-        # Modify MTS class
-        if zeitschritte:
-            modified_content = re.sub(r"I_N\s*=\s*\d+", f"I_N = {zeitschritte.get('eingabe', 13)}", modified_content)
-            modified_content = re.sub(r"O_N\s*=\s*\d+", f"O_N = {zeitschritte.get('ausgabe', 13)}", modified_content)
-            modified_content = re.sub(r"DELT\s*=\s*\d+", f"DELT = {zeitschritte.get('zeitschrittweite', 3)}", modified_content)
-            modified_content = re.sub(r"OFST\s*=\s*\d+", f"OFST = {zeitschritte.get('offset', 0)}", modified_content)
-        print("MTS class modified.")
-
-        # Modify T class (Time Information)
-        if time_info and time_info.get("category_data"):
-            t_class_str_parts = []
-            t_class_str_parts.append("class T:")
-            t_class_str_parts.append(f"    TZ = \"{time_info.get('zeitzone', 'Europe/Vienna')}\"")
-
-            categories = {
-                "jahr": "Y", "monat": "M", "woche": "W", "tag": "D", "feiertag": "H"
-            }
-            for category_key, class_name in categories.items():
-                cat_data = time_info["category_data"].get(category_key, {})
-                imp = time_info.get(category_key, False)
-                spec = cat_data.get("datenform", "Aktuelle Zeit")
-                th_strt = cat_data.get("zeithorizontStart", 0)
-                th_end = cat_data.get("zeithorizontEnd", 0)
-                scal = cat_data.get("skalierung", "nein") == "ja"
-                scal_max = cat_data.get("skalierungMax", 1)
-                scal_min = cat_data.get("skalierungMin", 0)
+        # Perform replacements
+        # Replace input file paths
+        for i, old_path in enumerate(hardcoded_input_paths):
+            if i < len(downloaded_files_by_type['input']):
+                new_path = downloaded_files_by_type['input'][i]
+                # This regex looks for 'path = "OLD_PATH"' and replaces it.
+                # It's designed to be as broad as possible to catch variations.
+                # It will replace the first occurrence of the old_path.
+                pattern = re.compile(r'(path\s*=\s*"' + re.escape(old_path) + r'")', re.MULTILINE)
                 
-                t_class_str_parts.append(f"    class {class_name}:")
-                t_class_str_parts.append(f"        IMP = {imp}")
-                # Assuming 'detaillierteBerechnung' maps to 'LT'
-                t_class_str_parts.append(f"        LT = {cat_data.get('detaillierteBerechnung', False)}") 
-                t_class_str_parts.append(f"        SPEC = \"{spec}\"")
-                t_class_str_parts.append(f"        TH_STRT = {th_strt}")
-                t_class_str_parts.append(f"        TH_END = {th_end}")
-                t_class_str_parts.append(f"        SCAL = {scal}")
-                t_class_str_parts.append(f"        SCAL_MAX = {scal_max}")
-                t_class_str_parts.append(f"        SCAL_MIN = {scal_min}")
-                if category_key == "feiertag":
-                    t_class_str_parts.append(f"        CNTRY = \"{cat_data.get('land', 'Österreich')}\"")
-                # Replicate original DELT calculation
-                t_class_str_parts.append(f"        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)")
-                t_class_str_parts.append("") # Empty line for formatting
+                # Use subn to get the count of replacements
+                modified_content, num_replacements = pattern.subn(f'path = "{new_path}"', modified_content, count=1) # Replace only first occurrence
+                if num_replacements > 0:
+                    print(f"Replaced input path '{old_path}' with '{new_path}' ({num_replacements} occurrence).")
+                else:
+                    print(f"Warning: Could not find hardcoded input path '{old_path}' for replacement.")
 
-            t_class_str = "\n".join(t_class_str_parts) # Use \n for literal newline in regex replacement
-
-            # Find the exact start and end of the T class block
-            t_class_start_marker = "# ZEITINFORMATION #############################################################"
-            t_class_end_marker = "# AUSGABEDATEN ################################################################"
-            
-            # Find the content between markers
-            match = re.search(f"{re.escape(t_class_start_marker)}(.*?){re.escape(t_class_end_marker)}", modified_content, re.DOTALL)
-
-            if match:
-                # Replace the content between markers with the new T class string
-                modified_content = modified_content.replace(match.group(1), f"\n{t_class_str}\n")
-            else:
-                print("Warning: Could not find T class block for modification.")
-        print("T class modified.")
-
-        # Modify file paths (i_dat and o_dat sections)
-        # This is highly dependent on the exact structure of the original script.
-        # It looks for 'name = "..."' followed by 'path = "..."' and replaces the path.
-        
-        # Create a combined list of names to search for in the script
-        # This is to handle cases where the script might use a different name than 'bezeichnung'
-        # or if 'bezeichnung' is empty.
-        script_names_to_paths = {}
-        for file_meta in files_metadata:
-            file_name = file_meta["fileName"]
-            bezeichnung = file_meta.get("bezeichnung")
-            downloaded_path = file_path_map.get(bezeichnung if bezeichnung else os.path.splitext(file_name)[0])
-
-            if downloaded_path:
-                # Add mapping for 'bezeichnung'
-                if bezeichnung:
-                    script_names_to_paths[bezeichnung] = downloaded_path
-                # Add mapping for filename without extension (common fallback)
-                script_names_to_paths[os.path.splitext(file_name)[0]] = downloaded_path
-                # Add mapping for full filename (less common for 'name' in script, but good to have)
-                script_names_to_paths[file_name] = downloaded_path
-
-        # Iterate through the script_names_to_paths and replace paths
-        for script_name, downloaded_path in script_names_to_paths.items():
-            escaped_script_name = re.escape(script_name)
-            # This regex looks for 'name = "SCRIPT_NAME"' followed by any characters (including newlines)
-            # until it finds 'path = "..."' and captures the entire path line.
-            # It's designed to be as broad as possible to catch variations.
-            pattern = re.compile(r'(name\s*=\s*\"' + escaped_script_name + r'\"(?:.|\n)*?path\s*=\s*\"[^\"]*\")', re.MULTILINE)
-            
-            # Find all occurrences and replace
-            modified_content, num_replacements = pattern.subn(lambda m: re.sub(r'path\s*=\s*\"[^\"]*\"', f'path = "{downloaded_path}"', m.group(0)), modified_content)
-            if num_replacements > 0:
-                print(f"Modified {num_replacements} path(s) for '{script_name}' to '{downloaded_path}'")
-            # else:
-            #     print(f"Warning: No path modification found for '{script_name}'.")
+        # Replace output file paths
+        for i, old_path in enumerate(hardcoded_output_paths):
+            if i < len(downloaded_files_by_type['output']):
+                new_path = downloaded_files_by_type['output'][i]
+                pattern = re.compile(r'(path\s*=\s*"' + re.escape(old_path) + r'")', re.MULTILINE)
+                modified_content, num_replacements = pattern.subn(f'path = "{new_path}"', modified_content, count=1) # Replace only first occurrence
+                if num_replacements > 0:
+                    print(f"Replaced output path '{old_path}' with '{new_path}' ({num_replacements} occurrence).")
+                else:
+                    print(f"Warning: Could not find hardcoded output path '{old_path}' for replacement.")
         print("File paths modified.")
-
 
         # 8. Write the modified content to a temporary file
         modified_script_path = os.path.join(temp_dir, "modified_training_script.py")
@@ -200,7 +144,8 @@ def run_training_script(session_id):
 
         # 9. Execute the modified script
         print("Executing modified script...")
-        result = subprocess.run(['python', modified_script_path], capture_output=True, text=True, check=False)
+        print(f"DEBUG: Python interpreter used by subprocess: {sys.executable}")
+        result = subprocess.run([sys.executable, modified_script_path], capture_output=True, text=True, check=False)
         print("Script Stdout:\n", result.stdout)
         if result.stderr:
             print("Script Stderr:\n", result.stderr)
