@@ -5,11 +5,11 @@ numpy==1.26.3
 Werkzeug==3.0.1
 pytz==2024.1
 requests==2.31.0
-scikit-learn==1.4.0
+scikit-learn==1.5.1
 gunicorn==21.2.0
 matplotlib==3.8.2
 seaborn==0.13.1
-tensorflow==2.15.0
+tensorflow==2.16.1
 APScheduler==3.10.4
 supabase==2.3.3
 python-dotenv==1.0.1
