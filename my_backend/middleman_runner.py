@@ -154,6 +154,20 @@ def run_training_script(session_id):
             raise Exception("Modified script execution failed.")
         print("Modified script execution completed.")
 
+        # 10. Execute print_session_data_vars.py
+        print("\nExecuting print_session_data_vars.py...")
+        print_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "print_session_data_vars.py")
+        if os.path.exists(print_script_path):
+            print_result = subprocess.run([sys.executable, print_script_path, session_id], capture_output=True, text=True, check=False)
+            print("Print Script Stdout:\n", print_result.stdout)
+            if print_result.stderr:
+                print("Print Script Stderr:\n", print_result.stderr)
+            if print_result.returncode != 0:
+                print(f"Print Script exited with error code: {print_result.returncode}")
+        else:
+            print(f"Warning: print_session_data_vars.py not found at {print_script_path}")
+        print("Print script execution completed.")
+
     except requests.exceptions.RequestException as e:
         print(f"Network or HTTP error: {e}")
     except json.JSONDecodeError as e:
@@ -161,7 +175,7 @@ def run_training_script(session_id):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
     finally:
-        # 10. Clean up temporary files
+        # 11. Clean up temporary files
         if temp_dir and os.path.exists(temp_dir):
             import shutil
             shutil.rmtree(temp_dir)
