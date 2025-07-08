@@ -1,36 +1,43 @@
+# Stage 1: Builder - instalira sve Python ovisnosti
+FROM python:3.9-slim as builder
+
+# Instaliraj sistemske ovisnosti potrebne za izgradnju (npr. curl, build-essential za neke pakete)
+# build-essential je koristan ako neki Python paketi zahtijevaju kompilaciju C/C++ koda
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Kopiraj samo requirements.txt kako bi se iskoristio Docker cache
+COPY requirements.txt .
+
+# Instaliraj Python ovisnosti. --no-cache-dir sprječava pip da kešira pakete unutar ove faze,
+# što je dobro jer ne želimo da se taj cache kopira u finalnu sliku.
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Stage 2: Production - kreira laganu sliku za pokretanje aplikacije
 FROM python:3.9-slim
 
-# Install system dependencies
+# Instaliraj samo sistemske ovisnosti potrebne za pokretanje aplikacije (ako ih ima)
+# U ovom slučaju, curl je možda potreban za HTTP zahtjeve.
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements first
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Kopiraj instalirane Python pakete iz "builder" faze
+# Ovo je ključno za ubrzanje, jer se paketi ne instaliraju ponovno
+COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
 
-# Copy application code
+# Kopiraj ostatak koda aplikacije
 COPY . .
 
-# Create temp directory with proper permissions
-RUN mkdir -p /app/temp_uploads && chmod 777 /app/temp_uploads
+# Izloži port na kojem aplikacija sluša
+EXPOSE 8080
 
-# Set environment variables
-ENV PORT=8080
-ENV PYTHONUNBUFFERED=1
-ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
-ENV GUNICORN_CMD_ARGS="--workers=1 --threads=8 --timeout=0 --bind=:${PORT} --log-level=info"
-
-# Expose port
-EXPOSE ${PORT}
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
-
-# Run with gunicorn
-CMD ["gunicorn", "app:app"]
+# Definiraj naredbu za pokretanje aplikacije
+# S obzirom na to da koristite Flask-SocketIO i eventlet, preporučuje se gunicorn s eventlet workerom.
+CMD ["gunicorn", "-k", "eventlet", "-w", "1", "app:app"]
