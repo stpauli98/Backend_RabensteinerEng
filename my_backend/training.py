@@ -19,6 +19,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Create blueprint
 bp = Blueprint('training', __name__)
@@ -1297,7 +1298,7 @@ def download_file(session_id, file_type, file_name):
 
         try:
             response = supabase.storage.from_(bucket_name).download(storage_path)
-            file_content = response.data
+            file_content = response
         except Exception as e:
             logger.error(f"Error downloading file from Supabase Storage: {e}")
             return jsonify({'success': False, 'error': f'File download failed: {str(e)}'}), 500
