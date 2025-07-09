@@ -102,6 +102,7 @@ def handle_join(data):
         upload_id = data['uploadId']
         from flask_socketio import join_room
         join_room(upload_id)
+        logger.info(f"Client joined Socket.IO room: {upload_id}")
         socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
 
 @app.route('/')

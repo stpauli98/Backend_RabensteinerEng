@@ -166,7 +166,7 @@ def upload_chunk():
             try:
                 # Import socketio directly from app module to avoid context issues
                 from app import socketio
-                logger.info(f"Emitting Socket.IO progress: {progress}% - {step} - {message}")
+                logger.info(f"Emitting Socket.IO progress: {progress}% - {step} - {message} to room: {upload_id}")
                 socketio.emit('processing_progress', {
                     'uploadId': upload_id,
                     'step': step,
