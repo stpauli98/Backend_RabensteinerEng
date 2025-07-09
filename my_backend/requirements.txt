@@ -15,8 +15,10 @@ supabase==2.3.3
 pandas==2.1.4
 numpy==1.26.3
 
+# Required by cloud.py blueprint
+scikit-learn==1.5.1
+matplotlib==3.8.2
+
 # Heavy packages - will be added in next commit
-# scikit-learn==1.5.1
-# matplotlib==3.8.2
 # seaborn==0.13.1
 # tensorflow==2.16.1
