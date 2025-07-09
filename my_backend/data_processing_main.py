@@ -164,20 +164,30 @@ def upload_chunk():
         """Emit progress update via Socket.IO"""
         if upload_id:
             try:
-                # Use socketio from current_app context
-                socketio = current_app.extensions.get('socketio')
-                if socketio:
-                    logger.info(f"Emitting Socket.IO progress: {progress}% - {step} - {message}")
-                    socketio.emit('processing_progress', {
-                        'uploadId': upload_id,
-                        'step': step,
-                        'progress': progress,
-                        'message': message
-                    }, room=upload_id)
-                else:
-                    logger.warning("SocketIO not available in current_app context")
+                # Import socketio directly from app module to avoid context issues
+                from app import socketio
+                logger.info(f"Emitting Socket.IO progress: {progress}% - {step} - {message}")
+                socketio.emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'step': step,
+                    'progress': progress,
+                    'message': message
+                }, room=upload_id)
             except Exception as e:
                 logger.error(f"Error emitting progress: {e}")
+                # Fallback: try current_app method
+                try:
+                    socketio = current_app.extensions.get('socketio')
+                    if socketio:
+                        logger.info(f"Fallback: Emitting Socket.IO progress via current_app: {progress}% - {step} - {message}")
+                        socketio.emit('processing_progress', {
+                            'uploadId': upload_id,
+                            'step': step,
+                            'progress': progress,
+                            'message': message
+                        }, room=upload_id)
+                except Exception as fallback_error:
+                    logger.error(f"Fallback emit also failed: {fallback_error}")
     try:
         # Minimal logging for performance
         logger.info(f"Processing chunk {request.form.get('chunkIndex')}/{request.form.get('totalChunks')}")

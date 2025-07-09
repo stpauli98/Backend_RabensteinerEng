@@ -30,6 +30,9 @@ app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB limit
 # Nakon inicijalizacije Flask aplikacije i CORS-a, dodajte:
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
+# Register socketio in app extensions for current_app access
+app.extensions['socketio'] = socketio
+
 # Configure CORS with more permissive settings
 CORS(app, resources={
     r"/*": {
