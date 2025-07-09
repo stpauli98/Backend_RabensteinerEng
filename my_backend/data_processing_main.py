@@ -30,6 +30,7 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
         current_step += 1
         if emit_progress_func and upload_id:
             progress = 75 + (current_step / total_steps) * 10  # 75-85%
+            logger.info(f"Emitting progress: {progress}% - {step_name}")
             emit_progress_func(upload_id, 'cleaning', progress, f'{step_name}...')
     
     df["UTC"] = pd.to_datetime(df["UTC"], format="%Y-%m-%d %H:%M:%S")
@@ -166,6 +167,7 @@ def upload_chunk():
                 # Use socketio from current_app context
                 socketio = current_app.extensions.get('socketio')
                 if socketio:
+                    logger.info(f"Emitting Socket.IO progress: {progress}% - {step} - {message}")
                     socketio.emit('processing_progress', {
                         'uploadId': upload_id,
                         'step': step,
