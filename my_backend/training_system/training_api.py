@@ -31,23 +31,29 @@ def get_training_results(session_id: str):
         JSON response with training results
     """
     try:
-        # TODO: Import supabase client
-        # results = _get_results_from_database(session_id, supabase)
+        supabase = get_supabase_client()
+        results = _get_results_from_database(session_id, supabase)
         
-        # Placeholder implementation
-        results = {
+        if not results:
+            return jsonify({
+                'session_id': session_id,
+                'status': 'not_found',
+                'message': 'No training results found for this session'
+            }), 404
+        
+        response_data = {
             'session_id': session_id,
-            'status': 'completed',
-            'results': {
-                'evaluation_metrics': {},
-                'evaluation_dataframes': {},
-                'model_comparison': {},
-                'training_metadata': {}
-            },
+            'status': results.get('status', 'unknown'),
+            'evaluation_metrics': results.get('evaluation_metrics', {}),
+            'model_performance': results.get('model_performance', {}),
+            'best_model': results.get('best_model', {}),
+            'summary': results.get('summary', {}),
+            'created_at': results.get('created_at'),
+            'completed_at': results.get('completed_at'),
             'message': 'Training results retrieved successfully'
         }
         
-        return jsonify(results), 200
+        return jsonify(response_data), 200
         
     except Exception as e:
         logger.error(f"Error retrieving training results for {session_id}: {str(e)}")
@@ -69,21 +75,54 @@ def get_training_status(session_id: str):
         JSON response with training status
     """
     try:
-        # TODO: Import supabase client
-        # status = _get_status_from_database(session_id, supabase)
+        supabase = get_supabase_client()
         
-        # Placeholder implementation
-        status = {
-            'session_id': session_id,
-            'status': 'completed',  # pending, in_progress, completed, failed
-            'progress': 100,
-            'current_step': 'Training completed',
-            'total_steps': 7,
-            'completed_steps': 7,
-            'started_at': '2024-01-01T00:00:00Z',
-            'completed_at': '2024-01-01T01:00:00Z',
-            'message': 'Training completed successfully'
-        }
+        # Check training_results table first
+        results_status = _get_results_from_database(session_id, supabase)
+        
+        # Check training_progress table for detailed progress
+        progress_status = _get_status_from_database(session_id, supabase)
+        
+        if results_status:
+            # Training is completed
+            status = {
+                'session_id': session_id,
+                'status': results_status.get('status', 'completed'),
+                'progress': 100,
+                'current_step': 'Training completed',
+                'total_steps': 7,
+                'completed_steps': 7,
+                'started_at': results_status.get('created_at'),
+                'completed_at': results_status.get('completed_at'),
+                'message': 'Training completed successfully'
+            }
+        elif progress_status and progress_status.get('status') != 'not_found':
+            # Training is in progress
+            progress_data = progress_status.get('progress', {})
+            status = {
+                'session_id': session_id,
+                'status': 'in_progress',
+                'progress': progress_data.get('overall', 0),
+                'current_step': progress_data.get('current_step', 'Processing'),
+                'total_steps': progress_data.get('total_steps', 7),
+                'completed_steps': progress_data.get('completed_steps', 0),
+                'started_at': progress_status.get('created_at'),
+                'completed_at': None,
+                'message': 'Training in progress'
+            }
+        else:
+            # No training found
+            status = {
+                'session_id': session_id,
+                'status': 'not_found',
+                'progress': 0,
+                'current_step': 'Not started',
+                'total_steps': 7,
+                'completed_steps': 0,
+                'started_at': None,
+                'completed_at': None,
+                'message': 'No training found for this session'
+            }
         
         return jsonify(status), 200
         
@@ -155,23 +194,25 @@ def get_training_visualizations(session_id: str):
         JSON response with training visualizations
     """
     try:
-        # TODO: Import supabase client
-        # visualizations = _get_visualizations_from_database(session_id, supabase)
+        supabase = get_supabase_client()
+        visualizations = _get_visualizations_from_database(session_id, supabase)
         
-        # Placeholder implementation
-        visualizations = {
+        if not visualizations or not visualizations.get('plots'):
+            return jsonify({
+                'session_id': session_id,
+                'plots': {},
+                'message': 'No visualizations found for this session'
+            }), 404
+        
+        response_data = {
             'session_id': session_id,
-            'plots': {
-                'violin_plots': {},
-                'forecast_plots': {},
-                'comparison_plots': {},
-                'training_history': {},
-                'residual_plots': {}
-            },
+            'plots': visualizations.get('plots', {}),
+            'metadata': visualizations.get('metadata', {}),
+            'created_at': visualizations.get('created_at'),
             'message': 'Visualizations retrieved successfully'
         }
         
-        return jsonify(visualizations), 200
+        return jsonify(response_data), 200
         
     except Exception as e:
         logger.error(f"Error retrieving training visualizations for {session_id}: {str(e)}")
@@ -193,37 +234,30 @@ def get_training_metrics(session_id: str):
         JSON response with training metrics
     """
     try:
-        # TODO: Import supabase client
-        # metrics = _get_metrics_from_database(session_id, supabase)
+        supabase = get_supabase_client()
+        results = _get_results_from_database(session_id, supabase)
         
-        # Placeholder implementation
-        metrics = {
+        if not results:
+            return jsonify({
+                'session_id': session_id,
+                'message': 'No metrics found for this session'
+            }), 404
+        
+        evaluation_metrics = results.get('evaluation_metrics', {})
+        best_model = results.get('best_model', {})
+        summary = results.get('summary', {})
+        
+        response_data = {
             'session_id': session_id,
-            'best_model': {
-                'name': 'lstm',
-                'metrics': {
-                    'mae': 0.123,
-                    'mse': 0.456,
-                    'rmse': 0.675,
-                    'mape': 0.089
-                }
-            },
-            'model_comparison': {
-                'dense': {'mae': 0.234, 'mse': 0.567, 'rmse': 0.753, 'mape': 0.098},
-                'cnn': {'mae': 0.345, 'mse': 0.678, 'rmse': 0.823, 'mape': 0.107},
-                'lstm': {'mae': 0.123, 'mse': 0.456, 'rmse': 0.675, 'mape': 0.089},
-                'svr': {'mae': 0.456, 'mse': 0.789, 'rmse': 0.888, 'mape': 0.116}
-            },
-            'dataset_statistics': {
-                'total_samples': 1000,
-                'training_samples': 800,
-                'test_samples': 200,
-                'features': 10
-            },
+            'best_model': best_model,
+            'evaluation_metrics': evaluation_metrics,
+            'model_comparison': evaluation_metrics,  # Same structure for now
+            'summary': summary,
+            'created_at': results.get('created_at'),
             'message': 'Metrics retrieved successfully'
         }
         
-        return jsonify(metrics), 200
+        return jsonify(response_data), 200
         
     except Exception as e:
         logger.error(f"Error retrieving training metrics for {session_id}: {str(e)}")
@@ -249,43 +283,19 @@ def get_training_logs(session_id: str):
         limit = request.args.get('limit', 100, type=int)
         level = request.args.get('level', 'INFO')
         
-        # TODO: Import supabase client
-        # logs = _get_logs_from_database(session_id, supabase, limit, level)
+        supabase = get_supabase_client()
+        logs_data = _get_logs_from_database(session_id, supabase, limit, level)
         
-        # Placeholder implementation
-        logs = {
+        response_data = {
             'session_id': session_id,
-            'logs': [
-                {
-                    'timestamp': '2024-01-01T00:00:00Z',
-                    'level': 'INFO',
-                    'message': 'Training started',
-                    'step': 'initialization'
-                },
-                {
-                    'timestamp': '2024-01-01T00:15:00Z',
-                    'level': 'INFO',
-                    'message': 'Data loading completed',
-                    'step': 'data_loading'
-                },
-                {
-                    'timestamp': '2024-01-01T00:30:00Z',
-                    'level': 'INFO',
-                    'message': 'Model training started',
-                    'step': 'model_training'
-                },
-                {
-                    'timestamp': '2024-01-01T01:00:00Z',
-                    'level': 'INFO',
-                    'message': 'Training completed successfully',
-                    'step': 'completion'
-                }
-            ],
-            'total_logs': 4,
+            'logs': logs_data.get('logs', []),
+            'total_logs': logs_data.get('total_logs', 0),
+            'limit': limit,
+            'level_filter': level,
             'message': 'Logs retrieved successfully'
         }
         
-        return jsonify(logs), 200
+        return jsonify(response_data), 200
         
     except Exception as e:
         logger.error(f"Error retrieving training logs for {session_id}: {str(e)}")
@@ -341,9 +351,9 @@ def _get_results_from_database(session_id: str, supabase_client) -> Dict:
         Dict containing training results
     """
     try:
-        response = supabase_client.table('training_results').select('*').eq('session_id', session_id).execute()
+        response = supabase_client.table('training_results').select('*').eq('session_id', session_id).order('created_at', desc=True).execute()
         
-        if response.data:
+        if response.data and len(response.data) > 0:
             return response.data[0]
         else:
             return {}
@@ -415,8 +425,25 @@ def _get_visualizations_from_database(session_id: str, supabase_client) -> Dict:
     try:
         response = supabase_client.table('training_visualizations').select('*').eq('session_id', session_id).execute()
         
-        if response.data:
-            return response.data[0]
+        if response.data and len(response.data) > 0:
+            # Organize plots by plot_name
+            plots = {}
+            metadata = {}
+            created_at = None
+            
+            for viz in response.data:
+                plot_name = viz.get('plot_name', 'unknown')
+                plots[plot_name] = viz.get('plot_data_base64', '')
+                
+                if not metadata:
+                    metadata = viz.get('metadata', {})
+                    created_at = viz.get('created_at')
+            
+            return {
+                'plots': plots,
+                'metadata': metadata,
+                'created_at': created_at
+            }
         else:
             return {'plots': {}}
             
