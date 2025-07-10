@@ -1,156 +1,353 @@
 """
 Configuration module for training system
 Contains all configuration classes and constants extracted from training_backend_test_2.py
+EXACT COPY from original file to preserve functionality
 """
 
 import datetime
-import calendar
 
 
 class MTS:
     """
     Multivariate Time Series configuration class
-    Extracted from training_backend_test_2.py around lines 619-692
+    Extracted from training_backend_test_2.py lines 619-632
     """
-    def __init__(self):
-        # TODO: Extract actual MTS class definition from training_backend_test_2.py
-        # This is a placeholder structure based on typical ML configurations
+    
+    # Anzahl der Zeitschritte der Eingabedaten
+    I_N  = 13
+    
+    # Anzahl der Zeitschritte der Ausgabedaten
+    O_N  = 13
+    
+    # Zeitschrittweite für die Bildung der finalen Datensätze [min]
+    DELT = 3
+    
+    # Offset für die Bildung der finalen Datensätze [min]
+    OFST = 0
+
+
+class T:
+    """
+    Time features configuration class
+    Extracted from training_backend_test_2.py lines 798-954
+    """
+    
+    # Jahreszeitliche Sinus-/Cosinus-Komponente
+    class Y:
         
-        # Time series parameters
-        self.time_steps_in = 24      # Input time steps
-        self.time_steps_out = 1      # Output time steps
-        self.time_step_size = 1      # Size of each time step
-        self.offset = 0              # Time offset
+        # Anwendung
+        IMP = False
         
-        # Data processing parameters
-        self.interpolation = True
-        self.outlier_removal = True
-        self.scaling = True
+        # Bezug auf lokale Zeit (Winter-/Sommerzeit)
+        LT = False
         
-        # Model parameters
-        self.epochs = 100
-        self.batch_size = 32
-        self.validation_split = 0.2
+        # Datenform
+        SPEC = "Zeithorizont"
         
-        # Feature engineering
-        self.use_time_features = True
-        self.use_holidays = True
-        self.timezone = "UTC"
+        # Zeithorizont Start [h]
+        TH_STRT = -24
         
-        # Categories and features
-        self.jahr = True      # Year
-        self.monat = True     # Month
-        self.woche = True     # Week
-        self.feiertag = True  # Holiday
+        # Zeithorizont Ende [h]
+        TH_END = 0
         
-        # Data paths (will be dynamic)
-        self.input_files = []
-        self.output_files = []
+        # Skalierung
+        SCAL = True
+        
+        # Skalierung max [-]
+        SCAL_MAX = 1
+        
+        # Skalierung min [-]
+        SCAL_MIN = 0
+        
+        # Zeitschrittweite [min]
+        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+        
+    # Monatliche Sinus-/Cosinus-Komponente
+    class M:
+        
+        # Anwendung
+        IMP = False
+        
+        # Bezug auf lokale Zeit (Winter-/Sommerzeit)
+        LT = False
+        
+        # Datenform
+        SPEC = "Zeithorizont"
+        
+        # Zeithorizont Start [h]
+        TH_STRT = -1
+        
+        # Zeithorizont Ende [h]
+        TH_END = 0
+        
+        # Skalierung
+        SCAL = True
+        
+        # Skalierung max [-]
+        SCAL_MAX = 1
+        
+        # Skalierung min [-]
+        SCAL_MIN = 0
+        
+        # Zeitschrittweite [min]
+        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+        
+    # Wöchentliche Sinus-/Cosinus-Komponente
+    class W:
+
+        # Anwendung
+        IMP = False
+        
+        # Bezug auf lokale Zeit (Winter-/Sommerzeit)
+        LT = False
+        
+        # Datenform
+        SPEC = "Aktuelle Zeit"
+        
+        # Zeithorizont Start [h]
+        TH_STRT = -24
+        
+        # Zeithorizont Ende [h]
+        TH_END = 0
+        
+        # Skalierung
+        SCAL = True
+        
+        # Skalierung max [-]
+        SCAL_MAX = 1
+        
+        # Skalierung min [-]
+        SCAL_MIN = 0
+        
+        # Zeitschrittweite [min]
+        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+    
+    # Tägliche Sinus-/Cosinus-Komponente
+    class D:
+
+        # Anwendung
+        IMP = False
+        
+        # Bezug auf lokale Zeit (Winter-/Sommerzeit)
+        LT = True
+        
+        # Datenform
+        SPEC = "Zeithorizont"
+        
+        # Zeithorizont Start [h]
+        TH_STRT = -24
+        
+        # Zeithorizont Ende [h]
+        TH_END = 0
+        
+        # Skalierung
+        SCAL = True
+        
+        # Skalierung max [-]
+        SCAL_MAX = 1
+        
+        # Skalierung min [-]
+        SCAL_MIN = 0
+        
+        # Zeitschrittweite [min]
+        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+    
+    # Berücksichtigung von Feiertagen
+    class H:
+
+        # Anwendung
+        IMP = False
+        
+        # Bezug auf lokale Zeit (Winter-/Sommerzeit)
+        LT = False
+        
+        # Datenform
+        SPEC = "Aktuelle Zeit"
+        
+        # Zeithorizont Start [h]
+        TH_STRT = -100
+        
+        # Zeithorizont Ende [h]
+        TH_END = 0
+        
+        # Skalierung
+        SCAL = True
+        
+        # Skalierung max [-]
+        SCAL_MAX = 1
+        
+        # Skalierung min [-]
+        SCAL_MIN = 0
+        
+        # Land
+        CNTRY   = "Österreich"
+        
+        # Zeitschrittweite [min]
+        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+    
+    # Zeitzone
+    TZ      = "Europe/Vienna"
 
 
 class MDL:
     """
     Model configuration class
-    Extracted from training_backend_test_2.py around lines 2046-2141
+    Extracted from training_backend_test_2.py lines 2046-2141
     """
-    def __init__(self):
-        # TODO: Extract actual MDL class definition from training_backend_test_2.py
-        # This is a placeholder structure
+    
+    # Ausgewähltes Verfahren
+    #MODE = "Dense"
+    #MODE = "CNN"
+    #MODE = "LSTM"
+    #MODE = "AR LSTM"
+    #MODE = "SVR_dir"
+    #MODE = "SVR_MIMO"
+    MODE = "LIN"
+    
+    if MODE == "Dense":
+    
+        # Anzahl an Layer [-]
+        LAY = 3
+            
+        # Anzahl der Neuronen pro Layer [-]
+        N = 512
         
-        # Model types to train
-        self.models = {
-            'dense': True,
-            'cnn': True,
-            'lstm': True,
-            'ar_lstm': True,
-            'svr_dir': True,
-            'svr_mimo': True,
-            'linear': True
-        }
+        # Max. Anzahl der Trainingsdurchläufe [-]
+        EP = 20
         
-        # Dense neural network parameters
-        self.dense_layers = [64, 32, 16]
-        self.dense_activation = 'relu'
-        self.dense_dropout = 0.2
+        # Aktivierungsfunktion
+        ACTF = "relu"
+    
+    elif MODE == "CNN":
         
-        # CNN parameters
-        self.cnn_filters = [32, 64]
-        self.cnn_kernel_size = 3
-        self.cnn_pool_size = 2
+        # Anzahl an Layer [-]
+        LAY = 3
+            
+        # Anzahl der Filter pro Layer [-]
+        N = 512
         
-        # LSTM parameters
-        self.lstm_units = [50, 50]
-        self.lstm_return_sequences = True
-        self.lstm_dropout = 0.2
+        # Kernelgröße [-]
+        K = 3
         
-        # SVR parameters
-        self.svr_kernel = 'rbf'
-        self.svr_C = 1.0
-        self.svr_epsilon = 0.1
+        # Max. Anzahl der Trainingsdurchläufe [-]
+        EP = 20
         
-        # Training parameters
-        self.early_stopping = True
-        self.patience = 10
-        self.min_delta = 0.001
+        # Aktivierungsfunktion
+        ACTF = "relu"
         
-        # Evaluation parameters
-        self.test_size = 0.2
-        self.random_state = 42
+        
+    elif MODE == "LSTM":
+        
+        # Anzahl an Layer [-]
+        LAY = 3
+            
+        # Anzahl der Neuronen pro Layer [-]
+        N = 512
+        
+        # Max. Anzahl der Trainingsdurchläufe [-]
+        EP = 20
+        
+        # Aktivierungsfunktion
+        ACTF = "relu"
+        
+    elif MODE == "AR LSTM":
+        
+        # Anzahl an Layer [-]
+        LAY = 3
+            
+        # Anzahl der Neuronen pro Layer [-]
+        N = 512
+        
+        # Max. Anzahl der Trainingsdurchläufe [-]
+        EP = 20
+        
+        # Aktivierungsfunktion
+        ACTF = "relu"
+        
+    elif MODE == "SVR_dir":
+        
+        # Art der Modellierung von Nichtlinearitäten
+        KERNEL = "poly"
+        
+        # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
+        C = 1
+        
+        # Toleranz für Abweichungen [-]
+        EPSILON = 0.1
+        
+    elif MODE == "SVR_MIMO":
+        
+        # Art der Modellierung von Nichtlinearitäten
+        KERNEL = "poly"
+        
+        # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
+        C = 1
+        
+        # Toleranz für Abweichungen [-]
+        EPSILON = 0.1
+        
+    elif MODE == "LIN":
+        a = 5
 
 
-# Holiday configuration dictionary
-# TODO: Extract actual HOL dictionary from training_backend_test_2.py
+# INFORMATIONEN ZU DEN FEIERTAGEN (DIE KEINE SONNTAGE SIND)
+# Extracted from training_backend_test_2.py lines 635-692
 HOL = {
-    'AT': {  # Austria holidays
-        'neue_jahr': (1, 1),
-        'heilige_drei_koenige': (1, 6),
-        'staatsfeiertag': (5, 1),
-        'maria_himmelfahrt': (8, 15),
-        'nationalfeiertag': (10, 26),
-        'allerheiligen': (11, 1),
-        'maria_empfaengnis': (12, 8),
-        'weihnachten': (12, 25),
-        'stefanitag': (12, 26),
-        # Easter-dependent holidays will be calculated dynamically
-    }
-}
+        "Österreich": [
+            "2022-01-01",   # Neujahrstag (SA)
+            "2022-01-06",   # Heilige Drei Könige (DO)
+            "2022-04-18",   # Ostermontag (MO)
+            "2022-05-26",   # Christi Himmelfahrt (DO)
+            "2022-06-06",   # Pfingsmontag (MO)
+            "2022-06-16",   # Fronleichnam (DO)
+            "2022-08-15",   # Mariä Himmelfahrt (MO)
+            "2022-10-26",   # Nationalfeiertag (MI)
+            "2022-11-01",   # Allerheiligen (DI)
+            "2022-12-08",   # Mariä Empfängnis (DO)
+            "2022-12-26",   # Stefanitag (MO)
+            "2023-01-06",   # Heilige Drei Könige (FR)
+            "2023-04-10",   # Ostermontag (MO)
+            "2023-05-01",   # Tag der Arbeit (MO)
+            "2023-05-18",   # Christi Himmelfahrt (DO)
+            "2023-05-29",   # Pfingsmontag (MO)
+            "2023-06-08",   # Fronleichnam (DO)
+            "2023-08-15",   # Mariä Himmelfahrt (DI)
+            "2023-10-26",   # Nationalfeiertag (DO)
+            "2023-11-01",   # Allerheiligen (MI)
+            "2023-12-08",   # Mariä Empfängnis (FR)
+            "2023-12-25",   # Christtag (MO)
+            "2023-12-26",   # Stefanitag (DI)
+            "2024-01-01",   # Neujahrstag (MO)
+            "2024-01-06",   # Heilige Drei Könige (SA)
+            "2024-04-01",   # Ostermontag (MO)
+            "2024-05-01",   # Tag der Arbeit (MI)
+            "2024-05-09",   # Christi Himmelfahrt (DO)
+            "2025-05-20",   # Pfingsmontag (MO)
+            "2024-05-30",   # Fronleichnam (DO)
+            "2024-08-15",   # Mariä Himmelfahrt (DO)
+            "2024-10-26",   # Nationalfeiertag (SA)
+            "2024-11-01",   # Allerheiligen (FR)
+            "2024-12-25",   # Christtag (MI)
+            "2024-12-26",   # Stefanitag (DO)
+            "2025-01-01",   # Neujahrstag (MI)
+            "2025-01-06",   # Heilige Drei Könige (MO)
+            "2025-04-21",   # Ostermontag (MO)
+            "2025-05-01",   # Tag der Arbeit (DO)
+            "2025-05-29",   # Christi Himmelfahrt (DO)
+            "2025-06-09",   # Pfingsmontag (MO)
+            "2025-06-19",   # Fronleichnam (DO)
+            "2025-08-15",   # Mariä Himmelfahrt (FR)
+            "2025-11-01",   # Allerheiligen (SA)
+            "2025-12-08",   # Mariä Empfängnis (MO)
+            "2025-12-25",   # Christtag (DO)
+            "2025-12-26"    # Stefanitag (FR)
+        ],
+        "Deutschland":  [],
+        "Schweiz":      []
+        }
 
-
-# Global constants
-SUPPORTED_TIMEZONES = ['UTC', 'Europe/Vienna', 'Europe/Berlin']
-SUPPORTED_LANGUAGES = ['de', 'en']
-DEFAULT_TIMEZONE = 'UTC'
-DEFAULT_LANGUAGE = 'de'
-
-# Data processing constants
-MIN_DATA_POINTS = 100
-MAX_DATA_POINTS = 1000000
-OUTLIER_THRESHOLD = 3.0
-INTERPOLATION_METHOD = 'linear'
-
-# Model training constants
-MAX_EPOCHS = 1000
-MIN_EPOCHS = 10
-DEFAULT_BATCH_SIZE = 32
-DEFAULT_VALIDATION_SPLIT = 0.2
-
-# Evaluation metrics
-EVALUATION_METRICS = [
-    'mae',          # Mean Absolute Error
-    'mape',         # Mean Absolute Percentage Error
-    'mse',          # Mean Squared Error
-    'rmse',         # Root Mean Squared Error
-    'nrmse',        # Normalized Root Mean Squared Error
-    'wape',         # Weighted Absolute Percentage Error
-    'smape',        # Symmetric Mean Absolute Percentage Error
-    'mase'          # Mean Absolute Scaled Error
-]
-
-# Visualization settings
-PLOT_SETTINGS = {
-    'figure_size': (12, 8),
-    'dpi': 300,
-    'style': 'seaborn',
-    'color_palette': 'husl',
-    'font_size': 12
+# Convert holiday strings to datetime objects (exactly as in original)
+HOL = {
+    land: [datetime.datetime.strptime(datum, "%Y-%m-%d") for datum in daten]
+    for land, daten in HOL.items()
 }

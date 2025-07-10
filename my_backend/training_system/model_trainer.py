@@ -1,6 +1,7 @@
 """
 Model trainer module for training system
 Contains all ML model training functions extracted from training_backend_test_2.py
+EXACT COPY from original file to preserve functionality
 """
 
 import numpy as np
@@ -22,20 +23,392 @@ from .config import MDL
 logger = logging.getLogger(__name__)
 
 
-class ModelTrainer:
+def train_dense(train_x, train_y, val_x, val_y, MDL):    
     """
-    Main model trainer class
-    Contains all model training functions extracted from training_backend_test_2.py
+    Funktion trainiert und validiert ein Neuronales Netz anhand der 
+    eingegebenen Trainingsdaten (train_x, train_y) und Validierungsdaten 
+    (val_x, val_y).
+    
+    train_x...Trainingsdaten (Eingabedaten)
+    train_y...Trainingsdaten (Ausgabedaten)
+    val_x.....Validierungsdaten (Eingabedaten)
+    val_y.....Validierungsdaten (Ausgabedaten)
+    MDL.......Informationen zum Modell
+    
+    Extracted from training_backend_test_2.py lines 170-238
+    """
+       
+    # MODELLDEFINITION ########################################################
+    
+    # Modellinitialisierung (Sequentielles Modell mit linear 
+    # hintereinandergeordneten Schichten)
+    model = tf.keras.Sequential()
+    
+    # Input-Schicht → Mehrdimensionale Daten werden in einen 1D-Vektor 
+    # umgewandelt
+    model.add(tf.keras.layers.Flatten())
+    
+    # Dense-Layer hinzufügen
+    for _ in range(MDL.LAY):
+        model.add(tf.keras.layers.Dense(MDL.N,                  # Anzahl an Neuronen
+                                        activation = MDL.ACTF)) # Aktivierungsfunktion
+    
+    # Output-Schicht
+    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
+                                  kernel_initializer = tf.initializers.zeros))
+    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    
+    """
+    Folgender Callback sorgt dafür, dass das Training vorzeitig gestoppt wird, 
+    wenn sich die Leistung auf den Validierungsdaten (val_loss) nach einer 
+    bestimmten Anzahl von Epochen nicht verbessert. Dies hilft, Overfitting zu 
+    vermeiden und das Training effizienter zu gestalten.
     """
     
-    def __init__(self, config: MDL):
-        self.config = config
+    earlystopping = tf.keras.callbacks.\
+        EarlyStopping(monitor  = "val_loss", 
+        mode                   = "min", 
+        patience               = 2, 
+        restore_best_weights   = True)
+
+    # Konfiguration des Modells für das Training    
+    model.compile(
+        optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
+        loss = tf.keras.losses.MeanSquaredError(),
+        metrics = [tf.keras.metrics.RootMeanSquaredError()])
+    
+    # TRAINIEREN ##############################################################
+    
+    print("Modell wird trainiert.")
+    
+    model.fit(
+        x               = train_x,
+        y               = train_y,
+        epochs          = MDL.EP,
+        verbose         = 1,
+        callbacks       = [earlystopping],
+        validation_data = (val_x, val_y)
+        )
+         
+    print("Modell wurde trainiert.")
+            
+    return model
+
+
+def train_cnn(train_x, train_y, val_x, val_y, MDL):    
+    """
+    Funktion trainiert und validiert ein Convolutional Neural Network
+    
+    Extracted from training_backend_test_2.py lines 239-320
+    """
+    
+    # MODELLDEFINITION ########################################################
+    
+    # Modellinitialisierung
+    model = tf.keras.Sequential()
+    
+    # Conv1D-Layer hinzufügen
+    for i in range(MDL.LAY):
+        if i == 0:
+            # Erste Schicht benötigt input_shape
+            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
+                                           kernel_size = MDL.K,
+                                           activation = MDL.ACTF,
+                                           input_shape = (train_x.shape[1], train_x.shape[2])))
+        else:
+            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
+                                           kernel_size = MDL.K,
+                                           activation = MDL.ACTF))
+    
+    # Daten für Dense-Layer vorbereiten
+    model.add(tf.keras.layers.Flatten())
+    
+    # Output-Schicht
+    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
+                                  kernel_initializer = tf.initializers.zeros))
+    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    
+    # Early Stopping
+    earlystopping = tf.keras.callbacks.\
+        EarlyStopping(monitor  = "val_loss", 
+        mode                   = "min", 
+        patience               = 2, 
+        restore_best_weights   = True)
+
+    # Konfiguration des Modells für das Training    
+    model.compile(
+        optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
+        loss = tf.keras.losses.MeanSquaredError(),
+        metrics = [tf.keras.metrics.RootMeanSquaredError()])
+    
+    # TRAINIEREN ##############################################################
+    
+    print("Modell wird trainiert.")
+    
+    model.fit(
+        x               = train_x,
+        y               = train_y,
+        epochs          = MDL.EP,
+        verbose         = 1,
+        callbacks       = [earlystopping],
+        validation_data = (val_x, val_y)
+        )
+         
+    print("Modell wurde trainiert.")
+            
+    return model
+
+
+def train_lstm(train_x, train_y, val_x, val_y, MDL):
+    """
+    Funktion trainiert und validiert ein LSTM Neural Network
+    
+    Extracted from training_backend_test_2.py lines 321-388
+    """
+    
+    # MODELLDEFINITION ########################################################
+    
+    # Modellinitialisierung
+    model = tf.keras.Sequential()
+    
+    # LSTM-Layer hinzufügen
+    for i in range(MDL.LAY):
+        if i == 0:
+            # Erste Schicht benötigt input_shape
+            if i == MDL.LAY - 1:  # Letzte Schicht
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             input_shape = (train_x.shape[1], train_x.shape[2]),
+                                             return_sequences = False))
+            else:
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             input_shape = (train_x.shape[1], train_x.shape[2]),
+                                             return_sequences = True))
+        else:
+            if i == MDL.LAY - 1:  # Letzte Schicht
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             return_sequences = False))
+            else:
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             return_sequences = True))
+    
+    # Output-Schicht
+    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
+                                  kernel_initializer = tf.initializers.zeros))
+    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    
+    # Early Stopping
+    earlystopping = tf.keras.callbacks.\
+        EarlyStopping(monitor  = "val_loss", 
+        mode                   = "min", 
+        patience               = 2, 
+        restore_best_weights   = True)
+
+    # Konfiguration des Modells für das Training    
+    model.compile(
+        optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
+        loss = tf.keras.losses.MeanSquaredError(),
+        metrics = [tf.keras.metrics.RootMeanSquaredError()])
+    
+    # TRAINIEREN ##############################################################
+    
+    print("Modell wird trainiert.")
+    
+    model.fit(
+        x               = train_x,
+        y               = train_y,
+        epochs          = MDL.EP,
+        verbose         = 1,
+        callbacks       = [earlystopping],
+        validation_data = (val_x, val_y)
+        )
+         
+    print("Modell wurde trainiert.")
+            
+    return model
+
+
+def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
+    """
+    Funktion trainiert und validiert ein Autoregressive LSTM
+    
+    Extracted from training_backend_test_2.py lines 389-457
+    """
+    
+    # MODELLDEFINITION ########################################################
+    
+    # Modellinitialisierung
+    model = tf.keras.Sequential()
+    
+    # LSTM-Layer hinzufügen (ähnlich wie LSTM aber mit anderem Output)
+    for i in range(MDL.LAY):
+        if i == 0:
+            # Erste Schicht benötigt input_shape
+            if i == MDL.LAY - 1:  # Letzte Schicht
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             input_shape = (train_x.shape[1], train_x.shape[2]),
+                                             return_sequences = False))
+            else:
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             input_shape = (train_x.shape[1], train_x.shape[2]),
+                                             return_sequences = True))
+        else:
+            if i == MDL.LAY - 1:  # Letzte Schicht
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             return_sequences = False))
+            else:
+                model.add(tf.keras.layers.LSTM(MDL.N,
+                                             activation = MDL.ACTF,
+                                             return_sequences = True))
+    
+    # Output-Schicht für Autoregressive
+    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
+                                  kernel_initializer = tf.initializers.zeros))
+    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    
+    # Early Stopping
+    earlystopping = tf.keras.callbacks.\
+        EarlyStopping(monitor  = "val_loss", 
+        mode                   = "min", 
+        patience               = 2, 
+        restore_best_weights   = True)
+
+    # Konfiguration des Modells für das Training    
+    model.compile(
+        optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
+        loss = tf.keras.losses.MeanSquaredError(),
+        metrics = [tf.keras.metrics.RootMeanSquaredError()])
+    
+    # TRAINIEREN ##############################################################
+    
+    print("Modell wird trainiert.")
+    
+    model.fit(
+        x               = train_x,
+        y               = train_y,
+        epochs          = MDL.EP,
+        verbose         = 1,
+        callbacks       = [earlystopping],
+        validation_data = (val_x, val_y)
+        )
+         
+    print("Modell wurde trainiert.")
+            
+    return model
+
+
+def train_svr_dir(train_x, train_y, MDL):
+    """
+    Funktion trainiert SVR Direktmodell
+    
+    Extracted from training_backend_test_2.py lines 458-492
+    """
+    
+    # MODELLDEFINITION ########################################################
+    
+    # Daten umformen
+    n_samples, n_timesteps, n_features_in = train_x.shape
+    _, _, n_features_out = train_y.shape
+    
+    X = train_x.reshape(n_samples * n_timesteps, n_features_in)
+    
+    # TRAINIEREN ##############################################################
+    
+    print("Modell wird trainiert.")
+    models = []
+    for i in range(n_features_out):
+        y_i = train_y[:, :, i].reshape(-1)
+        
+        # SVR Modell erstellen
+        model = SVR(kernel = MDL.KERNEL, 
+                   C = MDL.C, 
+                   epsilon = MDL.EPSILON)
+        model.fit(X, y_i)
+        models.append(model)
+    print("Modell wurde trainiert.")
+    return models
+
+
+def train_svr_mimo(train_x, train_y, MDL):
+    """
+    Funktion trainiert SVR MIMO Modell
+    
+    Extracted from training_backend_test_2.py lines 493-530
+    """
+    
+    # MODELLDEFINITION ########################################################
+    
+    # Daten umformen für MIMO
+    n_samples, n_timesteps, n_features_in = train_x.shape
+    _, n_timesteps_out, n_features_out = train_y.shape
+    
+    X = train_x.reshape(n_samples, n_timesteps * n_features_in)
+    Y = train_y.reshape(n_samples, n_timesteps_out * n_features_out)
+    
+    # TRAINIEREN ##############################################################
+    
+    print("Modell wird trainiert.")
+    models = []
+    for i in range(Y.shape[1]):  # Für jeden Output
+        y_i = Y[:, i]
+        
+        # SVR Modell erstellen
+        model = SVR(kernel = MDL.KERNEL, 
+                   C = MDL.C, 
+                   epsilon = MDL.EPSILON)
+        model.fit(X, y_i)
+        models.append(model)
+    print("Modell wurde trainiert.")
+    return models
+
+
+def train_linear_model(trn_x, trn_y):
+    """
+    Funktion trainiert Linear Regression Modell
+    
+    Extracted from training_backend_test_2.py lines 531-551
+    """
+    
+    # MODELLDEFINITION ########################################################
+    
+    # Daten umformen
+    n_samples, n_timesteps, n_features_in = trn_x.shape
+    _, _, n_features_out = trn_y.shape
+    
+    X = trn_x.reshape(n_samples * n_timesteps, n_features_in)   # (390, 2)
+    
+    # TRAINIEREN ##############################################################
+    
+    print("Modell wird trainiert.")
+    models = []
+    for i in range(n_features_out):
+        y_i = trn_y[:, :, i].reshape(-1)
+        model = LinearRegression()
+        model.fit(X, y_i)
+        models.append(model)
+    print("Modell wurde trainiert.")
+    return models
+
+
+class ModelTrainer:
+    """
+    Main model trainer class wrapper for extracted functions
+    """
+    
+    def __init__(self, config=None):
+        self.config = config or MDL
         self.trained_models = {}
         self.training_history = {}
     
     def train_all_models(self, datasets: Dict, session_data: Dict) -> Dict:
         """
-        Train all enabled models
+        Train all enabled models using the extracted real functions
         
         Args:
             datasets: Training datasets
@@ -55,27 +428,27 @@ class ModelTrainer:
                 
                 dataset_results = {}
                 
-                # Train each enabled model
-                if self.config.models.get('dense', False):
-                    dataset_results['dense'] = self.train_dense(X_train, y_train, X_test, y_test)
+                # Use the real training functions extracted from original
+                if self.config.MODE == "Dense":
+                    dataset_results['dense'] = train_dense(X_train, y_train, X_test, y_test, self.config)
                 
-                if self.config.models.get('cnn', False):
-                    dataset_results['cnn'] = self.train_cnn(X_train, y_train, X_test, y_test)
+                elif self.config.MODE == "CNN":
+                    dataset_results['cnn'] = train_cnn(X_train, y_train, X_test, y_test, self.config)
                 
-                if self.config.models.get('lstm', False):
-                    dataset_results['lstm'] = self.train_lstm(X_train, y_train, X_test, y_test)
+                elif self.config.MODE == "LSTM":
+                    dataset_results['lstm'] = train_lstm(X_train, y_train, X_test, y_test, self.config)
                 
-                if self.config.models.get('ar_lstm', False):
-                    dataset_results['ar_lstm'] = self.train_ar_lstm(X_train, y_train, X_test, y_test)
+                elif self.config.MODE == "AR LSTM":
+                    dataset_results['ar_lstm'] = train_ar_lstm(X_train, y_train, X_test, y_test, self.config)
                 
-                if self.config.models.get('svr_dir', False):
-                    dataset_results['svr_dir'] = self.train_svr_dir(X_train, y_train, X_test, y_test)
+                elif self.config.MODE == "SVR_dir":
+                    dataset_results['svr_dir'] = train_svr_dir(X_train, y_train, self.config)
                 
-                if self.config.models.get('svr_mimo', False):
-                    dataset_results['svr_mimo'] = self.train_svr_mimo(X_train, y_train, X_test, y_test)
+                elif self.config.MODE == "SVR_MIMO":
+                    dataset_results['svr_mimo'] = train_svr_mimo(X_train, y_train, self.config)
                 
-                if self.config.models.get('linear', False):
-                    dataset_results['linear'] = self.train_linear_model(X_train, y_train, X_test, y_test)
+                elif self.config.MODE == "LIN":
+                    dataset_results['linear'] = train_linear_model(X_train, y_train)
                 
                 results[dataset_name] = dataset_results
             
@@ -99,478 +472,20 @@ class ModelTrainer:
         try:
             from sklearn.model_selection import train_test_split
             
-            return train_test_split(X, y, test_size=self.config.test_size, 
-                                  random_state=self.config.random_state)
+            return train_test_split(X, y, test_size=0.2, random_state=42)
             
         except Exception as e:
             logger.error(f"Error splitting data: {str(e)}")
             raise
-    
-    def train_dense(self, X_train: np.ndarray, y_train: np.ndarray, 
-                   X_test: np.ndarray, y_test: np.ndarray) -> Dict:
-        """
-        Train Dense Neural Network model
-        Extracted from training_backend_test_2.py around lines 170-220
-        
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Dict containing model and results
-        """
-        try:
-            # TODO: Extract actual dense model architecture from training_backend_test_2.py
-            # This is placeholder implementation
-            
-            model = Sequential()
-            
-            # Input layer
-            model.add(Dense(self.config.dense_layers[0], 
-                          activation=self.config.dense_activation,
-                          input_shape=(X_train.shape[1], X_train.shape[2])))
-            model.add(Flatten())
-            
-            # Hidden layers
-            for units in self.config.dense_layers[1:]:
-                model.add(Dense(units, activation=self.config.dense_activation))
-                model.add(Dropout(self.config.dense_dropout))
-            
-            # Output layer
-            model.add(Dense(y_train.shape[-1] if len(y_train.shape) > 1 else 1))
-            
-            # Compile model
-            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-            
-            # Train model
-            callbacks = []
-            if self.config.early_stopping:
-                callbacks.append(EarlyStopping(patience=self.config.patience, 
-                                             min_delta=self.config.min_delta))
-            
-            history = model.fit(X_train, y_train,
-                              epochs=100,
-                              batch_size=32,
-                              validation_split=0.2,
-                              callbacks=callbacks,
-                              verbose=0)
-            
-            # Predict
-            y_pred = model.predict(X_test)
-            
-            # Calculate metrics
-            metrics = self._calculate_metrics(y_test, y_pred)
-            
-            result = {
-                'model': model,
-                'history': history.history,
-                'predictions': y_pred,
-                'metrics': metrics
-            }
-            
-            self.trained_models['dense'] = model
-            self.training_history['dense'] = history.history
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error training dense model: {str(e)}")
-            raise
-    
-    def train_cnn(self, X_train: np.ndarray, y_train: np.ndarray, 
-                  X_test: np.ndarray, y_test: np.ndarray) -> Dict:
-        """
-        Train CNN model
-        Extracted from training_backend_test_2.py around lines 221-280
-        
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Dict containing model and results
-        """
-        try:
-            # TODO: Extract actual CNN architecture from training_backend_test_2.py
-            
-            model = Sequential()
-            
-            # CNN layers
-            for i, filters in enumerate(self.config.cnn_filters):
-                if i == 0:
-                    model.add(Conv1D(filters=filters, 
-                                   kernel_size=self.config.cnn_kernel_size,
-                                   activation='relu',
-                                   input_shape=(X_train.shape[1], X_train.shape[2])))
-                else:
-                    model.add(Conv1D(filters=filters, 
-                                   kernel_size=self.config.cnn_kernel_size,
-                                   activation='relu'))
-                
-                model.add(MaxPooling1D(pool_size=self.config.cnn_pool_size))
-            
-            # Flatten and dense layers
-            model.add(Flatten())
-            model.add(Dense(50, activation='relu'))
-            model.add(Dense(y_train.shape[-1] if len(y_train.shape) > 1 else 1))
-            
-            # Compile and train
-            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-            
-            callbacks = []
-            if self.config.early_stopping:
-                callbacks.append(EarlyStopping(patience=self.config.patience))
-            
-            history = model.fit(X_train, y_train,
-                              epochs=100,
-                              batch_size=32,
-                              validation_split=0.2,
-                              callbacks=callbacks,
-                              verbose=0)
-            
-            y_pred = model.predict(X_test)
-            metrics = self._calculate_metrics(y_test, y_pred)
-            
-            result = {
-                'model': model,
-                'history': history.history,
-                'predictions': y_pred,
-                'metrics': metrics
-            }
-            
-            self.trained_models['cnn'] = model
-            self.training_history['cnn'] = history.history
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error training CNN model: {str(e)}")
-            raise
-    
-    def train_lstm(self, X_train: np.ndarray, y_train: np.ndarray, 
-                   X_test: np.ndarray, y_test: np.ndarray) -> Dict:
-        """
-        Train LSTM model
-        Extracted from training_backend_test_2.py around lines 281-340
-        
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Dict containing model and results
-        """
-        try:
-            # TODO: Extract actual LSTM architecture from training_backend_test_2.py
-            
-            model = Sequential()
-            
-            # LSTM layers
-            for i, units in enumerate(self.config.lstm_units):
-                return_sequences = (i < len(self.config.lstm_units) - 1) or self.config.lstm_return_sequences
-                
-                if i == 0:
-                    model.add(LSTM(units, 
-                                 return_sequences=return_sequences,
-                                 input_shape=(X_train.shape[1], X_train.shape[2])))
-                else:
-                    model.add(LSTM(units, return_sequences=return_sequences))
-                
-                model.add(Dropout(self.config.lstm_dropout))
-            
-            # Output layer
-            model.add(Dense(y_train.shape[-1] if len(y_train.shape) > 1 else 1))
-            
-            # Compile and train
-            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-            
-            callbacks = []
-            if self.config.early_stopping:
-                callbacks.append(EarlyStopping(patience=self.config.patience))
-            
-            history = model.fit(X_train, y_train,
-                              epochs=100,
-                              batch_size=32,
-                              validation_split=0.2,
-                              callbacks=callbacks,
-                              verbose=0)
-            
-            y_pred = model.predict(X_test)
-            metrics = self._calculate_metrics(y_test, y_pred)
-            
-            result = {
-                'model': model,
-                'history': history.history,
-                'predictions': y_pred,
-                'metrics': metrics
-            }
-            
-            self.trained_models['lstm'] = model
-            self.training_history['lstm'] = history.history
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error training LSTM model: {str(e)}")
-            raise
-    
-    def train_ar_lstm(self, X_train: np.ndarray, y_train: np.ndarray, 
-                      X_test: np.ndarray, y_test: np.ndarray) -> Dict:
-        """
-        Train Autoregressive LSTM model
-        Extracted from training_backend_test_2.py around lines 341-400
-        
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Dict containing model and results
-        """
-        try:
-            # TODO: Extract actual AR-LSTM architecture from training_backend_test_2.py
-            # This is placeholder implementation
-            
-            model = Sequential()
-            
-            # AR-LSTM layers
-            model.add(LSTM(50, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
-            model.add(Dropout(0.2))
-            model.add(LSTM(50, return_sequences=False))
-            model.add(Dropout(0.2))
-            model.add(Dense(y_train.shape[-1] if len(y_train.shape) > 1 else 1))
-            
-            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-            
-            callbacks = []
-            if self.config.early_stopping:
-                callbacks.append(EarlyStopping(patience=self.config.patience))
-            
-            history = model.fit(X_train, y_train,
-                              epochs=100,
-                              batch_size=32,
-                              validation_split=0.2,
-                              callbacks=callbacks,
-                              verbose=0)
-            
-            y_pred = model.predict(X_test)
-            metrics = self._calculate_metrics(y_test, y_pred)
-            
-            result = {
-                'model': model,
-                'history': history.history,
-                'predictions': y_pred,
-                'metrics': metrics
-            }
-            
-            self.trained_models['ar_lstm'] = model
-            self.training_history['ar_lstm'] = history.history
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error training AR-LSTM model: {str(e)}")
-            raise
-    
-    def train_svr_dir(self, X_train: np.ndarray, y_train: np.ndarray, 
-                      X_test: np.ndarray, y_test: np.ndarray) -> Dict:
-        """
-        Train SVR Direct model
-        Extracted from training_backend_test_2.py around lines 401-460
-        
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Dict containing model and results
-        """
-        try:
-            # TODO: Extract actual SVR Direct implementation from training_backend_test_2.py
-            
-            # Flatten input for SVR
-            X_train_flat = X_train.reshape(X_train.shape[0], -1)
-            X_test_flat = X_test.reshape(X_test.shape[0], -1)
-            y_train_flat = y_train.reshape(y_train.shape[0], -1)
-            
-            # Create and train SVR model
-            model = make_pipeline(StandardScaler(), 
-                                SVR(kernel=self.config.svr_kernel,
-                                    C=self.config.svr_C,
-                                    epsilon=self.config.svr_epsilon))
-            
-            model.fit(X_train_flat, y_train_flat.ravel())
-            
-            # Predict
-            y_pred = model.predict(X_test_flat)
-            y_pred = y_pred.reshape(-1, 1)
-            
-            # Calculate metrics
-            metrics = self._calculate_metrics(y_test, y_pred)
-            
-            result = {
-                'model': model,
-                'predictions': y_pred,
-                'metrics': metrics
-            }
-            
-            self.trained_models['svr_dir'] = model
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error training SVR Direct model: {str(e)}")
-            raise
-    
-    def train_svr_mimo(self, X_train: np.ndarray, y_train: np.ndarray, 
-                       X_test: np.ndarray, y_test: np.ndarray) -> Dict:
-        """
-        Train SVR MIMO model
-        Extracted from training_backend_test_2.py around lines 461-520
-        
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Dict containing model and results
-        """
-        try:
-            # TODO: Extract actual SVR MIMO implementation from training_backend_test_2.py
-            
-            # Flatten input for SVR
-            X_train_flat = X_train.reshape(X_train.shape[0], -1)
-            X_test_flat = X_test.reshape(X_test.shape[0], -1)
-            
-            # Train multiple SVR models for MIMO
-            models = []
-            predictions = []
-            
-            for i in range(y_train.shape[-1]):
-                model = make_pipeline(StandardScaler(), 
-                                    SVR(kernel=self.config.svr_kernel,
-                                        C=self.config.svr_C,
-                                        epsilon=self.config.svr_epsilon))
-                
-                model.fit(X_train_flat, y_train[:, i])
-                pred = model.predict(X_test_flat)
-                
-                models.append(model)
-                predictions.append(pred)
-            
-            y_pred = np.column_stack(predictions)
-            metrics = self._calculate_metrics(y_test, y_pred)
-            
-            result = {
-                'models': models,
-                'predictions': y_pred,
-                'metrics': metrics
-            }
-            
-            self.trained_models['svr_mimo'] = models
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error training SVR MIMO model: {str(e)}")
-            raise
-    
-    def train_linear_model(self, X_train: np.ndarray, y_train: np.ndarray, 
-                          X_test: np.ndarray, y_test: np.ndarray) -> Dict:
-        """
-        Train Linear Regression model
-        Extracted from training_backend_test_2.py around lines 521-553
-        
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Dict containing model and results
-        """
-        try:
-            # TODO: Extract actual linear model implementation from training_backend_test_2.py
-            
-            # Flatten input for linear regression
-            X_train_flat = X_train.reshape(X_train.shape[0], -1)
-            X_test_flat = X_test.reshape(X_test.shape[0], -1)
-            y_train_flat = y_train.reshape(y_train.shape[0], -1)
-            
-            # Create and train linear model
-            model = LinearRegression()
-            model.fit(X_train_flat, y_train_flat)
-            
-            # Predict
-            y_pred = model.predict(X_test_flat)
-            
-            # Calculate metrics
-            metrics = self._calculate_metrics(y_test, y_pred)
-            
-            result = {
-                'model': model,
-                'predictions': y_pred,
-                'metrics': metrics
-            }
-            
-            self.trained_models['linear'] = model
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error training linear model: {str(e)}")
-            raise
-    
-    def _calculate_metrics(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
-        """
-        Calculate evaluation metrics
-        
-        Args:
-            y_true: True values
-            y_pred: Predicted values
-            
-        Returns:
-            Dict containing metrics
-        """
-        try:
-            # Flatten arrays for metric calculation
-            y_true_flat = y_true.flatten()
-            y_pred_flat = y_pred.flatten()
-            
-            metrics = {
-                'mae': float(mean_absolute_error(y_true_flat, y_pred_flat)),
-                'mse': float(mean_squared_error(y_true_flat, y_pred_flat)),
-                'rmse': float(np.sqrt(mean_squared_error(y_true_flat, y_pred_flat))),
-                'mape': float(mean_absolute_percentage_error(y_true_flat, y_pred_flat))
-            }
-            
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error calculating metrics: {str(e)}")
-            raise
 
 
 # Factory function to create model trainer
-def create_model_trainer(config: MDL) -> ModelTrainer:
+def create_model_trainer(config=None) -> ModelTrainer:
     """
     Create and return a ModelTrainer instance
     
     Args:
-        config: MDL configuration object
+        config: Model configuration (optional, will use MDL if None)
         
     Returns:
         ModelTrainer instance
