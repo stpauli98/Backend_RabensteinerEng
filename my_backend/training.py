@@ -1322,14 +1322,19 @@ def run_analysis(session_id):
     """
     import threading
     from middleman_runner import ModernMiddlemanRunner
+    from flask import current_app
 
     if not session_id:
         return jsonify({'success': False, 'error': 'Missing session ID'}), 400
 
     try:
+        # Get SocketIO instance from app extensions
+        socketio_instance = current_app.extensions.get('socketio')
+        
         # Create modern middleman runner with SocketIO support
         runner = ModernMiddlemanRunner()
-        runner.set_socketio(socketio)  # Pass SocketIO for real-time updates
+        if socketio_instance:
+            runner.set_socketio(socketio_instance)  # Pass SocketIO for real-time updates
         
         # Run training in background thread to avoid blocking the request
         def run_training_async():
@@ -1340,27 +1345,30 @@ def run_analysis(session_id):
                 if result['success']:
                     logger.info(f"Training completed successfully for session {session_id}")
                     # Emit completion event via SocketIO
-                    socketio.emit('training_completed', {
-                        'session_id': session_id,
-                        'status': 'completed',
-                        'message': 'Training completed successfully'
-                    }, room=session_id)
+                    if socketio_instance:
+                        socketio_instance.emit('training_completed', {
+                            'session_id': session_id,
+                            'status': 'completed',
+                            'message': 'Training completed successfully'
+                        }, room=session_id)
                 else:
                     logger.error(f"Training failed for session {session_id}: {result.get('error', 'Unknown error')}")
                     # Emit error event via SocketIO
-                    socketio.emit('training_error', {
-                        'session_id': session_id,
-                        'status': 'failed',
-                        'error': result.get('error', 'Unknown error')
-                    }, room=session_id)
+                    if socketio_instance:
+                        socketio_instance.emit('training_error', {
+                            'session_id': session_id,
+                            'status': 'failed',
+                            'error': result.get('error', 'Unknown error')
+                        }, room=session_id)
                     
             except Exception as e:
                 logger.error(f"Async training failed for session {session_id}: {str(e)}")
-                socketio.emit('training_error', {
-                    'session_id': session_id,
-                    'status': 'failed',
-                    'error': str(e)
-                }, room=session_id)
+                if socketio_instance:
+                    socketio_instance.emit('training_error', {
+                        'session_id': session_id,
+                        'status': 'failed',
+                        'error': str(e)
+                    }, room=session_id)
         
         # Start training in background thread
         training_thread = threading.Thread(target=run_training_async)
