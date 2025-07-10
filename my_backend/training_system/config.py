@@ -351,3 +351,30 @@ HOL = {
     land: [datetime.datetime.strptime(datum, "%Y-%m-%d") for datum in daten]
     for land, daten in HOL.items()
 }
+
+
+# PLOT SETTINGS ################################################################
+# Visualization configuration for matplotlib and seaborn plots
+PLOT_SETTINGS = {
+    'figure_size': (12, 8),
+    'dpi': 100,
+    'font_size': 12,
+    'color_palette': 'tab20',
+    'violin_plot': {
+        'inner': 'quartile',
+        'linewidth': 1.5
+    },
+    'line_plot': {
+        'linewidth': 1,
+        'markersize': 2,
+        'marker_style': 'o',
+        'forecast_marker': 'x',
+        'forecast_linestyle': '--',
+        'forecast_markersize': 4
+    },
+    'subplot_layout': {
+        'constrained': True,
+        'wspace': 0.3,
+        'hspace': 0.4
+    }
+}

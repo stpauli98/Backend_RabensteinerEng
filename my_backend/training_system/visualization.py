@@ -77,13 +77,13 @@ class Visualizer:
             logger.error(f"Error creating visualizations: {str(e)}")
             raise
     
-    def create_violin_plots(self, evaluation_results: Dict) -> Dict:
+    def create_violin_plots(self, data_arrays: Dict) -> Dict:
         """
-        Create violin plots for error distribution
-        Extracted from training_backend_test_2.py around lines 1874-2032
+        Create violin plots for data distribution
+        Extracted from training_backend_test_2.py lines 1876-2026
         
         Args:
-            evaluation_results: Evaluation results
+            data_arrays: Dict containing i_combined_array and o_combined_array
             
         Returns:
             Dict containing violin plots as base64 strings
@@ -91,51 +91,179 @@ class Visualizer:
         try:
             violin_plots = {}
             
-            for dataset_name, dataset_results in evaluation_results.get('evaluation_metrics', {}).items():
-                # Prepare data for violin plot
-                plot_data = []
+            # Input data violin plots (lines 1876-1962)
+            if 'i_combined_array' in data_arrays:
+                input_plot = self._create_input_distribution_plot(data_arrays['i_combined_array'])
+                violin_plots['input_distribution'] = input_plot
                 
-                for model_name, metrics in dataset_results.items():
-                    for metric_name, metric_value in metrics.items():
-                        if isinstance(metric_value, (int, float)):
-                            plot_data.append({
-                                'Model': model_name,
-                                'Metric': metric_name,
-                                'Value': metric_value
-                            })
-                
-                if plot_data:
-                    df_plot = pd.DataFrame(plot_data)
-                    
-                    # Create violin plot for each metric
-                    metrics_to_plot = ['mae', 'mse', 'rmse', 'mape']
-                    
-                    for metric in metrics_to_plot:
-                        if metric in df_plot['Metric'].values:
-                            fig, ax = plt.subplots(figsize=PLOT_SETTINGS['figure_size'])
-                            
-                            metric_data = df_plot[df_plot['Metric'] == metric]
-                            
-                            # TODO: Extract actual violin plot logic from training_backend_test_2.py
-                            # This is placeholder implementation
-                            
-                            sns.violinplot(data=metric_data, x='Model', y='Value', ax=ax)
-                            ax.set_title(f'{metric.upper()} Distribution - {dataset_name}')
-                            ax.set_xlabel('Model')
-                            ax.set_ylabel(f'{metric.upper()} Value')
-                            plt.xticks(rotation=45)
-                            plt.tight_layout()
-                            
-                            # Convert to base64
-                            plot_key = f'violin_{dataset_name}_{metric}'
-                            violin_plots[plot_key] = self._figure_to_base64(fig)
-                            
-                            plt.close(fig)
+            # Output data violin plots (lines 1965-2026) 
+            if 'o_combined_array' in data_arrays:
+                output_plot = self._create_output_distribution_plot(
+                    data_arrays['o_combined_array'], 
+                    data_arrays.get('i_combined_array')
+                )
+                violin_plots['output_distribution'] = output_plot
             
             return violin_plots
             
         except Exception as e:
             logger.error(f"Error creating violin plots: {str(e)}")
+            raise
+    
+    def _create_input_distribution_plot(self, i_combined_array: np.ndarray) -> str:
+        """
+        Create input data distribution violin plot
+        Extracted from training_backend_test_2.py lines 1876-1962
+        """
+        try:
+            # Farbpalette (exactly as in original)
+            palette = sns.color_palette("tab20", i_combined_array.shape[1])
+            
+            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (simplified for extracted version)
+            i_list = [f"Feature_{i}" for i in range(i_combined_array.shape[1])]
+            
+            # DICTIONARY FÜR VIOLINENPLOT
+            df = pd.DataFrame(i_combined_array)
+            data = {}
+            for i, name in enumerate(i_list):
+                values = df.iloc[:,i]
+                data[name] = values
+            
+            # Anzahl der Merkmale der Eingabedaten
+            n_ft_i = i_combined_array.shape[1]
+            
+            fig, axes = plt.subplots(1,                         # Eine Zeile an Subplots
+                                   n_ft_i,                    # Anzahl an Subplots nebeneinander
+                                   figsize = (2*n_ft_i, 6))   # Größe des gesamten Plots
+            
+            if len(data) <= 1:
+                
+                for i, (name, values) in enumerate(data.items()):
+                        
+                    sns.violinplot(y            = values, 
+                                   ax           = axes, 
+                                   color        = palette[i], 
+                                   inner        = "quartile", 
+                                   linewidth    = 1.5)
+                     
+                    # Titel über jedem Subplot
+                    axes.set_title(name)
+                    
+                    # Entfernen der Achsenbeschriftungen
+                    axes.set_xlabel("")
+                    axes.set_ylabel("")
+                
+            else:
+                
+                # Violinplot in jeden Subplot
+                for i, (name, values) in enumerate(data.items()):
+                        
+                    sns.violinplot(y            = values, 
+                                   ax           = axes[i], 
+                                   color        = palette[i], 
+                                   inner        = "quartile", 
+                                   linewidth    = 1.5)
+                     
+                    # Titel über jedem Subplot
+                    axes[i].set_title(name)
+                    
+                    # Entfernen der Achsenbeschriftungen
+                    axes[i].set_xlabel("")
+                    axes[i].set_ylabel("")
+            
+            plt.suptitle("Datenverteilung \nder Eingabedaten",
+                         fontsize   = 15,
+                         fontweight = "bold")
+            
+            plt.tight_layout()
+            
+            # Convert to base64
+            plot_base64 = self._figure_to_base64(fig)
+            plt.close(fig)
+            
+            return plot_base64
+            
+        except Exception as e:
+            logger.error(f"Error creating input distribution plot: {str(e)}")
+            raise
+    
+    def _create_output_distribution_plot(self, o_combined_array: np.ndarray, i_combined_array: np.ndarray = None) -> str:
+        """
+        Create output data distribution violin plot
+        Extracted from training_backend_test_2.py lines 1965-2026
+        """
+        try:
+            # Calculate color offset
+            n_ft_i = i_combined_array.shape[1] if i_combined_array is not None else 0
+            total_features = n_ft_i + o_combined_array.shape[1]
+            palette = sns.color_palette("tab20", total_features)
+            
+            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (simplified for extracted version)
+            o_list = [f"Output_{i}" for i in range(o_combined_array.shape[1])]
+            
+            # DICTIONARY FÜR VIOLINENPLOT
+            df = pd.DataFrame(o_combined_array)
+            data = {}
+            for i, name in enumerate(o_list):
+                values = df.iloc[:,i]
+                data[name] = values
+            
+            # Anzahl der Merkmale der Ausgabedaten
+            n_ft_o = o_combined_array.shape[1]
+            
+            fig, axes = plt.subplots(1,                         # Eine Zeile an Subplots
+                                   n_ft_o,                    # Anzahl an Subplots nebeneinander
+                                   figsize = (2*n_ft_o, 6))   # Größe des gesamten Plots
+            
+            if len(data) <= 1:
+                
+                for i, (name, values) in enumerate(data.items()):
+                        
+                    sns.violinplot(y            = values, 
+                                   ax           = axes, 
+                                   color        = palette[i+n_ft_i], 
+                                   inner        = "quartile", 
+                                   linewidth    = 1.5)
+                    
+                    # Titel über jedem Subplot
+                    axes.set_title(name)
+                    
+                    # Entfernen der Achsenbeschriftungen
+                    axes.set_xlabel("")
+                    axes.set_ylabel("")
+                    
+            else:
+                
+                # Violinplot in jeden Subplot
+                for i, (name, values) in enumerate(data.items()):
+                        
+                    sns.violinplot(y            = values, 
+                                   ax           = axes[i], 
+                                   color        = palette[i+n_ft_i], 
+                                   inner        = "quartile", 
+                                   linewidth    = 1.5)
+                    
+                    # Titel über jedem Subplot
+                    axes[i].set_title(name)
+                    
+                    # Entfernen der Achsenbeschriftungen
+                    axes[i].set_xlabel("")
+                    axes[i].set_ylabel("")
+            
+            plt.suptitle("Datenverteilung \nder Ausgabedaten",
+                         fontsize   = 15,
+                         fontweight = "bold")
+            
+            plt.tight_layout()
+            
+            # Convert to base64
+            plot_base64 = self._figure_to_base64(fig)
+            plt.close(fig)
+            
+            return plot_base64
+            
+        except Exception as e:
+            logger.error(f"Error creating output distribution plot: {str(e)}")
             raise
     
     def create_forecast_plots(self, training_results: Dict, evaluation_results: Dict) -> Dict:

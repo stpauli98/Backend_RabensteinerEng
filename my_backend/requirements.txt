@@ -11,6 +11,7 @@ pytz==2024.1
 APScheduler==3.10.4
 supabase==2.3.3
 
+
 # Basic data handling (lightweight)
 pandas==2.1.4
 numpy==1.26.3
