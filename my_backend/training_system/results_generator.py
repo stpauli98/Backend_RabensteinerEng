@@ -12,6 +12,103 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def wape(y_true, y_pred):
+    """
+    FUNKTION ZUR BERECHNUNG DES GEWICHTETEN ABSOLUTEN PROZENTUALEN FEHLERS
+    
+    Extracted from training_backend_test_2.py lines 555-566
+    
+    Args:
+        y_true: True values
+        y_pred: Predicted values
+        
+    Returns:
+        WAPE value as percentage
+    """
+    
+    y_true = np.array(y_true, dtype=np.float64)
+    y_pred = np.array(y_pred, dtype=np.float64)
+    
+    numerator = np.sum(np.abs(y_true - y_pred))
+    denominator = np.sum(np.abs(y_true))
+    
+    if denominator == 0:
+        return np.nan
+
+    return (numerator/denominator)*100
+
+
+def smape(y_true, y_pred):
+    """
+    FUNKTION ZUR BERECHNUNG DES SYMMETRISCHEN MITTLEREN ABSOLUTEN PROZENTUALEN
+    FEHLERS
+    
+    Extracted from training_backend_test_2.py lines 570-585
+    
+    Args:
+        y_true: True values
+        y_pred: Predicted values
+        
+    Returns:
+        SMAPE value as percentage
+    """
+
+    y_true = np.array(y_true, dtype=np.float64)
+    y_pred = np.array(y_pred, dtype=np.float64)    
+
+    n = len(y_true)
+    smape_values = []
+
+    for yt, yp in zip(y_true, y_pred):
+        denominator = (abs(yt)+abs(yp))/2
+        if denominator == 0:
+            smape_values.append(0)
+        else:
+            smape_values.append(abs(yp-yt)/denominator)
+
+    return sum(smape_values)/n*100
+
+
+def mase(y_true, y_pred, m = 1):
+    """
+    FUNKTION ZUR BERECHNUNG DES MITTLEREN ABSOLUTEN FEHLERS
+    
+    Extracted from training_backend_test_2.py lines 588-608
+    
+    Args:
+        y_true: True values
+        y_pred: Predicted values
+        m: Seasonality parameter (default 1)
+        
+    Returns:
+        MASE value
+        
+    Raises:
+        ValueError: If insufficient data for chosen seasonality
+        ZeroDivisionError: If naive MAE is 0
+    """
+
+    y_true = np.array(y_true, dtype=np.float64)
+    y_pred = np.array(y_pred, dtype=np.float64)      
+    
+    n = len(y_true)
+    
+    # Vorhersagefehler (MAE der Prognose)
+    mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
+
+    # MAE des Naive-m-Modells (Baseline)
+    if n <= m:
+        raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
+        
+    naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
+    mae_naive = sum(naive_errors) / len(naive_errors)
+
+    if mae_naive == 0:
+        raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
+
+    return mae_forecast/mae_naive
+
+
 class ResultsGenerator:
     """
     Handles generation and formatting of training results
@@ -329,108 +426,99 @@ class ResultsGenerator:
             logger.error(f"Error generating training metadata: {str(e)}")
             raise
     
-    def wape(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    def wape(self, y_true, y_pred):
         """
-        Calculate Weighted Absolute Percentage Error
-        Extracted from training_backend_test_2.py around lines 3245-3300
+        FUNKTION ZUR BERECHNUNG DES GEWICHTETEN ABSOLUTEN PROZENTUALEN FEHLERS
+        
+        Extracted from training_backend_test_2.py lines 555-566
         
         Args:
             y_true: True values
             y_pred: Predicted values
             
         Returns:
-            WAPE value
+            WAPE value as percentage
         """
-        try:
-            # TODO: Extract actual WAPE implementation from training_backend_test_2.py
-            # This is placeholder implementation
+        
+        y_true = np.array(y_true, dtype=np.float64)
+        y_pred = np.array(y_pred, dtype=np.float64)
+        
+        numerator = np.sum(np.abs(y_true - y_pred))
+        denominator = np.sum(np.abs(y_true))
+        
+        if denominator == 0:
+            return np.nan
+
+        return (numerator/denominator)*100
+    
+    def smape(self, y_true, y_pred):
+        """
+        FUNKTION ZUR BERECHNUNG DES SYMMETRISCHEN MITTLEREN ABSOLUTEN PROZENTUALEN
+        FEHLERS
+        
+        Extracted from training_backend_test_2.py lines 570-585
+        
+        Args:
+            y_true: True values
+            y_pred: Predicted values
             
-            y_true_flat = y_true.flatten()
-            y_pred_flat = y_pred.flatten()
-            
-            numerator = np.sum(np.abs(y_true_flat - y_pred_flat))
-            denominator = np.sum(np.abs(y_true_flat))
-            
+        Returns:
+            SMAPE value as percentage
+        """
+
+        y_true = np.array(y_true, dtype=np.float64)
+        y_pred = np.array(y_pred, dtype=np.float64)    
+
+        n = len(y_true)
+        smape_values = []
+
+        for yt, yp in zip(y_true, y_pred):
+            denominator = (abs(yt)+abs(yp))/2
             if denominator == 0:
-                return float('inf')
-            
-            return float(numerator / denominator)
-            
-        except Exception as e:
-            logger.error(f"Error calculating WAPE: {str(e)}")
-            raise
+                smape_values.append(0)
+            else:
+                smape_values.append(abs(yp-yt)/denominator)
+
+        return sum(smape_values)/n*100
     
-    def smape(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    def mase(self, y_true, y_pred, m = 1):
         """
-        Calculate Symmetric Mean Absolute Percentage Error
-        Extracted from training_backend_test_2.py around lines 3300-3350
+        FUNKTION ZUR BERECHNUNG DES MITTLEREN ABSOLUTEN FEHLERS
+        
+        Extracted from training_backend_test_2.py lines 588-608
         
         Args:
             y_true: True values
             y_pred: Predicted values
-            
-        Returns:
-            sMAPE value
-        """
-        try:
-            # TODO: Extract actual sMAPE implementation from training_backend_test_2.py
-            # This is placeholder implementation
-            
-            y_true_flat = y_true.flatten()
-            y_pred_flat = y_pred.flatten()
-            
-            numerator = np.abs(y_true_flat - y_pred_flat)
-            denominator = (np.abs(y_true_flat) + np.abs(y_pred_flat)) / 2
-            
-            # Avoid division by zero
-            mask = denominator != 0
-            smape_values = np.zeros_like(numerator)
-            smape_values[mask] = numerator[mask] / denominator[mask]
-            
-            return float(np.mean(smape_values))
-            
-        except Exception as e:
-            logger.error(f"Error calculating sMAPE: {str(e)}")
-            raise
-    
-    def mase(self, y_true: np.ndarray, y_pred: np.ndarray, y_train: np.ndarray) -> float:
-        """
-        Calculate Mean Absolute Scaled Error
-        Extracted from training_backend_test_2.py around lines 3350-3467
-        
-        Args:
-            y_true: True values
-            y_pred: Predicted values
-            y_train: Training values (for naive forecast)
+            m: Seasonality parameter (default 1)
             
         Returns:
             MASE value
+            
+        Raises:
+            ValueError: If insufficient data for chosen seasonality
+            ZeroDivisionError: If naive MAE is 0
         """
-        try:
-            # TODO: Extract actual MASE implementation from training_backend_test_2.py
-            # This is placeholder implementation
+
+        y_true = np.array(y_true, dtype=np.float64)
+        y_pred = np.array(y_pred, dtype=np.float64)      
+        
+        n = len(y_true)
+        
+        # Vorhersagefehler (MAE der Prognose)
+        mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
+
+        # MAE des Naive-m-Modells (Baseline)
+        if n <= m:
+            raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
             
-            y_true_flat = y_true.flatten()
-            y_pred_flat = y_pred.flatten()
-            y_train_flat = y_train.flatten()
-            
-            # Calculate MAE of predictions
-            mae_pred = np.mean(np.abs(y_true_flat - y_pred_flat))
-            
-            # Calculate MAE of naive forecast (seasonal naive)
-            if len(y_train_flat) > 1:
-                mae_naive = np.mean(np.abs(y_train_flat[1:] - y_train_flat[:-1]))
-            else:
-                mae_naive = 1.0
-            
-            if mae_naive == 0:
-                return float('inf')
-            
-            return float(mae_pred / mae_naive)
-            
-        except Exception as e:
-            logger.error(f"Error calculating MASE: {str(e)}")
-            raise
+        naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
+        mae_naive = sum(naive_errors) / len(naive_errors)
+
+        if mae_naive == 0:
+            raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
+
+        return mae_forecast/mae_naive
     
     def save_results_to_database(self, session_id: str, supabase_client) -> bool:
         """
