@@ -5,12 +5,16 @@ Handles loading session data from database and downloading files
 
 import os
 import pandas as pd
+import math
 from supabase import create_client
 from typing import Dict, List, Optional, Tuple
 import logging
 
-# TODO: Import from your existing supabase_client
-# from supabase_client import supabase
+# Import existing supabase client
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +24,8 @@ class DataLoader:
     Handles loading training session data from database and file storage
     """
     
-    def __init__(self, supabase_client):
-        self.supabase = supabase_client
+    def __init__(self, supabase_client=None):
+        self.supabase = supabase_client or get_supabase_client()
         self.temp_dir = "temp_training_data"
         self._ensure_temp_dir()
     
@@ -223,21 +227,19 @@ class DataLoader:
             logger.error(f"Error preparing file paths: {str(e)}")
             raise
     
-    def load_csv_data(self, file_path: str) -> pd.DataFrame:
+    def load_csv_data(self, file_path: str, delimiter: str = ";") -> pd.DataFrame:
         """
-        Load CSV data from file path
+        Load CSV data from file path with proper formatting
         
         Args:
             file_path: Path to CSV file
+            delimiter: CSV delimiter (default ";")
             
         Returns:
             Pandas DataFrame
         """
         try:
-            # TODO: Add proper CSV loading with error handling
-            # Based on how your CSV files are structured
-            
-            df = pd.read_csv(file_path)
+            df = pd.read_csv(file_path, delimiter=delimiter)
             
             # Basic validation
             if df.empty:
@@ -270,15 +272,155 @@ class DataLoader:
             
         except Exception as e:
             logger.error(f"Error cleaning up temp files: {str(e)}")
+    
+    def process_csv_data(self, dat: Dict[str, pd.DataFrame], inf: pd.DataFrame) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+        """
+        Process CSV data and extract metadata (extracted from original load() function)
+        
+        Args:
+            dat: Dictionary of DataFrames
+            inf: Information DataFrame
+            
+        Returns:
+            Tuple of updated (dat, inf)
+        """
+        try:
+            # Get the last loaded dataframe
+            df_name, df = next(reversed(dat.items()))
+
+            # Convert UTC to datetime
+            df["UTC"] = pd.to_datetime(df["UTC"], format="%Y-%m-%d %H:%M:%S")
+
+            # Start time
+            utc_min = df["UTC"].iloc[0]
+            
+            # End time
+            utc_max = df["UTC"].iloc[-1]
+            
+            # Number of data points
+            n_all = len(df)
+            
+            # Time step width [min]
+            delt = (df["UTC"].iloc[-1] - df["UTC"].iloc[0]).total_seconds() / (60 * (n_all - 1))
+
+            # Constant Offset
+            if round(60/delt) == 60/delt:
+                ofst = (df["UTC"].iloc[0] -
+                        (df["UTC"].iloc[0]).replace(minute=0, second=0, microsecond=0)).total_seconds()/60
+                while ofst - delt >= 0:
+                   ofst -= delt
+            # Variable Offset
+            else:
+                ofst = "var"
+
+            # Number of numeric data points
+            n_num = n_all
+            for i in range(n_all):
+                try:
+                    float(df.iloc[i, 1])
+                    if math.isnan(float(df.iloc[i, 1])):
+                       n_num -= 1
+                except:
+                    n_num -= 1  
+            
+            # Percentage of numeric data points
+            rate_num = round(n_num/n_all*100, 2)
+                
+            # Maximum value
+            val_max = df.iloc[:, 1].max() 
+            
+            # Minimum value
+            val_min = df.iloc[:, 1].min()
+            
+            # Update dataframe
+            dat[df_name] = df
+
+            # Insert information
+            row_data = {
+                "utc_min":  utc_min,
+                "utc_max":  utc_max, 
+                "delt":     delt,
+                "ofst":     ofst,
+                "n_all":    n_all,
+                "n_num":    n_num,
+                "rate_num": rate_num,
+                "val_min":  val_min,
+                "val_max":  val_max,
+                "scal":     False,
+                "avg":      False
+            }
+            
+            # Create new row in DataFrame
+            if inf.empty:
+                inf = pd.DataFrame(columns=row_data.keys())
+            inf.loc[df_name] = row_data
+ 
+            return dat, inf 
+            
+        except Exception as e:
+            logger.error(f"Error processing CSV data: {str(e)}")
+            raise
+    
+    def utc_idx_pre(self, dat: pd.DataFrame, utc) -> Optional[int]:
+        """
+        Find the index of the first element that is less than or equal to 'utc'
+        
+        Args:
+            dat: DataFrame with UTC column
+            utc: UTC timestamp to search for
+            
+        Returns:
+            Index or None if not found
+        """
+        try:
+            # Index of first element that is less than or equal to "utc"
+            idx = dat["UTC"].searchsorted(utc, side='right')
+
+            # Return the value
+            if idx > 0:
+                return dat.index[idx-1]
+
+            # No matching entry
+            return None    
+            
+        except Exception as e:
+            logger.error(f"Error finding UTC index pre: {str(e)}")
+            return None
+    
+    def utc_idx_post(self, dat: pd.DataFrame, utc) -> Optional[int]:
+        """
+        Find the index of the first element that is greater than or equal to 'utc'
+        
+        Args:
+            dat: DataFrame with UTC column
+            utc: UTC timestamp to search for
+            
+        Returns:
+            Index or None if not found
+        """
+        try:
+            # Index of first element that is greater than or equal to "utc"
+            idx = dat["UTC"].searchsorted(utc, side='left')
+
+            # Return the value
+            if idx < len(dat):
+                return dat.index[idx]
+
+            # No matching entry
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding UTC index post: {str(e)}")
+            return None
 
 
 # Factory function to create data loader
-def create_data_loader(supabase_client) -> DataLoader:
+def create_data_loader(supabase_client=None) -> DataLoader:
     """
     Create and return a DataLoader instance
     
     Args:
-        supabase_client: Configured Supabase client
+        supabase_client: Configured Supabase client (optional, will use existing client if None)
         
     Returns:
         DataLoader instance

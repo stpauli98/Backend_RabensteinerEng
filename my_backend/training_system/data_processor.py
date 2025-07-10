@@ -7,6 +7,7 @@ Contains functions extracted from training_backend_test_2.py
 import pandas as pd
 import numpy as np
 import datetime
+import math
 import pytz
 import calendar
 from typing import Dict, List, Tuple, Optional
@@ -373,6 +374,56 @@ class DataProcessor:
             
         except Exception as e:
             logger.error(f"Error creating sequences: {str(e)}")
+            raise
+    
+    def transform_data(self, inf: pd.DataFrame, N: int, OFST: float) -> pd.DataFrame:
+        """
+        Transform data for time steps and offset calculation (extracted from original transf() function)
+        
+        Args:
+            inf: Information DataFrame
+            N: Number of time steps
+            OFST: Global offset value
+            
+        Returns:
+            Updated information DataFrame
+        """
+        try:
+            for i in range(len(inf)):
+                key = inf.index[i]
+                
+                inf.loc[key, "delt_transf"] = \
+                    (inf.loc[key, "th_end"] -
+                     inf.loc[key, "th_strt"]) * 60 / (N - 1)
+                
+                # OFFSET CAN BE CALCULATED (check for division by zero first)
+                if inf.loc[key, "delt_transf"] != 0 and \
+                   round(60 / inf.loc[key, "delt_transf"]) == \
+                    60 / inf.loc[key, "delt_transf"]:
+                      
+                    # Offset [min]
+                    ofst_transf = OFST - (inf.loc[key, "th_strt"] -
+                                        math.floor(inf.loc[key, "th_strt"])) * 60 + 60
+                    
+                    # Prevent infinite loop if delt_transf is 0 or negative
+                    loop_counter = 0
+                    max_iterations = 1000
+                    while (ofst_transf - inf.loc[key, "delt_transf"] >= 0 and 
+                           inf.loc[key, "delt_transf"] > 0 and 
+                           loop_counter < max_iterations):
+                       ofst_transf -= inf.loc[key, "delt_transf"]
+                       loop_counter += 1
+                    
+                    inf.loc[key, "ofst_transf"] = ofst_transf
+                        
+                # OFFSET CANNOT BE CALCULATED
+                else: 
+                    inf.loc[key, "ofst_transf"] = "var"
+                    
+            return inf
+            
+        except Exception as e:
+            logger.error(f"Error transforming data: {str(e)}")
             raise
     
     def _extract_metadata(self, input_data: Dict, output_data: Dict) -> Dict:

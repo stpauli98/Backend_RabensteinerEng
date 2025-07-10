@@ -265,7 +265,7 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
             "eingabe": zeitschritte.get("eingabe", ""),
             "ausgabe": zeitschritte.get("ausgabe", ""),
             "zeitschrittweite": zeitschritte.get("zeitschrittweite", ""),
-            "offset": zeitschritte.get("offset", "")
+            "offsett": zeitschritte.get("offset", "")  # Note: column name is 'offsett' with double 't'
         }
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
