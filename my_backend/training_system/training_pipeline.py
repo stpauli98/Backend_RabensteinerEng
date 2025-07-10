@@ -14,6 +14,7 @@ from .data_processor import create_data_processor
 from .model_trainer import create_model_trainer
 from .results_generator import create_results_generator
 from .visualization import create_visualizer
+from .pipeline_integration import run_real_training_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class TrainingPipeline:
     
     def run_training_pipeline(self, session_id: str) -> Dict:
         """
-        Main training pipeline execution
+        Main training pipeline execution using real extracted functions
         
         Args:
             session_id: Session identifier
@@ -56,47 +57,27 @@ class TrainingPipeline:
         """
         try:
             self.current_session_id = session_id
-            logger.info(f"Starting training pipeline for session {session_id}")
+            logger.info(f"Starting real training pipeline for session {session_id}")
             
             # Initialize progress tracking
-            self._update_progress(0, 'Initializing training pipeline')
+            self._update_progress(0, 'Initializing real training pipeline')
             
-            # Step 1: Load session data from database
-            self._update_progress(1, 'Loading session data')
-            session_data, input_files, output_files = self._load_session_data(session_id)
-            
-            # Step 2: Process data
-            self._update_progress(2, 'Processing data')
-            processed_data = self._process_data(session_data, input_files, output_files)
-            
-            # Step 3: Train models
-            self._update_progress(3, 'Training models')
-            training_results = self._train_models(processed_data, session_data)
-            
-            # Step 4: Evaluate models
-            self._update_progress(4, 'Evaluating models')
-            evaluation_results = self._evaluate_models(training_results, session_data)
-            
-            # Step 5: Create visualizations
-            self._update_progress(5, 'Creating visualizations')
-            visualizations = self._create_visualizations(training_results, evaluation_results)
-            
-            # Step 6: Generate final results
-            self._update_progress(6, 'Generating results')
-            final_results = self._generate_final_results(training_results, evaluation_results, visualizations)
+            # Use the real integrated pipeline instead of placeholder methods
+            self._update_progress(1, 'Running real training pipeline')
+            final_results = run_real_training_pipeline(session_id, self.supabase, self.socketio)
             
             # Step 7: Save results to database
-            self._update_progress(7, 'Saving results')
+            self._update_progress(6, 'Saving results to database')
             self._save_results_to_database(session_id, final_results)
             
             # Mark as completed
             self._update_progress(7, 'Training completed successfully', completed=True)
             
-            logger.info(f"Training pipeline completed successfully for session {session_id}")
+            logger.info(f"Real training pipeline completed successfully for session {session_id}")
             return final_results
             
         except Exception as e:
-            error_msg = f"Training pipeline failed for session {session_id}: {str(e)}"
+            error_msg = f"Real training pipeline failed for session {session_id}: {str(e)}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
             
@@ -286,20 +267,29 @@ class TrainingPipeline:
     
     def _save_results_to_database(self, session_id: str, results: Dict) -> bool:
         """
-        Save results to database
+        Save results to database using the new schema
         
         Args:
             session_id: Session identifier
-            results: Results to save
+            results: Results from real pipeline
             
         Returns:
             True if successful
         """
         try:
-            # Save main results
+            # Extract structured results from real pipeline output
+            evaluation_results = results.get('evaluation_results', {})
+            training_results = results.get('training_results', {})
+            visualizations = results.get('visualizations', {})
+            summary = results.get('summary', {})
+            
+            # Save main training results
             result_data = {
                 'session_id': session_id,
-                'results': results,
+                'evaluation_metrics': evaluation_results.get('evaluation_metrics', {}),
+                'model_performance': training_results,
+                'best_model': summary.get('best_model', {}),
+                'summary': summary,
                 'status': 'completed',
                 'completed_at': datetime.now().isoformat()
             }
@@ -307,7 +297,12 @@ class TrainingPipeline:
             response = self.supabase.table('training_results').insert(result_data).execute()
             
             if response.data:
-                logger.info(f"Results saved to database for session {session_id}")
+                result_id = response.data[0]['id']
+                
+                # Save visualizations to separate table
+                self._save_visualizations_to_database(session_id, visualizations)
+                
+                logger.info(f"Results saved to database for session {session_id}, result_id: {result_id}")
                 return True
             else:
                 logger.error(f"Failed to save results to database for session {session_id}")
@@ -316,6 +311,25 @@ class TrainingPipeline:
         except Exception as e:
             logger.error(f"Error saving results to database: {str(e)}")
             return False
+    
+    def _save_visualizations_to_database(self, session_id: str, visualizations: Dict):
+        """Save visualizations to training_visualizations table"""
+        try:
+            for plot_name, plot_data_base64 in visualizations.items():
+                viz_data = {
+                    'session_id': session_id,
+                    'plot_name': plot_name,
+                    'plot_type': 'violin' if 'violin' in plot_name.lower() else 'unknown',
+                    'plot_data_base64': plot_data_base64,
+                    'metadata': {'generated_by': 'real_pipeline'}
+                }
+                
+                self.supabase.table('training_visualizations').insert(viz_data).execute()
+                
+            logger.info(f"Saved {len(visualizations)} visualizations for session {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error saving visualizations: {str(e)}")
     
     def _save_error_to_database(self, session_id: str, error_message: str, error_traceback: str):
         """

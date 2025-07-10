@@ -13,17 +13,25 @@ class MTS:
     Extracted from training_backend_test_2.py lines 619-632
     """
     
-    # Anzahl der Zeitschritte der Eingabedaten
-    I_N  = 13
-    
-    # Anzahl der Zeitschritte der Ausgabedaten
-    O_N  = 13
-    
-    # Zeitschrittweite für die Bildung der finalen Datensätze [min]
-    DELT = 3
-    
-    # Offset für die Bildung der finalen Datensätze [min]
-    OFST = 0
+    def __init__(self):
+        # Anzahl der Zeitschritte der Eingabedaten
+        self.I_N  = 13
+        
+        # Anzahl der Zeitschritte der Ausgabedaten
+        self.O_N  = 13
+        
+        # Zeitschrittweite für die Bildung der finalen Datensätze [min]
+        self.DELT = 3
+        
+        # Offset für die Bildung der finalen Datensätze [min]
+        self.OFST = 0
+        
+        # Additional attributes for DataProcessor compatibility
+        self.timezone = 'UTC'
+        self.use_time_features = True
+        self.interpolation = True
+        self.outlier_removal = False
+        self.scaling = True
 
 
 class T:
@@ -60,7 +68,7 @@ class T:
         SCAL_MIN = 0
         
         # Zeitschrittweite [min]
-        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+        DELT = (TH_END-TH_STRT)*60/(13-1)  # Using default I_N=13
         
     # Monatliche Sinus-/Cosinus-Komponente
     class M:
@@ -90,7 +98,7 @@ class T:
         SCAL_MIN = 0
         
         # Zeitschrittweite [min]
-        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+        DELT = (TH_END-TH_STRT)*60/(13-1)  # Using default I_N=13
         
     # Wöchentliche Sinus-/Cosinus-Komponente
     class W:
@@ -120,7 +128,7 @@ class T:
         SCAL_MIN = 0
         
         # Zeitschrittweite [min]
-        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+        DELT = (TH_END-TH_STRT)*60/(13-1)  # Using default I_N=13
     
     # Tägliche Sinus-/Cosinus-Komponente
     class D:
@@ -150,7 +158,7 @@ class T:
         SCAL_MIN = 0
         
         # Zeitschrittweite [min]
-        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+        DELT = (TH_END-TH_STRT)*60/(13-1)  # Using default I_N=13
     
     # Berücksichtigung von Feiertagen
     class H:
@@ -183,7 +191,7 @@ class T:
         CNTRY   = "Österreich"
         
         # Zeitschrittweite [min]
-        DELT = (TH_END-TH_STRT)*60/(MTS.I_N-1)
+        DELT = (TH_END-TH_STRT)*60/(13-1)  # Using default I_N=13
     
     # Zeitzone
     TZ      = "Europe/Vienna"
@@ -195,99 +203,82 @@ class MDL:
     Extracted from training_backend_test_2.py lines 2046-2141
     """
     
-    # Ausgewähltes Verfahren
-    #MODE = "Dense"
-    #MODE = "CNN"
-    #MODE = "LSTM"
-    #MODE = "AR LSTM"
-    #MODE = "SVR_dir"
-    #MODE = "SVR_MIMO"
-    MODE = "LIN"
-    
-    if MODE == "Dense":
-    
-        # Anzahl an Layer [-]
-        LAY = 3
-            
-        # Anzahl der Neuronen pro Layer [-]
-        N = 512
+    def __init__(self, mode: str = "LIN"):
+        # Ausgewähltes Verfahren
+        self.MODE = mode
         
-        # Max. Anzahl der Trainingsdurchläufe [-]
-        EP = 20
+        # Initialize all attributes with defaults
+        self.LAY = 3
+        self.N = 512
+        self.EP = 20
+        self.ACTF = "relu"
+        self.K = 3
+        self.KERNEL = "poly"
+        self.C = 1
+        self.EPSILON = 0.1
         
-        # Aktivierungsfunktion
-        ACTF = "relu"
-    
-    elif MODE == "CNN":
+        # Set mode-specific parameters
+        if self.MODE == "Dense":
+            # Anzahl an Layer [-]
+            self.LAY = 3
+            # Anzahl der Neuronen pro Layer [-]
+            self.N = 512
+            # Max. Anzahl der Trainingsdurchläufe [-]
+            self.EP = 20
+            # Aktivierungsfunktion
+            self.ACTF = "relu"
         
-        # Anzahl an Layer [-]
-        LAY = 3
-            
-        # Anzahl der Filter pro Layer [-]
-        N = 512
+        elif self.MODE == "CNN":
+            # Anzahl an Layer [-]
+            self.LAY = 3
+            # Anzahl der Filter pro Layer [-]
+            self.N = 512
+            # Kernelgröße [-]
+            self.K = 3
+            # Max. Anzahl der Trainingsdurchläufe [-]
+            self.EP = 20
+            # Aktivierungsfunktion
+            self.ACTF = "relu"
         
-        # Kernelgröße [-]
-        K = 3
+        elif self.MODE == "LSTM":
+            # Anzahl an Layer [-]
+            self.LAY = 3
+            # Anzahl der Neuronen pro Layer [-]
+            self.N = 512
+            # Max. Anzahl der Trainingsdurchläufe [-]
+            self.EP = 20
+            # Aktivierungsfunktion
+            self.ACTF = "relu"
         
-        # Max. Anzahl der Trainingsdurchläufe [-]
-        EP = 20
+        elif self.MODE == "AR LSTM":
+            # Anzahl an Layer [-]
+            self.LAY = 3
+            # Anzahl der Neuronen pro Layer [-]
+            self.N = 512
+            # Max. Anzahl der Trainingsdurchläufe [-]
+            self.EP = 20
+            # Aktivierungsfunktion
+            self.ACTF = "relu"
         
-        # Aktivierungsfunktion
-        ACTF = "relu"
+        elif self.MODE == "SVR_dir":
+            # Art der Modellierung von Nichtlinearitäten
+            self.KERNEL = "poly"
+            # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
+            self.C = 1
+            # Toleranz für Abweichungen [-]
+            self.EPSILON = 0.1
         
+        elif self.MODE == "SVR_MIMO":
+            # Art der Modellierung von Nichtlinearitäten
+            self.KERNEL = "poly"
+            # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
+            self.C = 1
+            # Toleranz für Abweichungen [-]
+            self.EPSILON = 0.1
         
-    elif MODE == "LSTM":
-        
-        # Anzahl an Layer [-]
-        LAY = 3
-            
-        # Anzahl der Neuronen pro Layer [-]
-        N = 512
-        
-        # Max. Anzahl der Trainingsdurchläufe [-]
-        EP = 20
-        
-        # Aktivierungsfunktion
-        ACTF = "relu"
-        
-    elif MODE == "AR LSTM":
-        
-        # Anzahl an Layer [-]
-        LAY = 3
-            
-        # Anzahl der Neuronen pro Layer [-]
-        N = 512
-        
-        # Max. Anzahl der Trainingsdurchläufe [-]
-        EP = 20
-        
-        # Aktivierungsfunktion
-        ACTF = "relu"
-        
-    elif MODE == "SVR_dir":
-        
-        # Art der Modellierung von Nichtlinearitäten
-        KERNEL = "poly"
-        
-        # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
-        C = 1
-        
-        # Toleranz für Abweichungen [-]
-        EPSILON = 0.1
-        
-    elif MODE == "SVR_MIMO":
-        
-        # Art der Modellierung von Nichtlinearitäten
-        KERNEL = "poly"
-        
-        # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
-        C = 1
-        
-        # Toleranz für Abweichungen [-]
-        EPSILON = 0.1
-        
-    elif MODE == "LIN":
-        a = 5
+        elif self.MODE == "LIN":
+            # Linear model doesn't need special parameters
+            pass
 
 
 # INFORMATIONEN ZU DEN FEIERTAGEN (DIE KEINE SONNTAGE SIND)

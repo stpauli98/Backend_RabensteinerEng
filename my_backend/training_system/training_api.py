@@ -6,9 +6,12 @@ Provides API endpoints for training results and status
 from flask import Blueprint, jsonify, request
 from typing import Dict, Optional
 import logging
+import sys
+import os
 
-# TODO: Import from your existing supabase_client
-# from supabase_client import supabase
+# Import existing supabase client
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
