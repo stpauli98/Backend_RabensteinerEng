@@ -1317,36 +1317,63 @@ def download_file(session_id, file_type, file_name):
 @bp.route('/run-analysis/<session_id>', methods=['POST'])
 def run_analysis(session_id):
     """
-    Triggers the execution of middleman_runner.py for a given session ID.
+    Triggers the execution of training pipeline using modern approach.
+    Now uses TrainingPipeline directly instead of subprocess.
     """
-    import subprocess
-    import sys
+    import threading
+    from middleman_runner import ModernMiddlemanRunner
 
     if not session_id:
         return jsonify({'success': False, 'error': 'Missing session ID'}), 400
 
-    middleman_script_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        'middleman_runner.py'
-    )
-
-    if not os.path.exists(middleman_script_path):
-        return jsonify({'success': False, 'error': 'Middleman script not found'}), 500
-
     try:
-        # Pokreni middleman_runner.py kao zaseban proces
-        # stdout i stderr se preusmeravaju u fajlove radi debagovanja
-        # Koristimo sys.executable da osiguramo da se koristi isti Python interpreter
-        with open(os.path.join(current_app.root_path, f"middleman_runner_{session_id}.log"), "w") as log_file:
-            subprocess.Popen(
-                [sys.executable, middleman_script_path, session_id],
-                stdout=log_file,
-                stderr=log_file,
-                # Optional: set cwd if middleman_runner.py expects it
-                # cwd=os.path.dirname(middleman_script_path)
-            )
-        logger.info(f"Analysis for session {session_id} triggered successfully.")
-        return jsonify({'success': True, 'message': f'Analysis for session {session_id} started in background.'}), 200
+        # Create modern middleman runner with SocketIO support
+        runner = ModernMiddlemanRunner()
+        runner.set_socketio(socketio)  # Pass SocketIO for real-time updates
+        
+        # Run training in background thread to avoid blocking the request
+        def run_training_async():
+            try:
+                logger.info(f"Starting async training for session {session_id}")
+                result = runner.run_training_script(session_id)
+                
+                if result['success']:
+                    logger.info(f"Training completed successfully for session {session_id}")
+                    # Emit completion event via SocketIO
+                    socketio.emit('training_completed', {
+                        'session_id': session_id,
+                        'status': 'completed',
+                        'message': 'Training completed successfully'
+                    }, room=session_id)
+                else:
+                    logger.error(f"Training failed for session {session_id}: {result.get('error', 'Unknown error')}")
+                    # Emit error event via SocketIO
+                    socketio.emit('training_error', {
+                        'session_id': session_id,
+                        'status': 'failed',
+                        'error': result.get('error', 'Unknown error')
+                    }, room=session_id)
+                    
+            except Exception as e:
+                logger.error(f"Async training failed for session {session_id}: {str(e)}")
+                socketio.emit('training_error', {
+                    'session_id': session_id,
+                    'status': 'failed',
+                    'error': str(e)
+                }, room=session_id)
+        
+        # Start training in background thread
+        training_thread = threading.Thread(target=run_training_async)
+        training_thread.daemon = True
+        training_thread.start()
+        
+        logger.info(f"Modern training pipeline for session {session_id} triggered successfully.")
+        return jsonify({
+            'success': True, 
+            'message': f'Modern training pipeline for session {session_id} started.',
+            'note': 'Using real extracted functions instead of subprocess'
+        }), 200
+        
     except Exception as e:
-        logger.error(f"Failed to trigger analysis for session {session_id}: {e}")
-        return jsonify({'success': False, 'error': f'Failed to start analysis: {str(e)}'}), 500
+        logger.error(f"Failed to trigger modern training for session {session_id}: {e}")
+        return jsonify({'success': False, 'error': f'Failed to start modern training: {str(e)}'}), 500

@@ -14,6 +14,7 @@ from training import bp as training_bp
 from adjustmentsOfData import bp as adjustmentsOfData_bp
 from adjustmentsOfData import cleanup_old_files
 from cloud import bp as cloud_bp
+from training_system.training_api import training_api_bp
 
 # Configure logging
 logging.basicConfig(
@@ -65,6 +66,7 @@ app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
 app.register_blueprint(training_bp, url_prefix='/api/training')
+app.register_blueprint(training_api_bp)  # Already has /api/training prefix
 
 # Error handlers
 @app.errorhandler(400)
