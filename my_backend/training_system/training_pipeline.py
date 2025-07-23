@@ -346,7 +346,7 @@ class TrainingPipeline:
                 'error_message': error_message,
                 'error_traceback': error_traceback,
                 'status': 'failed',
-                'failed_at': datetime.now().isoformat()
+                'completed_at': datetime.now().isoformat()
             }
             
             self.supabase.table('training_results').insert(error_data).execute()
@@ -396,12 +396,15 @@ class TrainingPipeline:
             if self.current_session_id:
                 progress_data = {
                     'session_id': self.current_session_id,
-                    'progress': self.progress,
-                    'updated_at': datetime.now().isoformat()
+                    'message': f'Training progress: {self.progress}%',
+                    'level': 'INFO',
+                    'step_number': int(self.progress / 14),  # Approximate step based on progress
+                    'step_name': 'Training in progress',
+                    'progress_percentage': self.progress
                 }
                 
-                # Upsert progress
-                self.supabase.table('training_progress').upsert(progress_data).execute()
+                # Insert into training_logs instead of training_progress
+                self.supabase.table('training_logs').insert(progress_data).execute()
                 
         except Exception as e:
             logger.error(f"Error saving progress to database: {str(e)}")

@@ -74,7 +74,7 @@ class DataLoader:
             # TODO: Implement actual database query
             # This is placeholder based on your database schema
             
-            response = self.supabase.table('sessions').select('*').eq('session_id', session_id).execute()
+            response = self.supabase.table('sessions').select('*').eq('id', session_id).execute()
             
             if not response.data:
                 raise ValueError(f"Session {session_id} not found")
@@ -153,11 +153,11 @@ class DataLoader:
             
             for file_info in files_info:
                 file_type = file_info.get('type', 'unknown')
-                file_name = file_info.get('fileName', 'unknown.csv')
+                file_name = file_info.get('file_name', 'unknown.csv')  # Use 'file_name' key from database
                 storage_path = file_info.get('storage_path', '')
                 
                 # Download file from storage
-                local_path = self._download_file(storage_path, file_name, session_id)
+                local_path = self._download_file(storage_path, file_name, session_id, file_type)
                 downloaded_files[file_type] = local_path
             
             return downloaded_files
@@ -166,7 +166,7 @@ class DataLoader:
             logger.error(f"Error downloading session files: {str(e)}")
             raise
     
-    def _download_file(self, storage_path: str, file_name: str, session_id: str) -> str:
+    def _download_file(self, storage_path: str, file_name: str, session_id: str, file_type: str = 'input') -> str:
         """
         Download a single file from storage
         
@@ -174,6 +174,7 @@ class DataLoader:
             storage_path: Path in storage bucket
             file_name: Name of the file
             session_id: Session identifier
+            file_type: Type of file ('input' or 'output') to determine bucket
             
         Returns:
             Local file path
@@ -182,11 +183,13 @@ class DataLoader:
             # Create local file path
             local_file_path = os.path.join(self.temp_dir, f"{session_id}_{file_name}")
             
-            # TODO: Implement actual file download from Supabase storage
-            # This is placeholder based on your storage structure
+            # Determine bucket based on file type
+            bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
             
-            # Download from 'csv-files' bucket
-            response = self.supabase.storage.from_('csv-files').download(storage_path)
+            logger.info(f"Downloading {file_name} from bucket {bucket_name} at path {storage_path}")
+            
+            # Download from the appropriate bucket
+            response = self.supabase.storage.from_(bucket_name).download(storage_path)
             
             # Save to local file
             with open(local_file_path, 'wb') as f:

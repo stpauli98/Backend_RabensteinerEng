@@ -353,6 +353,17 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             
         # Prepare data for insertion/update - strogo prema shemi tabele files
         # Prepare data according to files table schema
+        
+        # Generate storage path if not provided in file_info
+        storage_path = file_info.get("storagePath", "")
+        if not storage_path:
+            file_name = file_info.get("fileName", "")
+            if file_name:
+                storage_path = f"{database_session_id}/{file_name}"
+                logger.info(f"Generated storage_path: {storage_path} for file {file_name}")
+            else:
+                logger.warning("No fileName provided, storage_path will be empty")
+        
         data = {
             "id": valid_uuid,
             "session_id": database_session_id,
@@ -377,7 +388,7 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             "zeitschrittweite_transferierten_daten": str(file_info.get("zeitschrittweiteTransferiertenDaten", "")),
             "offset_transferierten_daten": str(file_info.get("offsetTransferiertenDaten", "")),
             "mittelwertbildung_uber_den_zeithorizont": file_info.get("mittelwertbildungÜberDenZeithorizont", "nein"),
-            "storage_path": file_info.get("storagePath", ""),
+            "storage_path": storage_path,
             "type": file_info.get("type", "")
         }
         

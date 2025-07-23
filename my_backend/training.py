@@ -1385,3 +1385,128 @@ def run_analysis(session_id):
     except Exception as e:
         logger.error(f"Failed to trigger modern training for session {session_id}: {e}")
         return jsonify({'success': False, 'error': f'Failed to start modern training: {str(e)}'}), 500
+
+@bp.route('/get-zeitschritte/<session_id>', methods=['GET'])
+def get_zeitschritte(session_id):
+    """Get zeitschritte data for a session."""
+    try:
+        from supabase_client import get_supabase_client
+        supabase = get_supabase_client()
+        
+        # Get zeitschritte from database
+        response = supabase.table('zeitschritte').select('*').eq('session_id', session_id).single().execute()
+        
+        if response.data:
+            # Transform database data back to frontend format (offsett -> offset)
+            data = dict(response.data)
+            if 'offsett' in data:
+                data['offset'] = data['offsett']
+                del data['offsett']
+            
+            return jsonify({
+                'success': True,
+                'data': data
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'data': None,
+                'message': 'No zeitschritte found for this session'
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error getting zeitschritte for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@bp.route('/get-time-info/<session_id>', methods=['GET'])
+def get_time_info(session_id):
+    """Get time info data for a session."""
+    try:
+        from supabase_client import get_supabase_client
+        supabase = get_supabase_client()
+        
+        # Get time_info from database
+        response = supabase.table('time_info').select('*').eq('session_id', session_id).single().execute()
+        
+        if response.data:
+            return jsonify({
+                'success': True,
+                'data': response.data
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'data': None,
+                'message': 'No time info found for this session'
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error getting time info for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@bp.route('/debug-files-table/<session_id>', methods=['GET'])
+def debug_files_table(session_id):
+    """Debug endpoint to inspect files table data for a session."""
+    try:
+        from supabase_client import get_supabase_client, create_or_get_session_uuid
+        
+        # Convert session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                return jsonify({'success': False, 'error': 'Could not get session UUID'}), 400
+        
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Get all files for this session
+        response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
+        
+        logger.info(f"Debug: Files table query for session {session_id} (UUID: {uuid_session_id})")
+        logger.info(f"Debug: Found {len(response.data)} files")
+        
+        # Also check csv_file_refs table
+        refs_response = supabase.table('csv_file_refs').select('*').eq('session_id', uuid_session_id).execute()
+        logger.info(f"Debug: Found {len(refs_response.data)} CSV file references")
+        
+        result = {
+            'success': True,
+            'session_id': session_id,
+            'uuid_session_id': uuid_session_id,
+            'files_count': len(response.data),
+            'files': response.data,
+            'csv_refs_count': len(refs_response.data),
+            'csv_refs': refs_response.data
+        }
+        
+        # Check for empty storage_path values
+        empty_storage_paths = []
+        for file_data in response.data:
+            if not file_data.get('storage_path'):
+                empty_storage_paths.append({
+                    'file_id': file_data.get('id'),
+                    'file_name': file_data.get('file_name'),
+                    'storage_path': file_data.get('storage_path')
+                })
+        
+        if empty_storage_paths:
+            result['empty_storage_paths'] = empty_storage_paths
+            result['empty_storage_paths_count'] = len(empty_storage_paths)
+            logger.warning(f"Found {len(empty_storage_paths)} files with empty storage_path")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error debugging files table for {session_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500

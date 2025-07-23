@@ -98,14 +98,14 @@ class ModernMiddlemanRunner:
             True if valid, False otherwise
         """
         try:
-            # Check if session exists
-            response = self.supabase.table('sessions').select('uuid').eq('session_id', session_id).execute()
+            # Check if session exists - sessions table has 'id' column not 'uuid'
+            response = self.supabase.table('sessions').select('id').eq('id', session_id).execute()
             
             if not response.data:
                 logger.error(f"Session {session_id} not found in database")
                 return False
             
-            session_uuid = response.data[0]['uuid']
+            session_uuid = response.data[0]['id']
             
             # Check if session has files
             files_response = self.supabase.table('files').select('*').eq('session_id', session_uuid).execute()

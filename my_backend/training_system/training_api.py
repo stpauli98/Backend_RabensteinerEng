@@ -64,6 +64,7 @@ def get_training_results(session_id: str):
 
 
 @training_api_bp.route('/status/<session_id>', methods=['GET'])
+@training_api_bp.route('/session-status/<session_id>', methods=['GET'])  # Alias for frontend compatibility
 def get_training_status(session_id: str):
     """
     Get training status for a session
@@ -80,7 +81,7 @@ def get_training_status(session_id: str):
         # Check training_results table first
         results_status = _get_results_from_database(session_id, supabase)
         
-        # Check training_progress table for detailed progress
+        # Check training_logs table for detailed progress
         progress_status = _get_status_from_database(session_id, supabase)
         
         if results_status:
@@ -375,7 +376,7 @@ def _get_status_from_database(session_id: str, supabase_client) -> Dict:
         Dict containing training status
     """
     try:
-        response = supabase_client.table('training_progress').select('*').eq('session_id', session_id).execute()
+        response = supabase_client.table('training_logs').select('*').eq('session_id', session_id).order('created_at', desc=True).limit(1).execute()
         
         if response.data:
             return response.data[0]
@@ -399,7 +400,7 @@ def _get_progress_from_database(session_id: str, supabase_client) -> Dict:
         Dict containing training progress
     """
     try:
-        response = supabase_client.table('training_progress').select('*').eq('session_id', session_id).execute()
+        response = supabase_client.table('training_logs').select('*').eq('session_id', session_id).order('created_at', desc=True).limit(1).execute()
         
         if response.data:
             return response.data[0]
