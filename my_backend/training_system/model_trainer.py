@@ -37,6 +37,10 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
     
     Extracted from training_backend_test_2.py lines 170-238
     """
+    
+    # Validation: Check if we have enough features to train Dense network
+    if train_x.shape[2] == 0:
+        raise ValueError(f"Cannot train Dense network with 0 features. Input shape: {train_x.shape}")
        
     # MODELLDEFINITION ########################################################
     
@@ -101,6 +105,13 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     
     Extracted from training_backend_test_2.py lines 239-320
     """
+    
+    # Validation: Check if we have enough features to train CNN
+    if train_x.shape[2] == 0:
+        raise ValueError(f"Cannot train CNN with 0 features. Input shape: {train_x.shape}")
+    
+    if train_x.shape[2] < MDL.K:
+        raise ValueError(f"Cannot train CNN: kernel size {MDL.K} is larger than feature count {train_x.shape[2]}")
     
     # MODELLDEFINITION ########################################################
     

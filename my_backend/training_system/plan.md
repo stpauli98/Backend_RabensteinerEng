@@ -452,4 +452,54 @@ Real extracted functions → Database results → API endpoints → JSON respons
 **ETA za trigger:** 2-3 dana (ako nema blokera)
 **Risk Level:** SREDNJI (Kompleksna integracija, ali komponente testirane)
 
+## 🚨 WORKFLOW RESTRUCTURING PLAN (URGENT)
+
+**PROBLEM IDENTIFIED:** Current backend immediately trains models after "Run Analysis", but should follow proper sequence:
+
+### ORIGINAL INTENDED WORKFLOW:
+1. **Upload & Process Data** → Generate datasets and show count
+2. **Generate & Display Violin Plots** → Show data distribution visualizations  
+3. **User Model Parameter Selection** → Wait for user to choose model types, layers, neurons, epochs
+4. **Train Models** → Only after user provides parameters
+
+### CURRENT INCORRECT WORKFLOW:
+1. Upload & Process Data
+2. ❌ **IMMEDIATELY TRAIN MODELS** (wrong!)
+
+### REQUIRED CHANGES:
+
+#### BACKEND RESTRUCTURING:
+1. **Split `/api/training/run-analysis` endpoint:**
+   - Current: Processes data + trains models
+   - New: Only processes data + generates violin plots
+   
+2. **Create new `/api/training/generate-datasets/` endpoint:**
+   - Generate datasets from processed data
+   - Create violin plots using Seaborn
+   - Return dataset count and base64 violin plots
+   
+3. **Modify existing `/api/training/train-models/` endpoint:**
+   - Accept user model parameters (Dense/CNN layers, neurons, epochs, activation functions)
+   - Train models only after user selection
+   
+#### FRONTEND CHANGES:
+4. **Update Training.tsx workflow:**
+   - "Run Analysis" → call `/api/training/generate-datasets/`
+   - Display violin plots and dataset count
+   - Show model parameter selection form
+   - "Train Models" button → call `/api/training/train-models/` with parameters
+
+#### FILES TO MODIFY:
+- `middleman_runner.py` - Split analysis and training logic
+- `training_pipeline.py` - Separate dataset generation from training
+- `training.py` - Add new API endpoints
+- `Training.tsx` - Add model parameter form and restructure workflow
+
+### IMPLEMENTATION PRIORITY:
+1. **Backend endpoint restructuring** (CRITICAL)
+2. **Frontend model parameter form** (HIGH)
+3. **Testing complete workflow** (HIGH)
+
+---
+
 Ovaj plan je živ dokument - ažuriram ga kako radiš!

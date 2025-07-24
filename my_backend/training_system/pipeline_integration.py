@@ -60,14 +60,17 @@ class RealDataProcessor:
             # Load and process each input file
             for file_path in input_files:
                 try:
-                    df = pd.read_csv(file_path)
+                    # Use data_loader.load_csv_data which handles delimiter and column naming
+                    df = self.data_loader.load_csv_data(file_path, delimiter=';')
                     file_name = file_path.split('/')[-1].replace('.csv', '')
                     dat[file_name] = df
+                    
+                    logger.info(f"Loaded input file: {file_name}, shape: {df.shape}, columns: {list(df.columns)}")
                     
                     # Use real load() function to extract metadata
                     dat, inf = self.data_loader.process_csv_data(dat, inf)
                     
-                    logger.info(f"Processed input file: {file_name}, shape: {df.shape}")
+                    logger.info(f"Processed input file: {file_name}, shape: {df.shape}, processed successfully")
                     
                 except Exception as e:
                     logger.error(f"Error processing input file {file_path}: {str(e)}")
@@ -77,11 +80,12 @@ class RealDataProcessor:
             output_dat = {}
             for file_path in output_files:
                 try:
-                    df = pd.read_csv(file_path)
+                    # Use data_loader.load_csv_data which handles delimiter and column naming
+                    df = self.data_loader.load_csv_data(file_path, delimiter=';')
                     file_name = file_path.split('/')[-1].replace('.csv', '')
                     output_dat[file_name] = df
                     
-                    logger.info(f"Processed output file: {file_name}, shape: {df.shape}")
+                    logger.info(f"Loaded output file: {file_name}, shape: {df.shape}, columns: {list(df.columns)}")
                     
                 except Exception as e:
                     logger.error(f"Error processing output file {file_path}: {str(e)}")
@@ -141,6 +145,11 @@ class RealDataProcessor:
                         # Convert to numpy arrays for ML
                         X = input_df.select_dtypes(include=[np.number]).values
                         y = output_df.select_dtypes(include=[np.number]).values
+                        
+                        logger.info(f"Dataset {dataset_name}: input_df columns {list(input_df.columns)}, output_df columns {list(output_df.columns)}")
+                        logger.info(f"Dataset {dataset_name}: input numeric data shape {X.shape}, output numeric data shape {y.shape}")
+                        logger.info(f"Dataset {dataset_name}: input_df dtypes: {input_df.dtypes}")
+                        logger.info(f"Dataset {dataset_name}: output_df dtypes: {output_df.dtypes}")
                         
                         # Ensure we have enough data
                         if X.shape[0] > 10 and y.shape[0] > 10:
@@ -473,6 +482,58 @@ class RealVisualizationGenerator:
             raise
 
 
+# NEW: Dataset generation function (separated from training)
+def run_dataset_generation_pipeline(session_id: str, supabase_client, socketio_instance=None) -> Dict:
+    """
+    Run dataset generation pipeline - processes data and creates violin plots
+    WITHOUT training models (first step of restructured workflow)
+    
+    Args:
+        session_id: Session identifier
+        supabase_client: Supabase client instance
+        socketio_instance: SocketIO instance for progress updates
+        
+    Returns:
+        Dataset generation results with violin plots
+    """
+    try:
+        logger.info(f"Starting dataset generation pipeline for session {session_id}")
+        
+        # Step 1: Real data processing
+        data_processor = RealDataProcessor(supabase_client)
+        processed_data = data_processor.process_session_data(session_id)
+        
+        # Step 2: Generate violin plots only (no training)
+        viz_generator = RealVisualizationGenerator()
+        visualizations = viz_generator.create_visualizations(
+            {}, {},  # No training/evaluation results yet
+            processed_data
+        )
+        
+        # Step 3: Return dataset info and visualizations
+        results = {
+            'session_id': session_id,
+            'timestamp': datetime.now().isoformat(),
+            'status': 'datasets_generated',
+            'dataset_count': len(processed_data.get('train_datasets', {})),
+            'visualizations': visualizations,
+            'datasets_info': {
+                'input_datasets': len(processed_data.get('input_data', {})),
+                'output_datasets': len(processed_data.get('output_data', {})),
+                'train_datasets': len(processed_data.get('train_datasets', {})),
+                'dataset_names': list(processed_data.get('train_datasets', {}).keys())
+            },
+            'processed_data': processed_data  # Store for later training
+        }
+        
+        logger.info(f"Dataset generation completed for session {session_id}: {results['dataset_count']} datasets")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Dataset generation pipeline failed for session {session_id}: {str(e)}")
+        raise
+
+
 # Main integration function to replace TrainingPipeline._process_data, etc.
 def run_real_training_pipeline(session_id: str, supabase_client, socketio_instance=None) -> Dict:
     """
@@ -537,4 +598,97 @@ def run_real_training_pipeline(session_id: str, supabase_client, socketio_instan
         
     except Exception as e:
         logger.error(f"Real training pipeline failed for session {session_id}: {str(e)}")
+        raise
+
+
+# NEW: Training-only function (accepts user model parameters)
+def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_client, socketio_instance=None) -> Dict:
+    """
+    Run model training pipeline using user-specified parameters
+    This is the second step of the restructured workflow
+    
+    Args:
+        session_id: Session identifier
+        model_params: User-specified model parameters (layers, neurons, epochs, etc.)
+        supabase_client: Supabase client instance
+        socketio_instance: SocketIO instance for progress updates
+        
+    Returns:
+        Training results
+    """
+    try:
+        logger.info(f"Starting model training pipeline for session {session_id} with params: {model_params}")
+        
+        # Step 1: Load previously generated datasets
+        # (In real implementation, we'd store processed_data in database or cache)
+        data_processor = RealDataProcessor(supabase_client)
+        processed_data = data_processor.process_session_data(session_id)
+        
+        # Step 2: Configure model training with user parameters
+        from .config import MDL
+        config = MDL()
+        
+        # Apply user-specified model parameters
+        config.MODE = model_params.get('model_type', 'Dense')  # Dense, CNN, LSTM, etc.
+        config.LAY = int(model_params.get('layers', 2))         # Number of layers
+        config.N = int(model_params.get('neurons', 50))         # Neurons per layer
+        config.EP = int(model_params.get('epochs', 100))        # Training epochs
+        config.ACTF = model_params.get('activation', 'relu')    # Activation function
+        
+        # CNN-specific parameters
+        if config.MODE == 'CNN':
+            config.K = int(model_params.get('kernel_size', 3))  # Kernel size
+        
+        # SVR-specific parameters
+        if 'SVR' in config.MODE:
+            config.KERNEL = model_params.get('kernel', 'rbf')
+            config.C = float(model_params.get('c_parameter', 1.0))
+            config.EPSILON = float(model_params.get('epsilon', 0.1))
+        
+        logger.info(f"Training configuration: MODE={config.MODE}, LAY={config.LAY}, N={config.N}, EP={config.EP}")
+        
+        # Step 3: Train models with user configuration
+        model_trainer = RealModelTrainer(config)
+        training_results = model_trainer.train_all_models(
+            processed_data['train_datasets'], 
+            processed_data['session_data']
+        )
+        
+        # Step 4: Generate evaluation results
+        results_generator = RealResultsGenerator()
+        evaluation_results = results_generator.generate_results(
+            training_results, 
+            processed_data['session_data']
+        )
+        
+        # Step 5: Create post-training visualizations
+        viz_generator = RealVisualizationGenerator()
+        visualizations = viz_generator.create_visualizations(
+            training_results, 
+            evaluation_results, 
+            processed_data
+        )
+        
+        # Step 6: Combine final results
+        final_results = {
+            'session_id': session_id,
+            'timestamp': datetime.now().isoformat(),
+            'status': 'training_completed',
+            'model_parameters': model_params,
+            'training_results': training_results,
+            'evaluation_results': evaluation_results,
+            'visualizations': visualizations,
+            'summary': evaluation_results.get('summary', {}),
+            'processed_data_info': {
+                'input_datasets': len(processed_data.get('input_data', {})),
+                'output_datasets': len(processed_data.get('output_data', {})),
+                'train_datasets': len(processed_data.get('train_datasets', {}))
+            }
+        }
+        
+        logger.info(f"Model training pipeline completed for session {session_id}")
+        return final_results
+        
+    except Exception as e:
+        logger.error(f"Model training pipeline failed for session {session_id}: {str(e)}")
         raise

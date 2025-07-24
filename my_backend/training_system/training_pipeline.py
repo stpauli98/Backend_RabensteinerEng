@@ -14,7 +14,11 @@ from .data_processor import create_data_processor
 from .model_trainer import create_model_trainer
 from .results_generator import create_results_generator
 from .visualization import create_visualizer
-from .pipeline_integration import run_real_training_pipeline
+from .pipeline_integration import (
+    run_real_training_pipeline, 
+    run_dataset_generation_pipeline, 
+    run_model_training_pipeline
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +87,93 @@ class TrainingPipeline:
             
             # Update progress with error
             self._update_progress(self.progress['completed_steps'], f'Training failed: {str(e)}', error=True)
+            
+            # Save error to database
+            self._save_error_to_database(session_id, str(e), traceback.format_exc())
+            
+            raise
+    
+    def run_dataset_generation(self, session_id: str) -> Dict:
+        """
+        Run dataset generation pipeline (first step of restructured workflow)
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Dict containing dataset info and violin plots
+        """
+        try:
+            self.current_session_id = session_id
+            logger.info(f"Starting dataset generation for session {session_id}")
+            
+            # Initialize progress tracking
+            self._update_progress(0, 'Generating datasets and violin plots')
+            
+            # Use the new dataset generation pipeline
+            results = run_dataset_generation_pipeline(session_id, self.supabase, self.socketio)
+            
+            # Save dataset generation results to database
+            self._update_progress(1, 'Saving dataset generation results')
+            self._save_dataset_generation_to_database(session_id, results)
+            
+            # Mark as completed
+            self._update_progress(2, 'Dataset generation completed successfully', completed=True)
+            
+            logger.info(f"Dataset generation completed successfully for session {session_id}")
+            return results
+            
+        except Exception as e:
+            error_msg = f"Dataset generation failed for session {session_id}: {str(e)}"
+            logger.error(error_msg)
+            logger.error(traceback.format_exc())
+            
+            # Update progress with error
+            self._update_progress(self.progress['completed_steps'], f'Dataset generation failed: {str(e)}', error=True)
+            
+            # Save error to database
+            self._save_error_to_database(session_id, str(e), traceback.format_exc())
+            
+            raise
+    
+    def run_model_training(self, session_id: str, model_params: Dict) -> Dict:
+        """
+        Run model training pipeline with user parameters (second step of restructured workflow)
+        
+        Args:
+            session_id: Session identifier
+            model_params: User-specified model parameters
+            
+        Returns:
+            Dict containing training results
+        """
+        try:
+            self.current_session_id = session_id
+            logger.info(f"Starting model training for session {session_id} with params: {model_params}")
+            
+            # Initialize progress tracking
+            self._update_progress(0, 'Training models with user parameters')
+            
+            # Use the new model training pipeline
+            results = run_model_training_pipeline(session_id, model_params, self.supabase, self.socketio)
+            
+            # Save training results to database
+            self._update_progress(6, 'Saving training results to database')
+            self._save_results_to_database(session_id, results)
+            
+            # Mark as completed
+            self._update_progress(7, 'Model training completed successfully', completed=True)
+            
+            logger.info(f"Model training completed successfully for session {session_id}")
+            return results
+            
+        except Exception as e:
+            error_msg = f"Model training failed for session {session_id}: {str(e)}"
+            logger.error(error_msg)
+            logger.error(traceback.format_exc())
+            
+            # Update progress with error
+            self._update_progress(self.progress['completed_steps'], f'Model training failed: {str(e)}', error=True)
             
             # Save error to database
             self._save_error_to_database(session_id, str(e), traceback.format_exc())
@@ -265,6 +356,37 @@ class TrainingPipeline:
             logger.error(f"Error generating final results: {str(e)}")
             raise
     
+    def _clean_json_data(self, data):
+        """
+        Clean data by replacing inf/nan values to make it JSON serializable
+        
+        Args:
+            data: Data structure to clean
+            
+        Returns:
+            Cleaned data structure
+        """
+        import math
+        import numpy as np
+        
+        if isinstance(data, dict):
+            return {key: self._clean_json_data(value) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [self._clean_json_data(item) for item in data]
+        elif isinstance(data, (int, str, bool)) or data is None:
+            return data
+        elif isinstance(data, float):
+            if math.isnan(data) or math.isinf(data):
+                return None  # Replace inf/nan with None
+            return data
+        elif isinstance(data, np.ndarray):
+            # Convert numpy arrays to lists and clean
+            return self._clean_json_data(data.tolist())
+        elif hasattr(data, 'item'):  # numpy scalars
+            return self._clean_json_data(data.item())
+        else:
+            return str(data)  # Convert other types to string
+    
     def _save_results_to_database(self, session_id: str, results: Dict) -> bool:
         """
         Save results to database using the new schema
@@ -282,6 +404,11 @@ class TrainingPipeline:
             training_results = results.get('training_results', {})
             visualizations = results.get('visualizations', {})
             summary = results.get('summary', {})
+            
+            # Clean all data to remove inf/nan values
+            evaluation_results = self._clean_json_data(evaluation_results)
+            training_results = self._clean_json_data(training_results)
+            summary = self._clean_json_data(summary)
             
             # Save main training results
             result_data = {
@@ -354,6 +481,45 @@ class TrainingPipeline:
         except Exception as e:
             logger.error(f"Error saving error to database: {str(e)}")
     
+    def _save_dataset_generation_to_database(self, session_id: str, results: Dict) -> bool:
+        """
+        Save dataset generation results to database
+        
+        Args:
+            session_id: Session identifier
+            results: Dataset generation results
+            
+        Returns:
+            True if successful
+        """
+        try:
+            # Save dataset generation info to training_results with status 'datasets_generated'
+            dataset_data = {
+                'session_id': session_id,
+                'status': 'datasets_generated',
+                'dataset_count': results.get('dataset_count', 0),
+                'datasets_info': results.get('datasets_info', {}),
+                'completed_at': datetime.now().isoformat()
+            }
+            
+            response = self.supabase.table('training_results').insert(dataset_data).execute()
+            
+            if response.data:
+                # Save violin plots to visualizations table
+                visualizations = results.get('visualizations', {})
+                if visualizations:
+                    self._save_visualizations_to_database(session_id, visualizations)
+                
+                logger.info(f"Dataset generation results saved to database for session {session_id}")
+                return True
+            else:
+                logger.error(f"Failed to save dataset generation results for session {session_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error saving dataset generation to database: {str(e)}")
+            return False
+    
     def _update_progress(self, step: int, message: str, completed: bool = False, error: bool = False):
         """
         Update training progress
@@ -394,13 +560,16 @@ class TrainingPipeline:
         """Save progress to database"""
         try:
             if self.current_session_id:
+                # Clean progress data to avoid inf/nan issues
+                clean_progress = self._clean_json_data(self.progress)
+                
                 progress_data = {
                     'session_id': self.current_session_id,
-                    'message': f'Training progress: {self.progress}%',
+                    'message': f'Training progress: {clean_progress.get("overall", 0)}%',
                     'level': 'INFO',
-                    'step_number': int(self.progress / 14),  # Approximate step based on progress
-                    'step_name': 'Training in progress',
-                    'progress_percentage': self.progress
+                    'step_number': int(clean_progress.get("completed_steps", 0)),
+                    'step_name': clean_progress.get("current_step", "Training in progress"),
+                    'progress_percentage': clean_progress.get("overall", 0)
                 }
                 
                 # Insert into training_logs instead of training_progress

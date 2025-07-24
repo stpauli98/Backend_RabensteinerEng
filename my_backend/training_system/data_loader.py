@@ -247,8 +247,15 @@ class DataLoader:
             # Basic validation
             if df.empty:
                 raise ValueError(f"CSV file {file_path} is empty")
+                
+            # Ensure the first column is treated as UTC timestamp
+            if len(df.columns) >= 2:
+                # Rename columns to match expected format (UTC, data_value)
+                df.columns = ['UTC', 'data_value']
+            else:
+                raise ValueError(f"CSV file must have at least 2 columns, found {len(df.columns)}")
             
-            logger.info(f"Loaded CSV data from {file_path}: {df.shape}")
+            logger.info(f"Loaded CSV data from {file_path}: {df.shape}, columns: {list(df.columns)}")
             return df
             
         except Exception as e:
@@ -320,8 +327,9 @@ class DataLoader:
             n_num = n_all
             for i in range(n_all):
                 try:
-                    float(df.iloc[i, 1])
-                    if math.isnan(float(df.iloc[i, 1])):
+                    # Use 'data_value' column instead of iloc[i, 1]
+                    float(df['data_value'].iloc[i])
+                    if math.isnan(float(df['data_value'].iloc[i])):
                        n_num -= 1
                 except:
                     n_num -= 1  
@@ -330,27 +338,35 @@ class DataLoader:
             rate_num = round(n_num/n_all*100, 2)
                 
             # Maximum value
-            val_max = df.iloc[:, 1].max() 
+            val_max = df['data_value'].max() 
             
             # Minimum value
-            val_min = df.iloc[:, 1].min()
+            val_min = df['data_value'].min()
             
             # Update dataframe
             dat[df_name] = df
 
-            # Insert information
+            # Insert information - include all columns needed by data_processor
             row_data = {
-                "utc_min":  utc_min,
-                "utc_max":  utc_max, 
-                "delt":     delt,
-                "ofst":     ofst,
-                "n_all":    n_all,
-                "n_num":    n_num,
-                "rate_num": rate_num,
-                "val_min":  val_min,
-                "val_max":  val_max,
-                "scal":     False,
-                "avg":      False
+                "utc_min":      utc_min,
+                "utc_max":      utc_max, 
+                "delt":         delt,
+                "ofst":         ofst,
+                "n_all":        n_all,
+                "n_num":        n_num,
+                "rate_num":     rate_num,
+                "val_min":      val_min,
+                "val_max":      val_max,
+                "spec":         "Historische Daten",  # Default value
+                "th_strt":      -2,                   # Default value (from original script)
+                "th_end":       0,                    # Default value (from original script)
+                "meth":         "Lineare Interpolation", # Default value
+                "avg":          False,
+                "delt_transf":  None,                 # Will be calculated by transform_data
+                "ofst_transf":  None,                 # Will be calculated by transform_data
+                "scal":         False,
+                "scal_max":     1,                    # Default scaling max
+                "scal_min":     0                     # Default scaling min
             }
             
             # Create new row in DataFrame
