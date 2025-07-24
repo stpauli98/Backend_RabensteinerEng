@@ -338,6 +338,360 @@ def cancel_training(session_id: str):
         }), 500
 
 
+@training_api_bp.route('/list-sessions', methods=['GET'])
+def list_sessions():
+    """
+    Get list of all available sessions
+    
+    Returns:
+        JSON response with list of sessions
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Get all sessions with basic info
+        sessions_response = supabase.table('sessions').select('id, created_at, finalized, file_count').order('created_at', desc=True).execute()
+        
+        sessions_list = []
+        
+        if sessions_response.data:
+            for session in sessions_response.data:
+                session_id = session['id']
+                
+                # Get additional info for each session
+                # Check if there are files
+                files_response = supabase.table('csv_file_refs').select('id, name, type').eq('session_id', session_id).execute()
+                files_count = len(files_response.data) if files_response.data else 0
+                
+                # Check if there's time info
+                time_info_response = supabase.table('time_info').select('jahr, woche, monat, feiertag, tag').eq('session_id', session_id).execute()
+                has_time_info = len(time_info_response.data) > 0 if time_info_response.data else False
+                
+                # Check if there's zeitschritte info
+                zeitschritte_response = supabase.table('zeitschritte').select('eingabe, ausgabe').eq('session_id', session_id).execute()
+                has_zeitschritte = len(zeitschritte_response.data) > 0 if zeitschritte_response.data else False
+                
+                # Check training status
+                training_results = supabase.table('training_results').select('status, created_at').eq('session_id', session_id).execute()
+                training_status = 'not_started'
+                training_completed_at = None
+                
+                if training_results.data and len(training_results.data) > 0:
+                    result = training_results.data[0]
+                    training_status = result.get('status', 'unknown')
+                    training_completed_at = result.get('created_at')
+                
+                session_info = {
+                    'id': session_id,
+                    'created_at': session['created_at'],
+                    'finalized': session.get('finalized', False),
+                    'file_count': files_count,
+                    'has_time_info': has_time_info,
+                    'has_zeitschritte': has_zeitschritte,
+                    'training_status': training_status,
+                    'training_completed_at': training_completed_at,
+                    'url': f'/training?session={session_id}'
+                }
+                
+                sessions_list.append(session_info)
+        
+        return jsonify({
+            'success': True,
+            'sessions': sessions_list,
+            'total_count': len(sessions_list)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error listing sessions: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to list sessions',
+            'message': str(e),
+            'sessions': []
+        }), 500
+
+
+@training_api_bp.route('/get-session-uuid/<session_id>', methods=['GET'])
+def get_session_uuid(session_id: str):
+    """
+    Get UUID for a session ID (handles string to UUID conversion)
+    
+    Args:
+        session_id: Session identifier (string or UUID)
+        
+    Returns:
+        JSON response with session UUID
+    """
+    try:
+        import re
+        supabase = get_supabase_client()
+        
+        # Check if it's already a UUID format
+        uuid_regex = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if re.match(uuid_regex, session_id, re.IGNORECASE):
+            # Already a UUID, just return it
+            return jsonify({
+                'session_id': session_id,
+                'uuid': session_id,
+                'success': True
+            }), 200
+        
+        # Look up in session_mappings table
+        response = supabase.table('session_mappings').select('uuid_session_id').eq('string_session_id', session_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            uuid_session_id = response.data[0]['uuid_session_id']
+            return jsonify({
+                'session_id': session_id,
+                'uuid': uuid_session_id,
+                'success': True
+            }), 200
+        else:
+            return jsonify({
+                'session_id': session_id,
+                'error': 'Session not found',
+                'success': False
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error getting session UUID for {session_id}: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get session UUID',
+            'message': str(e),
+            'success': False
+        }), 500
+
+
+@training_api_bp.route('/create-database-session', methods=['POST'])
+def create_database_session():
+    """
+    Create a new database session with UUID
+    
+    Returns:
+        JSON response with created session UUID
+    """
+    try:
+        import uuid
+        supabase = get_supabase_client()
+        
+        # Create new session in sessions table
+        new_session_id = str(uuid.uuid4())
+        session_response = supabase.table('sessions').insert({
+            'id': new_session_id,
+            'finalized': False,
+            'file_count': 0
+        }).execute()
+        
+        if session_response.data:
+            return jsonify({
+                'success': True,
+                'session_id': new_session_id,
+                'uuid': new_session_id
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to create session'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error creating database session: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to create database session',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/save-time-info', methods=['POST'])
+def save_time_info():
+    """
+    Save time information for a session
+    
+    Returns:
+        JSON response with save status
+    """
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        time_info = data.get('time_info', {})
+        
+        if not session_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing session_id'
+            }), 400
+            
+        supabase = get_supabase_client()
+        
+        # Save to time_info table
+        response = supabase.table('time_info').upsert({
+            'session_id': session_id,
+            'jahr': time_info.get('jahr', False),
+            'woche': time_info.get('woche', False),
+            'monat': time_info.get('monat', False),
+            'feiertag': time_info.get('feiertag', False),
+            'tag': time_info.get('tag', False),
+            'zeitzone': time_info.get('zeitzone', ''),
+            'category_data': time_info.get('category_data', {})
+        }).execute()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Time info saved successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error saving time info: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to save time info',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/save-zeitschritte', methods=['POST'])
+def save_zeitschritte():
+    """
+    Save zeitschritte information for a session
+    
+    Returns:
+        JSON response with save status
+    """
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        zeitschritte = data.get('zeitschritte', {})
+        
+        if not session_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing session_id'
+            }), 400
+            
+        supabase = get_supabase_client()
+        
+        # Save to zeitschritte table
+        response = supabase.table('zeitschritte').upsert({
+            'session_id': session_id,
+            'eingabe': zeitschritte.get('eingabe', ''),
+            'ausgabe': zeitschritte.get('ausgabe', ''),
+            'zeitschrittweite': zeitschritte.get('zeitschrittweite', ''),
+            'offset': zeitschritte.get('offset', '')
+        }).execute()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Zeitschritte saved successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error saving zeitschritte: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to save zeitschritte',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/generate-datasets/<session_id>', methods=['POST'])
+def generate_datasets(session_id: str):
+    """
+    Generate datasets for training
+    
+    Returns:
+        JSON response with generation status
+    """
+    try:
+        # TODO: Implement actual dataset generation logic
+        # This is a placeholder implementation
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'message': 'Dataset generation started',
+            'status': 'generating'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error generating datasets for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to generate datasets',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/train-models/<session_id>', methods=['POST'])
+def train_models(session_id: str):
+    """
+    Start model training for a session
+    
+    Returns:
+        JSON response with training status
+    """
+    try:
+        # TODO: Implement actual model training logic
+        # This is a placeholder implementation
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'message': 'Model training started',
+            'status': 'training'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error starting model training for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to start model training',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/get-training-status/<session_id>', methods=['GET'])
+def get_training_status_details(session_id: str):
+    """
+    Get detailed training status for a session
+    
+    Returns:
+        JSON response with detailed training status
+    """
+    try:
+        # Use existing status function as base
+        return get_training_status(session_id)
+        
+    except Exception as e:
+        logger.error(f"Error getting training status details for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get training status',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/get-training-results/<session_id>', methods=['GET'])
+def get_training_results_details(session_id: str):
+    """
+    Get detailed training results for a session
+    
+    Returns:
+        JSON response with detailed training results
+    """
+    try:
+        # Use existing results function as base
+        return get_training_results(session_id)
+        
+    except Exception as e:
+        logger.error(f"Error getting training results details for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get training results',
+            'message': str(e)
+        }), 500
+
+
 # Helper functions (to be implemented with actual database queries)
 
 def _get_results_from_database(session_id: str, supabase_client) -> Dict:
