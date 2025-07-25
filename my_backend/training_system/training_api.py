@@ -710,27 +710,61 @@ def generate_datasets(session_id: str):
 @training_api_bp.route('/train-models/<session_id>', methods=['POST'])
 def train_models(session_id: str):
     """
-    Start model training for a session
+    Start model training for a session with user parameters
+    
+    Expects JSON body with:
+    - model_parameters: Model configuration (MODE, LAY, N, EP, etc.)
+    - training_split: Training data split parameters (trainPercentage, etc.)
     
     Returns:
         JSON response with training status
     """
     try:
-        # TODO: Implement actual model training logic
-        # This is a placeholder implementation
+        logger.info(f"Starting model training for session {session_id}")
+        
+        # Get request data
+        request_data = request.get_json() or {}
+        model_parameters = request_data.get('model_parameters', {})
+        training_split = request_data.get('training_split', {})
+        
+        logger.info(f"Received model parameters: {model_parameters}")
+        logger.info(f"Received training split: {training_split}")
+        
+        # Validate required parameters
+        if not model_parameters:
+            return jsonify({
+                'success': False,
+                'error': 'Model parameters are required',
+                'message': 'Please provide model configuration parameters'
+            }), 400
+        
+        if not training_split:
+            return jsonify({
+                'success': False,
+                'error': 'Training split parameters are required',
+                'message': 'Please provide training data split parameters'
+            }), 400
+        
+        # Start the complete pipeline with user parameters
+        results = run_complete_original_pipeline(
+            session_id, 
+            model_parameters, 
+            training_split
+        )
         
         return jsonify({
             'success': True,
             'session_id': session_id,
-            'message': 'Model training started',
-            'status': 'training'
+            'message': 'Model training completed successfully',
+            'status': 'completed',
+            'results': results
         }), 200
         
     except Exception as e:
-        logger.error(f"Error starting model training for {session_id}: {str(e)}")
+        logger.error(f"Error training models for {session_id}: {str(e)}")
         return jsonify({
             'success': False,
-            'error': 'Failed to start model training',
+            'error': 'Failed to train models',
             'message': str(e)
         }), 500
 
@@ -1029,6 +1063,7 @@ def start_complete_pipeline(session_id: str):
         # Get request data
         request_data = request.get_json() or {}
         model_parameters = request_data.get('model_parameters', {})
+        training_split = request_data.get('training_split', {})
         
         # Initialize phase progress
         _phase_progress[session_id] = {
@@ -1066,6 +1101,7 @@ def start_complete_pipeline(session_id: str):
             results = run_complete_original_pipeline(
                 session_id, 
                 model_parameters, 
+                training_split,
                 progress_callback
             )
             
