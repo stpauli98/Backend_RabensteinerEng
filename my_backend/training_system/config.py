@@ -199,86 +199,24 @@ class T:
 
 class MDL:
     """
-    Model configuration class
-    Extracted from training_backend_test_2.py lines 2046-2141
+    Model configuration class - NO DEFAULT VALUES
+    All parameters must be provided by user or validation will fail
     """
     
-    def __init__(self, mode: str = "LIN"):
-        # Ausgewähltes Verfahren
-        self.MODE = mode
+    def __init__(self, mode: str = None):
+        # Only set MODE if provided, everything else is None
+        if mode:
+            self.MODE = mode
         
-        # Initialize all attributes with defaults
-        self.LAY = 3
-        self.N = 512
-        self.EP = 20
-        self.ACTF = "relu"
-        self.K = 3
-        self.KERNEL = "poly"
-        self.C = 1
-        self.EPSILON = 0.1
-        
-        # Set mode-specific parameters
-        if self.MODE == "Dense":
-            # Anzahl an Layer [-]
-            self.LAY = 3
-            # Anzahl der Neuronen pro Layer [-]
-            self.N = 512
-            # Max. Anzahl der Trainingsdurchläufe [-]
-            self.EP = 20
-            # Aktivierungsfunktion
-            self.ACTF = "relu"
-        
-        elif self.MODE == "CNN":
-            # Anzahl an Layer [-]
-            self.LAY = 3
-            # Anzahl der Filter pro Layer [-]
-            self.N = 512
-            # Kernelgröße [-]
-            self.K = 3
-            # Max. Anzahl der Trainingsdurchläufe [-]
-            self.EP = 20
-            # Aktivierungsfunktion
-            self.ACTF = "relu"
-        
-        elif self.MODE == "LSTM":
-            # Anzahl an Layer [-]
-            self.LAY = 3
-            # Anzahl der Neuronen pro Layer [-]
-            self.N = 512
-            # Max. Anzahl der Trainingsdurchläufe [-]
-            self.EP = 20
-            # Aktivierungsfunktion
-            self.ACTF = "relu"
-        
-        elif self.MODE == "AR LSTM":
-            # Anzahl an Layer [-]
-            self.LAY = 3
-            # Anzahl der Neuronen pro Layer [-]
-            self.N = 512
-            # Max. Anzahl der Trainingsdurchläufe [-]
-            self.EP = 20
-            # Aktivierungsfunktion
-            self.ACTF = "relu"
-        
-        elif self.MODE == "SVR_dir":
-            # Art der Modellierung von Nichtlinearitäten
-            self.KERNEL = "poly"
-            # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
-            self.C = 1
-            # Toleranz für Abweichungen [-]
-            self.EPSILON = 0.1
-        
-        elif self.MODE == "SVR_MIMO":
-            # Art der Modellierung von Nichtlinearitäten
-            self.KERNEL = "poly"
-            # Regulationsparameter (Trade-off Bias vs. Varianz) [-]
-            self.C = 1
-            # Toleranz für Abweichungen [-]
-            self.EPSILON = 0.1
-        
-        elif self.MODE == "LIN":
-            # Linear model doesn't need special parameters
-            pass
+        # Initialize all attributes as None - user MUST provide values
+        self.LAY = None
+        self.N = None
+        self.EP = None
+        self.ACTF = None
+        self.K = None
+        self.KERNEL = None
+        self.C = None
+        self.EPSILON = None
 
 
 # INFORMATIONEN ZU DEN FEIERTAGEN (DIE KEINE SONNTAGE SIND)

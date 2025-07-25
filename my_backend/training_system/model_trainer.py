@@ -417,13 +417,14 @@ class ModelTrainer:
         self.trained_models = {}
         self.training_history = {}
     
-    def train_all_models(self, datasets: Dict, session_data: Dict) -> Dict:
+    def train_all_models(self, datasets: Dict, session_data: Dict, training_split: dict = None) -> Dict:
         """
         Train all enabled models using the extracted real functions
         
         Args:
             datasets: Training datasets
             session_data: Session configuration
+            training_split: Training split parameters from user (REQUIRED)
             
         Returns:
             Dict containing trained models and results
@@ -431,11 +432,15 @@ class ModelTrainer:
         try:
             results = {}
             
+            # Validate training_split is provided
+            if not training_split:
+                raise ValueError("Training split parameters are required but not provided")
+            
             for dataset_name, dataset in datasets.items():
                 X, y = dataset['X'], dataset['y']
                 
-                # Split data
-                X_train, X_test, y_train, y_test = self._split_data(X, y)
+                # Split data using user parameters
+                X_train, X_test, y_train, y_test = self._split_data(X, y, training_split)
                 
                 dataset_results = {}
                 
@@ -469,13 +474,14 @@ class ModelTrainer:
             logger.error(f"Error training models: {str(e)}")
             raise
     
-    def _split_data(self, X: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _split_data(self, X: np.ndarray, y: np.ndarray, training_split: dict = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Split data into training and testing sets
+        Split data into training and testing sets using REQUIRED user-specified parameters
         
         Args:
             X: Input features
             y: Target values
+            training_split: Dictionary with user training split parameters (REQUIRED)
             
         Returns:
             Tuple of (X_train, X_test, y_train, y_test)
@@ -483,7 +489,29 @@ class ModelTrainer:
         try:
             from sklearn.model_selection import train_test_split
             
-            return train_test_split(X, y, test_size=0.2, random_state=42)
+            # Require user parameters - NO DEFAULTS
+            if not training_split:
+                raise ValueError("Training split parameters are required but not provided")
+            
+            # Validate required parameters
+            required_params = ['testPercentage', 'random_dat']
+            for param in required_params:
+                if param not in training_split:
+                    raise ValueError(f"Training split parameter '{param}' is required")
+            
+            # Calculate test_size from user percentages
+            test_percentage = training_split['testPercentage']
+            if test_percentage <= 0 or test_percentage >= 100:
+                raise ValueError(f"testPercentage must be between 0 and 100, got {test_percentage}")
+            
+            test_size = test_percentage / 100.0
+            
+            # Use randomization setting from user
+            random_state = None if training_split['random_dat'] else 42
+            
+            logger.info(f"Using user split parameters: test_size={test_size}, random_state={random_state}")
+            
+            return train_test_split(X, y, test_size=test_size, random_state=random_state)
             
         except Exception as e:
             logger.error(f"Error splitting data: {str(e)}")

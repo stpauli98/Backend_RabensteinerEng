@@ -617,21 +617,24 @@ def generate_datasets(session_id: str):
     try:
         logger.info(f"Starting dataset generation for session {session_id}")
         
+        # Get request data for model parameters and training split
+        request_data = request.get_json() or {}
+        model_parameters = request_data.get('model_parameters', {})
+        training_split = request_data.get('training_split', {})
+        
+        logger.info(f"Received model parameters: {model_parameters}")
+        logger.info(f"Received training split: {training_split}")
+        
         # Start the complete 7-phase pipeline in background thread
         def run_pipeline_async():
             try:
                 logger.info(f"Running complete original pipeline for session {session_id}")
                 
-                # Import and run the complete pipeline
+                # Import and run the complete pipeline with user parameters
                 result = run_complete_original_pipeline(
                     session_id=session_id,
-                    model_parameters={
-                        'MODE': 'Dense',
-                        'LAY': 2,
-                        'N': 50,
-                        'EP': 50,
-                        'ACTF': 'relu'
-                    },
+                    model_parameters=model_parameters,
+                    training_split=training_split,
                     progress_callback=lambda session_id, phase, msg, progress: logger.info(f"Phase {phase}: {msg} ({progress}%)")
                 )
                 

@@ -559,7 +559,8 @@ def run_real_training_pipeline(session_id: str, supabase_client, socketio_instan
         model_trainer = RealModelTrainer()
         training_results = model_trainer.train_all_models(
             processed_data['train_datasets'], 
-            processed_data['session_data']
+            processed_data['session_data'],
+            {}
         )
         
         # Step 3: Real results generation
@@ -651,7 +652,8 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
         model_trainer = RealModelTrainer(config)
         training_results = model_trainer.train_all_models(
             processed_data['train_datasets'], 
-            processed_data['session_data']
+            processed_data['session_data'],
+            training_split
         )
         
         # Step 4: Generate evaluation results
@@ -694,13 +696,14 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
         raise
 
 
-def run_complete_original_pipeline(session_id: str, model_parameters: dict = None, progress_callback=None):
+def run_complete_original_pipeline(session_id: str, model_parameters: dict = None, training_split: dict = None, progress_callback=None):
     """
     Complete 7-phase pipeline following original training_backend_test_2.py workflow
     
     Args:
         session_id: Session identifier
         model_parameters: Model configuration parameters
+        training_split: Training data split parameters
         progress_callback: Function to call for progress updates
         
     Returns:
@@ -822,19 +825,80 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         
         logger.info(f"PHASE 5: {phases[4]}")
         
-        # Use existing model training with enhancements
+        # Validate and use ONLY user parameters - NO DEFAULTS
+        if not model_parameters:
+            raise ValueError("Model parameters are required but not provided")
+        
         config = MDL()
-        if model_parameters:
-            config.MODE = model_parameters.get('MODE', 'Dense')
-            config.LAY = model_parameters.get('LAY', 2)
-            config.N = model_parameters.get('N', 50)
-            config.EP = model_parameters.get('EP', 100)
-            config.ACTF = model_parameters.get('ACTF', 'ReLU')
+        
+        # Core model parameters - REQUIRED
+        if 'MODE' not in model_parameters:
+            raise ValueError("Model MODE parameter is required")
+        config.MODE = model_parameters['MODE']
+        
+        # Validate parameters based on model type
+        if config.MODE in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
+            # Neural network parameters - ALL REQUIRED
+            required_params = ['LAY', 'N', 'EP', 'ACTF']
+            for param in required_params:
+                if param not in model_parameters or model_parameters[param] is None or model_parameters[param] == '':
+                    raise ValueError(f"Neural network parameter '{param}' is required for model type '{config.MODE}'")
+            
+            config.LAY = model_parameters['LAY']
+            config.N = model_parameters['N']
+            config.EP = model_parameters['EP']
+            config.ACTF = model_parameters['ACTF']
+            
+            # CNN-specific parameters
+            if config.MODE == 'CNN':
+                if 'K' not in model_parameters or model_parameters['K'] is None:
+                    raise ValueError("CNN parameter 'K' (kernel size) is required for CNN model")
+                config.K = model_parameters['K']
+            
+        elif config.MODE in ['SVR_dir', 'SVR_MIMO']:
+            # SVR parameters - ALL REQUIRED
+            required_params = ['KERNEL', 'C', 'EPSILON']
+            for param in required_params:
+                if param not in model_parameters or model_parameters[param] is None or model_parameters[param] == '':
+                    raise ValueError(f"SVR parameter '{param}' is required for model type '{config.MODE}'")
+            
+            config.KERNEL = model_parameters['KERNEL']
+            config.C = model_parameters['C']
+            config.EPSILON = model_parameters['EPSILON']
+            
+        elif config.MODE == 'LIN':
+            # Linear model has minimal configuration but still validate MODE
+            pass
+        else:
+            raise ValueError(f"Unknown model type: {config.MODE}")
+        
+        logger.info(f"Model configuration validated: MODE={config.MODE}")
+        if hasattr(config, 'LAY'):
+            logger.info(f"Neural network parameters: LAY={config.LAY}, N={config.N}, EP={config.EP}, ACTF={config.ACTF}")
+        if hasattr(config, 'K'):
+            logger.info(f"CNN parameters: K={config.K}")
+        if hasattr(config, 'KERNEL'):
+            logger.info(f"SVR parameters: KERNEL={config.KERNEL}, C={config.C}, EPSILON={config.EPSILON}")
+        
+        # Validate training split parameters if provided
+        if training_split:
+            required_split_params = ['trainPercentage', 'valPercentage', 'testPercentage', 'random_dat']
+            for param in required_split_params:
+                if param not in training_split:
+                    raise ValueError(f"Training split parameter '{param}' is required")
+            
+            # Validate percentages sum to 100
+            total_percentage = training_split['trainPercentage'] + training_split['valPercentage'] + training_split['testPercentage']
+            if abs(total_percentage - 100) > 0.1:  # Allow small floating point errors
+                raise ValueError(f"Training split percentages must sum to 100, got {total_percentage}")
+            
+            logger.info(f"Training split validated: train={training_split['trainPercentage']}%, val={training_split['valPercentage']}%, test={training_split['testPercentage']}%, random={training_split['random_dat']}")
         
         model_trainer = RealModelTrainer(config)
         training_results = model_trainer.train_all_models(
             phase4_data['train_datasets'], 
-            phase4_data['session_data']
+            phase4_data['session_data'],
+            training_split
         )
         
         results['phases']['phase5'] = {
