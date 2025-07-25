@@ -536,11 +536,19 @@ class ResultsGenerator:
                 logger.warning("No results to save")
                 return False
             
-            # TODO: Create database schema for training_results table
-            # This is placeholder implementation
+            # Convert session_id to UUID for database
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from supabase_client import create_or_get_session_uuid
+            
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.error(f"Could not get UUID for session {session_id}")
+                return False
             
             result_data = {
-                'session_id': session_id,
+                'session_id': uuid_session_id,  # Use UUID instead of string
                 'results': self.results,
                 'created_at': pd.Timestamp.now().isoformat(),
                 'status': 'completed'

@@ -14,7 +14,7 @@ import logging
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from supabase_client import get_supabase_client
+from supabase_client import get_supabase_client, create_or_get_session_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,18 @@ class DataLoader:
         self.supabase = supabase_client or get_supabase_client()
         self.temp_dir = "temp_training_data"
         self._ensure_temp_dir()
+    
+    def _convert_to_uuid(self, session_id: str) -> str:
+        """Convert string session_id to UUID if needed"""
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            return session_id  # Already UUID
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                raise ValueError(f"Could not get UUID for session {session_id}")
+            return uuid_session_id
     
     def _ensure_temp_dir(self):
         """Create temporary directory for downloaded files"""
@@ -71,13 +83,19 @@ class DataLoader:
     def _load_session_info(self, session_id: str) -> Dict:
         """Load basic session information"""
         try:
-            # TODO: Implement actual database query
-            # This is placeholder based on your database schema
+            # Convert to UUID for database query
+            uuid_session_id = self._convert_to_uuid(session_id)
             
-            response = self.supabase.table('sessions').select('*').eq('id', session_id).execute()
+            response = self.supabase.table('sessions').select('*').eq('id', uuid_session_id).execute()
             
             if not response.data:
-                raise ValueError(f"Session {session_id} not found")
+                logger.warning(f"Session {session_id} not found in sessions table")
+                # Return minimal session info if not found
+                return {
+                    'id': uuid_session_id,
+                    'string_id': session_id,
+                    'created_at': None
+                }
             
             return response.data[0]
             
@@ -88,7 +106,10 @@ class DataLoader:
     def _load_time_info(self, session_id: str) -> Dict:
         """Load time configuration for the session"""
         try:
-            response = self.supabase.table('time_info').select('*').eq('session_id', session_id).execute()
+            # Convert to UUID for database query
+            uuid_session_id = self._convert_to_uuid(session_id)
+            
+            response = self.supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
             
             if not response.data:
                 # Return default time info if none exists
@@ -109,7 +130,10 @@ class DataLoader:
     def _load_zeitschritte(self, session_id: str) -> Dict:
         """Load zeitschritte (time steps) configuration"""
         try:
-            response = self.supabase.table('zeitschritte').select('*').eq('session_id', session_id).execute()
+            # Convert to UUID for database query
+            uuid_session_id = self._convert_to_uuid(session_id)
+            
+            response = self.supabase.table('zeitschritte').select('*').eq('session_id', uuid_session_id).execute()
             
             if not response.data:
                 # Return default zeitschritte if none exists
@@ -129,7 +153,10 @@ class DataLoader:
     def _load_files_info(self, session_id: str) -> List[Dict]:
         """Load file metadata for the session"""
         try:
-            response = self.supabase.table('files').select('*').eq('session_id', session_id).execute()
+            # Convert to UUID for database query
+            uuid_session_id = self._convert_to_uuid(session_id)
+            
+            response = self.supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
             
             return response.data or []
             

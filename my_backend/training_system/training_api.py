@@ -8,10 +8,14 @@ from typing import Dict, Optional
 import logging
 import sys
 import os
+from datetime import datetime
 
 # Import existing supabase client
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from supabase_client import get_supabase_client
+from supabase_client import get_supabase_client, create_or_get_session_uuid
+
+# Import the new pipeline function
+from .pipeline_integration import run_complete_original_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,10 @@ def get_training_results(session_id: str):
                 'message': 'No training results found for this session'
             }), 404
         
+        # Also get visualizations from training_visualizations table
+        visualizations = _get_visualizations_from_database(session_id, supabase)
+        logger.info(f"Retrieved visualizations for {session_id}: {visualizations}")
+        
         response_data = {
             'session_id': session_id,
             'status': results.get('status', 'unknown'),
@@ -48,10 +56,12 @@ def get_training_results(session_id: str):
             'model_performance': results.get('model_performance', {}),
             'best_model': results.get('best_model', {}),
             'summary': results.get('summary', {}),
+            'visualizations': visualizations.get('plots', {}),  # Include violin plots
             'created_at': results.get('created_at'),
             'completed_at': results.get('completed_at'),
             'message': 'Training results retrieved successfully'
         }
+        logger.info(f"API response includes visualizations: {'visualizations' in response_data}")
         
         return jsonify(response_data), 200
         
@@ -597,27 +607,99 @@ def save_zeitschritte():
 @training_api_bp.route('/generate-datasets/<session_id>', methods=['POST'])
 def generate_datasets(session_id: str):
     """
-    Generate datasets for training
+    Generate datasets for training using the 7-phase pipeline
     
     Returns:
         JSON response with generation status
     """
+    import threading
+    
     try:
-        # TODO: Implement actual dataset generation logic
-        # This is a placeholder implementation
+        logger.info(f"Starting dataset generation for session {session_id}")
+        
+        # Start the complete 7-phase pipeline in background thread
+        def run_pipeline_async():
+            try:
+                logger.info(f"Running complete original pipeline for session {session_id}")
+                
+                # Import and run the complete pipeline
+                result = run_complete_original_pipeline(
+                    session_id=session_id,
+                    model_parameters={
+                        'MODE': 'Dense',
+                        'LAY': 2,
+                        'N': 50,
+                        'EP': 50,
+                        'ACTF': 'relu'
+                    },
+                    progress_callback=lambda session_id, phase, msg, progress: logger.info(f"Phase {phase}: {msg} ({progress}%)")
+                )
+                
+                if result.get('success'):
+                    logger.info(f"Pipeline completed successfully for session {session_id}")
+                    
+                    # Save results to database
+                    try:
+                        from .results_generator import ResultsGenerator
+                        results_gen = ResultsGenerator()
+                        
+                        # Extract and save evaluation results if they exist
+                        if 'final_results' in result and 'evaluation_results' in result['final_results']:
+                            results_gen.results = result['final_results']['evaluation_results']
+                            success = results_gen.save_results_to_database(session_id, get_supabase_client())
+                            if success:
+                                logger.info(f"Results saved to database for session {session_id}")
+                            else:
+                                logger.warning(f"Failed to save results to database for session {session_id}")
+                        
+                        # Also save violin plots if they exist
+                        if 'final_results' in result and 'visualizations' in result['final_results']:
+                            visualizations = result['final_results']['visualizations']
+                            logger.info(f"Found {len(visualizations)} visualizations to save")
+                            
+                            # Save each visualization to database
+                            supabase = get_supabase_client()
+                            for plot_name, plot_data in visualizations.items():
+                                try:
+                                    # Convert session_id to UUID
+                                    uuid_session_id = create_or_get_session_uuid(session_id)
+                                    if uuid_session_id:
+                                        viz_record = {
+                                            'session_id': uuid_session_id,
+                                            'plot_name': plot_name,
+                                            'image_data': plot_data,  # Use 'image_data' instead of 'plot_data'
+                                            'plot_type': 'violin_plot' if 'distribution' in plot_name else 'other'
+                                        }
+                                        response = supabase.table('training_visualizations').insert(viz_record).execute()
+                                        logger.info(f"Saved visualization {plot_name} for session {session_id}")
+                                except Exception as viz_error:
+                                    logger.error(f"Error saving visualization {plot_name}: {str(viz_error)}")
+                            
+                    except Exception as save_error:
+                        logger.error(f"Error saving results to database: {str(save_error)}")
+                else:
+                    logger.error(f"Pipeline failed for session {session_id}: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                logger.error(f"Error in async pipeline execution: {str(e)}")
+        
+        # Start pipeline in background thread
+        pipeline_thread = threading.Thread(target=run_pipeline_async)
+        pipeline_thread.daemon = True
+        pipeline_thread.start()
         
         return jsonify({
             'success': True,
             'session_id': session_id,
-            'message': 'Dataset generation started',
+            'message': 'Dataset generation and training pipeline started',
             'status': 'generating'
         }), 200
         
     except Exception as e:
-        logger.error(f"Error generating datasets for {session_id}: {str(e)}")
+        logger.error(f"Error starting pipeline for {session_id}: {str(e)}")
         return jsonify({
             'success': False,
-            'error': 'Failed to generate datasets',
+            'error': 'Failed to start dataset generation',
             'message': str(e)
         }), 500
 
@@ -699,14 +781,25 @@ def _get_results_from_database(session_id: str, supabase_client) -> Dict:
     Get training results from database
     
     Args:
-        session_id: Session identifier
+        session_id: Session identifier (string or UUID)
         supabase_client: Supabase client instance
         
     Returns:
         Dict containing training results
     """
     try:
-        response = supabase_client.table('training_results').select('*').eq('session_id', session_id).order('created_at', desc=True).execute()
+        # Convert string session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.warning(f"Could not get UUID for session {session_id}")
+                return {}
+        
+        response = supabase_client.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).execute()
         
         if response.data and len(response.data) > 0:
             return response.data[0]
@@ -723,14 +816,25 @@ def _get_status_from_database(session_id: str, supabase_client) -> Dict:
     Get training status from database
     
     Args:
-        session_id: Session identifier
+        session_id: Session identifier (string or UUID)
         supabase_client: Supabase client instance
         
     Returns:
         Dict containing training status
     """
     try:
-        response = supabase_client.table('training_logs').select('*').eq('session_id', session_id).order('created_at', desc=True).limit(1).execute()
+        # Convert string session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.warning(f"Could not get UUID for session {session_id}")
+                return {'status': 'not_found'}
+        
+        response = supabase_client.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
         
         if response.data:
             return response.data[0]
@@ -747,14 +851,25 @@ def _get_progress_from_database(session_id: str, supabase_client) -> Dict:
     Get training progress from database
     
     Args:
-        session_id: Session identifier
+        session_id: Session identifier (string or UUID)
         supabase_client: Supabase client instance
         
     Returns:
         Dict containing training progress
     """
     try:
-        response = supabase_client.table('training_logs').select('*').eq('session_id', session_id).order('created_at', desc=True).limit(1).execute()
+        # Convert string session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.warning(f"Could not get UUID for session {session_id}")
+                return {'progress': 0}
+        
+        response = supabase_client.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
         
         if response.data:
             return response.data[0]
@@ -771,14 +886,25 @@ def _get_visualizations_from_database(session_id: str, supabase_client) -> Dict:
     Get training visualizations from database
     
     Args:
-        session_id: Session identifier
+        session_id: Session identifier (string or UUID)
         supabase_client: Supabase client instance
         
     Returns:
         Dict containing training visualizations
     """
     try:
-        response = supabase_client.table('training_visualizations').select('*').eq('session_id', session_id).execute()
+        # Convert string session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.warning(f"Could not get UUID for session {session_id}")
+                return {'plots': {}}
+        
+        response = supabase_client.table('training_visualizations').select('*').eq('session_id', uuid_session_id).execute()
         
         if response.data and len(response.data) > 0:
             # Organize plots by plot_name
@@ -788,10 +914,10 @@ def _get_visualizations_from_database(session_id: str, supabase_client) -> Dict:
             
             for viz in response.data:
                 plot_name = viz.get('plot_name', 'unknown')
-                plots[plot_name] = viz.get('plot_data_base64', '')
+                plots[plot_name] = viz.get('image_data', '')  # Use 'image_data' instead of 'plot_data_base64'
                 
                 if not metadata:
-                    metadata = viz.get('metadata', {})
+                    metadata = viz.get('plot_metadata', {})  # Use 'plot_metadata' from schema
                     created_at = viz.get('created_at')
             
             return {
@@ -812,14 +938,25 @@ def _get_metrics_from_database(session_id: str, supabase_client) -> Dict:
     Get training metrics from database
     
     Args:
-        session_id: Session identifier
+        session_id: Session identifier (string or UUID)
         supabase_client: Supabase client instance
         
     Returns:
         Dict containing training metrics
     """
     try:
-        response = supabase_client.table('training_results').select('*').eq('session_id', session_id).execute()
+        # Convert string session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.warning(f"Could not get UUID for session {session_id}")
+                return {}
+        
+        response = supabase_client.table('training_results').select('*').eq('session_id', uuid_session_id).execute()
         
         if response.data:
             return response.data[0].get('evaluation_metrics', {})
@@ -836,7 +973,7 @@ def _get_logs_from_database(session_id: str, supabase_client, limit: int = 100, 
     Get training logs from database
     
     Args:
-        session_id: Session identifier
+        session_id: Session identifier (string or UUID)
         supabase_client: Supabase client instance
         limit: Maximum number of logs to return
         level: Log level filter
@@ -845,7 +982,18 @@ def _get_logs_from_database(session_id: str, supabase_client, limit: int = 100, 
         Dict containing training logs
     """
     try:
-        response = supabase_client.table('training_logs').select('*').eq('session_id', session_id).eq('level', level).limit(limit).execute()
+        # Convert string session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.warning(f"Could not get UUID for session {session_id}")
+                return {'logs': [], 'total_logs': 0}
+        
+        response = supabase_client.table('training_logs').select('*').eq('session_id', uuid_session_id).eq('level', level).limit(limit).execute()
         
         return {
             'logs': response.data or [],
@@ -855,3 +1003,318 @@ def _get_logs_from_database(session_id: str, supabase_client, limit: int = 100, 
     except Exception as e:
         logger.error(f"Error getting logs from database: {str(e)}")
         raise
+
+
+# Global storage for phase progress tracking
+_phase_progress = {}
+
+
+@training_api_bp.route('/start-complete-pipeline/<session_id>', methods=['POST'])
+def start_complete_pipeline(session_id: str):
+    """
+    Start complete 7-phase training pipeline
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        JSON response with pipeline start status
+    """
+    try:
+        logger.info(f"Starting complete 7-phase pipeline for session {session_id}")
+        
+        # Get request data
+        request_data = request.get_json() or {}
+        model_parameters = request_data.get('model_parameters', {})
+        
+        # Initialize phase progress
+        _phase_progress[session_id] = {
+            'current_phase': 1,
+            'phases': {
+                1: {'name': 'Data Loading & Configuration', 'status': 'in_progress', 'progress': 0},
+                2: {'name': 'Output Data Setup', 'status': 'pending', 'progress': 0},
+                3: {'name': 'Dataset Creation - Time Features', 'status': 'pending', 'progress': 0},
+                4: {'name': 'Data Preparation - Scaling & Splitting', 'status': 'pending', 'progress': 0},
+                5: {'name': 'Model Training', 'status': 'pending', 'progress': 0},
+                6: {'name': 'Model Testing - Predictions', 'status': 'pending', 'progress': 0},
+                7: {'name': 'Re-scaling & Comprehensive Evaluation', 'status': 'pending', 'progress': 0}
+            },
+            'overall_progress': 0,
+            'started_at': datetime.now().isoformat(),
+            'status': 'running'
+        }
+        
+        # Define progress callback
+        def progress_callback(session_id, phase_num, phase_name, progress):
+            if session_id in _phase_progress:
+                _phase_progress[session_id]['current_phase'] = phase_num
+                _phase_progress[session_id]['phases'][phase_num]['progress'] = progress
+                _phase_progress[session_id]['phases'][phase_num]['status'] = 'completed' if progress >= 100 else 'in_progress'
+                
+                # Update overall progress
+                total_progress = sum(p['progress'] for p in _phase_progress[session_id]['phases'].values())
+                _phase_progress[session_id]['overall_progress'] = total_progress / 7
+                
+                logger.info(f"Phase {phase_num} ({phase_name}): {progress}%")
+        
+        # Start pipeline in background (in production, use Celery or similar)
+        # For now, run synchronously
+        try:
+            results = run_complete_original_pipeline(
+                session_id, 
+                model_parameters, 
+                progress_callback
+            )
+            
+            # Update final status
+            if session_id in _phase_progress:
+                _phase_progress[session_id]['status'] = 'completed'
+                _phase_progress[session_id]['completed_at'] = datetime.now().isoformat()
+                _phase_progress[session_id]['results'] = results
+            
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'status': 'pipeline_started',
+                'message': 'Complete 7-phase pipeline started successfully',
+                'phases_total': 7,
+                'results': results
+            })
+            
+        except Exception as pipeline_error:
+            # Update error status
+            if session_id in _phase_progress:
+                _phase_progress[session_id]['status'] = 'failed'
+                _phase_progress[session_id]['error'] = str(pipeline_error)
+                _phase_progress[session_id]['failed_at'] = datetime.now().isoformat()
+            
+            return jsonify({
+                'success': False,
+                'session_id': session_id,
+                'status': 'pipeline_failed',
+                'error': str(pipeline_error)
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"Error starting complete pipeline for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'session_id': session_id,
+            'status': 'start_failed',
+            'error': str(e)
+        }), 500
+
+
+@training_api_bp.route('/phase-status/<session_id>/<int:phase>', methods=['GET'])
+def get_phase_status(session_id: str, phase: int):
+    """
+    Get status of a specific phase
+    
+    Args:
+        session_id: Session identifier
+        phase: Phase number (1-7)
+        
+    Returns:
+        JSON response with phase status
+    """
+    try:
+        if session_id not in _phase_progress:
+            return jsonify({
+                'session_id': session_id,
+                'phase': phase,
+                'status': 'not_found',
+                'message': 'No pipeline found for this session'
+            }), 404
+        
+        phase_data = _phase_progress[session_id]
+        
+        if phase < 1 or phase > 7:
+            return jsonify({
+                'session_id': session_id,
+                'phase': phase,
+                'status': 'invalid_phase',
+                'message': 'Phase must be between 1 and 7'
+            }), 400
+        
+        phase_info = phase_data['phases'].get(phase, {})
+        
+        return jsonify({
+            'session_id': session_id,
+            'phase': phase,
+            'status': phase_info.get('status', 'unknown'),
+            'progress': phase_info.get('progress', 0),
+            'name': phase_info.get('name', f'Phase {phase}'),
+            'current_phase': phase_data.get('current_phase', 1),
+            'overall_progress': phase_data.get('overall_progress', 0),
+            'pipeline_status': phase_data.get('status', 'unknown')
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting phase status for session {session_id}, phase {phase}: {str(e)}")
+        return jsonify({
+            'session_id': session_id,
+            'phase': phase,
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+@training_api_bp.route('/comprehensive-evaluation/<session_id>', methods=['GET'])
+def get_comprehensive_evaluation(session_id: str):
+    """
+    Get comprehensive evaluation results
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        JSON response with comprehensive evaluation results
+    """
+    try:
+        # Check if pipeline results are available
+        if session_id not in _phase_progress:
+            return jsonify({
+                'session_id': session_id,
+                'status': 'not_found',
+                'message': 'No pipeline results found for this session'
+            }), 404
+        
+        phase_data = _phase_progress[session_id]
+        
+        if phase_data.get('status') != 'completed':
+            return jsonify({
+                'session_id': session_id,
+                'status': 'incomplete',
+                'message': 'Pipeline not completed yet',
+                'current_status': phase_data.get('status', 'unknown')
+            }), 202  # Accepted but not ready
+        
+        # Get comprehensive results
+        results = phase_data.get('results', {})
+        final_results = results.get('final_results', {})
+        
+        # Extract evaluation metrics in the format expected by frontend
+        evaluation_results = {
+            'session_id': session_id,
+            'status': 'completed',
+            'evaluation_metrics': final_results.get('evaluation_results', {}).get('evaluation_metrics', {}),
+            'model_comparison': final_results.get('evaluation_results', {}).get('model_comparison', {}),
+            'training_metadata': {
+                'total_models_trained': final_results.get('summary', {}).get('models_trained', 0),
+                'datasets_processed': final_results.get('summary', {}).get('datasets_processed', 0),
+                'total_phases': 7,
+                'successful_phases': 7,
+                'training_completed_at': phase_data.get('completed_at'),
+                'training_duration': _calculate_duration(
+                    phase_data.get('started_at'), 
+                    phase_data.get('completed_at')
+                )
+            },
+            'comprehensive_metrics': {
+                # Include all metrics as shown in the image
+                'mae': 'Mean Absolute Error',
+                'rmse': 'Root Mean Squared Error', 
+                'mse': 'Mean Squared Error',
+                'mape': 'Mean Absolute Percentage Error',
+                'mspe': 'Mean Squared Percentage Error',
+                'wape': 'Weighted Absolute Percentage Error',
+                'smape': 'Symmetric Mean Absolute Percentage Error',
+                'mase': 'Mean Absolute Scaled Error'
+            }
+        }
+        
+        return jsonify(evaluation_results)
+        
+    except Exception as e:
+        logger.error(f"Error getting comprehensive evaluation for session {session_id}: {str(e)}")
+        return jsonify({
+            'session_id': session_id,
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+@training_api_bp.route('/pipeline-overview/<session_id>', methods=['GET'])
+def get_pipeline_overview(session_id: str):
+    """
+    Get complete overview of pipeline status
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        JSON response with complete pipeline overview
+    """
+    try:
+        if session_id not in _phase_progress:
+            return jsonify({
+                'session_id': session_id,
+                'status': 'not_found',
+                'message': 'No pipeline found for this session'
+            }), 404
+        
+        phase_data = _phase_progress[session_id]
+        
+        return jsonify({
+            'session_id': session_id,
+            'status': phase_data.get('status', 'unknown'),
+            'current_phase': phase_data.get('current_phase', 1),
+            'overall_progress': phase_data.get('overall_progress', 0),
+            'started_at': phase_data.get('started_at'),
+            'completed_at': phase_data.get('completed_at'),
+            'failed_at': phase_data.get('failed_at'),
+            'error': phase_data.get('error'),
+            'phases': phase_data.get('phases', {}),
+            'total_phases': 7,
+            'phases_summary': {
+                'completed': len([p for p in phase_data.get('phases', {}).values() if p.get('status') == 'completed']),
+                'in_progress': len([p for p in phase_data.get('phases', {}).values() if p.get('status') == 'in_progress']),
+                'pending': len([p for p in phase_data.get('phases', {}).values() if p.get('status') == 'pending']),
+                'failed': len([p for p in phase_data.get('phases', {}).values() if p.get('status') == 'failed'])
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting pipeline overview for session {session_id}: {str(e)}")
+        return jsonify({
+            'session_id': session_id,
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+def _calculate_duration(start_time: str, end_time: str) -> Optional[str]:
+    """
+    Calculate duration between two ISO timestamp strings
+    
+    Args:
+        start_time: Start time in ISO format
+        end_time: End time in ISO format
+        
+    Returns:
+        Duration string or None
+    """
+    try:
+        if not start_time or not end_time:
+            return None
+        
+        start = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        end = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        
+        duration = end - start
+        
+        # Format duration nicely
+        total_seconds = int(duration.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        if hours > 0:
+            return f"{hours}h {minutes}m {seconds}s"
+        elif minutes > 0:
+            return f"{minutes}m {seconds}s"
+        else:
+            return f"{seconds}s"
+        
+    except Exception as e:
+        logger.error(f"Error calculating duration: {str(e)}")
+        return None
