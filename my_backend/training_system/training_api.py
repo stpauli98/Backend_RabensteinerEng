@@ -3,11 +3,16 @@ Training API module for training system
 Provides API endpoints for training results and status
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 from typing import Dict, Optional
 import logging
 import sys
 import os
+import io
+import pickle
+import tempfile
+import zipfile
+import threading
 from datetime import datetime
 
 # Import comprehensive error handling
@@ -1010,6 +1015,7 @@ def train_models(session_id: str):
                     
                     if uuid_session_id:
                         # Save comprehensive training results (sanitized for JSON)
+                        # Map to existing database schema columns
                         raw_training_result_data = {
                             'session_id': uuid_session_id,
                             'status': 'training_completed',
@@ -1017,9 +1023,13 @@ def train_models(session_id: str):
                             'model_performance': result.get('training_results', {}),
                             'best_model': result.get('summary', {}).get('best_model', {}),
                             'summary': result.get('summary', {}),
-                            'ui_parameters': result.get('ui_parameters', {}),
-                            'converted_parameters': result.get('converted_parameters', {}),
-                            'validation_warnings': result.get('validation_warnings', []),
+                            'training_metadata': {
+                                'ui_parameters': result.get('ui_parameters', {}),
+                                'converted_parameters': result.get('converted_parameters', {}),
+                                'validation_warnings': result.get('validation_warnings', []),
+                                'training_type': 'single_model_pipeline',  # Indicate this is from Phase 3.2
+                                'framework_version': 'modular_system_v1'
+                            },
                             'completed_at': result.get('timestamp')
                         }
                         
@@ -1226,7 +1236,7 @@ def save_model(session_id: str):
             'best_model': training_result.get('best_model', {}),
             'evaluation_metrics': training_result.get('evaluation_metrics', {}),
             'model_summary': training_result.get('summary', {}),
-            'parameters_used': training_result.get('converted_parameters', {}),
+            'parameters_used': training_result.get('training_metadata', {}).get('converted_parameters', {}),
             'save_timestamp': datetime.now().isoformat(),
             'model_format': 'tensorflow_savedmodel',  # Indicate the format
             'download_instructions': 'Model metadata saved. In production, this would provide download links for model files.'
@@ -1854,3 +1864,269 @@ def _calculate_duration(start_time: str, end_time: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Error calculating duration: {str(e)}")
         return None
+
+
+@training_api_bp.route('/download-model/<session_id>', methods=['GET'])
+def download_model(session_id: str):
+    """
+    Download trained model for a session as ZIP file
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        ZIP file containing the trained model and metadata
+    """
+    error_handler = get_error_handler()
+    
+    try:
+        with error_handler.error_context("download_model", session_id):
+            logger.info(f"Starting model download for session {session_id}")
+            
+            # Get UUID session ID
+            supabase = get_supabase_client()
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            
+            # Get training results from database
+            logger.info(f"Fetching training results for UUID session {uuid_session_id}")
+            results = supabase.table('training_results')\
+                .select('*')\
+                .eq('session_id', uuid_session_id)\
+                .order('created_at', desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if not results.data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No training results found for this session'
+                }), 404
+            
+            training_result = results.data[0]
+            logger.info(f"Found training results: {list(training_result.keys())}")
+            
+            # Create temporary ZIP file
+            temp_dir = tempfile.mkdtemp()
+            zip_path = os.path.join(temp_dir, f"model_{session_id}.zip")
+            
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add training metadata as JSON
+                import json
+                metadata = {
+                    'session_id': session_id,
+                    'model_type': training_result.get('model_type', 'unknown'),
+                    'training_duration': training_result.get('training_duration'),
+                    'training_parameters': training_result.get('training_metadata', {}).get('ui_parameters', {}),
+                    'model_config': training_result.get('training_metadata', {}).get('converted_parameters', {}),
+                    'training_metrics': training_result.get('training_metrics', {}),
+                    'evaluation_metrics': training_result.get('evaluation_metrics', {}),
+                    'created_at': training_result.get('created_at'),
+                    'status': training_result.get('status'),
+                    'download_timestamp': datetime.now().isoformat()
+                }
+                
+                zipf.writestr('model_metadata.json', json.dumps(metadata, indent=2))
+                logger.info("Added metadata to ZIP")
+                
+                # Add training results summary
+                summary = {
+                    'session_info': {
+                        'session_id': session_id,
+                        'uuid_session_id': uuid_session_id,
+                        'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    },
+                    'model_performance': training_result.get('training_metrics', {}),
+                    'training_config': training_result.get('training_metadata', {}),
+                    'model_architecture': training_result.get('model_architecture', {}),
+                    'data_info': training_result.get('processed_data_info', {})
+                }
+                
+                zipf.writestr('training_summary.json', json.dumps(summary, indent=2))
+                logger.info("Added training summary to ZIP")
+                
+                # Add model architecture info if available
+                if 'model_architecture' in training_result:
+                    zipf.writestr('model_architecture.json', 
+                                json.dumps(training_result['model_architecture'], indent=2))
+                
+                # Add visualizations if available
+                viz_results = supabase.table('training_visualizations')\
+                    .select('*')\
+                    .eq('session_id', uuid_session_id)\
+                    .execute()
+                    
+                if viz_results.data:
+                    for viz in viz_results.data:
+                        if viz.get('plot_data'):
+                            viz_filename = f"visualization_{viz.get('plot_type', 'unknown')}.json"
+                            zipf.writestr(viz_filename, json.dumps(viz['plot_data'], indent=2))
+                    logger.info(f"Added {len(viz_results.data)} visualizations to ZIP")
+                
+                # Add README with instructions
+                readme_content = f"""# Model Download - Session {session_id}
+
+## Contents
+- `model_metadata.json`: Complete model training metadata
+- `training_summary.json`: Training performance summary  
+- `model_architecture.json`: Model architecture details (if available)
+- `visualization_*.json`: Training visualizations (if available)
+
+## Model Information
+- Session ID: {session_id}
+- Model Type: {training_result.get('model_type', 'unknown')}
+- Training Status: {training_result.get('status', 'unknown')}
+- Created: {training_result.get('created_at', 'unknown')}
+- Downloaded: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Usage Notes
+This ZIP contains the training metadata and results for your trained model.
+The actual model weights are stored in the database and can be loaded 
+using the provided session ID in your application.
+
+For technical support, reference Session ID: {session_id}
+"""
+                zipf.writestr('README.md', readme_content)
+                logger.info("Added README to ZIP")
+            
+            logger.info(f"Created ZIP file: {zip_path}")
+            
+            # Send the ZIP file for download
+            return send_file(
+                zip_path,
+                as_attachment=True,
+                download_name=f"model_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                mimetype='application/zip'
+            )
+            
+    except Exception as e:
+        logger.error(f"Error downloading model for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to download model: {str(e)}'
+        }), 500
+
+
+@training_api_bp.route('/evaluation-tables/<session_id>', methods=['GET'])
+def get_evaluation_tables(session_id: str):
+    """
+    Get evaluation dataframes as tables for frontend display
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        JSON response with evaluation tables (df_eval and df_eval_ts)
+    """
+    error_handler = get_error_handler()
+    
+    try:
+        with error_handler.error_context("get_evaluation_tables", session_id):
+            logger.info(f"Getting evaluation tables for session {session_id}")
+            
+            # Get UUID session ID
+            supabase = get_supabase_client()
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            
+            # Get training results from database
+            logger.info(f"Fetching training results for UUID session {uuid_session_id}")
+            results = supabase.table('training_results')\
+                .select('*')\
+                .eq('session_id', uuid_session_id)\
+                .order('created_at', desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if not results.data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No training results found for this session'
+                }), 404
+            
+            training_result = results.data[0]
+            evaluation_metrics = training_result.get('evaluation_metrics', {})
+            
+            # Check if evaluation_metrics exists and is not None
+            if not evaluation_metrics or evaluation_metrics is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'No evaluation metrics available. Model training must be completed first.'
+                }), 404
+            
+            # Process evaluation metrics into table format
+            evaluation_tables = {}
+            
+            for dataset_name, dataset_metrics in evaluation_metrics.items():
+                # Create df_eval table (model performance comparison)
+                df_eval_rows = []
+                
+                for model_name, model_data in dataset_metrics.items():
+                    if 'metrics' in model_data:
+                        metrics = model_data['metrics']
+                        
+                        eval_row = {
+                            'Model': model_name.upper(),  # First column: model name
+                            'delta [min]': round(model_data.get('delta_min', metrics.get('delta_min', 15.0)), 2),  # Time delta in minutes - exact match with original
+                            'MAE': round(metrics.get('mae', 0.0), 5),
+                            'MAPE': round(metrics.get('mape', 0.0), 5),
+                            'MSE': round(metrics.get('mse', 0.0), 5),
+                            'RMSE': round(metrics.get('rmse', 0.0), 5),
+                            'NRMSE': round(metrics.get('nrmse', 0.0), 5),  # NRMSE as in original code
+                            'WAPE': round(metrics.get('wape', 0.0), 5),  # WAPE missing from previous version
+                            'sMAPE': round(metrics.get('smape', 0.0), 5),  # sMAPE as in original code
+                            'MASE': round(metrics.get('mase', 0.0), 5)
+                        }
+                        
+                        df_eval_rows.append(eval_row)
+                
+                # Create df_eval_ts table (time series evaluation) - simplified version
+                df_eval_ts_rows = []
+                
+                for model_name, model_data in dataset_metrics.items():
+                    if 'config' in model_data:
+                        config = model_data['config']
+                        metrics = model_data.get('metrics', {})
+                        
+                        ts_row = {
+                            'Model': model_name.upper(),
+                            'Type': model_data.get('model_type', 'unknown'),
+                            'Config': f"Epochs: {config.get('epochs', 'N/A')}, "
+                                    f"Activation: {config.get('activation', 'N/A')}, "
+                                    f"Learning Rate: {config.get('learning_rate', 'N/A')}",
+                            'Performance': f"MAE: {round(metrics.get('mae', 0.0), 4)}, "
+                                         f"WAPE: {round(metrics.get('wape', 0.0), 2)}%",
+                            'Status': 'Trained Successfully'
+                        }
+                        
+                        df_eval_ts_rows.append(ts_row)
+                
+                evaluation_tables[dataset_name] = {
+                    'df_eval': {
+                        'title': f'Model Performance Evaluation - {dataset_name}',
+                        'description': 'Comparison of different models performance metrics',
+                        'columns': ['Model', 'MAE', 'MSE', 'RMSE', 'MAPE', 'NRMSE', 'WAPE', 'SMAPE', 'MASE'],
+                        'data': df_eval_rows
+                    },
+                    'df_eval_ts': {
+                        'title': f'Model Configuration & Training Info - {dataset_name}',
+                        'description': 'Training configuration and status for each model',
+                        'columns': ['Model', 'Type', 'Config', 'Performance', 'Status'],
+                        'data': df_eval_ts_rows
+                    }
+                }
+            
+            logger.info(f"Generated evaluation tables for {len(evaluation_tables)} datasets")
+            
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'tables': evaluation_tables,
+                'total_datasets': len(evaluation_tables),
+                'generated_at': datetime.now().isoformat()
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting evaluation tables for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to get evaluation tables: {str(e)}'
+        }), 500

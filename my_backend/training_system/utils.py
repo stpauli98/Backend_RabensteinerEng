@@ -977,7 +977,8 @@ def convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
     Convert frontend flat parameter structure to backend nested structure
     Transforms Training.tsx format to backend-expected format
     
-    UPDATED: Now uses the new parameter_converter module for exact MDL format matching
+    CRITICAL FIX: Frontend sends MODE-based parameters (MODE, LAY, N, EP, etc.)
+    This matches the reference implementation format and should use legacy converter
     
     Args:
         frontend_params: Parameters from frontend
@@ -986,27 +987,34 @@ def convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
         Dict with structure matching reference implementation MDL format
     """
     try:
-        logger.info(f"Converting frontend parameters using new parameter converter: {list(frontend_params.keys())}")
-        
-        # Import the new parameter converter
-        from .parameter_converter import convert_frontend_parameters_to_mdl
-        
-        # Convert using the new system
-        mdl_config, validation_result = convert_frontend_parameters_to_mdl(frontend_params)
-        
-        # Log validation results
-        if validation_result['errors']:
-            logger.error(f"Parameter conversion errors: {validation_result['errors']}")
-        if validation_result['warnings']:
-            logger.warning(f"Parameter conversion warnings: {validation_result['warnings']}")
-        
-        # Return the validated MDL configuration
-        logger.info(f"Parameter conversion successful: {list(mdl_config.keys())} model(s) configured in MDL format")
-        return mdl_config
+        # Check if this is MODE-based format (from ModelConfiguration.tsx)
+        if 'MODE' in frontend_params:
+            logger.info(f"Converting MODE-based frontend parameters: {list(frontend_params.keys())}")
+            # Use legacy converter for MODE-based parameters
+            return _legacy_convert_frontend_to_backend_params(frontend_params)
+        else:
+            # Try new parameter converter for complex format
+            logger.info(f"Converting frontend parameters using new parameter converter: {list(frontend_params.keys())}")
+            
+            # Import the new parameter converter
+            from .parameter_converter import convert_frontend_parameters_to_mdl
+            
+            # Convert using the new system
+            mdl_config, validation_result = convert_frontend_parameters_to_mdl(frontend_params)
+            
+            # Log validation results
+            if validation_result['errors']:
+                logger.error(f"Parameter conversion errors: {validation_result['errors']}")
+            if validation_result['warnings']:
+                logger.warning(f"Parameter conversion warnings: {validation_result['warnings']}")
+            
+            # Return the validated MDL configuration
+            logger.info(f"Parameter conversion successful: {list(mdl_config.keys())} model(s) configured in MDL format")
+            return mdl_config
         
     except Exception as e:
-        logger.error(f"Error converting frontend parameters with new converter: {str(e)}")
-        # Fallback to legacy conversion if new converter fails
+        logger.error(f"Error converting frontend parameters: {str(e)}")
+        # Always fallback to legacy conversion
         logger.warning("Falling back to legacy parameter conversion")
         return _legacy_convert_frontend_to_backend_params(frontend_params)
 
@@ -1051,7 +1059,9 @@ def _legacy_convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
                     'ReLU': 'relu',
                     'Sigmoid': 'sigmoid', 
                     'Tanh': 'tanh',
-                    'Linear': 'linear'
+                    'Linear': 'linear',
+                    'Softmax': 'softmax',
+                    'Keine': 'linear'  # 'Keine' means 'None', map to linear as default
                 }
                 dense_config['activation'] = actf_map.get(frontend_params['ACTF'], 'relu')
             
@@ -1081,7 +1091,9 @@ def _legacy_convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
                     'ReLU': 'relu',
                     'Sigmoid': 'sigmoid',
                     'Tanh': 'tanh',
-                    'Linear': 'linear'
+                    'Linear': 'linear',
+                    'Softmax': 'softmax',
+                    'Keine': 'linear'  # 'Keine' means 'None', map to linear as default
                 }
                 cnn_config['activation'] = actf_map.get(frontend_params['ACTF'], 'relu')
             
@@ -1122,6 +1134,81 @@ def _legacy_convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
             
             backend_params['svr'] = svr_config
             logger.info(f"Legacy: Converted to SVR model config: {svr_config}")
+            
+        elif mode in ['lstm', 'ar lstm']:
+            # Convert LSTM model parameters
+            lstm_config = {}
+            
+            if 'N' in frontend_params:
+                # Create LSTM units configuration
+                lstm_config['units'] = [frontend_params['N'], max(25, frontend_params['N'] // 2)]
+            
+            if 'EP' in frontend_params:
+                lstm_config['epochs'] = int(frontend_params['EP'])
+            
+            if 'ACTF' in frontend_params:
+                actf_map = {
+                    'ReLU': 'relu',
+                    'Sigmoid': 'sigmoid',
+                    'Tanh': 'tanh',
+                    'Linear': 'linear',
+                    'Softmax': 'softmax',
+                    'Keine': 'linear'  # 'Keine' means 'None', map to linear as default
+                }
+                lstm_config['activation'] = actf_map.get(frontend_params['ACTF'], 'tanh')
+            
+            # Add default LSTM parameters
+            lstm_config.setdefault('dropout', 0.2)
+            lstm_config.setdefault('return_sequences_l1', True)
+            lstm_config.setdefault('return_sequences_l2', False)
+            lstm_config.setdefault('dense_neurons', 25)
+            lstm_config.setdefault('dense_activation', 'relu')
+            lstm_config.setdefault('batch_size', 32)
+            lstm_config.setdefault('validation_split', 0.2)
+            lstm_config.setdefault('optimizer', 'adam')
+            lstm_config.setdefault('loss', 'mse')
+            lstm_config.setdefault('learning_rate', 0.001)
+            
+            backend_params['lstm'] = lstm_config
+            logger.info(f"Legacy: Converted to LSTM model config: {lstm_config}")
+            
+        elif mode in ['svr_dir', 'svr_mimo']:
+            # Convert SVR model parameters (both direct and MIMO)
+            svr_config = {}
+            
+            if 'KERNEL' in frontend_params:
+                svr_config['kernel'] = frontend_params['KERNEL'].lower()
+            
+            if 'C' in frontend_params:
+                svr_config['C'] = float(frontend_params['C'])
+                
+            if 'EPSILON' in frontend_params:
+                svr_config['epsilon'] = float(frontend_params['EPSILON'])
+            
+            # Add default SVR parameters
+            svr_config.setdefault('gamma', 'scale')
+            svr_config.setdefault('degree', 3)
+            svr_config.setdefault('coef0', 0.0)
+            svr_config.setdefault('shrinking', True)
+            svr_config.setdefault('cache_size', 200)
+            svr_config.setdefault('max_iter', 1000)
+            
+            backend_params['svr'] = svr_config
+            logger.info(f"Legacy: Converted to {mode.upper()} model config: {svr_config}")
+            
+        elif mode == 'lin':
+            # Convert Linear model parameters
+            linear_config = {}
+            
+            # Linear model has minimal configuration - mostly defaults
+            linear_config['fit_intercept'] = True
+            linear_config['normalize'] = False
+            linear_config['copy_x'] = True
+            linear_config['n_jobs'] = None
+            linear_config['positive'] = False
+            
+            backend_params['linear'] = linear_config
+            logger.info(f"Legacy: Converted to Linear model config: {linear_config}")
             
         else:
             logger.error(f"Unsupported model MODE: {mode}")

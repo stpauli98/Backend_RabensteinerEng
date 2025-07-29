@@ -376,10 +376,10 @@ class RealModelTrainer:
                 
                 dataset_results = {}
                 
-                # Train models based on MDL.MODE or train all if specified
+                # Train ONLY ONE MODEL based on MODE - identical to reference implementation
                 models_trained = 0
                 
-                if self.config.MODE == "Dense" or self.config.MODE == "LIN":
+                if self.config.MODE == "Dense":
                     try:
                         logger.info("Training Dense neural network...")
                         model = train_dense(X_train, y_train, X_val, y_val, self.config)
@@ -399,7 +399,7 @@ class RealModelTrainer:
                         )
                         logger.error(f"Failed to train Dense model for {dataset_name}: {str(model_error)}")
                 
-                if self.config.MODE == "CNN" or self.config.MODE == "LIN":
+                elif self.config.MODE == "CNN":
                     try:
                         logger.info("Training CNN...")
                         model = train_cnn(X_train, y_train, X_val, y_val, self.config)
@@ -419,7 +419,7 @@ class RealModelTrainer:
                         )
                         logger.error(f"Failed to train CNN model for {dataset_name}: {str(model_error)}")
                 
-                if self.config.MODE == "LSTM" or self.config.MODE == "LIN":
+                elif self.config.MODE == "LSTM":
                     try:
                         logger.info("Training LSTM...")
                         model = train_lstm(X_train, y_train, X_val, y_val, self.config)
@@ -439,27 +439,27 @@ class RealModelTrainer:
                         )
                         logger.error(f"Failed to train LSTM model for {dataset_name}: {str(model_error)}")
                 
-                if self.config.MODE == "LIN":
+                elif self.config.MODE == "AR LSTM":
                     try:
-                        logger.info("Training Linear model...")
-                        models = train_linear_model(X_train, y_train)
-                        dataset_results['linear'] = {
-                            'model': models,
-                            'type': 'linear_regression',
+                        logger.info("Training AR LSTM...")
+                        model = train_ar_lstm(X_train, y_train, X_val, y_val, self.config)
+                        dataset_results['ar_lstm'] = {
+                            'model': model,
+                            'type': 'neural_network',
                             'config': self.config.MODE
                         }
                         models_trained += 1
-                        logger.info(f"Successfully trained Linear model for dataset {dataset_name}")
+                        logger.info(f"Successfully trained AR LSTM model for dataset {dataset_name}")
                     except Exception as model_error:
                         handle_model_training_error(
                             model_error, session_id,
-                            operation="train_linear_model",
+                            operation="train_ar_lstm",
                             dataset_name=dataset_name,
-                            model_type="linear"
+                            model_type="ar_lstm"
                         )
-                        logger.error(f"Failed to train Linear model for {dataset_name}: {str(model_error)}")
+                        logger.error(f"Failed to train AR LSTM model for {dataset_name}: {str(model_error)}")
                 
-                if self.config.MODE == "SVR_dir":
+                elif self.config.MODE == "SVR_dir":
                     try:
                         logger.info("Training SVR Direct...")
                         models = train_svr_dir(X_train, y_train, self.config)
@@ -479,7 +479,7 @@ class RealModelTrainer:
                         )
                         logger.error(f"Failed to train SVR Direct model for {dataset_name}: {str(model_error)}")
                 
-                if self.config.MODE == "SVR_MIMO":
+                elif self.config.MODE == "SVR_MIMO":
                     try:
                         logger.info("Training SVR MIMO...")
                         models = train_svr_mimo(X_train, y_train, self.config)
@@ -498,6 +498,35 @@ class RealModelTrainer:
                             model_type="svr_mimo"
                         )
                         logger.error(f"Failed to train SVR MIMO model for {dataset_name}: {str(model_error)}")
+                
+                elif self.config.MODE == "LIN":
+                    try:
+                        logger.info("Training Linear model...")
+                        models = train_linear_model(X_train, y_train)
+                        dataset_results['linear'] = {
+                            'model': models,
+                            'type': 'linear_regression',
+                            'config': self.config.MODE
+                        }
+                        models_trained += 1
+                        logger.info(f"Successfully trained Linear model for dataset {dataset_name}")
+                    except Exception as model_error:
+                        handle_model_training_error(
+                            model_error, session_id,
+                            operation="train_linear_model",
+                            dataset_name=dataset_name,
+                            model_type="linear"
+                        )
+                        logger.error(f"Failed to train Linear model for {dataset_name}: {str(model_error)}")
+                
+                else:
+                    # Unknown/unsupported MODE - identical to reference implementation behavior
+                    raise ModelTrainingError(
+                        f"Unsupported MODEL MODE: {self.config.MODE}. Supported modes: Dense, CNN, LSTM, AR LSTM, SVR_dir, SVR_MIMO, LIN",
+                        session_id=session_id,
+                        severity=ErrorSeverity.HIGH,
+                        details={'unsupported_mode': self.config.MODE, 'dataset_name': dataset_name}
+                    )
                 
                 # Check if any models were successfully trained
                 if models_trained == 0:
@@ -1000,7 +1029,7 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
         # Step 3: Load session data for merging with UI parameters
         session_data = processed_data.get('session_data', {})
         
-        # Step 4: Validate and convert UI parameters to backend format
+        # Step 4: Use already converted model parameters from training_api.py
         try:
             if "model_params" not in model_params:
                 raise ParameterValidationError(
@@ -1009,27 +1038,19 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
                     severity=ErrorSeverity.HIGH
                 )
             
-            # Validate model parameters first
-            validation_result = validate_model_parameters(model_params["model_params"])
+            # CRITICAL FIX: Parameters are already converted by training_api.py
+            # training_api.py calls convert_frontend_to_backend_params and sends result as model_params
+            # Format: {'model_params': {'cnn': {...config...}}}
+            mdl_config = model_params["model_params"]
             
-            if not validation_result["is_valid"]:
+            if not mdl_config:
                 raise ParameterValidationError(
-                    f"Invalid model parameters: {validation_result['errors']}",
+                    "No model parameters provided - configuration is empty",
                     session_id=session_id,
-                    severity=ErrorSeverity.HIGH,
-                    details={
-                        'validation_errors': validation_result['errors'],
-                        'provided_params': list(model_params["model_params"].keys())
-                    }
+                    severity=ErrorSeverity.HIGH
                 )
-            
-            # Log any warnings
-            if validation_result["warnings"]:
-                logger.warning(f"Parameter validation warnings: {validation_result['warnings']}")
-            
-            # Convert UI parameters to MDL configuration
-            mdl_config = convert_ui_to_mdl_config(validation_result["corrected_params"])
-            logger.info(f"Converted UI parameters to MDL config: {list(mdl_config.keys())} models configured")
+                
+            logger.info(f"Using already converted model parameters: {list(mdl_config.keys())} models configured")
             
         except (ParameterValidationError, TrainingSystemError):
             raise  # Re-raise training system errors as-is
@@ -1061,14 +1082,51 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
         # Step 6: Merge all UI parameters with session data
         merged_config = merge_ui_with_session_data(model_params, session_data)
         
+        # Initialize validation_result to prevent undefined error in final results
+        validation_result = {"warnings": [], "errors": [], "suggestions": []}
+        
         # Step 7: Configure model training with converted parameters
         from .config import MDL
         config = MDL()
         
-        # Apply model configuration from converted parameters
-        # We'll train all models specified in the UI parameters
-        models_to_train = list(mdl_config.keys())
-        logger.info(f"Models selected for training: {models_to_train}")
+        # CRITICAL FIX: Train only ONE model based on frontend MODE parameter
+        # The frontend sends a single MODE (Dense, CNN, LSTM, etc.) and we should train only that model
+        # This matches the reference implementation behavior: one model per execution
+        
+        # Extract the selected model from already converted parameters
+        # mdl_config now contains converted parameters like {'cnn': {...}, 'dense': {...}}
+        # We need to determine which model was selected by the frontend
+        
+        if len(mdl_config) != 1:
+            raise ModelTrainingError(
+                f"Expected exactly 1 model configuration, got {len(mdl_config)}: {list(mdl_config.keys())}",
+                session_id=session_id,
+                severity=ErrorSeverity.HIGH
+            )
+        
+        # Get the single selected model type
+        selected_model_type = list(mdl_config.keys())[0]
+        
+        # Map backend model type back to frontend MODE for compatibility
+        backend_to_frontend_mapping = {
+            "dense": "Dense",
+            "cnn": "CNN", 
+            "lstm": "LSTM",
+            "svr": "SVR_dir",  # Default to SVR_dir, will check config for MIMO later
+            "linear": "LIN"
+        }
+        
+        frontend_mode = backend_to_frontend_mapping.get(selected_model_type)
+        if not frontend_mode:
+            raise ModelTrainingError(
+                f"Unknown model type: {selected_model_type}",
+                session_id=session_id,
+                severity=ErrorSeverity.HIGH
+            )
+        
+        # Train only the selected model (matches reference implementation)
+        models_to_train = [selected_model_type]
+        logger.info(f"Training SINGLE model as per reference implementation: {frontend_mode} -> {selected_model_type}")
         
         # Step 8: Train models with user configuration
         model_trainer = RealModelTrainer(config)
@@ -1099,22 +1157,26 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
             X_train, X_val = X[:train_idx], X[train_idx:val_idx]
             y_train, y_val = y[:train_idx], y[train_idx:val_idx]
             
-            # Train each model type specified by user
-            for model_type in models_to_train:
+            # Train ONLY the selected model (matches reference implementation)
+            # The loop now processes only ONE model instead of multiple models
+            for model_type in models_to_train:  # This list now contains only ONE model
                 try:
                     model_config = mdl_config[model_type]
-                    logger.info(f"Training {model_type} with config: {model_config}")
+                    logger.info(f"Training SINGLE model {model_type} with config: {model_config}")
+                    
+                    # Set the MDL config MODE to match the frontend selection
+                    # This matches the reference implementation: config.MODE = frontend_mode
+                    config.MODE = frontend_mode
                     
                     if model_type == "dense":
-                        # Update MDL config for Dense
-                        config.MODE = "Dense"
+                        # Update MDL config for Dense Neural Network
                         config.LAY = len(model_config.get("layers", [64, 32]))
                         config.N = model_config.get("layers", [64, 32])[0] if model_config.get("layers") else 64
                         config.EP = model_config.get("epochs", 100)
                         config.ACTF = model_config.get("activation", "relu")
                         
                         model = train_dense(X_train, y_train, X_val, y_val, config)
-                        dataset_results['dense'] = {
+                        dataset_results[model_type] = {
                             'model': model,
                             'type': 'neural_network',
                             'config': model_config,
@@ -1123,15 +1185,28 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
                         
                     elif model_type == "cnn":
                         # Update MDL config for CNN
-                        config.MODE = "CNN"
                         config.LAY = len(model_config.get("dense_layers", [50]))
                         config.N = model_config.get("dense_layers", [50])[0] if model_config.get("dense_layers") else 50
                         config.EP = model_config.get("epochs", 100)
                         config.ACTF = model_config.get("activation", "relu")
-                        config.K = model_config.get("kernel_size", [3, 3])[0]
+                        
+                        # Intelligent kernel size adjustment based on data dimensions
+                        requested_kernel_size = model_config.get("kernel_size", [3, 3])[0]
+                        feature_count = X_train.shape[2]  # Number of features in the dataset
+                        
+                        if requested_kernel_size > feature_count:
+                            # Adjust kernel size to maximum possible value for this dataset
+                            # For CNN time series, kernel size should be at least 1 but not exceed feature count
+                            adjusted_kernel_size = max(1, min(feature_count, requested_kernel_size))
+                            logger.warning(f"CNN kernel size adjusted from {requested_kernel_size} to {adjusted_kernel_size} "
+                                         f"(dataset has only {feature_count} features). CNN will use Conv1D with adjusted kernel.")
+                            config.K = adjusted_kernel_size
+                        else:
+                            config.K = requested_kernel_size
+                            logger.info(f"CNN kernel size {config.K} is compatible with {feature_count} features")
                         
                         model = train_cnn(X_train, y_train, X_val, y_val, config)
-                        dataset_results['cnn'] = {
+                        dataset_results[model_type] = {
                             'model': model,
                             'type': 'neural_network',
                             'config': model_config,
@@ -1139,15 +1214,19 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
                         }
                         
                     elif model_type == "lstm":
-                        # Update MDL config for LSTM
-                        config.MODE = "LSTM"
+                        # Update MDL config for LSTM/AR-LSTM
                         config.LAY = len(model_config.get("units", [50, 50]))
                         config.N = model_config.get("units", [50, 50])[0] if model_config.get("units") else 50
                         config.EP = model_config.get("epochs", 100)
                         config.ACTF = model_config.get("activation", "tanh")
                         
-                        model = train_lstm(X_train, y_train, X_val, y_val, config)
-                        dataset_results['lstm'] = {
+                        # Use appropriate training function based on frontend MODE
+                        if frontend_mode == "AR LSTM":
+                            model = train_ar_lstm(X_train, y_train, X_val, y_val, config)
+                        else:
+                            model = train_lstm(X_train, y_train, X_val, y_val, config)
+                            
+                        dataset_results[model_type] = {
                             'model': model,
                             'type': 'neural_network',
                             'config': model_config,
@@ -1156,13 +1235,17 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
                         
                     elif model_type == "svr":
                         # Update MDL config for SVR
-                        config.MODE = "SVR_dir"
                         config.KERNEL = model_config.get("kernel", "rbf")
                         config.C = model_config.get("C", 1.0)
                         config.EPSILON = model_config.get("epsilon", 0.1)
                         
-                        models = train_svr_dir(X_train, y_train, config)
-                        dataset_results['svr'] = {
+                        # Use appropriate SVR training function based on frontend MODE
+                        if frontend_mode == "SVR_MIMO":
+                            models = train_svr_mimo(X_train, y_train, config)
+                        else:  # SVR_dir
+                            models = train_svr_dir(X_train, y_train, config)
+                            
+                        dataset_results[model_type] = {
                             'model': models,
                             'type': 'support_vector',
                             'config': model_config,
@@ -1170,20 +1253,24 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
                         }
                         
                     elif model_type == "linear":
-                        # Linear model training
+                        # Linear model training (LIN mode)
                         models = train_linear_model(X_train, y_train)
-                        dataset_results['linear'] = {
+                        dataset_results[model_type] = {
                             'model': models,
                             'type': 'linear_regression',
                             'config': model_config,
                             'metrics': {}
                         }
                     
-                    logger.info(f"Successfully trained {model_type} for dataset {dataset_name}")
+                    logger.info(f"Successfully trained SINGLE model {model_type} for dataset {dataset_name}")
                     
                 except Exception as model_error:
                     logger.error(f"Error training {model_type} for dataset {dataset_name}: {str(model_error)}")
-                    continue
+                    raise ModelTrainingError(
+                        f"Failed to train {model_type}: {str(model_error)}",
+                        session_id=session_id,
+                        severity=ErrorSeverity.HIGH
+                    ) from model_error
             
             training_results[dataset_name] = dataset_results
         

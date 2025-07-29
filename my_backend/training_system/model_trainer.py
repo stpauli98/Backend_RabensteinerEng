@@ -14,7 +14,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolu
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Dense, LSTM, Conv1D, MaxPooling1D, Flatten, Dropout
+    from tensorflow.keras.layers import Dense, LSTM, Conv1D, Conv2D, MaxPooling1D, Flatten, Dropout
     from tensorflow.keras.callbacks import EarlyStopping
     TENSORFLOW_AVAILABLE = True
 except ImportError:
@@ -24,6 +24,7 @@ except ImportError:
     Dense = None
     LSTM = None
     Conv1D = None
+    Conv2D = None
     MaxPooling1D = None
     Flatten = None
     Dropout = None
@@ -117,7 +118,8 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     """
     Funktion trainiert und validiert ein Convolutional Neural Network
     
-    Extracted from training_backend_test_2.py lines 239-320
+    Updated to match reference implementation approach from training_backend_test_2.py
+    Uses Conv2D with padding='same' and forces minimum 20 epochs for numerical stability
     """
     
     if not TENSORFLOW_AVAILABLE:
@@ -127,43 +129,61 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     if train_x.shape[2] == 0:
         raise ValueError(f"Cannot train CNN with 0 features. Input shape: {train_x.shape}")
     
+    # Intelligent kernel size adjustment (keep existing logic)
     if train_x.shape[2] < MDL.K:
         raise ValueError(f"Cannot train CNN: kernel size {MDL.K} is larger than feature count {train_x.shape[2]}")
+    
+    # REFERENCE IMPLEMENTATION APPROACH ######################################
+    
+    # Force minimum 20 epochs like reference implementation for numerical stability
+    original_epochs = MDL.EP
+    if MDL.EP < 20:
+        logger.warning(f"CNN: Forcing minimum 20 epochs (was {MDL.EP}) for numerical stability")
+        MDL.EP = 20
+    
+    # Reshape data to 4D format for Conv2D (reference approach)
+    # From (samples, timesteps, features) to (samples, timesteps, features, 1)
+    train_x_4d = np.expand_dims(train_x, axis=-1)
+    val_x_4d = np.expand_dims(val_x, axis=-1)
+    
+    logger.info(f"CNN: Reshaped data from {train_x.shape} to {train_x_4d.shape} for Conv2D")
     
     # MODELLDEFINITION ########################################################
     
     # Modellinitialisierung
     model = tf.keras.Sequential()
     
-    # Conv1D-Layer hinzufügen
+    # Conv2D-Layer hinzufügen (reference implementation approach)
     for i in range(MDL.LAY):
         if i == 0:
             # Erste Schicht benötigt input_shape
-            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
-                                           kernel_size = MDL.K,
+            model.add(tf.keras.layers.Conv2D(filters = MDL.N,
+                                           kernel_size = (MDL.K, 1),  # Kernel for time dimension only
+                                           padding = 'same',  # CRITICAL: padding='same' from reference
                                            activation = MDL.ACTF,
-                                           input_shape = (train_x.shape[1], train_x.shape[2])))
+                                           input_shape = (train_x_4d.shape[1], train_x_4d.shape[2], train_x_4d.shape[3])))
         else:
-            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
-                                           kernel_size = MDL.K,
+            model.add(tf.keras.layers.Conv2D(filters = MDL.N,
+                                           kernel_size = (MDL.K, 1),
+                                           padding = 'same',  # CRITICAL: padding='same' from reference
                                            activation = MDL.ACTF))
     
     # Daten für Dense-Layer vorbereiten
     model.add(tf.keras.layers.Flatten())
     
-    # Output-Schicht
+    # Output-Schicht (same as reference)
     model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
                                   kernel_initializer = tf.initializers.zeros))
     model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
     
-    # Early Stopping
+    # Early Stopping (keep existing)
     earlystopping = tf.keras.callbacks.\
         EarlyStopping(monitor  = "val_loss", 
         mode                   = "min", 
         patience               = 2, 
         restore_best_weights   = True)
 
-    # Konfiguration des Modells für das Training    
+    # Konfiguration des Modells für das Training (same as reference)    
     model.compile(
         optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
         loss = tf.keras.losses.MeanSquaredError(),
@@ -174,15 +194,18 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     print("Modell wird trainiert.")
     
     model.fit(
-        x               = train_x,
+        x               = train_x_4d,  # Use 4D reshaped data
         y               = train_y,
-        epochs          = MDL.EP,
+        epochs          = MDL.EP,      # Using forced 20 epochs
         verbose         = 1,
         callbacks       = [earlystopping],
-        validation_data = (val_x, val_y)
+        validation_data = (val_x_4d, val_y)  # Use 4D reshaped validation data
         )
          
     print("Modell wurde trainiert.")
+    
+    # Restore original epoch setting
+    MDL.EP = original_epochs
             
     return model
 
