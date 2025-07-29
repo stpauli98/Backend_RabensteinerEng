@@ -1,0 +1,10 @@
+# Ova datoteka onemogućuje automatsko pokretanje Cloud Build procesa
+# Prazna konfiguracija koja ne radi ništa
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args: ['-c', 'echo "Build preskočen"']
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,3 @@
+# Ignoriranje svih datoteka kako bi se spriječilo automatsko pokretanje buildova
+*
+!.gcloudignore
