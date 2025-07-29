@@ -977,23 +977,47 @@ def convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
     Convert frontend flat parameter structure to backend nested structure
     Transforms Training.tsx format to backend-expected format
     
+    UPDATED: Now uses the new parameter_converter module for exact MDL format matching
+    
     Args:
-        frontend_params: Flat parameters from frontend with MODE indicator
-        Expected structure:
-        {
-            "MODE": "Dense"|"CNN"|"SVR",
-            "LAY": 2, "N": 64, "EP": 100, "ACTF": "ReLU",
-            "K": 3, "KERNEL": "rbf", "C": 1.0, "EPSILON": 0.1
-        }
+        frontend_params: Parameters from frontend
         
     Returns:
-        Dict with nested structure expected by backend:
-        {
-            "dense": {...} | "cnn": {...} | "svr": {...}
-        }
+        Dict with structure matching reference implementation MDL format
     """
     try:
-        logger.info(f"Converting frontend parameters: {list(frontend_params.keys())}")
+        logger.info(f"Converting frontend parameters using new parameter converter: {list(frontend_params.keys())}")
+        
+        # Import the new parameter converter
+        from .parameter_converter import convert_frontend_parameters_to_mdl
+        
+        # Convert using the new system
+        mdl_config, validation_result = convert_frontend_parameters_to_mdl(frontend_params)
+        
+        # Log validation results
+        if validation_result['errors']:
+            logger.error(f"Parameter conversion errors: {validation_result['errors']}")
+        if validation_result['warnings']:
+            logger.warning(f"Parameter conversion warnings: {validation_result['warnings']}")
+        
+        # Return the validated MDL configuration
+        logger.info(f"Parameter conversion successful: {list(mdl_config.keys())} model(s) configured in MDL format")
+        return mdl_config
+        
+    except Exception as e:
+        logger.error(f"Error converting frontend parameters with new converter: {str(e)}")
+        # Fallback to legacy conversion if new converter fails
+        logger.warning("Falling back to legacy parameter conversion")
+        return _legacy_convert_frontend_to_backend_params(frontend_params)
+
+
+def _legacy_convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
+    """
+    Legacy parameter conversion function (kept as fallback)
+    Original implementation for backwards compatibility
+    """
+    try:
+        logger.info(f"Using legacy parameter conversion: {list(frontend_params.keys())}")
         
         # Get the model mode
         mode = frontend_params.get('MODE', '').lower()
@@ -1040,7 +1064,7 @@ def convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
             dense_config.setdefault('dropout', 0.1)
             
             backend_params['dense'] = dense_config
-            logger.info(f"Converted to Dense model config: {dense_config}")
+            logger.info(f"Legacy: Converted to Dense model config: {dense_config}")
             
         elif mode == 'cnn':
             # Convert CNN model parameters
@@ -1073,7 +1097,7 @@ def convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
             cnn_config.setdefault('dropout', 0.1)
             
             backend_params['cnn'] = cnn_config
-            logger.info(f"Converted to CNN model config: {cnn_config}")
+            logger.info(f"Legacy: Converted to CNN model config: {cnn_config}")
             
         elif mode == 'svr':
             # Convert SVR model parameters
@@ -1097,17 +1121,17 @@ def convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
             svr_config.setdefault('max_iter', 1000)
             
             backend_params['svr'] = svr_config
-            logger.info(f"Converted to SVR model config: {svr_config}")
+            logger.info(f"Legacy: Converted to SVR model config: {svr_config}")
             
         else:
             logger.error(f"Unsupported model MODE: {mode}")
             return {}
         
-        logger.info(f"Frontend conversion successful: {list(backend_params.keys())} model(s) configured")
+        logger.info(f"Legacy frontend conversion successful: {list(backend_params.keys())} model(s) configured")
         return backend_params
         
     except Exception as e:
-        logger.error(f"Error converting frontend parameters: {str(e)}")
+        logger.error(f"Error in legacy frontend parameter conversion: {str(e)}")
         raise
 
 
@@ -1547,7 +1571,7 @@ def merge_ui_with_session_data(ui_params: Dict, session_data: Dict) -> Dict:
         # Add UI parameter metadata
         merged_data["ui_params_metadata"] = {
             "parameters_provided_by_user": True,
-            "ui_timestamp": datetime.datetime.now().isoformat(),
+            "ui_timestamp": datetime.now().isoformat(),
             "parameter_source": "frontend_ui",
             "validation_warnings": validation_result.get("warnings", []) if "model_params" in ui_params else []
         }

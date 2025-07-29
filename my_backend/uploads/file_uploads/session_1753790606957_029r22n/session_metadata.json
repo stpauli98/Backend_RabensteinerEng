@@ -1,0 +1,26 @@
+{
+  "timeInfo": {
+    "session_id": "",
+    "jahr": false,
+    "monat": false,
+    "woche": false,
+    "tag": false,
+    "feiertag": false,
+    "zeitzone": "UTC",
+    "category_data": {}
+  },
+  "zeitschritte": {
+    "eingabe": "1",
+    "ausgabe": "2",
+    "zeitschrittweite": "3",
+    "offset": "4"
+  },
+  "sessionInfo": {
+    "sessionId": "session_1753790606957_029r22n",
+    "totalFiles": 0
+  },
+  "lastUpdated": "2025-07-29T14:03:26.966084",
+  "finalized": true,
+  "finalizationTime": "2025-07-29T14:03:27.632677",
+  "files": []
+}

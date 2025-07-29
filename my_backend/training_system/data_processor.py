@@ -13,86 +13,94 @@ import calendar
 from typing import Dict, List, Tuple, Optional
 import logging
 
-from .config import MTS, HOL
+from .config import MTS, T, HOL
+from .time_features import ReferenceTimeFeatures
 
 logger = logging.getLogger(__name__)
 
 
-class TimeFeatures:
+class ReferenceTimeProcessor:
     """
-    Time features class (T class from training_backend_test_2.py)
-    Extracted from around lines 798-955
+    REFERENCE TIME PROCESSOR using exact implementation from training_backend_test_2.py
+    Integrates ReferenceTimeFeatures with data processing pipeline
     """
     
-    def __init__(self, timezone: str = 'UTC'):
-        self.timezone = timezone
-        self.tz = pytz.timezone(timezone)
+    def __init__(self):
+        self.reference_time_features = ReferenceTimeFeatures()
     
-    def add_time_features(self, df: pd.DataFrame, time_column: str = 'UTC') -> pd.DataFrame:
+    def add_reference_time_features(self, i_dat: Dict[str, pd.DataFrame], i_dat_inf: pd.DataFrame, utc_ref: datetime.datetime) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
         """
-        Add time-based features to DataFrame
+        Add reference time features to the data using exact reference implementation
         
         Args:
-            df: Input DataFrame
-            time_column: Name of the time column
+            i_dat: Dictionary of DataFrames (reference format)
+            i_dat_inf: Information DataFrame (reference format)  
+            utc_ref: Reference UTC timestamp
             
         Returns:
-            DataFrame with added time features
+            Tuple of updated (i_dat, i_dat_inf) with time features
         """
         try:
-            # Time features logic extracted and implemented from training_backend_test_2.py
+            logger.info(f"Adding reference time features with UTC ref: {utc_ref}")
             
-            df = df.copy()
+            # Generate time features using reference implementation
+            time_array, feature_names = self.reference_time_features.generate_time_features(utc_ref, i_dat_inf)
             
-            # Convert to datetime if not already
-            if not pd.api.types.is_datetime64_any_dtype(df[time_column]):
-                df[time_column] = pd.to_datetime(df[time_column])
+            if len(time_array) > 0:
+                logger.info(f"Generated {len(feature_names)} time features: {feature_names}")
+                
+                # Add time features to i_dat (follow reference pattern)
+                for i, feature_name in enumerate(feature_names):
+                    # Create DataFrame for each time feature (following reference structure)
+                    feature_df = pd.DataFrame({
+                        'UTC': pd.date_range(start=utc_ref, periods=len(time_array), freq='1min'),
+                        feature_name: time_array[:, i]
+                    })
+                    
+                    # Add to i_dat dictionary with proper naming
+                    i_dat[f"Time_Feature_{feature_name}"] = feature_df
+                    
+                    logger.info(f"Added time feature {feature_name}: shape {feature_df.shape}")
+                
+                # Update i_dat_inf with time feature metadata
+                for feature_name in feature_names:
+                    feature_key = f"Time_Feature_{feature_name}"
+                    
+                    # Add metadata row for time feature (similar to reference)
+                    if feature_key not in i_dat_inf.index:
+                        i_dat_inf.loc[feature_key] = {
+                            "utc_min": utc_ref,
+                            "utc_max": utc_ref + pd.Timedelta(minutes=len(time_array)-1),
+                            "delt": 1.0,  # 1 minute intervals
+                            "ofst": 0.0,
+                            "n_all": len(time_array),
+                            "n_num": len(time_array),
+                            "rate_num": 100.0,
+                            "val_min": time_array[:, feature_names.index(feature_name)].min(),
+                            "val_max": time_array[:, feature_names.index(feature_name)].max(),
+                            "spec": "Time Feature",
+                            "th_strt": getattr(T.Y, 'TH_STRT', -24),  # Use appropriate T class values
+                            "th_end": getattr(T.Y, 'TH_END', 0),
+                            "meth": "Reference Implementation",
+                            "avg": False,
+                            "delt_transf": 1.0,
+                            "ofst_transf": 0.0,
+                            "scal": True,
+                            "scal_max": 1.0,
+                            "scal_min": 0.0
+                        }
+                
+                logger.info(f"Successfully integrated {len(feature_names)} reference time features")
+            else:
+                logger.warning("No time features generated - all T.*.IMP flags may be False")
             
-            # Extract basic time features
-            df['year'] = df[time_column].dt.year
-            df['month'] = df[time_column].dt.month
-            df['day'] = df[time_column].dt.day
-            df['hour'] = df[time_column].dt.hour
-            df['minute'] = df[time_column].dt.minute
-            df['weekday'] = df[time_column].dt.weekday
-            df['week'] = df[time_column].dt.isocalendar().week
-            
-            # Cyclical features
-            df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
-            df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
-            df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
-            df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
-            df['weekday_sin'] = np.sin(2 * np.pi * df['weekday'] / 7)
-            df['weekday_cos'] = np.cos(2 * np.pi * df['weekday'] / 7)
-            
-            # Add holiday features
-            df = self._add_holiday_features(df, time_column)
-            
-            return df
+            return i_dat, i_dat_inf
             
         except Exception as e:
-            logger.error(f"Error adding time features: {str(e)}")
-            raise
-    
-    def _add_holiday_features(self, df: pd.DataFrame, time_column: str) -> pd.DataFrame:
-        """Add holiday features based on HOL dictionary"""
-        try:
-            # Holiday logic implemented using HOL configuration
-            
-            df['is_holiday'] = False
-            
-            # Check for fixed holidays
-            for country, holidays in HOL.items():
-                for holiday_name, (month, day) in holidays.items():
-                    if isinstance(month, int) and isinstance(day, int):
-                        holiday_mask = (df[time_column].dt.month == month) & (df[time_column].dt.day == day)
-                        df.loc[holiday_mask, 'is_holiday'] = True
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error adding holiday features: {str(e)}")
-            raise
+            logger.error(f"Error adding reference time features: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return i_dat, i_dat_inf  # Return original data on error
 
 
 class DataProcessor:
@@ -103,7 +111,77 @@ class DataProcessor:
     
     def __init__(self, config: MTS):
         self.config = config
-        self.time_features = TimeFeatures(config.timezone)
+        self.reference_time_processor = ReferenceTimeProcessor()
+    
+    def process_session_data_with_reference_format(self, i_dat: Dict[str, pd.DataFrame], i_dat_inf: pd.DataFrame, session_data: Dict) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+        """
+        Process session data in reference format (i_dat, i_dat_inf) with time features
+        
+        Args:
+            i_dat: Dictionary of DataFrames (reference format)
+            i_dat_inf: Information DataFrame (reference format)
+            session_data: Session configuration
+            
+        Returns:
+            Tuple of processed (i_dat, i_dat_inf) with time features
+        """
+        try:
+            logger.info("Processing session data with reference format and time features")
+            
+            # Determine UTC reference from the data
+            utc_ref = self._determine_utc_reference(i_dat, i_dat_inf)
+            logger.info(f"Using UTC reference: {utc_ref}")
+            
+            # Add reference time features if any T.*.IMP flags are enabled
+            if any([T.Y.IMP, T.M.IMP, T.W.IMP, T.D.IMP, T.H.IMP]):
+                logger.info("Adding reference time features (T.*.IMP flags enabled)")
+                i_dat, i_dat_inf = self.reference_time_processor.add_reference_time_features(i_dat, i_dat_inf, utc_ref)
+            else:
+                logger.info("Skipping time features (all T.*.IMP flags disabled)")
+            
+            return i_dat, i_dat_inf
+            
+        except Exception as e:
+            logger.error(f"Error processing session data with reference format: {str(e)}")
+            raise
+    
+    def _determine_utc_reference(self, i_dat: Dict[str, pd.DataFrame], i_dat_inf: pd.DataFrame) -> datetime.datetime:
+        """
+        Determine the UTC reference timestamp from the loaded data
+        
+        Args:
+            i_dat: Dictionary of DataFrames
+            i_dat_inf: Information DataFrame
+            
+        Returns:
+            UTC reference timestamp
+        """
+        try:
+            # Get the first available UTC timestamp from the data
+            for data_name, df in i_dat.items():
+                if 'UTC' in df.columns and len(df) > 0:
+                    # Get the first timestamp and ensure it's timezone-aware
+                    first_utc = df['UTC'].iloc[0]
+                    
+                    if isinstance(first_utc, pd.Timestamp):
+                        # Convert to datetime and ensure it's timezone-naive (as expected by reference)
+                        utc_ref = first_utc.to_pydatetime()
+                        if utc_ref.tzinfo is not None:
+                            utc_ref = utc_ref.replace(tzinfo=None)
+                        return utc_ref
+                    elif isinstance(first_utc, str):
+                        # Parse string timestamp
+                        return datetime.datetime.strptime(first_utc, "%Y-%m-%d %H:%M:%S")
+                    else:
+                        return datetime.datetime.now()
+            
+            # Fallback to current time if no UTC data found
+            logger.warning("No UTC timestamps found in data, using current time as reference")
+            return datetime.datetime.now()
+            
+        except Exception as e:
+            logger.error(f"Error determining UTC reference: {str(e)}")
+            return datetime.datetime.now()
     
     def process_session_data(self, session_data: Dict, input_files: List[str], output_files: List[str]) -> Dict:
         """
@@ -420,7 +498,7 @@ class DataProcessor:
                         
                 # OFFSET CANNOT BE CALCULATED
                 else: 
-                    inf.loc[key, "ofst_transf"] = "var"
+                    inf.loc[key, "ofst_transf"] = str("var")
                     
             return inf
             

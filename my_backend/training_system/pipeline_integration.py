@@ -86,44 +86,46 @@ class RealDataProcessor:
                 handle_data_processing_error(e, session_id, operation="prepare_file_paths")
                 raise
             
-            # Step 3: Process CSV data using real load() function
-            dat = {}
-            inf = pd.DataFrame()
-            
-            # Load and process each input file
-            for file_path in input_files:
-                try:
-                    # Use data_loader.load_csv_data which handles delimiter and column naming
-                    df = self.data_loader.load_csv_data(file_path, delimiter=';')
-                    
-                    if df is None or df.empty:
-                        raise DataProcessingError(
-                            f"Failed to load data from file {file_path} or file is empty",
-                            session_id=session_id,
-                            details={'file_path': file_path}
-                        )
-                    
-                    file_name = file_path.split('/')[-1].replace('.csv', '')
-                    dat[file_name] = df
-                    
-                    logger.info(f"Loaded input file: {file_name}, shape: {df.shape}, columns: {list(df.columns)}")
-                    
-                    # Use real load() function to extract metadata
-                    dat, inf = self.data_loader.process_csv_data(dat, inf)
-                    
-                    logger.info(f"Processed input file: {file_name}, shape: {df.shape}, processed successfully")
-                    
-                except DataProcessingError:
-                    raise  # Re-raise DataProcessingError as-is
-                except Exception as e:
-                    error_details = handle_data_processing_error(
-                        e, session_id, 
-                        operation="load_input_file",
-                        file_path=file_path,
-                        file_name=file_path.split('/')[-1] if '/' in file_path else file_path
+            # Step 3: Load session data using REFERENCE FORMAT (i_dat, i_dat_inf)
+            try:
+                logger.info("Loading session data in reference format (i_dat, i_dat_inf)")
+                i_dat, i_dat_inf = self.data_loader.load_session_with_reference_format(session_id)
+                
+                if not i_dat:
+                    raise DataProcessingError(
+                        f"No data loaded for session {session_id} using reference format",
+                        session_id=session_id,
+                        severity=ErrorSeverity.HIGH
                     )
-                    logger.warning(f"Skipping input file {file_path} due to error: {error_details['error_code']}")
-                    continue
+                    
+                logger.info(f"✅ Successfully loaded {len(i_dat)} datasets in reference format")
+                logger.info(f"   Datasets: {list(i_dat.keys())}")
+                logger.info(f"   Metadata rows: {len(i_dat_inf)}")
+                
+                # Store both formats for compatibility
+                dat = i_dat  # Reference format
+                inf = i_dat_inf  # Reference metadata format
+                
+                # Step 3.5: Process data with reference time features
+                logger.info("Processing reference format data with time features")
+                data_processor = DataProcessor(MTS())
+                i_dat, i_dat_inf = data_processor.process_session_data_with_reference_format(i_dat, i_dat_inf, session_data)
+                
+                logger.info(f"✅ Successfully processed data with time features")
+                logger.info(f"   Updated datasets: {len(i_dat)}")
+                logger.info(f"   Updated metadata rows: {len(i_dat_inf)}")
+                
+                # Also store in a way that's accessible for downstream processing
+                processed_data = {
+                    'i_dat': i_dat,           # Reference data dictionary (with time features)
+                    'i_dat_inf': i_dat_inf,   # Reference metadata DataFrame (with time features)
+                    'session_data': session_data,  # Original session data for context
+                    'reference_format': True   # Flag to indicate reference format
+                }
+                
+            except Exception as e:
+                handle_data_processing_error(e, session_id, operation="load_reference_format")
+                raise
             
             # Load and process output files
             output_dat = {}

@@ -29,7 +29,13 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB limit
 
 # Nakon inicijalizacije Flask aplikacije i CORS-a, dodajte:
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, 
+                   cors_allowed_origins="*", 
+                   async_mode='threading',
+                   logger=False,
+                   engineio_logger=False,
+                   ping_timeout=60,
+                   ping_interval=25)
 
 # Register socketio in app extensions for current_app access
 app.extensions['socketio'] = socketio
@@ -91,11 +97,17 @@ def health():
 
 @socketio.on('connect')
 def handle_connect():
-    logger.info("Client connected")
+    try:
+        logger.info("Client connected")
+    except Exception as e:
+        logger.error(f"Error in connect handler: {str(e)}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    logger.info("Client disconnected")
+    try:
+        logger.info("Client disconnected")
+    except Exception as e:
+        logger.error(f"Error in disconnect handler: {str(e)}")
 
 # Enhanced SocketIO event handlers for training system
 @socketio.on('join_training_session')
@@ -203,12 +215,21 @@ def handle_request_training_status(data):
 @socketio.on('join')
 def handle_join(data):
     """Client joins a room based on uploadId"""
-    if 'uploadId' in data:
-        upload_id = data['uploadId']
-        from flask_socketio import join_room
-        join_room(upload_id)
-        logger.info(f"Client joined Socket.IO room: {upload_id}")
-        socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
+    try:
+        if 'uploadId' in data:
+            upload_id = data['uploadId']
+            from flask_socketio import join_room
+            join_room(upload_id)
+            logger.info(f"Client joined Socket.IO room: {upload_id}")
+            socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
+    except Exception as e:
+        logger.error(f"Error in join handler: {str(e)}")
+
+# Add global SocketIO error handler
+@socketio.on_error_default
+def default_error_handler(e):
+    logger.error(f"SocketIO error: {str(e)}")
+    return False
 
 @app.route('/')
 def index():

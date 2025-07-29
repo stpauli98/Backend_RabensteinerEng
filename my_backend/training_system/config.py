@@ -10,28 +10,20 @@ import datetime
 class MTS:
     """
     Multivariate Time Series configuration class
-    Extracted from training_backend_test_2.py lines 619-632
+    Extracted EXACTLY from training_backend_test_2.py lines 619-632
     """
     
-    def __init__(self):
-        # Anzahl der Zeitschritte der Eingabedaten
-        self.I_N  = 13
-        
-        # Anzahl der Zeitschritte der Ausgabedaten
-        self.O_N  = 13
-        
-        # Zeitschrittweite für die Bildung der finalen Datensätze [min]
-        self.DELT = 3
-        
-        # Offset für die Bildung der finalen Datensätze [min]
-        self.OFST = 0
-        
-        # Additional attributes for DataProcessor compatibility
-        self.timezone = 'UTC'
-        self.use_time_features = True
-        self.interpolation = True
-        self.outlier_removal = False
-        self.scaling = True
+    # Anzahl der Zeitschritte der Eingabedaten
+    I_N  = 13
+    
+    # Anzahl der Zeitschritte der Ausgabedaten
+    O_N  = 13
+    
+    # Zeitschrittweite für die Bildung der finalen Datensätze [min]
+    DELT = 3
+    
+    # Offset für die Bildung der finalen Datensätze [min]
+    OFST = 0
 
 
 class T:

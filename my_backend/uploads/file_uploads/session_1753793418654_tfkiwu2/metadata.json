@@ -1,0 +1,88 @@
+[
+  {
+    "chunkIndex": 0,
+    "totalChunks": 2,
+    "fileName": "load_grid_kW_Krumpendorf.csv",
+    "filePath": "/Users/posao/Documents/GitHub/Backend_RabensteinerEng/my_backend/uploads/file_uploads/session_1753793418654_tfkiwu2/load_grid_kW_Krumpendorf.csv_0",
+    "fileType": "output",
+    "createdAt": "2025-07-29T14:50:19.707316",
+    "params": {
+      "chunkSize": 2097152,
+      "totalSize": 2746701,
+      "fileHash": "027d06793edc98482421b3f69fd8ce9f6ea4a759424eb4979edbf0bb98a19792",
+      "fileMetadata": {
+        "id": "1753793103512",
+        "fileName": "load_grid_kW_Krumpendorf.csv",
+        "bezeichnung": "Test2",
+        "utcMin": "2022-01-01 00:00:00",
+        "utcMax": "2024-11-08 10:30:00",
+        "zeitschrittweite": "15",
+        "min": "-80",
+        "max": "4400",
+        "offset": "0",
+        "datenpunkte": "100075",
+        "numerischeDatenpunkte": "97072",
+        "numerischerAnteil": "97.00",
+        "datenform": "Aktueller Wert",
+        "zeithorizontStart": "12",
+        "zeithorizontEnd": "2",
+        "zeitschrittweiteTransferiertenDaten": "2",
+        "offsetTransferiertenDaten": "2",
+        "mittelwertbildung\u00dcberDenZeithorizont": "ja",
+        "datenanpassung": "2",
+        "zeitschrittweiteMinValue": "2",
+        "zeitschrittweiteAvgValue": "2",
+        "skalierung": "ja",
+        "skalierungMax": "2",
+        "skalierungMin": "2",
+        "storagePath": "",
+        "type": "output",
+        "createdAt": "",
+        "updatedAt": ""
+      },
+      "sessionInfo": {
+        "sessionId": "session_1753793418654_tfkiwu2",
+        "totalFiles": 2
+      },
+      "timeInfo": {
+        "session_id": "",
+        "jahr": true,
+        "monat": false,
+        "woche": false,
+        "tag": false,
+        "feiertag": false,
+        "zeitzone": "Europe/Vienna",
+        "category_data": {
+          "jahr": {
+            "detaillierteBerechnung": true,
+            "datenform": "Zeit Horizont",
+            "zeithorizontStart": "3",
+            "zeithorizontEnd": "9",
+            "skalierung": "nein",
+            "skalierungMin": "",
+            "skalierungMax": ""
+          }
+        }
+      },
+      "zeitschritte": {
+        "eingabe": "1",
+        "ausgabe": "2",
+        "zeitschrittweite": "1",
+        "offset": "2"
+      }
+    }
+  },
+  {
+    "chunkIndex": 1,
+    "totalChunks": 2,
+    "fileName": "load_grid_kW_Krumpendorf.csv",
+    "filePath": "/Users/posao/Documents/GitHub/Backend_RabensteinerEng/my_backend/uploads/file_uploads/session_1753793418654_tfkiwu2/load_grid_kW_Krumpendorf.csv_1",
+    "fileType": "output",
+    "createdAt": "2025-07-29T14:50:19.713876",
+    "params": {
+      "chunkSize": 649549,
+      "totalSize": 2746701,
+      "fileHash": "027d06793edc98482421b3f69fd8ce9f6ea4a759424eb4979edbf0bb98a19792"
+    }
+  }
+]

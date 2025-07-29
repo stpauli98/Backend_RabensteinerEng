@@ -1,0 +1,97 @@
+{
+  "timeInfo": {
+    "session_id": "",
+    "jahr": true,
+    "monat": false,
+    "woche": false,
+    "tag": false,
+    "feiertag": false,
+    "zeitzone": "Europe/Vienna",
+    "category_data": {
+      "jahr": {
+        "detaillierteBerechnung": true,
+        "datenform": "Zeit Horizont",
+        "zeithorizontStart": "3",
+        "zeithorizontEnd": "9",
+        "skalierung": "nein",
+        "skalierungMin": "",
+        "skalierungMax": ""
+      }
+    }
+  },
+  "zeitschritte": {
+    "eingabe": "1",
+    "ausgabe": "2",
+    "zeitschrittweite": "1",
+    "offset": "2"
+  },
+  "sessionInfo": {
+    "sessionId": "session_1753793418654_tfkiwu2",
+    "totalFiles": 0
+  },
+  "lastUpdated": "2025-07-29T14:50:19.707605",
+  "files": [
+    {
+      "id": "1753793103506",
+      "fileName": "t_out_grad_C_Krumpendorf.csv",
+      "bezeichnung": "Test1",
+      "utcMin": "2022-01-01 00:00:00",
+      "utcMax": "2024-11-08 10:30:00",
+      "zeitschrittweite": "15",
+      "min": "-10.2",
+      "max": "34.9",
+      "offset": "0",
+      "datenpunkte": "100075",
+      "numerischeDatenpunkte": "99920",
+      "numerischerAnteil": "99.85",
+      "datenform": "Historische Daten",
+      "zeithorizontStart": "1",
+      "zeithorizontEnd": "1",
+      "zeitschrittweiteTransferiertenDaten": "1",
+      "offsetTransferiertenDaten": "1",
+      "mittelwertbildung\u00dcberDenZeithorizont": "ja",
+      "datenanpassung": "1",
+      "zeitschrittweiteMinValue": "1",
+      "zeitschrittweiteAvgValue": "1",
+      "skalierung": "ja",
+      "skalierungMax": "1",
+      "skalierungMin": "1",
+      "storagePath": "",
+      "type": "input",
+      "createdAt": "",
+      "updatedAt": ""
+    },
+    {
+      "id": "1753793103512",
+      "fileName": "load_grid_kW_Krumpendorf.csv",
+      "bezeichnung": "Test2",
+      "utcMin": "2022-01-01 00:00:00",
+      "utcMax": "2024-11-08 10:30:00",
+      "zeitschrittweite": "15",
+      "min": "-80",
+      "max": "4400",
+      "offset": "0",
+      "datenpunkte": "100075",
+      "numerischeDatenpunkte": "97072",
+      "numerischerAnteil": "97.00",
+      "datenform": "Aktueller Wert",
+      "zeithorizontStart": "12",
+      "zeithorizontEnd": "2",
+      "zeitschrittweiteTransferiertenDaten": "2",
+      "offsetTransferiertenDaten": "2",
+      "mittelwertbildung\u00dcberDenZeithorizont": "ja",
+      "datenanpassung": "2",
+      "zeitschrittweiteMinValue": "2",
+      "zeitschrittweiteAvgValue": "2",
+      "skalierung": "ja",
+      "skalierungMax": "2",
+      "skalierungMin": "2",
+      "storagePath": "",
+      "type": "output",
+      "createdAt": "",
+      "updatedAt": ""
+    }
+  ],
+  "finalized": true,
+  "finalizationTime": "2025-07-29T14:50:19.751167"
+}

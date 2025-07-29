@@ -287,6 +287,86 @@ class DataLoader:
             logger.error(f"Error loading CSV data from {file_path}: {str(e)}")
             raise
     
+    def load_session_with_reference_format(self, session_id: str) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+        """
+        Load session data and convert to reference format (i_dat, i_dat_inf)
+        This creates the exact data structures expected by the reference implementation
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Tuple of (i_dat, i_dat_inf) in reference format
+        """
+        try:
+            # Download session files
+            downloaded_files = self.download_session_files(session_id)
+            
+            # Initialize reference data structures
+            i_dat = {}  # Dictionary of DataFrames (like reference)
+            i_dat_inf = pd.DataFrame(columns=[
+                "utc_min", "utc_max", "delt", "ofst", "n_all", "n_num", "rate_num",
+                "val_min", "val_max", "spec", "th_strt", "th_end", "meth", "avg",
+                "delt_transf", "ofst_transf", "scal", "scal_max", "scal_min"
+            ])
+            
+            # Process each CSV file using reference format
+            for file_type, file_path in downloaded_files.items():
+                try:
+                    # Load CSV with exact reference format (delimiter=';')
+                    df = pd.read_csv(file_path, delimiter=';')
+                    
+                    # Ensure proper column structure (UTC, value)
+                    if len(df.columns) >= 2:
+                        # Keep original column names but ensure first is UTC
+                        if 'UTC' not in df.columns:
+                            df.columns = ['UTC'] + list(df.columns[1:])
+                    else:
+                        raise ValueError(f"CSV file must have at least 2 columns, found {len(df.columns)}")
+                    
+                    # Create data name like in reference (use file type + description)
+                    if file_type == 'input':
+                        data_name = "Eingabedaten [kW]"  # Input data name like reference
+                    elif file_type == 'output':
+                        data_name = "Ausgabedaten [kW]"  # Output data name like reference
+                    else:
+                        data_name = f"{file_type}_data [kW]"
+                    
+                    # Store in i_dat dictionary
+                    i_dat[data_name] = df
+                    
+                    # Process with reference load() function
+                    i_dat, i_dat_inf = self.reference_load(i_dat, i_dat_inf)
+                    
+                    # Add additional metadata fields required by reference
+                    i_dat_inf.loc[data_name, "spec"] = "Historische Daten"
+                    i_dat_inf.loc[data_name, "th_strt"] = -1  # Default time horizon start
+                    i_dat_inf.loc[data_name, "th_end"] = 0    # Default time horizon end  
+                    i_dat_inf.loc[data_name, "meth"] = "Lineare Interpolation"
+                    i_dat_inf.loc[data_name, "scal"] = True
+                    i_dat_inf.loc[data_name, "scal_max"] = 1
+                    i_dat_inf.loc[data_name, "scal_min"] = 0
+                    
+                    logger.info(f"Loaded {data_name}: {df.shape} - {len(df)} data points")
+                    
+                except Exception as file_error:
+                    logger.error(f"Error loading file {file_path}: {str(file_error)}")
+                    continue
+            
+            # Apply transformation using reference transf() function
+            from .config import MTS
+            i_dat_inf = self.reference_transf(i_dat_inf, MTS.I_N, MTS.OFST)
+            
+            logger.info(f"Successfully loaded session {session_id} in reference format:")
+            logger.info(f"  - i_dat contains {len(i_dat)} datasets")
+            logger.info(f"  - i_dat_inf contains {len(i_dat_inf)} metadata rows")
+            
+            return i_dat, i_dat_inf
+            
+        except Exception as e:
+            logger.error(f"Error loading session with reference format: {str(e)}")
+            raise
+
     def cleanup_temp_files(self, session_id: str):
         """
         Clean up temporary files for a session
@@ -308,101 +388,137 @@ class DataLoader:
         except Exception as e:
             logger.error(f"Error cleaning up temp files: {str(e)}")
     
-    def process_csv_data(self, dat: Dict[str, pd.DataFrame], inf: pd.DataFrame) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+    def reference_load(self, dat: Dict[str, pd.DataFrame], inf: pd.DataFrame) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
         """
-        Process CSV data and extract metadata (extracted from original load() function)
+        EXACT COPY of load() function from training_backend_test_2.py lines 37-109
+        Process CSV data and extract metadata using original reference implementation
         
         Args:
-            dat: Dictionary of DataFrames
-            inf: Information DataFrame
+            dat: Dictionary of DataFrames (i_dat from reference)
+            inf: Information DataFrame (i_dat_inf from reference)
             
         Returns:
             Tuple of updated (dat, inf)
         """
         try:
-            # Get the last loaded dataframe
+            # Zuletzt geladener Dataframe
             df_name, df = next(reversed(dat.items()))
 
-            # Convert UTC to datetime
+            # UTC in datetime umwandeln
             df["UTC"] = pd.to_datetime(df["UTC"], format="%Y-%m-%d %H:%M:%S")
 
-            # Start time
+            # Startzeit
             utc_min = df["UTC"].iloc[0]
             
-            # End time
+            # Endzeit
             utc_max = df["UTC"].iloc[-1]
             
-            # Number of data points
+            # Anzahl der Datenpunkte
             n_all = len(df)
             
-            # Time step width [min]
-            delt = (df["UTC"].iloc[-1] - df["UTC"].iloc[0]).total_seconds() / (60 * (n_all - 1))
+            # Zeitschrittweite [min]
+            delt = (df["UTC"].iloc[-1]-df["UTC"].iloc[0]).total_seconds()/(60*(n_all-1))
 
-            # Constant Offset
+            # Konstanter Offset
             if round(60/delt) == 60/delt:
-                ofst = (df["UTC"].iloc[0] -
-                        (df["UTC"].iloc[0]).replace(minute=0, second=0, microsecond=0)).total_seconds()/60
-                while ofst - delt >= 0:
+                
+                ofst = (df["UTC"].iloc[0]-
+                        (df["UTC"].iloc[0]).replace(minute      = 0, 
+                                                    second      = 0, 
+                                                    microsecond = 0)).total_seconds()/60
+                while ofst-delt >= 0:
                    ofst -= delt
-            # Variable Offset
+            
+            # Variabler Offset
             else:
+                
                 ofst = "var"
 
-            # Number of numeric data points
+            # Anzahl der numerischen Datenpunkte
             n_num = n_all
             for i in range(n_all):
                 try:
-                    # Use 'data_value' column instead of iloc[i, 1]
-                    float(df['data_value'].iloc[i])
-                    if math.isnan(float(df['data_value'].iloc[i])):
+                    float(df.iloc[i, 1])
+                    if math.isnan(float(df.iloc[i, 1])):
                        n_num -= 1
                 except:
                     n_num -= 1  
             
-            # Percentage of numeric data points
+            # Anteil an numerischen Datenpunkten [%]
             rate_num = round(n_num/n_all*100, 2)
                 
-            # Maximum value
-            val_max = df['data_value'].max() 
+            # Maximalwert [#]
+            val_max = df.iloc[:, 1].max() 
             
-            # Minimum value
-            val_min = df['data_value'].min()
+            # Minimalwert [#]
+            val_min = df.iloc[:, 1].min()
             
-            # Update dataframe
+            # Dataframe aktualisieren
             dat[df_name] = df
 
-            # Insert information - include all columns needed by data_processor
-            row_data = {
-                "utc_min":      utc_min,
-                "utc_max":      utc_max, 
-                "delt":         delt,
-                "ofst":         ofst,
-                "n_all":        n_all,
-                "n_num":        n_num,
-                "rate_num":     rate_num,
-                "val_min":      val_min,
-                "val_max":      val_max,
-                "spec":         "Historische Daten",  # Default value
-                "th_strt":      -2,                   # Default value (from original script)
-                "th_end":       0,                    # Default value (from original script)
-                "meth":         "Lineare Interpolation", # Default value
-                "avg":          False,
-                "delt_transf":  None,                 # Will be calculated by transform_data
-                "ofst_transf":  None,                 # Will be calculated by transform_data
-                "scal":         False,
-                "scal_max":     1,                    # Default scaling max
-                "scal_min":     0                     # Default scaling min
-            }
-            
-            # Create new row in DataFrame
-            if inf.empty:
-                inf = pd.DataFrame(columns=row_data.keys())
-            inf.loc[df_name] = row_data
+            # Information einfügen
+            inf.loc[df_name] = {
+                "utc_min":  utc_min,
+                "utc_max":  utc_max, 
+                "delt":     delt,
+                "ofst":     ofst,
+                "n_all":    n_all,
+                "n_num":    n_num,
+                "rate_num": rate_num,
+                "val_min":  val_min,
+                "val_max":  val_max,
+                "scal":     False,
+                "avg":      False}
  
             return dat, inf 
             
         except Exception as e:
-            logger.error(f"Error processing CSV data: {str(e)}")
+            logger.error(f"Error in reference_load function: {str(e)}")
+            raise
+    
+    def reference_transf(self, inf: pd.DataFrame, N: int, OFST: int) -> pd.DataFrame:
+        """
+        EXACT COPY of transf() function from training_backend_test_2.py lines 113-141
+        Transform data parameters according to reference implementation
+        
+        Args:
+            inf: Information DataFrame (i_dat_inf from reference)
+            N: Number of input steps (MTS.I_N)
+            OFST: Offset value (MTS.OFST)
+            
+        Returns:
+            Updated information DataFrame
+        """
+        try:
+            for i in range(len(inf)):
+                
+                key = inf.index[i]
+                
+                inf.loc[key, "delt_transf"] = \
+                    (inf.loc[key, "th_end"]-\
+                     inf.loc[key, "th_strt"])*60/(N-1)
+                
+                # OFFSET KANN BERECHNET WERDEN
+                if round(60/inf.loc[key, "delt_transf"]) == \
+                    60/inf.loc[key, "delt_transf"]:
+                      
+                    # Offset [min]
+                    ofst_transf = OFST-(inf.loc[key, "th_strt"]-
+                                        math.floor(inf.loc[key, "th_strt"]))*60+60
+                    
+                    while ofst_transf-inf.loc[key, "delt_transf"] >= 0:
+                       ofst_transf -= inf.loc[key, "delt_transf"]
+                    
+                    inf.loc[key, "ofst_transf"] = ofst_transf
+                        
+                # OFFSET KANN NICHT BERECHNET WERDEN
+                else: 
+                    inf.loc[key, "ofst_transf"] = "var"
+                    
+            return inf
+            
+        except Exception as e:
+            logger.error(f"Error in reference_transf function: {str(e)}")
             raise
     
     def utc_idx_pre(self, dat: pd.DataFrame, utc) -> Optional[int]:

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS public.training_results (
     training_metadata JSONB, -- Training configuration and metadata
     best_model_info JSONB, -- Information about the best performing model
     error_message TEXT, -- Error message if training failed
+    error_type VARCHAR(50), -- Type of error (training_failed, data_processing, etc.)
     error_traceback TEXT, -- Full error traceback for debugging
     
     -- Dataset information

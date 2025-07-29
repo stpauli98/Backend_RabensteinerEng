@@ -5,23 +5,21 @@ Runs the dataset columns migration safely
 """
 
 import os
-import psycopg2
-from supabase import create_client
 import sys
+from supabase_client import get_supabase_client
 
 def run_migration():
-    """Run the 001_add_dataset_columns migration"""
+    """Run the add_error_type_column migration"""
     
-    # Get Supabase URL and key from environment
-    supabase_url = os.environ.get('SUPABASE_URL')
-    supabase_key = os.environ.get('SUPABASE_KEY')
+    # Get Supabase client
+    supabase = get_supabase_client()
     
-    if not supabase_url or not supabase_key:
-        print("❌ Error: SUPABASE_URL and SUPABASE_KEY environment variables must be set")
+    if not supabase:
+        print("❌ Error: Could not connect to Supabase")
         sys.exit(1)
     
     # Read migration SQL
-    migration_file = os.path.join(os.path.dirname(__file__), 'training_system', 'migrations', '001_add_dataset_columns.sql')
+    migration_file = os.path.join(os.path.dirname(__file__), 'training_system', 'migrations', 'add_error_type_column.sql')
     
     if not os.path.exists(migration_file):
         print(f"❌ Error: Migration file not found: {migration_file}")
@@ -31,10 +29,7 @@ def run_migration():
         migration_sql = f.read()
     
     try:
-        # Create Supabase client
-        supabase = create_client(supabase_url, supabase_key)
-        
-        print("🔄 Running database migration: 001_add_dataset_columns.sql")
+        print("🔄 Running database migration: add_error_type_column.sql")
         print("📝 Migration SQL:")
         print("=" * 50)
         print(migration_sql[:500] + "..." if len(migration_sql) > 500 else migration_sql)
@@ -46,18 +41,18 @@ def run_migration():
         print("✅ Migration completed successfully!")
         print("📊 Result:", result)
         
-        # Verify the columns were added
+        # Verify the column was added
         verify_sql = """
         SELECT column_name, data_type, is_nullable
         FROM information_schema.columns 
         WHERE table_schema = 'public' 
         AND table_name = 'training_results' 
-        AND column_name IN ('dataset_count', 'train_dataset_size', 'val_dataset_size', 'test_dataset_size', 'dataset_generation_time')
+        AND column_name = 'error_type'
         ORDER BY column_name;
         """
         
         verification_result = supabase.rpc('execute_sql', {'sql': verify_sql})
-        print("🔍 Verification - New columns added:")
+        print("🔍 Verification - error_type column added:")
         print(verification_result)
         
     except Exception as e:
