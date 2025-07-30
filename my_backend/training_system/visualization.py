@@ -10,10 +10,11 @@ import pandas as pd
 import numpy as np
 import base64
 from io import BytesIO
-from typing import Dict, List, Optional, Tuple
+from typing import Dict
 import logging
 
 from .config import PLOT_SETTINGS
+from .temporal_config import T
 
 logger = logging.getLogger(__name__)
 
@@ -93,14 +94,20 @@ class Visualizer:
             
             # Input data violin plots (lines 1876-1962)
             if 'i_combined_array' in data_arrays:
-                input_plot = self._create_input_distribution_plot(data_arrays['i_combined_array'])
+                input_plot = self._create_input_distribution_plot(
+                    data_arrays['i_combined_array'],
+                    data_arrays.get('i_dat_inf'),
+                    data_arrays.get('o_combined_array'),
+                    data_arrays.get('T')
+                )
                 violin_plots['input_distribution'] = input_plot
                 
             # Output data violin plots (lines 1965-2026) 
             if 'o_combined_array' in data_arrays:
                 output_plot = self._create_output_distribution_plot(
                     data_arrays['o_combined_array'], 
-                    data_arrays.get('i_combined_array')
+                    data_arrays.get('i_combined_array'),
+                    data_arrays.get('o_dat_inf')
                 )
                 violin_plots['output_distribution'] = output_plot
             
@@ -110,17 +117,41 @@ class Visualizer:
             logger.error(f"Error creating violin plots: {str(e)}")
             raise
     
-    def _create_input_distribution_plot(self, i_combined_array: np.ndarray) -> str:
+    def _create_input_distribution_plot(self, i_combined_array: np.ndarray, i_dat_inf: pd.DataFrame = None, 
+                                       o_combined_array: np.ndarray = None, T=None) -> str:
         """
         Create input data distribution violin plot
         Extracted from training_backend_test_2.py lines 1876-1962
+        EXACT COPY/PASTE from original code
         """
         try:
             # Farbpalette (exactly as in original)
-            palette = sns.color_palette("tab20", i_combined_array.shape[1])
+            palette = sns.color_palette("tab20", i_combined_array.shape[1] + (o_combined_array.shape[1] if o_combined_array is not None else 0))
             
-            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (simplified for extracted version)
-            i_list = [f"Feature_{i}" for i in range(i_combined_array.shape[1])]
+            color_plot = []
+            
+            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (EXACT as original)
+            if i_dat_inf is not None:
+                i_list = i_dat_inf.index.tolist()
+            else:
+                i_list = [f"Feature_{i}" for i in range(i_combined_array.shape[1])]
+            
+            # Add temporal features exactly as in original
+            if T is not None:
+                if T.Y.IMP == True:
+                    i_list.append("Y_sin")
+                    i_list.append("Y_cos")
+                if T.M.IMP == True:
+                    i_list.append("M_sin")
+                    i_list.append("M_cos")
+                if T.W.IMP == True:
+                    i_list.append("W_sin")
+                    i_list.append("W_cos")
+                if T.D.IMP == True:
+                    i_list.append("D_sin")
+                    i_list.append("D_cos")
+                if T.H.IMP == True:
+                    i_list.append("Holiday")
             
             # DICTIONARY FÜR VIOLINENPLOT
             df = pd.DataFrame(i_combined_array)
@@ -187,19 +218,24 @@ class Visualizer:
             logger.error(f"Error creating input distribution plot: {str(e)}")
             raise
     
-    def _create_output_distribution_plot(self, o_combined_array: np.ndarray, i_combined_array: np.ndarray = None) -> str:
+    def _create_output_distribution_plot(self, o_combined_array: np.ndarray, i_combined_array: np.ndarray = None, 
+                                        o_dat_inf: pd.DataFrame = None) -> str:
         """
         Create output data distribution violin plot
         Extracted from training_backend_test_2.py lines 1965-2026
+        EXACT COPY/PASTE from original code
         """
         try:
-            # Calculate color offset
+            # Calculate color offset exactly as in original
             n_ft_i = i_combined_array.shape[1] if i_combined_array is not None else 0
             total_features = n_ft_i + o_combined_array.shape[1]
             palette = sns.color_palette("tab20", total_features)
             
-            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (simplified for extracted version)
-            o_list = [f"Output_{i}" for i in range(o_combined_array.shape[1])]
+            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (EXACT as original)
+            if o_dat_inf is not None:
+                o_list = o_dat_inf.index.tolist()
+            else:
+                o_list = [f"Output_{i}" for i in range(o_combined_array.shape[1])]
             
             # DICTIONARY FÜR VIOLINENPLOT
             df = pd.DataFrame(o_combined_array)
