@@ -724,6 +724,19 @@ class RealVisualizationGenerator:
                     data_arrays['i_combined_array'] = combined_input
                     input_length = combined_input.shape[0]
                     logger.info(f"Combined input data: {input_length} rows")
+                    
+                    # Create i_dat_inf DataFrame with real feature names
+                    import pandas as pd
+                    feature_names = []
+                    for file_name, df in processed_data['input_data'].items():
+                        if len(df) > 0:
+                            numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+                            feature_names.extend(numeric_columns)
+                    
+                    if feature_names:
+                        i_dat_inf = pd.DataFrame(index=feature_names)
+                        data_arrays['i_dat_inf'] = i_dat_inf
+                        logger.info(f"Created i_dat_inf with {len(feature_names)} features: {feature_names[:5]}{'...' if len(feature_names) > 5 else ''}")
             
             if 'output_data' in processed_data:
                 # Convert output data to arrays for visualization
@@ -753,6 +766,19 @@ class RealVisualizationGenerator:
                     data_arrays['o_combined_array'] = combined_output
                     output_length = combined_output.shape[0]
                     logger.info(f"Combined output data: {output_length} rows")
+                    
+                    # Create o_dat_inf DataFrame with real feature names
+                    import pandas as pd
+                    output_feature_names = []
+                    for file_name, df in processed_data['output_data'].items():
+                        if len(df) > 0:
+                            numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+                            output_feature_names.extend(numeric_columns)
+                    
+                    if output_feature_names:
+                        o_dat_inf = pd.DataFrame(index=output_feature_names)
+                        data_arrays['o_dat_inf'] = o_dat_inf
+                        logger.info(f"Created o_dat_inf with {len(output_feature_names)} features: {output_feature_names[:5]}{'...' if len(output_feature_names) > 5 else ''}")
             
             # CRITICAL CHECK: Verify input and output data have same length
             if input_length is not None and output_length is not None:
@@ -784,6 +810,10 @@ class RealVisualizationGenerator:
                     }
                 else:
                     logger.info(f"✅ Data length validation passed: both input and output have {input_length:,} rows")
+            
+            # Add temporal configuration to data_arrays
+            from .temporal_config import T
+            data_arrays['T'] = T
             
             # Create violin plots using real extracted functions
             if data_arrays:
