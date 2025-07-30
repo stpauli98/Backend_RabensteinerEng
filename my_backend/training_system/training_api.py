@@ -84,6 +84,7 @@ def get_training_results(session_id: str):
                 'best_model': results.get('best_model', {}),
                 'summary': results.get('summary', {}),
                 'visualizations': visualizations.get('plots', {}),  # Include violin plots
+                'n_dat': results.get('n_dat', 0),  # Number of generated datasets
                 'created_at': results.get('created_at'),
                 'completed_at': results.get('completed_at'),
                 'message': 'Training results retrieved successfully'
@@ -730,6 +731,62 @@ def generate_datasets(session_id: str):
                     model_params=model_params if model_params else None,  # NEW: Pass model parameters
                     split_params=split_params if split_params else None   # NEW: Pass split parameters
                 )
+                
+                # 🛑 CHECK FOR DATA VALIDATION ERRORS - STOP PROCESSING IF ERROR DETECTED
+                if isinstance(result, dict) and result.get('status') == 'error':
+                    logger.warning(f"Dataset generation stopped due to data validation error: {result.get('error_message')}")
+                    logger.info(f"Error type: {result.get('error_type')} - Processing stopped, no results saved to database")
+                    
+                    # 🔔 NOTIFY FRONTEND VIA SOCKETIO ABOUT DATA INCOMPATIBILITY
+                    try:
+                        from flask import current_app
+                        if hasattr(current_app, 'extensions') and 'socketio' in current_app.extensions:
+                            socketio_instance = current_app.extensions['socketio']
+                            room = f"training_{session_id}"
+                            
+                            error_notification = {
+                                'session_id': session_id,
+                                'status': 'data_validation_error',
+                                'error_type': result.get('error_type'),
+                                'error_message': result.get('error_message'),
+                                'error_details': result.get('error_details', {}),
+                                'timestamp': datetime.now().isoformat(),
+                                'processing_stopped': True
+                            }
+                            
+                            socketio_instance.emit('dataset_generation_error', error_notification, room=room)
+                            logger.info(f"Sent data validation error notification to frontend via SocketIO room: {room}")
+                        else:
+                            logger.info("SocketIO not available, error notification not sent")
+                    except Exception as socketio_error:
+                        logger.error(f"Failed to send SocketIO error notification: {str(socketio_error)}")
+                    
+                    # 💾 SAVE ERROR STATUS TO DATABASE FOR FRONTEND STATUS POLLING
+                    try:
+                        supabase = get_supabase_client()
+                        uuid_session_id = create_or_get_session_uuid(session_id)
+                        if uuid_session_id:
+                            error_status = {
+                                'session_id': uuid_session_id,
+                                'status': 'data_validation_error',
+                                'error_message': result.get('error_message'),
+                                'error_details': result.get('error_details', {}),
+                                'completed_at': datetime.now().isoformat(),
+                                'summary': {
+                                    'error_type': result.get('error_type'),
+                                    'processing_stopped': True,
+                                    'input_length': result.get('error_details', {}).get('input_length'),
+                                    'output_length': result.get('error_details', {}).get('output_length'),
+                                    'difference': result.get('error_details', {}).get('difference')
+                                }
+                            }
+                            response = supabase.table('training_results').insert(error_status).execute()
+                            logger.info(f"Saved data validation error status to database for frontend polling")
+                    except Exception as db_error:
+                        logger.error(f"Failed to save error status to database: {str(db_error)}")
+                    
+                    # 🛑 STOP PROCESSING - Error status saved, processing terminated
+                    return
                 
                 logger.info(f"Dataset generation completed successfully for session {session_id}")
                 logger.info(f"Generated {result.get('dataset_count', 0)} datasets and {len(result.get('visualizations', {}))} visualizations")

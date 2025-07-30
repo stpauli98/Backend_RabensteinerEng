@@ -276,7 +276,8 @@ class RealDataProcessor:
                                         'time_steps_in': time_steps_in,
                                         'time_steps_out': time_steps_out,
                                         'input_features': X.shape[1],
-                                        'output_features': y.shape[1] if len(y.shape) > 1 else 1
+                                        'output_features': y.shape[1] if len(y.shape) > 1 else 1,
+                                        'n_dat': samples  # Number of generated datasets (equivalent to i_array_3D.shape[0])
                                     }
                                     
                                     logger.info(f"Created dataset {dataset_name}: X{X_reshaped.shape}, y{y_reshaped.shape}")
@@ -563,13 +564,14 @@ class RealResultsGenerator:
     def __init__(self):
         self.results_generator = ResultsGenerator()
     
-    def generate_results(self, training_results: Dict, session_data: Dict) -> Dict:
+    def generate_results(self, training_results: Dict, session_data: Dict, processed_data: Dict = None) -> Dict:
         """
         Generate evaluation results using real extracted functions
         
         Args:
             training_results: Results from model training
             session_data: Session configuration
+            processed_data: Optional processed data information
             
         Returns:
             Dict containing evaluation results
@@ -683,41 +685,105 @@ class RealVisualizationGenerator:
             processed_data: Processed data containing arrays
             
         Returns:
-            Dict containing base64-encoded visualizations
+            Dict containing base64-encoded visualizations or error info
         """
         try:
             visualizations = {}
             
             # Extract data arrays for violin plots
             data_arrays = {}
+            input_length = None
+            output_length = None
             
             # Create sample arrays for visualization (in real implementation, use actual processed data)
             if 'input_data' in processed_data:
                 # Convert input data to arrays for visualization
                 input_arrays = []
-                for df in processed_data['input_data'].values():
+                input_file_info = []
+                for file_name, df in processed_data['input_data'].items():
                     if len(df) > 0:
                         numeric_data = df.select_dtypes(include=[np.number]).values
                         if numeric_data.shape[1] > 0:
                             input_arrays.append(numeric_data)
+                            input_file_info.append((file_name, numeric_data.shape))
+                            logger.info(f"Input file '{file_name}': {numeric_data.shape[0]} rows, {numeric_data.shape[1]} columns")
                 
                 if input_arrays:
-                    # Combine arrays
-                    combined_input = np.concatenate(input_arrays, axis=1) if len(input_arrays) > 1 else input_arrays[0]
+                    # Check if all input arrays have the same number of rows before concatenating
+                    row_counts = [arr.shape[0] for arr in input_arrays]
+                    if len(set(row_counts)) > 1:
+                        # Different row counts - cannot concatenate, use the first/largest array
+                        max_rows_idx = row_counts.index(max(row_counts))
+                        combined_input = input_arrays[max_rows_idx]
+                        logger.warning(f"Input files have different row counts: {row_counts}. Using largest array from '{input_file_info[max_rows_idx][0]}'")
+                    else:
+                        # Same row counts - safe to concatenate
+                        combined_input = np.concatenate(input_arrays, axis=1) if len(input_arrays) > 1 else input_arrays[0]
+                        logger.info(f"Successfully concatenated {len(input_arrays)} input arrays with matching row counts")
+                    
                     data_arrays['i_combined_array'] = combined_input
+                    input_length = combined_input.shape[0]
+                    logger.info(f"Combined input data: {input_length} rows")
             
             if 'output_data' in processed_data:
                 # Convert output data to arrays for visualization
                 output_arrays = []
-                for df in processed_data['output_data'].values():
+                output_file_info = []
+                for file_name, df in processed_data['output_data'].items():
                     if len(df) > 0:
                         numeric_data = df.select_dtypes(include=[np.number]).values
                         if numeric_data.shape[1] > 0:
                             output_arrays.append(numeric_data)
+                            output_file_info.append((file_name, numeric_data.shape))
+                            logger.info(f"Output file '{file_name}': {numeric_data.shape[0]} rows, {numeric_data.shape[1]} columns")
                 
                 if output_arrays:
-                    combined_output = np.concatenate(output_arrays, axis=1) if len(output_arrays) > 1 else output_arrays[0]
+                    # Check if all output arrays have the same number of rows before concatenating
+                    row_counts = [arr.shape[0] for arr in output_arrays]
+                    if len(set(row_counts)) > 1:
+                        # Different row counts - cannot concatenate, use the first/largest array
+                        max_rows_idx = row_counts.index(max(row_counts))
+                        combined_output = output_arrays[max_rows_idx]
+                        logger.warning(f"Output files have different row counts: {row_counts}. Using largest array from '{output_file_info[max_rows_idx][0]}'")
+                    else:
+                        # Same row counts - safe to concatenate
+                        combined_output = np.concatenate(output_arrays, axis=1) if len(output_arrays) > 1 else output_arrays[0]
+                        logger.info(f"Successfully concatenated {len(output_arrays)} output arrays with matching row counts")
+                    
                     data_arrays['o_combined_array'] = combined_output
+                    output_length = combined_output.shape[0]
+                    logger.info(f"Combined output data: {output_length} rows")
+            
+            # CRITICAL CHECK: Verify input and output data have same length
+            if input_length is not None and output_length is not None:
+                if input_length != output_length:
+                    input_files_str = ', '.join(processed_data.get('input_data', {}).keys())
+                    output_files_str = ', '.join(processed_data.get('output_data', {}).keys())
+                    
+                    error_message = f"❌ Fajlovi nisu kompatibilni za violin plot generisanje!\n\n" \
+                                  f"📊 Input fajlovi ({input_files_str}): {input_length:,} redova\n" \
+                                  f"📊 Output fajlovi ({output_files_str}): {output_length:,} redova\n\n" \
+                                  f"⚠️  Za kreiranje vizualizacija, input i output fajlovi moraju imati ISTO BROJ redova.\n" \
+                                  f"Molimo uploadujte kompatibilne fajlove ili skratite veći fajl da odgovara manjem."
+                    
+                    logger.error(f"Data length mismatch for visualization: input={input_length:,}, output={output_length:,}")
+                    
+                    # Return error information instead of trying to create visualizations
+                    return {
+                        'error': True,
+                        'error_type': 'data_length_mismatch',
+                        'error_message': error_message,
+                        'error_details': {
+                            'input_length': input_length,
+                            'output_length': output_length,
+                            'input_files': list(processed_data.get('input_data', {}).keys()),
+                            'output_files': list(processed_data.get('output_data', {}).keys()),
+                            'difference': abs(input_length - output_length),
+                            'larger_dataset': 'input' if input_length > output_length else 'output'
+                        }
+                    }
+                else:
+                    logger.info(f"✅ Data length validation passed: both input and output have {input_length:,} rows")
             
             # Create violin plots using real extracted functions
             if data_arrays:
@@ -733,7 +799,15 @@ class RealVisualizationGenerator:
             
         except Exception as e:
             logger.error(f"Error creating visualizations: {str(e)}")
-            raise
+            # Return error information for frontend display
+            return {
+                'error': True,
+                'error_type': 'visualization_creation_error',
+                'error_message': f"Greška pri kreiranju vizualizacija: {str(e)}",
+                'error_details': {
+                    'original_error': str(e)
+                }
+            }
 
 
 # NEW: Dataset generation function (separated from training)
@@ -843,6 +917,21 @@ def run_dataset_generation_pipeline(session_id: str, supabase_client, socketio_i
                 processed_data
             )
             
+            # Check if visualization creation returned an error
+            if isinstance(visualizations, dict) and visualizations.get('error'):
+                logger.error(f"Visualization creation failed: {visualizations['error_message']}")
+                
+                # Return the error to frontend immediately
+                return {
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat(),
+                    'status': 'error',
+                    'error_type': visualizations['error_type'],
+                    'error_message': visualizations['error_message'],
+                    'error_details': visualizations['error_details'],
+                    'success': False
+                }            
+            
             logger.info(f"Generated {len(visualizations)} visualizations for session {session_id}")
             
         except Exception as e:
@@ -926,7 +1015,8 @@ def run_real_training_pipeline(session_id: str, supabase_client, socketio_instan
         results_generator = RealResultsGenerator()
         evaluation_results = results_generator.generate_results(
             training_results, 
-            processed_data['session_data']
+            processed_data['session_data'],
+            processed_data  # Pass processed_data to get n_dat info
         )
         
         # Step 4: Real visualizations
@@ -936,6 +1026,21 @@ def run_real_training_pipeline(session_id: str, supabase_client, socketio_instan
             evaluation_results, 
             processed_data
         )
+        
+        # Check if visualization creation returned an error
+        if isinstance(visualizations, dict) and visualizations.get('error'):
+            logger.error(f"Real training pipeline visualization creation failed: {visualizations['error_message']}")
+            
+            # Return the error to frontend immediately
+            return {
+                'session_id': session_id,
+                'timestamp': datetime.now().isoformat(),
+                'status': 'error',
+                'error_type': visualizations['error_type'],
+                'error_message': visualizations['error_message'],
+                'error_details': visualizations['error_details'],
+                'success': False
+            }
         
         # Step 5: Combine final results
         final_results = {
@@ -1278,7 +1383,8 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
         results_generator = RealResultsGenerator()
         evaluation_results = results_generator.generate_results(
             training_results, 
-            merged_config
+            merged_config,
+            processed_data  # Pass processed_data to get n_dat info
         )
         
         # Step 10: Create post-training visualizations
@@ -1288,6 +1394,21 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
             evaluation_results, 
             processed_data
         )
+        
+        # Check if visualization creation returned an error
+        if isinstance(visualizations, dict) and visualizations.get('error'):
+            logger.error(f"Post-training visualization creation failed: {visualizations['error_message']}")
+            
+            # Return the error to frontend immediately
+            return {
+                'session_id': session_id,
+                'timestamp': datetime.now().isoformat(),
+                'status': 'error',
+                'error_type': visualizations['error_type'],
+                'error_message': visualizations['error_message'],
+                'error_details': visualizations['error_details'],
+                'success': False
+            }
         
         # Step 11: Combine final results
         final_results = {
@@ -1571,7 +1692,8 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         results_generator = RealResultsGenerator()
         evaluation_results = results_generator.generate_results(
             training_results, 
-            phase4_data['session_data']
+            phase4_data['session_data'],
+            phase4_data  # Pass phase4_data to get n_dat info
         )
         
         # Generate visualizations including violin plots
@@ -1581,6 +1703,27 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
             evaluation_results, 
             phase4_data  # Contains processed input/output data
         )
+        
+        # Check if visualization creation returned an error
+        if isinstance(visualizations, dict) and visualizations.get('error'):
+            logger.error(f"Complete pipeline visualization creation failed: {visualizations['error_message']}")
+            
+            # Return error in results format expected by training_api.py
+            return {
+                'session_id': session_id,
+                'timestamp': datetime.now().isoformat(),
+                'status': 'error',
+                'error_type': visualizations['error_type'],
+                'error_message': visualizations['error_message'],
+                'error_details': visualizations['error_details'],
+                'success': False,
+                'phases': results.get('phases', {}),
+                'final_results': {
+                    'status': 'error',
+                    'error_type': visualizations['error_type'],
+                    'error_message': visualizations['error_message']
+                }
+            }
         
         logger.info(f"Generated {len(visualizations)} visualizations including violin plots")
         

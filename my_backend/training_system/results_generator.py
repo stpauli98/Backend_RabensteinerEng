@@ -119,13 +119,14 @@ class ResultsGenerator:
         self.results = {}
         self.evaluation_dataframes = {}
     
-    def generate_results(self, training_results: Dict, session_data: Dict) -> Dict:
+    def generate_results(self, training_results: Dict, session_data: Dict, processed_data: Dict = None) -> Dict:
         """
         Generate formatted results for frontend
         
         Args:
             training_results: Results from model training
             session_data: Session configuration data
+            processed_data: Processed data containing train_datasets with n_dat info
             
         Returns:
             Dict containing formatted results
@@ -143,11 +144,19 @@ class ResultsGenerator:
             # Generate training metadata
             training_metadata = self._generate_training_metadata(training_results, session_data)
             
+            # Calculate total n_dat from processed_data if available
+            total_n_dat = 0
+            if processed_data and 'train_datasets' in processed_data:
+                for dataset_name, dataset_info in processed_data['train_datasets'].items():
+                    if 'n_dat' in dataset_info:
+                        total_n_dat += dataset_info['n_dat']
+            
             results = {
                 'evaluation_metrics': evaluation_results,
                 'evaluation_dataframes': evaluation_dataframes,
                 'model_comparison': model_comparison,
                 'training_metadata': training_metadata,
+                'n_dat': total_n_dat,  # Total number of generated datasets (equivalent to i_array_3D.shape[0])
                 'status': 'completed',
                 'timestamp': pd.Timestamp.now().isoformat()
             }

@@ -98,18 +98,24 @@ def health():
     return jsonify(status="ok"), 200
 
 @socketio.on('connect')
-def handle_connect():
+def handle_connect(sid=None):
     try:
-        logger.info("Client connected")
+        if sid:
+            logger.info(f"Client {sid} connected")
+        else:
+            logger.info("Client connected")
     except Exception as e:
         logger.error(f"Error in connect handler: {str(e)}")
 
 @socketio.on('disconnect')
-def handle_disconnect():
+def handle_disconnect(sid=None):
     try:
-        logger.info("Client disconnected")
+        if sid:
+            logger.info(f"Client {sid} disconnected")
+        else:
+            logger.info("Client disconnected")
     except Exception as e:
-        logger.error(f"Error in disconnect handler: {str(e)}")
+        logger.error(f"SocketIO error: {str(e)}")
 
 # Enhanced SocketIO event handlers for training system
 @socketio.on('join_training_session')
@@ -226,6 +232,56 @@ def handle_join(data):
             socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
     except Exception as e:
         logger.error(f"Error in join handler: {str(e)}")
+
+@socketio.on('request_dataset_status')
+def handle_request_dataset_status(data):
+    """
+    Handle requests for dataset generation status updates
+    """
+    try:
+        session_id = data.get('session_id')
+        if session_id:
+            logger.info(f"Frontend requesting dataset status for session: {session_id}")
+            
+            # Get dataset status from database
+            from training_system.supabase_client import get_supabase_client
+            from training_system.training_api import create_or_get_session_uuid
+            
+            supabase = get_supabase_client()
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            
+            if uuid_session_id:
+                # Get latest training result
+                results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
+                
+                if results.data:
+                    dataset_status = results.data[0]
+                    from flask_socketio import emit
+                    emit('dataset_status_update', {
+                        'session_id': session_id,
+                        'status': dataset_status.get('status', 'unknown'),
+                        'message': dataset_status.get('error_message') if dataset_status.get('status') == 'data_validation_error' else f"Current status: {dataset_status.get('status', 'unknown')}",
+                        'error_details': dataset_status.get('error_details') if dataset_status.get('status') == 'data_validation_error' else None,
+                        'last_updated': dataset_status.get('updated_at', dataset_status.get('created_at')),
+                        'processing_stopped': dataset_status.get('summary', {}).get('processing_stopped', False) if dataset_status.get('summary') else False
+                    })
+                else:
+                    emit('dataset_status_update', {
+                        'session_id': session_id,
+                        'status': 'not_found',
+                        'message': 'No dataset generation data found for this session'
+                    })
+            else:
+                emit('dataset_status_error', {
+                    'session_id': session_id,
+                    'message': 'Session not found'
+                })
+    except Exception as e:
+        logger.error(f"Error getting dataset status: {str(e)}")
+        from flask_socketio import emit
+        emit('dataset_status_error', {
+            'message': f'Failed to get dataset status: {str(e)}'
+        })
 
 # Add global SocketIO error handler
 @socketio.on_error_default
