@@ -191,24 +191,95 @@ class T:
 
 class MDL:
     """
-    Model configuration class - NO DEFAULT VALUES
-    All parameters must be provided by user or validation will fail
+    Model configuration class - Dynamic configuration from user input
+    Receives parameters from frontend ModelConfiguration.tsx component
     """
     
-    def __init__(self, mode: str = None):
-        # Only set MODE if provided, everything else is None
-        if mode:
-            self.MODE = mode
+    def __init__(self, user_config: dict = None):
+        """
+        Initialize model configuration from user input
         
-        # Initialize all attributes as None - user MUST provide values
-        self.LAY = None
-        self.N = None
-        self.EP = None
-        self.ACTF = None
-        self.K = None
-        self.KERNEL = None
-        self.C = None
-        self.EPSILON = None
+        Args:
+            user_config: Dictionary containing user-selected model parameters
+                        from frontend ModelConfiguration component
+        """
+        if user_config:
+            # Use user-provided configuration
+            self.MODE = user_config.get('MODE', 'LIN')
+            self.LAY = user_config.get('LAY')
+            self.N = user_config.get('N') 
+            self.EP = user_config.get('EP')
+            self.ACTF = user_config.get('ACTF')
+            self.K = user_config.get('K')  # CNN kernel size
+            self.KERNEL = user_config.get('KERNEL')  # SVR kernel type
+            self.C = user_config.get('C')  # SVR C parameter
+            self.EPSILON = user_config.get('EPSILON')  # SVR epsilon
+        else:
+            # Default fallback configuration (for backwards compatibility)
+            self.MODE = "LIN"
+            self.LAY = None
+            self.N = None
+            self.EP = None
+            self.ACTF = None
+            self.K = None
+            self.KERNEL = None
+            self.C = None
+            self.EPSILON = None
+    
+    def validate_config(self) -> bool:
+        """
+        Validate that all required parameters are provided for the selected model
+        Returns True if valid, False otherwise
+        """
+        if self.MODE in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
+            # Neural network models require LAY, N, EP, ACTF
+            required = [self.LAY, self.N, self.EP, self.ACTF]
+            if self.MODE == 'CNN':
+                required.append(self.K)  # CNN also needs kernel size
+            return all(param is not None and param != '' for param in required)
+        
+        elif self.MODE in ['SVR_dir', 'SVR_MIMO']:
+            # SVR models require KERNEL, C, EPSILON
+            required = [self.KERNEL, self.C, self.EPSILON]
+            return all(param is not None and param != '' for param in required)
+        
+        elif self.MODE == 'LIN':
+            # Linear model has minimal requirements
+            return True
+        
+        return False
+    
+    def to_dict(self) -> dict:
+        """Convert configuration to dictionary format"""
+        return {
+            'MODE': self.MODE,
+            'LAY': self.LAY,
+            'N': self.N,
+            'EP': self.EP,
+            'ACTF': self.ACTF,
+            'K': self.K,
+            'KERNEL': self.KERNEL,
+            'C': self.C,
+            'EPSILON': self.EPSILON
+        }
+    
+    @classmethod
+    def get_default_for_mode(cls, mode: str) -> 'MDL':
+        """
+        Get default configuration for a specific model type
+        Used as fallback when user doesn't provide complete config
+        """
+        defaults = {
+            'Dense': {'MODE': mode, 'LAY': 3, 'N': 512, 'EP': 20, 'ACTF': 'ReLU'},
+            'CNN': {'MODE': mode, 'LAY': 3, 'N': 512, 'K': 3, 'EP': 20, 'ACTF': 'ReLU'},
+            'LSTM': {'MODE': mode, 'LAY': 3, 'N': 512, 'EP': 20, 'ACTF': 'ReLU'},
+            'AR LSTM': {'MODE': mode, 'LAY': 3, 'N': 512, 'EP': 20, 'ACTF': 'ReLU'},
+            'SVR_dir': {'MODE': mode, 'KERNEL': 'poly', 'C': 1, 'EPSILON': 0.1},
+            'SVR_MIMO': {'MODE': mode, 'KERNEL': 'poly', 'C': 1, 'EPSILON': 0.1},
+            'LIN': {'MODE': mode}
+        }
+        
+        return cls(defaults.get(mode, {'MODE': 'LIN'}))
 
 
 # INFORMATIONEN ZU DEN FEIERTAGEN (DIE KEINE SONNTAGE SIND)

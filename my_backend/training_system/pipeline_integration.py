@@ -811,9 +811,26 @@ class RealVisualizationGenerator:
                 else:
                     logger.info(f"✅ Data length validation passed: both input and output have {input_length:,} rows")
             
-            # Add temporal configuration to data_arrays
+            # Add temporal configuration to data_arrays - load from database
             from .temporal_config import T
-            data_arrays['T'] = T
+            
+            # Try to load temporal configuration from database for this session
+            try:
+                session_id = request_data.get('session_id', 'default')
+                temporal_config = T.load_from_database(self.supabase_client, session_id)
+                
+                if not temporal_config.validate_config():
+                    logger.warning("Temporal configuration validation failed, using defaults")
+                    temporal_config = T()  # Use default config
+                    
+                data_arrays['T'] = temporal_config
+                logger.info(f"Loaded temporal configuration for session {session_id}")
+                
+            except Exception as e:
+                logger.error(f"Error loading temporal configuration: {e}")
+                # Fallback to default temporal configuration
+                data_arrays['T'] = T()
+                logger.info("Using default temporal configuration as fallback")
             
             # Create violin plots using real extracted functions
             if data_arrays:
