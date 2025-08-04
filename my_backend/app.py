@@ -8,7 +8,7 @@ from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from firstProcessing import bp as first_processing_bp
-from load_row_data import bp as load_row_data_bp
+from RowData import rowdata_blueprint  # Novi RowData modul
 from data_processing_main import bp as data_processing_bp
 from training import bp as training_bp
 from adjustmentsOfData import bp as adjustmentsOfData_bp
@@ -68,7 +68,7 @@ def handle_preflight():
 
 # Register blueprints with correct prefixes
 app.register_blueprint(data_processing_bp)
-app.register_blueprint(load_row_data_bp, url_prefix='/api/loadRowData')
+app.register_blueprint(rowdata_blueprint, url_prefix='/api/loadRowData')  # Koristi novi RowData modul
 app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
 app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
 app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
@@ -118,6 +118,20 @@ def handle_disconnect(sid=None):
             logger.info("Client disconnected")
     except Exception as e:
         logger.error(f"SocketIO error: {str(e)}")
+
+# RowData Socket.IO event handlers
+@socketio.on('join_upload_room')
+def handle_join_upload_room(data):
+    """Client joins a room for upload progress tracking"""
+    try:
+        upload_id = data.get('uploadId')
+        if upload_id:
+            from flask_socketio import join_room, emit
+            join_room(upload_id)
+            logger.info(f"Client joined upload room: {upload_id}")
+            emit('joined_room', {'uploadId': upload_id}, room=upload_id)
+    except Exception as e:
+        logger.error(f"Error in join_upload_room: {str(e)}")
 
 # Enhanced SocketIO event handlers for training system
 @socketio.on('join_training_session')
