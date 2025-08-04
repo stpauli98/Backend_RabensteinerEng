@@ -97,15 +97,7 @@ def internal_error(error):
 def health():
     return jsonify(status="ok"), 200
 
-# Debug endpoint
-@app.route('/')
-def index():
-    import os
-    return jsonify({
-        "status": "running",
-        "port": os.environ.get('PORT', 'not set'),
-        "supabase_configured": bool(os.environ.get('SUPABASE_URL'))
-    }), 200
+# Debug endpoint removed - already exists below
 
 @socketio.on('connect')
 def handle_connect(sid=None):
