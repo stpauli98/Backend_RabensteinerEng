@@ -143,10 +143,10 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     
     # Reshape data to 4D format for Conv2D (reference approach)
     # From (samples, timesteps, features) to (samples, timesteps, features, 1)
-    train_x_4d = np.expand_dims(train_x, axis=-1)
-    val_x_4d = np.expand_dims(val_x, axis=-1)
+    train_x = train_x.reshape(train_x.shape[0], train_x.shape[1], train_x.shape[2], 1)
+    val_x = val_x.reshape(val_x.shape[0], val_x.shape[1], val_x.shape[2], 1)
     
-    logger.info(f"CNN: Reshaped data from {train_x.shape} to {train_x_4d.shape} for Conv2D")
+    logger.info(f"CNN: Reshaped data to 4D for Conv2D")
     
     # MODELLDEFINITION ########################################################
     
@@ -158,23 +158,27 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
         if i == 0:
             # Erste Schicht benötigt input_shape
             model.add(tf.keras.layers.Conv2D(filters = MDL.N,
-                                           kernel_size = (MDL.K, 1),  # Kernel for time dimension only
+                                           kernel_size = MDL.K,
                                            padding = 'same',  # CRITICAL: padding='same' from reference
                                            activation = MDL.ACTF,
-                                           input_shape = (train_x_4d.shape[1], train_x_4d.shape[2], train_x_4d.shape[3])))
+                                           input_shape = train_x.shape[1:]))
         else:
             model.add(tf.keras.layers.Conv2D(filters = MDL.N,
-                                           kernel_size = (MDL.K, 1),
+                                           kernel_size = MDL.K,
                                            padding = 'same',  # CRITICAL: padding='same' from reference
                                            activation = MDL.ACTF))
     
-    # Daten für Dense-Layer vorbereiten
-    model.add(tf.keras.layers.Flatten())
+    # Output-Layer: Convolution mit 1 Filter (oder Anzahl Kanäle von train_y)
+    # und linearer Aktivierung, damit die Ausgabe dieselbe Form wie train_y hat.
+    # Falls train_y z.B. (Batch, H, W, C), dann Filteranzahl = C.
     
-    # Output-Schicht (same as reference)
-    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
-                                  kernel_initializer = tf.initializers.zeros))
-    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    output_channels = train_y.shape[-1] if len(train_y.shape) == 4 else 1
+    
+    model.add(tf.keras.layers.Conv2D(filters            = output_channels,
+                                     kernel_size        = 1,
+                                     padding            = 'same',
+                                     activation         = 'linear',
+                                     kernel_initializer = tf.initializers.zeros))
     
     # Early Stopping (keep existing)
     earlystopping = tf.keras.callbacks.\
@@ -194,12 +198,12 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     print("Modell wird trainiert.")
     
     model.fit(
-        x               = train_x_4d,  # Use 4D reshaped data
+        x               = train_x,
         y               = train_y,
         epochs          = MDL.EP,      # Using forced 20 epochs
         verbose         = 1,
         callbacks       = [earlystopping],
-        validation_data = (val_x_4d, val_y)  # Use 4D reshaped validation data
+        validation_data = (val_x, val_y)
         )
          
     print("Modell wurde trainiert.")
@@ -225,34 +229,26 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
     # Modellinitialisierung
     model = tf.keras.Sequential()
     
-    # LSTM-Layer hinzufügen
     for i in range(MDL.LAY):
+        
+        # Alle LSTM-Schichten mit return_sequences = True, um Sequenzen zu erhalten
+                
         if i == 0:
-            # Erste Schicht benötigt input_shape
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = True))
+            model.add(tf.keras.layers.LSTM(units            = MDL.N,
+                                           activation       = MDL.ACTF,
+                                           return_sequences = True,
+                                           input_shape      = train_x.shape[1:]))
         else:
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             return_sequences = True))
+            model.add(tf.keras.layers.LSTM(units            = MDL.N,
+                                           activation       = MDL.ACTF,
+                                           return_sequences = True))
     
-    # Output-Schicht
-    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
-                                  kernel_initializer = tf.initializers.zeros))
-    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    # Dense Layer für jedes TimeStep
+    output_units = train_y.shape[-1]
+    model.add(tf.keras.layers.TimeDistributed(
+        tf.keras.layers.Dense(output_units,
+                              kernel_initializer = tf.initializers.zeros)
+    ))
     
     # Early Stopping
     earlystopping = tf.keras.callbacks.\
@@ -288,6 +284,7 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
 def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
     """
     Funktion trainiert und validiert ein Autoregressive LSTM
+    Updated to match reference implementation with TimeDistributed output
     """
     
     if not TENSORFLOW_AVAILABLE:
@@ -298,47 +295,39 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
     # Modellinitialisierung
     model = tf.keras.Sequential()
     
-    # LSTM-Layer hinzufügen (ähnlich wie LSTM aber mit anderem Output)
+    # LSTM-Layer hinzufügen - ALLE mit return_sequences = True (wie in Referenz)
     for i in range(MDL.LAY):
         if i == 0:
             # Erste Schicht benötigt input_shape
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = True))
+            model.add(tf.keras.layers.LSTM(units            = MDL.N,
+                                           activation       = MDL.ACTF,
+                                           return_sequences = True,
+                                           input_shape      = train_x.shape[1:]))
         else:
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
-                                             return_sequences = True))
+            model.add(tf.keras.layers.LSTM(units            = MDL.N,
+                                           activation       = MDL.ACTF,
+                                           return_sequences = True))
     
-    # Output-Schicht für Autoregressive
-    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
-                                  kernel_initializer = tf.initializers.zeros))
-    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    # TimeDistributed Dense Layer für Vorhersage pro Zeitschritt (wie in Referenz)
+    output_units = train_y.shape[-1] if len(train_y.shape) > 2 else 1
+    model.add(tf.keras.layers.TimeDistributed(
+        tf.keras.layers.Dense(output_units,
+                              kernel_initializer = tf.initializers.zeros)
+    ))
     
     # Early Stopping
-    earlystopping = tf.keras.callbacks.\
-        EarlyStopping(monitor  = "val_loss", 
-        mode                   = "min", 
-        patience               = 2, 
-        restore_best_weights   = True)
+    earlystopping = tf.keras.callbacks.EarlyStopping(
+        monitor                 = "val_loss",
+        mode                    = "min",
+        patience                = 2,
+        restore_best_weights    = True)
 
     # Konfiguration des Modells für das Training    
     model.compile(
-        optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
-        loss = tf.keras.losses.MeanSquaredError(),
-        metrics = [tf.keras.metrics.RootMeanSquaredError()])
+        optimizer   = tf.keras.optimizers.Adam(learning_rate = 0.001),
+        loss        = tf.keras.losses.MeanSquaredError(),
+        metrics     = [tf.keras.metrics.RootMeanSquaredError()]
+    )
     
     # TRAINIEREN ##############################################################
     
@@ -351,7 +340,7 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
         verbose         = 1,
         callbacks       = [earlystopping],
         validation_data = (val_x, val_y)
-        )
+    )
          
     print("Modell wurde trainiert.")
             
@@ -360,16 +349,105 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
 
 def train_svr_dir(train_x, train_y, MDL):
     """
-    Funktion trainiert SVR Direktmodell
+    Funktion trainiert ein SVR-Modell anhand der 
+    eingegebenen Trainingsdaten (train_x, train_y).
     
-    Extracted from training_backend_test_2.py lines 458-492
+    train_x...Trainingsdaten (Eingabedaten) [n_samples, n_timesteps, n_features_in]
+    train_y...Trainingsdaten (Ausgabedaten) [n_samples, n_timesteps, n_features_out]
+    MDL.......Informationen zum Modell
+    """
+    
+    # MODELLDEFINITION ########################################################
+    
+    n_samples, n_timesteps, n_features = train_x.shape
+    X = train_x.reshape(n_samples * n_timesteps, n_features)
+    
+    y = []
+    for i in range(n_features):
+        y.append(train_y[:, :, i].reshape(-1))
+
+    # TRAINIEREN ##############################################################
+
+    print("Modell wird trainiert.")
+    
+    model = []
+    for i in range(n_features):
+        model.append(make_pipeline(StandardScaler(), 
+                                   SVR(kernel  = MDL.KERNEL,
+                                       C       = MDL.C, 
+                                       epsilon = MDL.EPSILON)))
+        model[-1].fit(X, y[i])
+
+    print("Modell wurde trainiert.")  
+    
+    return model
+
+
+def train_svr_mimo(train_x, train_y, MDL):
+    """
+    Funktion trainiert ein SVR-MIMO-Modell anhand der
+    eingegebenen Trainingsdaten (train_x, train_y).
+    
+    train_x...Trainingsdaten (Eingabedaten) [n_samples, n_timesteps, n_features_in]
+    train_y...Trainingsdaten (Ausgabedaten) [n_samples, n_timesteps, n_features_out]
+    MDL.......Informationen zum Modell
+    """
+
+    # MODELLDEFINITION ########################################################
+
+    n_samples, n_timesteps, n_features_in = train_x.shape
+    _, _, n_features_out = train_y.shape
+
+    # Eingabedaten 2D umformen: (n_samples * n_timesteps, n_features_in)
+    X = train_x.reshape(n_samples * n_timesteps, n_features_in)
+    
+    # TRAINIEREN ##############################################################
+
+    print("Modell wird trainiert.")
+
+    model = []
+    for i in range(n_features_out):
+        # Für jedes Ausgabefeature das passende Ziel erstellen
+        y_i = train_y[:, :, i].reshape(-1)
+
+        # Pipeline mit StandardScaler + SVR
+        svr = make_pipeline(StandardScaler(),
+                            SVR(kernel=MDL.KERNEL,
+                                C=MDL.C,
+                                epsilon=MDL.EPSILON))
+        svr.fit(X, y_i)
+        model.append(svr)
+
+    print("Modell wurde trainiert.")
+    return model
+
+
+def train_linear_model(train_x, train_y):
+    """
+    Funktion trainiert Linear Regression Modell
+    
+    Extracted from training_backend_test_2.py lines 531-551
+    IMPORTANT: Reference assumes same timesteps for X and y
     """
     
     # MODELLDEFINITION ########################################################
     
     # Daten umformen
-    n_samples, n_timesteps, n_features_in = train_x.shape
-    _, _, n_features_out = train_y.shape
+    n_samples, n_timesteps_x, n_features_in = train_x.shape
+    _, n_timesteps_y, n_features_out = train_y.shape
+    
+    # Handle case where input and output have different timesteps
+    # In reference, they're always equal, but user might set different values
+    if n_timesteps_x != n_timesteps_y:
+        logger.warning(f"Linear model: Different timesteps for X ({n_timesteps_x}) and y ({n_timesteps_y}). "
+                      f"Using minimum to ensure consistency.")
+        # Use the minimum timesteps to ensure consistency
+        min_timesteps = min(n_timesteps_x, n_timesteps_y)
+        train_x = train_x[:, :min_timesteps, :]
+        train_y = train_y[:, :min_timesteps, :]
+        n_timesteps = min_timesteps
+    else:
+        n_timesteps = n_timesteps_x
     
     X = train_x.reshape(n_samples * n_timesteps, n_features_in)
     
@@ -379,71 +457,6 @@ def train_svr_dir(train_x, train_y, MDL):
     models = []
     for i in range(n_features_out):
         y_i = train_y[:, :, i].reshape(-1)
-        
-        # SVR Modell erstellen
-        model = SVR(kernel = MDL.KERNEL, 
-                   C = MDL.C, 
-                   epsilon = MDL.EPSILON)
-        model.fit(X, y_i)
-        models.append(model)
-    print("Modell wurde trainiert.")
-    return models
-
-
-def train_svr_mimo(train_x, train_y, MDL):
-    """
-    Funktion trainiert SVR MIMO Modell
-    
-    Extracted from training_backend_test_2.py lines 493-530
-    """
-    
-    # MODELLDEFINITION ########################################################
-    
-    # Daten umformen für MIMO
-    n_samples, n_timesteps, n_features_in = train_x.shape
-    _, n_timesteps_out, n_features_out = train_y.shape
-    
-    X = train_x.reshape(n_samples, n_timesteps * n_features_in)
-    Y = train_y.reshape(n_samples, n_timesteps_out * n_features_out)
-    
-    # TRAINIEREN ##############################################################
-    
-    print("Modell wird trainiert.")
-    models = []
-    for i in range(Y.shape[1]):  # Für jeden Output
-        y_i = Y[:, i]
-        
-        # SVR Modell erstellen
-        model = SVR(kernel = MDL.KERNEL, 
-                   C = MDL.C, 
-                   epsilon = MDL.EPSILON)
-        model.fit(X, y_i)
-        models.append(model)
-    print("Modell wurde trainiert.")
-    return models
-
-
-def train_linear_model(trn_x, trn_y):
-    """
-    Funktion trainiert Linear Regression Modell
-    
-    Extracted from training_backend_test_2.py lines 531-551
-    """
-    
-    # MODELLDEFINITION ########################################################
-    
-    # Daten umformen
-    n_samples, n_timesteps, n_features_in = trn_x.shape
-    _, _, n_features_out = trn_y.shape
-    
-    X = trn_x.reshape(n_samples * n_timesteps, n_features_in)   # (390, 2)
-    
-    # TRAINIEREN ##############################################################
-    
-    print("Modell wird trainiert.")
-    models = []
-    for i in range(n_features_out):
-        y_i = trn_y[:, :, i].reshape(-1)
         model = LinearRegression()
         model.fit(X, y_i)
         models.append(model)
@@ -521,41 +534,97 @@ class ModelTrainer:
     def _split_data(self, X: np.ndarray, y: np.ndarray, training_split: dict = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Split data into training and testing sets using REQUIRED user-specified parameters
+        Matches reference implementation that uses array slicing for 3D data
         
         Args:
-            X: Input features
-            y: Target values
+            X: Input features (can be 3D: samples, timesteps, features)
+            y: Target values (can be 3D: samples, timesteps, features)
             training_split: Dictionary with user training split parameters (REQUIRED)
             
         Returns:
             Tuple of (X_train, X_test, y_train, y_test)
         """
         try:
-            from sklearn.model_selection import train_test_split
-            
             # Require user parameters - NO DEFAULTS
             if not training_split:
                 raise ValueError("Training split parameters are required but not provided")
             
-            # Validate required parameters
-            required_params = ['testPercentage', 'random_dat']
-            for param in required_params:
-                if param not in training_split:
-                    raise ValueError(f"Training split parameter '{param}' is required")
+            # Get total number of samples (first dimension)
+            n_samples = X.shape[0]
             
-            # Calculate test_size from user percentages
-            test_percentage = training_split['testPercentage']
-            if test_percentage <= 0 or test_percentage >= 100:
-                raise ValueError(f"testPercentage must be between 0 and 100, got {test_percentage}")
+            # Get split parameters from user - matching reference implementation
+            # Reference uses n_train, n_val, n_test directly
+            if 'n_train' in training_split and 'n_val' in training_split and 'n_test' in training_split:
+                # Direct sample counts like reference implementation
+                n_train = training_split['n_train']
+                n_val = training_split['n_val'] 
+                n_test = training_split['n_test']
+                
+                # Validate counts
+                total_specified = n_train + n_val + n_test
+                if total_specified > n_samples:
+                    logger.warning(f"Specified splits ({total_specified}) exceed available samples ({n_samples}). Adjusting proportionally.")
+                    # Scale down proportionally
+                    scale_factor = n_samples / total_specified
+                    n_train = int(n_train * scale_factor)
+                    n_val = int(n_val * scale_factor)
+                    n_test = n_samples - n_train - n_val  # Ensure we use all samples
+                
+            else:
+                # Fall back to percentage-based splitting
+                train_percentage = training_split.get('trainPercentage', 70)
+                val_percentage = training_split.get('valPercentage', 15)
+                test_percentage = training_split.get('testPercentage', 15)
+                
+                # Validate percentages
+                total_percentage = train_percentage + val_percentage + test_percentage
+                if total_percentage != 100 and total_percentage > 0:
+                    logger.warning(f"Percentages don't sum to 100% ({total_percentage}%). Normalizing.")
+                    train_percentage = (train_percentage / total_percentage) * 100
+                    val_percentage = (val_percentage / total_percentage) * 100
+                    test_percentage = (test_percentage / total_percentage) * 100
+                
+                # Calculate sample counts
+                n_train = int(n_samples * train_percentage / 100)
+                n_val = int(n_samples * val_percentage / 100)
+                n_test = n_samples - n_train - n_val  # Ensure we use all samples
             
-            test_size = test_percentage / 100.0
+            # Handle randomization like reference implementation
+            random_dat = training_split.get('random_dat', False)
             
-            # Use randomization setting from user
-            random_state = None if training_split['random_dat'] else 42
+            if random_dat:
+                # Shuffle indices like reference implementation (line 2162-2166)
+                indices = np.random.permutation(n_samples)
+                X = X[indices]
+                y = y[indices]
+                logger.info("Data shuffled randomly as per user request")
             
-            logger.info(f"Using user split parameters: test_size={test_size}, random_state={random_state}")
+            # Split using array slicing like reference implementation (lines 2218-2224)
+            # This preserves 3D structure
+            X_train = X[:n_train]
+            X_val = X[n_train:(n_train + n_val)]
+            X_test = X[(n_train + n_val):]
             
-            return train_test_split(X, y, test_size=test_size, random_state=random_state)
+            y_train = y[:n_train]
+            y_val = y[n_train:(n_train + n_val)]
+            y_test = y[(n_train + n_val):]
+            
+            logger.info(f"Data split - Train: {n_train}, Val: {n_val}, Test: {n_test} samples")
+            logger.info(f"Shapes - X_train: {X_train.shape}, X_val: {X_val.shape}, X_test: {X_test.shape}")
+            
+            # For models that don't use validation data (SVR, Linear), combine train and val
+            # Reference implementation passes val data to neural networks but not to SVR/Linear
+            if self.config.MODE in ["SVR_dir", "SVR_MIMO", "LIN"]:
+                # Combine train and validation for these models
+                X_train_combined = np.concatenate([X_train, X_val], axis=0)
+                y_train_combined = np.concatenate([y_train, y_val], axis=0)
+                logger.info(f"Combined train+val for {self.config.MODE}: {X_train_combined.shape}")
+                return X_train_combined, X_test, y_train_combined, y_test
+            else:
+                # Return validation data separately for neural networks
+                # Note: Our interface expects (train, test, train, test) not (train, val, test)
+                # So we'll return validation as "test" for now
+                return X_train, X_val, y_train, y_val
             
         except Exception as e:
             logger.error(f"Error splitting data: {str(e)}")

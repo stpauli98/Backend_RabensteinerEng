@@ -421,6 +421,7 @@ class DataProcessor:
                          time_steps_in: int, time_steps_out: int) -> Tuple[np.ndarray, np.ndarray]:
         """
         Create sequences for time series training
+        IMPORTANT: Skips samples containing NaN values (matching reference implementation behavior)
         
         Args:
             input_df: Input DataFrame
@@ -433,18 +434,37 @@ class DataProcessor:
         """
         try:
             # Sequence creation logic implemented for ML model training
-            # This is placeholder implementation
+            # Matches reference implementation NaN handling
             
             # Get numerical columns only
             input_numeric = input_df.select_dtypes(include=[np.number]).values
             output_numeric = output_df.select_dtypes(include=[np.number]).values
             
             X, y = [], []
+            skipped_samples = 0
             
-            # Create sequences
+            # Create sequences - skip samples with NaN (matching reference implementation)
             for i in range(len(input_numeric) - time_steps_in - time_steps_out + 1):
-                X.append(input_numeric[i:(i + time_steps_in)])
-                y.append(output_numeric[i + time_steps_in:(i + time_steps_in + time_steps_out)])
+                # Extract the candidate sequences
+                X_sample = input_numeric[i:(i + time_steps_in)]
+                y_sample = output_numeric[i + time_steps_in:(i + time_steps_in + time_steps_out)]
+                
+                # Check for NaN values in either X or y (matching reference at line 1332)
+                # Reference skips entire sample if any NaN is found
+                if np.isnan(X_sample).any() or np.isnan(y_sample).any():
+                    skipped_samples += 1
+                    continue  # Skip this sample entirely
+                
+                # Only append if no NaN values
+                X.append(X_sample)
+                y.append(y_sample)
+            
+            if skipped_samples > 0:
+                logger.warning(f"Skipped {skipped_samples} samples containing NaN values (matching reference implementation)")
+            
+            if len(X) == 0:
+                logger.error("No valid samples after removing NaN values")
+                raise ValueError("No valid training data after removing NaN values")
             
             return np.array(X), np.array(y)
             

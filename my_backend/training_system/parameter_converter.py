@@ -175,70 +175,113 @@ class FrontendParameterConverter:
         
         Args:
             frontend_params: Frontend parameters from TrainingApiService.ts
-            Expected structure:
+            Expected structure (matching MDL class):
             {
-                "dense_layers": [64, 32, 16],
-                "dense_activation": "relu", 
-                "dense_epochs": 100,
-                "dense_batch_size": 32,
-                "dense_optimizer": "adam",
-                "dense_learning_rate": 0.001,
-                "cnn_filters": [32, 64],
-                "cnn_kernel_size": [3, 3],
-                "cnn_activation": "relu",
-                "cnn_epochs": 100,
-                "lstm_units": [50, 50],
-                "lstm_dropout": 0.2,
-                "lstm_epochs": 100,
-                "svr_kernel": "rbf",
-                "svr_C": 1.0,
-                "svr_epsilon": 0.1,
-                "linear_fit_intercept": true
+                "MODE": "Dense",     # Model type
+                "LAY": 3,           # Number of layers
+                "N": 512,           # Neurons/filters per layer
+                "EP": 20,           # Epochs
+                "ACTF": "ReLU",     # Activation function
+                "K": 3,             # Kernel size (CNN only)
+                "KERNEL": "rbf",    # Kernel type (SVR only)
+                "C": 1.0,           # C parameter (SVR only)
+                "EPSILON": 0.1      # Epsilon (SVR only)
             }
             
         Returns:
             Dict with MDL structure exactly matching reference implementation
         """
         try:
-            self.logger.info(f"Converting frontend parameters: {list(frontend_params.keys())}")
+            self.logger.info(f"Converting frontend parameters: {frontend_params}")
             
-            mdl_config = {}
+            # Get model type from frontend
+            mode = frontend_params.get('MODE', 'LIN')
             
-            # Convert Dense parameters
-            if self._has_dense_params(frontend_params):
-                mdl_config['DENSE'] = self._convert_dense_params(frontend_params)
-                self.logger.info("Converted Dense Neural Network parameters")
+            # Create MDL config based on model type
+            mdl_config = {
+                'MODE': mode
+            }
             
-            # Convert CNN parameters  
-            if self._has_cnn_params(frontend_params):
-                mdl_config['CNN'] = self._convert_cnn_params(frontend_params)
-                self.logger.info("Converted CNN parameters")
+            # Convert parameters based on model type
+            if mode == 'Dense':
+                mdl_config['DENSE'] = ReferenceMDLStructure.DENSE(
+                    L1_N=frontend_params.get('N', 64),
+                    L1_A=self.activation_mapping.get(frontend_params.get('ACTF', 'ReLU'), 'relu'),
+                    L2_N=int(frontend_params.get('N', 64) / 2) if frontend_params.get('LAY', 2) > 1 else frontend_params.get('N', 64),
+                    L2_A=self.activation_mapping.get(frontend_params.get('ACTF', 'ReLU'), 'relu'),
+                    L3_N=int(frontend_params.get('N', 64) / 4) if frontend_params.get('LAY', 2) > 2 else frontend_params.get('N', 64),
+                    L3_A=self.activation_mapping.get(frontend_params.get('ACTF', 'ReLU'), 'relu'),
+                    EP=frontend_params.get('EP', 100),
+                    BS=32,  # Still hardcoded - should come from frontend
+                    VAL_S=0.2,  # Still hardcoded - should come from frontend
+                    OPT='adam',  # Still hardcoded - should come from frontend
+                    LOSS='mse',  # Still hardcoded - should come from frontend
+                    LR=0.001  # Still hardcoded - should come from frontend
+                )
+                self.logger.info(f"Converted Dense parameters: LAY={frontend_params.get('LAY')}, N={frontend_params.get('N')}, EP={frontend_params.get('EP')}, ACTF={frontend_params.get('ACTF')}")
             
-            # Convert LSTM parameters
-            if self._has_lstm_params(frontend_params):
-                mdl_config['LSTM'] = self._convert_lstm_params(frontend_params)
-                self.logger.info("Converted LSTM parameters")
+            elif mode == 'CNN':
+                mdl_config['CNN'] = ReferenceMDLStructure.CNN(
+                    L1_F=frontend_params.get('N', 32),
+                    L1_K=frontend_params.get('K', 3),
+                    L1_A=self.activation_mapping.get(frontend_params.get('ACTF', 'ReLU'), 'relu'),
+                    L2_F=frontend_params.get('N', 32) * 2 if frontend_params.get('LAY', 2) > 1 else frontend_params.get('N', 32),
+                    L2_K=frontend_params.get('K', 3),
+                    L2_A=self.activation_mapping.get(frontend_params.get('ACTF', 'ReLU'), 'relu'),
+                    L3_N=50,  # Still hardcoded
+                    L3_A=self.activation_mapping.get(frontend_params.get('ACTF', 'ReLU'), 'relu'),
+                    EP=frontend_params.get('EP', 100),
+                    BS=32,  # Still hardcoded
+                    VAL_S=0.2,  # Still hardcoded
+                    OPT='adam',  # Still hardcoded
+                    LOSS='mse',  # Still hardcoded
+                    LR=0.001  # Still hardcoded
+                )
+                self.logger.info(f"Converted CNN parameters: LAY={frontend_params.get('LAY')}, N={frontend_params.get('N')}, K={frontend_params.get('K')}, EP={frontend_params.get('EP')}")
             
-            # Convert AR-LSTM parameters (if different from LSTM)
-            if self._has_ar_lstm_params(frontend_params):
-                mdl_config['AR_LSTM'] = self._convert_ar_lstm_params(frontend_params)
-                self.logger.info("Converted AR-LSTM parameters")
+            elif mode in ['LSTM', 'AR LSTM']:
+                mdl_config['LSTM'] = ReferenceMDLStructure.LSTM(
+                    L1_N=frontend_params.get('N', 50),
+                    L1_D=0.2,  # Still hardcoded
+                    L1_RS=True,
+                    L2_N=frontend_params.get('N', 50),
+                    L2_D=0.2,  # Still hardcoded
+                    L2_RS=False,
+                    L3_N=25,  # Still hardcoded
+                    L3_A=self.activation_mapping.get(frontend_params.get('ACTF', 'ReLU'), 'relu'),
+                    EP=frontend_params.get('EP', 100),
+                    BS=32,  # Still hardcoded
+                    VAL_S=0.2,  # Still hardcoded
+                    OPT='adam',  # Still hardcoded
+                    LOSS='mse',  # Still hardcoded
+                    LR=0.001  # Still hardcoded
+                )
+                self.logger.info(f"Converted LSTM parameters: LAY={frontend_params.get('LAY')}, N={frontend_params.get('N')}, EP={frontend_params.get('EP')}")
             
-            # Convert SVR parameters
-            if self._has_svr_params(frontend_params):
-                mdl_config['SVR'] = self._convert_svr_params(frontend_params)
-                self.logger.info("Converted SVR parameters")
+            elif mode in ['SVR_dir', 'SVR_MIMO']:
+                mdl_config['SVR'] = ReferenceMDLStructure.SVR(
+                    KERNEL=self.kernel_mapping.get(frontend_params.get('KERNEL', 'rbf'), 'rbf'),
+                    C=frontend_params.get('C', 1.0),
+                    EPSILON=frontend_params.get('EPSILON', 0.1),
+                    GAMMA='scale',  # Still hardcoded
+                    DEGREE=3,  # Still hardcoded
+                    COEF0=0.0,  # Still hardcoded
+                    SHRINKING=True,  # Still hardcoded
+                    TOL=0.001,  # Still hardcoded
+                    CACHE_SIZE=200,  # Still hardcoded
+                    MAX_ITER=-1  # Still hardcoded
+                )
+                self.logger.info(f"Converted SVR parameters: KERNEL={frontend_params.get('KERNEL')}, C={frontend_params.get('C')}, EPSILON={frontend_params.get('EPSILON')}")
             
-            # Convert Linear parameters
-            if self._has_linear_params(frontend_params):
-                mdl_config['LINEAR'] = self._convert_linear_params(frontend_params)
-                self.logger.info("Converted Linear Regression parameters")
+            elif mode == 'LIN':
+                mdl_config['LINEAR'] = ReferenceMDLStructure.LINEAR()
+                self.logger.info("Using default Linear Regression parameters")
             
-            if not mdl_config:
-                self.logger.warning("No model parameters detected in frontend data")
+            else:
+                self.logger.warning(f"Unknown model type: {mode}")
                 return {}
             
-            self.logger.info(f"Successfully converted {len(mdl_config)} model configurations to MDL format")
+            self.logger.info(f"Successfully converted {mode} model configuration to MDL format")
             return mdl_config
             
         except Exception as e:

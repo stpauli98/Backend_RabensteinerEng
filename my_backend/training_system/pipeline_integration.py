@@ -263,12 +263,32 @@ class RealDataProcessor:
                                 samples = min_len - max(time_steps_in, time_steps_out) + 1
                                 
                                 if samples > 0:
-                                    X_reshaped = np.array([
-                                        X[i:i+time_steps_in] for i in range(samples)
-                                    ])
-                                    y_reshaped = np.array([
-                                        y[i:i+time_steps_out] for i in range(samples)
-                                    ])
+                                    # Create sequences, skipping samples with NaN (matching reference implementation)
+                                    X_sequences = []
+                                    y_sequences = []
+                                    skipped_samples = 0
+                                    
+                                    for i in range(samples):
+                                        X_sample = X[i:i+time_steps_in]
+                                        y_sample = y[i:i+time_steps_out]
+                                        
+                                        # Check for NaN values (matching reference at line 1332)
+                                        if np.isnan(X_sample).any() or np.isnan(y_sample).any():
+                                            skipped_samples += 1
+                                            continue  # Skip this sample
+                                        
+                                        X_sequences.append(X_sample)
+                                        y_sequences.append(y_sample)
+                                    
+                                    if skipped_samples > 0:
+                                        logger.warning(f"Skipped {skipped_samples} samples containing NaN values (matching reference)")
+                                    
+                                    if len(X_sequences) == 0:
+                                        logger.error(f"No valid samples for {dataset_name} after removing NaN values")
+                                        continue  # Skip this dataset
+                                    
+                                    X_reshaped = np.array(X_sequences)
+                                    y_reshaped = np.array(y_sequences)
                                     
                                     datasets[dataset_name] = {
                                         'X': X_reshaped,
@@ -277,7 +297,7 @@ class RealDataProcessor:
                                         'time_steps_out': time_steps_out,
                                         'input_features': X.shape[1],
                                         'output_features': y.shape[1] if len(y.shape) > 1 else 1,
-                                        'n_dat': samples  # Number of generated datasets (equivalent to i_array_3D.shape[0])
+                                        'n_dat': len(X_sequences)  # Actual number of valid samples after NaN removal
                                     }
                                     
                                     logger.info(f"Created dataset {dataset_name}: X{X_reshaped.shape}, y{y_reshaped.shape}")
@@ -1269,6 +1289,12 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
         }
         
         frontend_mode = backend_to_frontend_mapping.get(selected_model_type)
+        
+        # Special handling for SVR models to distinguish between SVR_dir and SVR_MIMO
+        if selected_model_type == "svr" and mdl_config.get(selected_model_type, {}).get('frontend_mode'):
+            frontend_mode = mdl_config[selected_model_type]['frontend_mode']
+            logger.info(f"Using frontend_mode from config: {frontend_mode}")
+        
         if not frontend_mode:
             raise ModelTrainingError(
                 f"Unknown model type: {selected_model_type}",

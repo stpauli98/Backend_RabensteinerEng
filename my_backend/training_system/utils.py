@@ -486,12 +486,14 @@ def validate_frontend_model_parameters(frontend_params: Dict) -> Dict:
         mode = frontend_params.get('MODE', '').lower()
         if not mode:
             validation_result['valid'] = False
-            validation_result['errors'].append("Model MODE is required (Dense, CNN, or SVR)")
+            validation_result['errors'].append("Model MODE is required (Dense, CNN, LSTM, AR LSTM, SVR_dir, SVR_MIMO, or LIN)")
             return validation_result
             
-        if mode not in ['dense', 'cnn', 'svr']:
+        # Updated to accept all model types
+        valid_modes = ['dense', 'cnn', 'lstm', 'ar lstm', 'svr_dir', 'svr_mimo', 'lin']
+        if mode not in valid_modes:
             validation_result['valid'] = False
-            validation_result['errors'].append(f"Invalid model MODE: {mode}. Must be Dense, CNN, or SVR")
+            validation_result['errors'].append(f"Invalid model MODE: {mode}. Must be one of: {', '.join([m.upper() for m in valid_modes])}")
             return validation_result
         
         # Dense model validation
@@ -542,8 +544,42 @@ def validate_frontend_model_parameters(frontend_params: Dict) -> Dict:
                 elif k > 7:
                     validation_result['warnings'].append("Large kernel size (K > 7) may lose fine details")
         
-        # SVR model validation  
-        elif mode == 'svr':
+        # LSTM and AR LSTM model validation
+        elif mode in ['lstm', 'ar lstm']:
+            # Validate neurons (N)
+            n = frontend_params.get('N')
+            if n is not None:
+                if not isinstance(n, (int, float)) or n <= 0:
+                    validation_result['errors'].append("LSTM units (N) must be a positive number")
+                elif n < 10:
+                    validation_result['warnings'].append("Very small LSTM network (N < 10) may underperform")
+                elif n > 256:
+                    validation_result['warnings'].append("Large LSTM network (N > 256) may train slowly")
+            
+            # Validate layers (LAY)
+            lay = frontend_params.get('LAY')
+            if lay is not None:
+                if not isinstance(lay, (int, float)) or lay <= 0:
+                    validation_result['errors'].append("Layers (LAY) must be a positive number")
+                elif lay > 3:
+                    validation_result['warnings'].append("Deep LSTM networks (LAY > 3) may have training difficulties")
+            
+            # Validate epochs (EP)
+            ep = frontend_params.get('EP')
+            if ep is not None:
+                if not isinstance(ep, (int, float)) or ep <= 0:
+                    validation_result['errors'].append("Epochs (EP) must be a positive number")
+                elif ep < 20:
+                    validation_result['warnings'].append("LSTM models typically need more epochs (EP < 20 may underperform)")
+            
+            # Validate activation (ACTF)
+            actf = frontend_params.get('ACTF', '').lower()
+            valid_activations = ['relu', 'sigmoid', 'tanh', 'linear']
+            if actf and actf not in valid_activations:
+                validation_result['errors'].append(f"Invalid activation function: {actf}. Valid options: {', '.join(valid_activations)}")
+        
+        # SVR model validation (includes SVR_dir and SVR_MIMO)
+        elif mode in ['svr', 'svr_dir', 'svr_mimo']:
             # Validate C parameter
             c = frontend_params.get('C')
             if c is not None:
@@ -566,6 +602,11 @@ def validate_frontend_model_parameters(frontend_params: Dict) -> Dict:
             if kernel and kernel not in valid_kernels:
                 validation_result['errors'].append(f"Invalid kernel: {kernel}. Valid options: {', '.join(valid_kernels)}")
         
+        # LIN model validation (minimal validation needed)
+        elif mode == 'lin':
+            # Linear model has no user-configurable parameters
+            validation_result['suggestions'].append("Linear model uses default configuration.")
+        
         # Add general suggestions
         if not validation_result['errors']:
             validation_result['suggestions'].append("Parameters look good! Consider adjusting based on your dataset size and complexity.")
@@ -576,8 +617,14 @@ def validate_frontend_model_parameters(frontend_params: Dict) -> Dict:
             if mode == 'cnn':
                 validation_result['suggestions'].append("CNN models work best with spatial or sequential patterns in your data.")
                 
-            if mode == 'svr':
+            if mode in ['svr', 'svr_dir', 'svr_mimo']:
                 validation_result['suggestions'].append("SVR is excellent for non-linear relationships. Consider 'rbf' kernel for complex patterns.")
+            
+            if mode in ['lstm', 'ar lstm']:
+                validation_result['suggestions'].append("LSTM models excel at capturing long-term dependencies in sequential data.")
+            
+            if mode == 'lin':
+                validation_result['suggestions'].append("Linear models are fast and interpretable, best for linear relationships.")
         
         # Mark as invalid if any errors exist
         validation_result['valid'] = len(validation_result['errors']) == 0
@@ -1192,6 +1239,9 @@ def _legacy_convert_frontend_to_backend_params(frontend_params: Dict) -> Dict:
             svr_config.setdefault('shrinking', True)
             svr_config.setdefault('cache_size', 200)
             svr_config.setdefault('max_iter', 1000)
+            
+            # IMPORTANT: Store mode information to distinguish SVR_dir from SVR_MIMO
+            svr_config['frontend_mode'] = mode.upper()
             
             backend_params['svr'] = svr_config
             logger.info(f"Legacy: Converted to {mode.upper()} model config: {svr_config}")
