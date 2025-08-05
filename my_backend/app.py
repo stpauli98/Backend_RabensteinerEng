@@ -8,7 +8,7 @@ from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from firstProcessing import bp as first_processing_bp
-from RowData import rowdata_blueprint  # Novi RowData modul
+from load_row_data import bp as rowdata_blueprint
 from data_processing_main import bp as data_processing_bp
 from training import bp as training_bp
 from adjustmentsOfData import bp as adjustmentsOfData_bp
