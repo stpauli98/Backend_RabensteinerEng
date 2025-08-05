@@ -46,7 +46,6 @@ def cleanup_old_uploads() -> None:
         ]
         for upload_id in expired_uploads:
             del chunk_storage[upload_id]
-            logger.info(f"Cleaned up expired upload: {upload_id}")
 
 # Supported date/time formats based on frontend patterns
 SUPPORTED_DATE_FORMATS = [
@@ -123,7 +122,6 @@ def parse_datetime_column(df: pd.DataFrame, datetime_col: str, custom_format: Op
         # Clean data before parsing
         df = df.copy()
         df[datetime_col] = df[datetime_col].astype(str).str.strip()
-        # sample_datetime = df[datetime_col].iloc[0] if len(df) > 0 else ""
 
         # Try custom format first if provided
         if custom_format:
@@ -131,8 +129,8 @@ def parse_datetime_column(df: pd.DataFrame, datetime_col: str, custom_format: Op
                 parsed_dates = pd.to_datetime(df[datetime_col], format=custom_format, errors='coerce')
                 if not parsed_dates.isna().all():
                     return True, parsed_dates, None
-            except Exception as e:
-                logger.warning(f"Custom format failed: {e}")
+            except Exception:
+                pass
 
         # Try supported formats with caching for performance
         detected_format = None
@@ -150,14 +148,12 @@ def parse_datetime_column(df: pd.DataFrame, datetime_col: str, custom_format: Op
         if detected_format:
             parsed_dates = pd.to_datetime(df[datetime_col], format=detected_format, errors='coerce')
             if not parsed_dates.isna().all():
-                logger.info(f"Successfully parsed dates with format: {detected_format}")
                 return True, parsed_dates, None
         
         # If no format worked, try pandas auto-detection as last resort
         try:
             parsed_dates = pd.to_datetime(df[datetime_col], errors='coerce')
             if not parsed_dates.isna().all():
-                logger.info("Successfully parsed dates with pandas auto-detection")
                 return True, parsed_dates, None
         except Exception:
             pass
@@ -165,7 +161,6 @@ def parse_datetime_column(df: pd.DataFrame, datetime_col: str, custom_format: Op
         return False, None, "Unsupported date format. Please use custom format or one of the supported formats: DD.MM.YYYY HH:MM:SS"
 
     except Exception as e:
-        logger.error(f"Date parsing error: {e}")
         return False, None, f"Date parsing error: {str(e)}"
 
 
@@ -184,7 +179,6 @@ def convert_to_utc(df: pd.DataFrame, date_column: str, timezone: str = 'UTC') ->
             try:
                 df[date_column] = df[date_column].dt.tz_localize(timezone, ambiguous='NaT', nonexistent='NaT')
             except Exception as e:
-                logger.error(f"Unsupported timezone '{timezone}': {e}")
                 raise ValueError(f"Unsupported timezone: {timezone}")
             
             if timezone.upper() != 'UTC':
@@ -195,7 +189,6 @@ def convert_to_utc(df: pd.DataFrame, date_column: str, timezone: str = 'UTC') ->
         
         return df
     except Exception as e:
-        logger.error(f"Error converting to UTC: {e}")
         raise ValueError(f"Error converting to UTC: {str(e)}")
 
 @bp.route('/upload-chunk', methods=['POST'])
@@ -318,7 +311,6 @@ def finalize_upload():
         return process_chunks(upload_id)
         
     except Exception as e:
-        logger.error(f"Error finalizing upload: {e}")
         return jsonify({"error": "Error finalizing upload"}), 400
 
 @bp.route('/cancel-upload', methods=['POST'])
@@ -339,7 +331,6 @@ def cancel_upload():
         with storage_lock:
             if upload_id in chunk_storage:
                 del chunk_storage[upload_id]
-                logger.info(f"Canceled upload: {upload_id}")
         
         socketio = get_socketio()
         socketio.emit('upload_progress', {
@@ -355,7 +346,6 @@ def cancel_upload():
         }), 200
         
     except Exception as e:
-        logger.error(f"Error canceling upload: {e}")
         return jsonify({"error": "Error canceling upload"}), 400
 
 def process_chunks(upload_id: str):
@@ -389,7 +379,6 @@ def process_chunks(upload_id: str):
             try:
                 decoded_chunks = [chunk.decode(encoding) for chunk in chunks]
                 full_content = "".join(decoded_chunks)
-                logger.info(f"Successfully decoded with {encoding} encoding")
                 break
             except UnicodeDecodeError:
                 continue
@@ -411,7 +400,6 @@ def process_chunks(upload_id: str):
         return upload_files(full_content, params)
         
     except Exception as e:
-        logger.error(f"Error processing chunks: {e}")
         return jsonify({"error": "Error processing file data"}), 400
 
 @bp.route('/upload-status/<upload_id>', methods=['GET'])
@@ -437,7 +425,6 @@ def check_upload_status(upload_id: str):
             })
         
     except Exception as e:
-        logger.error(f"Error checking upload status: {e}")
         return jsonify({"error": "Error checking upload status"}), 400
 
 def process_csv_data(df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
@@ -490,7 +477,6 @@ def process_csv_data(df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[bool, An
                             for col in df.columns:
                                 if col != date_column and col != time_column:
                                     value_column = col
-                                    logger.info(f"Auto-selected value column: {value_column}")
                                     break
                             else:
                                 value_column = None
@@ -500,14 +486,11 @@ def process_csv_data(df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[bool, An
                         value_column = df.columns[value_idx]
                     else:
                         value_column = None
-            except (ValueError, IndexError) as e:
-                logger.error(f"Error converting column indices: {e}")
+            except (ValueError, IndexError):
                 return False, None, f"Invalid column selection"
         
         # Validate columns exist
         if not value_column or value_column not in df.columns:
-            logger.error(f"Value column '{value_column}' not found. Available columns: {df.columns.tolist()}")
-            logger.error(f"Date column: {date_column}, Time column: {time_column}, Has header: {has_header}")
             # For files without headers, provide more helpful message
             if not has_header:
                 available_cols = [f"Column {i+1}" for i in range(len(df.columns))]
@@ -551,7 +534,7 @@ def process_csv_data(df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[bool, An
                 df[value_column] = numeric_values
             else:
                 # Keep as string if all numeric conversions failed
-                logger.info(f"Column '{value_column}' kept as string type")
+                pass
         
         result_df[final_value_column] = df[value_column].apply(lambda x: str(x) if pd.notnull(x) else "")
         result_df.dropna(subset=['UTC'], inplace=True)
@@ -563,7 +546,6 @@ def process_csv_data(df: pd.DataFrame, params: Dict[str, Any]) -> Tuple[bool, An
         return True, data_list, None
         
     except Exception as e:
-        logger.error(f"Error processing CSV data: {e}")
         return False, None, str(e)
 
 def upload_files(file_content: str, params: Dict[str, Any]):
@@ -586,11 +568,9 @@ def upload_files(file_content: str, params: Dict[str, Any]):
         
         has_header = params.get('has_header', False) 
         
-        # Validate delimiter - log warning but continue with user's choice
+        # Auto-detect delimiter but use user's choice
         detected_delimiter = detect_delimiter(file_content)
-        if delimiter != detected_delimiter:
-            logger.warning(f"Delimiter mismatch - User provided: '{delimiter}', Detected: '{detected_delimiter}'. Using user's choice.")
-            # Continue with user's delimiter choice instead of failing
+        # Continue with user's delimiter choice
         
         # Parse CSV
         cleaned_content = clean_file_content(file_content, delimiter)
@@ -631,7 +611,6 @@ def upload_files(file_content: str, params: Dict[str, Any]):
         success, data_list, error = process_csv_data(df, params)
         
         if not success:
-            logger.error(f"Data processing failed: {error}")
             socketio.emit('upload_progress', {
                 'uploadId': upload_id,
                 'progress': 0,
@@ -650,7 +629,6 @@ def upload_files(file_content: str, params: Dict[str, Any]):
         
         return jsonify({"data": data_list, "fullData": data_list})
     except Exception as e:
-        logger.error(f"Upload processing error: {e}")
         if 'uploadId' in params:
             socketio = get_socketio()
             socketio.emit('upload_progress', {
@@ -677,7 +655,6 @@ def prepare_save():
         if file_name:
             file_name = secure_filename(file_name)
         
-        logger.info(f"Preparing file for download: {file_name}")
         
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
@@ -710,7 +687,6 @@ def prepare_save():
         
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
-        logger.error(f"Error preparing file: {e}")
         return jsonify({"error": "Error preparing file for download"}), 500
 
 @bp.route('/download/<file_id>', methods=['GET'])
@@ -736,7 +712,6 @@ def download_file(file_id: str):
         
         # Check if the file is in the temp directory (handles symlinks)
         if not real_path.startswith(real_temp_dir):
-            logger.error(f"Security: Attempted access outside temp dir: {real_path} not in {real_temp_dir}")
             return jsonify({"error": "Access denied"}), 403
         
         if not os.path.exists(file_path):
@@ -762,10 +737,9 @@ def download_file(file_id: str):
                     if file_id in temp_files:
                         del temp_files[file_id]
             except Exception as e:
-                logger.error(f"Error cleaning up file: {e}")
+                pass
         
         return response
         
     except Exception as e:
-        logger.error(f"Error downloading file: {e}")
         return jsonify({"error": "Error downloading file"}), 500
