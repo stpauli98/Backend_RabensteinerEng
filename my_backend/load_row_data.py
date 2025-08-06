@@ -627,7 +627,34 @@ def upload_files(file_content: str, params: Dict[str, Any]):
             'message': 'Data processing completed'
         }, room=upload_id)
         
-        return jsonify({"data": data_list, "fullData": data_list})
+        # Save all data to temp file and return only preview
+        file_id = generate_secure_file_id()
+        temp_dir = tempfile.gettempdir()
+        temp_file_path = os.path.join(temp_dir, f"processed_{file_id}.json")
+        
+        # Save full data to temp file
+        with open(temp_file_path, 'w') as f:
+            json.dump(data_list, f)
+        
+        # Store file info for later retrieval
+        with storage_lock:
+            temp_files[file_id] = {
+                'path': temp_file_path,
+                'timestamp': time.time(),
+                'totalRows': len(data_list)
+            }
+        
+        # Return only preview (first 7 rows - header + 6 data rows)
+        preview_data = data_list[:7] if len(data_list) > 0 else []
+        
+        return jsonify({
+            "fileId": file_id,
+            "preview": preview_data,
+            "data": preview_data,  # For backward compatibility
+            "fullData": preview_data,  # For backward compatibility
+            "totalRows": len(data_list),
+            "success": True
+        })
     except Exception as e:
         if 'uploadId' in params:
             socketio = get_socketio()
@@ -688,6 +715,44 @@ def prepare_save():
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
         return jsonify({"error": "Error preparing file for download"}), 500
+
+@bp.route('/get-full-data/<file_id>', methods=['GET'])
+def get_full_data(file_id: str):
+    """Get full processed data by file ID"""
+    try:
+        # Validate file ID format
+        if not validate_upload_id(file_id):
+            return jsonify({"error": "Invalid file ID"}), 400
+        
+        with storage_lock:
+            if file_id not in temp_files:
+                return jsonify({"error": "File not found or expired"}), 404
+            
+            file_info = temp_files[file_id].copy()
+        
+        file_path = file_info['path']
+        
+        # Security check: ensure file is in temp directory
+        temp_dir = tempfile.gettempdir()
+        real_path = os.path.realpath(file_path)
+        real_temp_dir = os.path.realpath(temp_dir)
+        
+        # Check if the file is in the temp directory (handles symlinks)
+        if not real_path.startswith(real_temp_dir):
+            return jsonify({"error": "Access denied"}), 403
+        
+        if not os.path.exists(file_path):
+            return jsonify({"error": "File not found"}), 404
+        
+        # Load the full data
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        
+        return jsonify({"data": data, "fullData": data})
+        
+    except Exception as e:
+        logger.error(f"Error retrieving full data: {str(e)}")
+        return jsonify({"error": "Error retrieving data"}), 500
 
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id: str):
