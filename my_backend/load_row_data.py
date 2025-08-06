@@ -163,9 +163,6 @@ def parse_datetime_column(df: pd.DataFrame, datetime_col: str, custom_format: Op
     except Exception as e:
         return False, None, f"Date parsing error: {str(e)}"
 
-
-
-
 def convert_to_utc(df: pd.DataFrame, date_column: str, timezone: str = 'UTC') -> pd.DataFrame:
     """
     Convert datetime column to UTC timezone.
@@ -568,9 +565,7 @@ def upload_files(file_content: str, params: Dict[str, Any]):
         
         has_header = params.get('has_header', False) 
         
-        # Auto-detect delimiter but use user's choice
-        detected_delimiter = detect_delimiter(file_content)
-        # Continue with user's delimiter choice
+        # Use user's delimiter choice
         
         # Parse CSV
         cleaned_content = clean_file_content(file_content, delimiter)
@@ -650,8 +645,6 @@ def upload_files(file_content: str, params: Dict[str, Any]):
         return jsonify({
             "fileId": file_id,
             "preview": preview_data,
-            "data": preview_data,  # For backward compatibility
-            "fullData": preview_data,  # For backward compatibility
             "totalRows": len(data_list),
             "success": True
         })
@@ -715,6 +708,105 @@ def prepare_save():
         return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
     except Exception as e:
         return jsonify({"error": "Error preparing file for download"}), 500
+
+@bp.route('/merge-and-prepare', methods=['POST'])
+def merge_and_prepare_download():
+    """Merge multiple processed files and prepare for download"""
+    try:
+        data = request.get_json(force=True, silent=True)
+        
+        if not data or 'fileIds' not in data:
+            return jsonify({"error": "fileIds array is required"}), 400
+        
+        file_ids = data.get('fileIds', [])
+        user_filename = secure_filename(data.get('fileName', 'merged_data.csv'))
+        
+        if not file_ids or not isinstance(file_ids, list):
+            return jsonify({"error": "fileIds must be a non-empty array"}), 400
+        
+        # Collect all data from all files
+        all_data = []
+        headers = None
+        
+        for file_id in file_ids:
+            # Validate each file ID
+            if not validate_upload_id(file_id):
+                continue
+            
+            with storage_lock:
+                if file_id not in temp_files:
+                    continue
+                file_info = temp_files[file_id].copy()
+            
+            file_path = file_info['path']
+            
+            # Security check
+            temp_dir = tempfile.gettempdir()
+            real_path = os.path.realpath(file_path)
+            real_temp_dir = os.path.realpath(temp_dir)
+            
+            if not real_path.startswith(real_temp_dir):
+                continue
+            
+            if not os.path.exists(file_path):
+                continue
+            
+            # Load data from this file
+            with open(file_path, 'r') as f:
+                data_from_file = json.load(f)
+            
+            if data_from_file and len(data_from_file) > 0:
+                if headers is None:
+                    # First file - take headers
+                    headers = data_from_file[0]
+                    all_data.extend(data_from_file[1:])  # Add data without headers
+                else:
+                    # Subsequent files - skip headers if they match
+                    if len(data_from_file) > 1:
+                        if data_from_file[0] == headers:
+                            all_data.extend(data_from_file[1:])
+                        else:
+                            all_data.extend(data_from_file)
+        
+        if not headers or not all_data:
+            return jsonify({"error": "No data found in provided files"}), 404
+        
+        # Sort all data by date (first column)
+        try:
+            all_data.sort(key=lambda row: row[0] if row else '')
+        except:
+            pass  # If sorting fails, keep original order
+        
+        # Combine headers with sorted data
+        final_data = [headers] + all_data
+        
+        # Create a new CSV file for download
+        download_file_id = generate_secure_file_id()
+        csv_file_path = os.path.join(tempfile.gettempdir(), f"merged_{download_file_id}.csv")
+        
+        # Write merged data to CSV file
+        with open(csv_file_path, 'w', newline='', encoding='utf-8') as csv_file:
+            writer = csv.writer(csv_file, delimiter=';')
+            for row in final_data:
+                writer.writerow(row)
+        
+        # Store download file info
+        with storage_lock:
+            temp_files[download_file_id] = {
+                'path': csv_file_path,
+                'fileName': user_filename,
+                'timestamp': time.time()
+            }
+        
+        return jsonify({
+            "downloadFileId": download_file_id,
+            "totalRows": len(final_data),
+            "success": True
+        })
+        
+    except Exception as e:
+        logger.error(f"Error merging and preparing download: {str(e)}")
+        return jsonify({"error": "Error merging files"}), 500
 
 @bp.route('/prepare-download/<file_id>', methods=['POST'])
 def prepare_download_from_processed(file_id: str):
@@ -782,11 +874,7 @@ def prepare_download_from_processed(file_id: str):
         logger.error(f"Error preparing download: {str(e)}")
         return jsonify({"error": "Error preparing download"}), 500
 
-@bp.route('/get-full-data/<file_id>', methods=['GET'])
-def get_full_data(file_id: str):
-    """DEPRECATED: This endpoint returns too much data and causes issues. Use prepare-download instead."""
-    # Keep for backward compatibility but redirect to prepare-download
-    return jsonify({"error": "This endpoint is deprecated. Use /prepare-download/<file_id> instead"}), 400
+# DEPRECATED endpoint removed - use /prepare-download/<file_id> instead
 
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id: str):
