@@ -698,6 +698,56 @@ def prepare_save():
         logger.error(f"Error in prepare_save: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to prepare file"}), 500
 
+@bp.route('/cancel-upload', methods=['POST'])
+def cancel_upload():
+    """Cancel an ongoing upload and clean up resources"""
+    try:
+        data = request.get_json(force=True, silent=True)
+        
+        if not data or 'uploadId' not in data:
+            return jsonify({"error": "uploadId is required"}), 400
+        
+        upload_id = data['uploadId']
+        
+        # Validate upload ID format (basic security)
+        if not re.match(r'^fp_\d+_[a-zA-Z0-9]+$', upload_id):
+            return jsonify({"error": "Invalid upload ID format"}), 400
+        
+        # Clean up any temporary chunk files
+        try:
+            chunk_pattern = os.path.join(UPLOAD_FOLDER, f"{upload_id}_*.chunk")
+            import glob
+            for chunk_file in glob.glob(chunk_pattern):
+                if os.path.exists(chunk_file):
+                    os.remove(chunk_file)
+                    logger.info(f"Removed chunk file: {chunk_file}")
+        except Exception as cleanup_error:
+            logger.warning(f"Error cleaning up chunks for {upload_id}: {cleanup_error}")
+        
+        # Send cancellation message via Socket.IO
+        try:
+            from flask import current_app
+            socketio = current_app.extensions.get('socketio')
+            if socketio:
+                socketio.emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'progress': 0,
+                    'status': 'error',
+                    'message': 'Upload canceled by user',
+                    'step': 'canceled'
+                }, room=upload_id)
+        except Exception as socket_error:
+            logger.warning(f"Error sending cancel message via socket: {socket_error}")
+        
+        return jsonify({
+            "message": "Upload canceled successfully",
+            "uploadId": upload_id
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in cancel_upload: {str(e)}", exc_info=True)
+        return jsonify({"error": "Failed to cancel upload"}), 500
+
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     """Download a prepared CSV file.
