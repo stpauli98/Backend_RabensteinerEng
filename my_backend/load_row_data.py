@@ -716,10 +716,16 @@ def prepare_save():
     except Exception as e:
         return jsonify({"error": "Error preparing file for download"}), 500
 
-@bp.route('/get-full-data/<file_id>', methods=['GET'])
-def get_full_data(file_id: str):
-    """Get full processed data by file ID"""
+@bp.route('/prepare-download/<file_id>', methods=['POST'])
+def prepare_download_from_processed(file_id: str):
+    """Prepare CSV file from processed data for direct download"""
     try:
+        # Get the desired filename from request
+        data = request.get_json(force=True, silent=True)
+        user_filename = None
+        if data and 'fileName' in data:
+            user_filename = secure_filename(data['fileName'])
+        
         # Validate file ID format
         if not validate_upload_id(file_id):
             return jsonify({"error": "Invalid file ID"}), 400
@@ -744,15 +750,43 @@ def get_full_data(file_id: str):
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
         
-        # Load the full data
+        # Load the full data from JSON
         with open(file_path, 'r') as f:
             data = json.load(f)
         
-        return jsonify({"data": data, "fullData": data})
+        # Create a new CSV file for download
+        download_file_id = generate_secure_file_id()
+        csv_file_path = os.path.join(temp_dir, f"download_{download_file_id}.csv")
+        
+        # Write data to CSV file
+        with open(csv_file_path, 'w', newline='', encoding='utf-8') as csv_file:
+            writer = csv.writer(csv_file, delimiter=';')
+            for row in data:
+                writer.writerow(row)
+        
+        # Store download file info with user's filename
+        with storage_lock:
+            temp_files[download_file_id] = {
+                'path': csv_file_path,
+                'fileName': user_filename if user_filename else f"data_{download_file_id}.csv",
+                'timestamp': time.time()
+            }
+        
+        # Return only the download file ID, not the data
+        return jsonify({
+            "downloadFileId": download_file_id,
+            "success": True
+        })
         
     except Exception as e:
-        logger.error(f"Error retrieving full data: {str(e)}")
-        return jsonify({"error": "Error retrieving data"}), 500
+        logger.error(f"Error preparing download: {str(e)}")
+        return jsonify({"error": "Error preparing download"}), 500
+
+@bp.route('/get-full-data/<file_id>', methods=['GET'])
+def get_full_data(file_id: str):
+    """DEPRECATED: This endpoint returns too much data and causes issues. Use prepare-download instead."""
+    # Keep for backward compatibility but redirect to prepare-download
+    return jsonify({"error": "This endpoint is deprecated. Use /prepare-download/<file_id> instead"}), 400
 
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id: str):
