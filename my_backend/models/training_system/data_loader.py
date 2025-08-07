@@ -12,7 +12,8 @@ import logging
 
 # Import existing supabase client
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from supabase_client import get_supabase_client, create_or_get_session_uuid
+from services.supabase_client import get_supabase_client, create_or_get_session_uuid
+from config.storage_config import storage_config
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class DataLoader:
     
     def __init__(self, supabase_client=None):
         self.supabase = supabase_client or get_supabase_client()
-        self.temp_dir = "temp_training_data"
+        self.temp_dir = str(storage_config.temp_dir / "training")
         self._ensure_temp_dir()
     
     def _convert_to_uuid(self, session_id: str) -> str:

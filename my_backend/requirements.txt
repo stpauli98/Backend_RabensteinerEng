@@ -1,27 +1,30 @@
 # Essential packages for server to start
-Flask==3.0.2
-Flask-Cors==4.0.0
-Werkzeug==3.0.1
-flask-socketio==5.3.4
-eventlet==0.33.3
-gunicorn==21.2.0
-python-dotenv==1.0.1
-requests==2.31.0
-pytz==2024.1
-APScheduler==3.10.4
-supabase==2.3.3
+Flask==3.1.1
+Flask-Cors==6.0.1
+Werkzeug==3.1.3
+flask-socketio==5.5.1
+eventlet==0.40.2
+gunicorn==23.0.0
+python-dotenv==1.1.1
+requests==2.32.4
+pytz==2025.2
+APScheduler==3.11.0
+supabase==2.17.0
 
 
 # Basic data handling (lightweight)
-pandas==2.1.4
-numpy==1.26.3
+pandas==2.3.1
+numpy==2.1.3
 
 # Required by cloud.py blueprint
-scikit-learn==1.5.1
-matplotlib==3.8.2
+scikit-learn==1.7.1
+matplotlib==3.10.3
 
 # Data visualization
-seaborn==0.13.1
+seaborn==0.13.2
+
+# System monitoring
+psutil==7.0.0
 
 # Heavy packages - will be added later if needed
 # tensorflow==2.16.1

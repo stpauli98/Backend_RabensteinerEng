@@ -16,7 +16,7 @@ from datetime import datetime
 import os
 
 # Import necessary modules
-from supabase_client import get_supabase_client
+from services.supabase_client import get_supabase_client
 
 plotting_bp = Blueprint('plotting', __name__)
 logger = logging.getLogger(__name__)

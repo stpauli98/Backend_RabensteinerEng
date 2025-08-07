@@ -18,7 +18,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p chunk_uploads temp_uploads uploads/file_uploads
+RUN mkdir -p chunk_uploads temp_uploads uploads/file_uploads \
+    storage/temp storage/sessions storage/processed storage/uploads storage/logs storage/cache
 
 # Expose port
 EXPOSE 8080

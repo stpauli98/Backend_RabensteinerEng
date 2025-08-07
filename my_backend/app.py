@@ -5,17 +5,16 @@ from flask_socketio import SocketIO
 from datetime import datetime as dat
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from apscheduler.schedulers.background import BackgroundScheduler
 
-from firstProcessing import bp as first_processing_bp
-from load_row_data import bp as rowdata_blueprint
-from data_processing_main import bp as data_processing_bp
-from training import bp as training_bp
-from adjustmentsOfData import bp as adjustmentsOfData_bp
-from adjustmentsOfData import cleanup_old_files
-from cloud import bp as cloud_bp
-from training_system.training_api import training_api_bp
-from plotting import plotting_bp
+# Import consolidated blueprints
+from api.data_pipeline import bp as data_pipeline_bp
+from api.analytics import bp as analytics_bp
+from api.machine_learning import bp as machine_learning_bp
+from api.system import bp as system_bp
+from api.backward_compatibility import bp as compatibility_bp, COMPATIBILITY_ROUTES
+
+# Import centralized scheduler service
+from services.scheduler import init_scheduler, start_scheduler
 
 # Configure logging
 logging.basicConfig(
@@ -66,15 +65,29 @@ def handle_preflight():
         headers['Access-Control-Max-Age'] = '3600'
         return response
 
-# Register blueprints with correct prefixes
-app.register_blueprint(data_processing_bp)
-app.register_blueprint(rowdata_blueprint, url_prefix='/api/loadRowData')  # Koristi novi RowData modul
-app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
-app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
-app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
-app.register_blueprint(training_bp, url_prefix='/api/training')
-app.register_blueprint(training_api_bp)  # Already has /api/training prefix
-app.register_blueprint(plotting_bp)  # Already has /api/training prefix
+# ============================================================================
+# REGISTER CONSOLIDATED BLUEPRINTS
+# ============================================================================
+
+# Register new consolidated blueprints
+app.register_blueprint(data_pipeline_bp, url_prefix='/api/data')
+app.register_blueprint(analytics_bp, url_prefix='/api/analytics')  
+app.register_blueprint(machine_learning_bp, url_prefix='/api/ml')
+app.register_blueprint(system_bp, url_prefix='/api/system')
+
+# Register backward compatibility blueprint
+app.register_blueprint(compatibility_bp)
+
+# Register legacy compatibility routes dynamically
+for route_config in COMPATIBILITY_ROUTES:
+    app.add_url_rule(
+        route_config['rule'],
+        endpoint=route_config['endpoint'],
+        view_func=route_config['handler'],
+        methods=route_config['methods']
+    )
+
+logger.info("Registered consolidated API blueprints with backward compatibility")
 
 # Error handlers
 @app.errorhandler(400)
@@ -92,10 +105,11 @@ def internal_error(error):
     logger.error(f"Internal server error (500): {error}")
     return jsonify({'error': 'Internal Server Error', 'message': str(error)}), 500
 
-# Health check endpoint
+# Legacy health check endpoint - redirects to system health
 @app.route('/health')
 def health():
-    return jsonify(status="ok"), 200
+    from flask import redirect
+    return redirect('/api/system/health', code=301)
 
 # Debug endpoint removed - already exists below
 
@@ -156,6 +170,7 @@ def handle_join_training_session(data):
                 'message': 'Successfully joined training session'
             })
         else:
+            from flask_socketio import emit
             emit('training_session_error', {
                 'status': 'error',
                 'message': 'Session ID is required'
@@ -198,8 +213,8 @@ def handle_request_training_status(data):
         session_id = data.get('session_id')
         if session_id:
             # Get current training status from database
-            from training_system.supabase_client import get_supabase_client
-            from training_system.training_api import create_or_get_session_uuid
+            from services.supabase_client import get_supabase_client
+            from models.training_system.training_api import create_or_get_session_uuid
             
             supabase = get_supabase_client()
             uuid_session_id = create_or_get_session_uuid(session_id)
@@ -262,8 +277,8 @@ def handle_request_dataset_status(data):
             logger.info(f"Frontend requesting dataset status for session: {session_id}")
             
             # Get dataset status from database
-            from training_system.supabase_client import get_supabase_client
-            from training_system.training_api import create_or_get_session_uuid
+            from services.supabase_client import get_supabase_client
+            from models.training_system.training_api import create_or_get_session_uuid
             
             supabase = get_supabase_client()
             uuid_session_id = create_or_get_session_uuid(session_id)
@@ -323,22 +338,9 @@ def index():
         logger.error(f"Error in index route: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Initialize the scheduler
-scheduler = BackgroundScheduler(daemon=True)
-
-# Create a wrapper function that runs cleanup_old_files within the app context
-def run_cleanup_with_app_context():
-    with app.app_context():
-        try:
-            result = cleanup_old_files()
-            logger.info(f"Scheduled cleanup completed: {result.get('message', 'No message')}")
-        except Exception as e:
-            logger.error(f"Error in scheduled cleanup: {str(e)}")
-
-# Schedule the wrapper function to run every 30 minutes
-scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='cleanup_job')
-# Start the scheduler
-scheduler.start()
+# Initialize centralized scheduler
+scheduler = init_scheduler(app)
+start_scheduler()
 
 if __name__ == '__main__':
     import os

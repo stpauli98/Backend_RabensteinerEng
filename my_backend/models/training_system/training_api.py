@@ -24,7 +24,7 @@ from .error_handler import (
 
 # Import existing supabase client
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from supabase_client import get_supabase_client, create_or_get_session_uuid
+from services.supabase_client import get_supabase_client, create_or_get_session_uuid
 
 # Import the new pipeline function
 from .pipeline_integration import run_complete_original_pipeline

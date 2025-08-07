@@ -10,7 +10,7 @@ import logging
 # Add the parent directory to sys.path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from training_system.parameter_converter import (
+from parameter_converter import (
     FrontendParameterConverter, 
     ReferenceMDLValidator,
     convert_frontend_parameters_to_mdl
@@ -301,7 +301,7 @@ def test_legacy_mode_conversion():
     
     try:
         # Import the utils function that should handle this
-        from training_system.utils import convert_frontend_to_backend_params
+        from utils import convert_frontend_to_backend_params
         
         result = convert_frontend_to_backend_params(legacy_params)
         

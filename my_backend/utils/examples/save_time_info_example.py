@@ -5,7 +5,7 @@ import uuid
 # Add the parent directory to the path so we can import from my_backend
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from supabase_client import save_time_info
+from services.supabase_client import save_time_info
 
 def example_save_time_info():
     """

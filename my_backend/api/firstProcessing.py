@@ -20,18 +20,24 @@ import logging
 import os
 import re
 import statistics
+import sys
 import tempfile
 import threading
 import time
 import traceback
 from datetime import datetime, timedelta
 from io import BytesIO, StringIO
+from pathlib import Path
 
 # Third-party imports
 import numpy as np
 import pandas as pd
 from flask import Blueprint, Response, jsonify, request, send_file
 from flask_socketio import emit
+
+# Local imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.storage_config import storage_config
 
 # ============================================================================
 # CONFIGURATION
@@ -50,8 +56,8 @@ MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB total
 TEMP_FILE_LIFETIME = 3600  # 1 hour in seconds
 CLEANUP_INTERVAL = 600  # 10 minutes
 
-# Upload configuration
-UPLOAD_FOLDER = "chunk_uploads"
+# Storage configuration using centralized storage
+UPLOAD_FOLDER = str(storage_config.temp_dir / "chunks")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Global storage for temporary files

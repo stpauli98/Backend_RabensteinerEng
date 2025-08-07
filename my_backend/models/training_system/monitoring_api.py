@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 
 # Import existing supabase client
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from supabase_client import get_supabase_client
+from services.supabase_client import get_supabase_client
 
 # Import error handling and logging
 from .error_handler import get_error_handler, ErrorCategory, ErrorSeverity

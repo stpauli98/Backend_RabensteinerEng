@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import logging
 import uuid
@@ -6,6 +7,10 @@ import base64
 from datetime import datetime
 from supabase import create_client, Client
 from dotenv import load_dotenv
+
+# Import storage config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.storage_config import storage_config
 
 # Configure logging
 logging.basicConfig(
@@ -665,9 +670,8 @@ def save_session_to_supabase(session_id: str) -> bool:
                 logger.error(f"Failed to get UUID for session {session_id}")
                 return False
             logger.info(f"Successfully converted '{session_id}' to UUID: '{database_session_id}' in save_session_to_supabase")
-        # Base directory for file uploads
-        upload_base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'file_uploads')
-        session_dir = os.path.join(upload_base_dir, session_id)
+        # Base directory for file uploads using centralized storage
+        session_dir = str(storage_config.get_session_dir(session_id))
         
         # Check if session directory exists
         if not os.path.exists(session_dir):

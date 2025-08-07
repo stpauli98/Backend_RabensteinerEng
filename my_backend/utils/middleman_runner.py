@@ -10,11 +10,11 @@ from typing import Dict, Optional
 import traceback
 
 # Add training_system to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'training_system'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'models', 'training_system'))
 
 # Import existing supabase client and SocketIO
-from supabase_client import get_supabase_client
-from training_system.training_pipeline import run_training_for_session
+from services.supabase_client import get_supabase_client
+from models.training_system.training_pipeline import run_training_for_session
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

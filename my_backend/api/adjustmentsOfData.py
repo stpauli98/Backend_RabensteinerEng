@@ -3,21 +3,27 @@ import numpy as np
 from datetime import datetime
 import tempfile
 import os
+import sys
 import time
 import csv
 import logging
 import traceback
 import time
 from io import StringIO
+from pathlib import Path
 from flask import request, jsonify, send_file, Blueprint
 from flask_socketio import emit
 import json
 
+# Local imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.storage_config import storage_config
+
 # Create Blueprint
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 
-# Configure temp upload folder
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
+# Configure temp upload folder using centralized storage
+UPLOAD_FOLDER = str(storage_config.temp_dir / "api")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Global dictionaries to store data
@@ -44,58 +50,33 @@ info_df = pd.DataFrame(columns=['Name der Datei', 'Name der Messreihe', 'Startze
 
 # Function to check if file is a CSV
 def cleanup_old_files():
-    """Clean up files older than 5 minutes from temp_uploads directory"""
-    success = True
-    errors = []
-    deleted_count = 0
-    current_time = time.time()
-    EXPIRY_TIME = 60 * 60  # 60 minutes in seconds
-    
-    # Get temp_uploads directory path
-    temp_dir = os.path.join(os.path.dirname(__file__), 'temp_uploads')
-    
+    """Clean up expired files using centralized storage cleanup"""
     try:
-        # Prolazi kroz sve poddirektorijume
-        for root, dirs, files in os.walk(temp_dir, topdown=False):
-            for name in files:
-                file_path = os.path.join(root, name)
-                try:
-                    # Proveri starost fajla
-                    file_age = current_time - os.path.getmtime(file_path)
-                    if file_age > EXPIRY_TIME:
-                        os.remove(file_path)
-                        deleted_count += 1
-                except Exception as e:
-                    success = False
-                    errors.append(f"Error with {name}: {str(e)}")
-                    logger.error(f"Error cleaning up file {name}: {str(e)}")
-            
-            # Pokušaj obrisati prazne direktorijume
-            for dir_name in dirs:
-                dir_path = os.path.join(root, dir_name)
-                try:
-                    os.rmdir(dir_path)  # Ovo će uspeti samo ako je direktorijum prazan
-                except OSError:
-                    pass
+        # Use centralized cleanup from storage_config
+        cleanup_stats = storage_config.cleanup_expired_files()
         
-        # Očisti temp_files dictionary za obrisane fajlove
+        # Clear temp_files dictionary for removed files
         for file_id, file_info in list(temp_files.items()):
             if not os.path.exists(file_info['path']):
                 del temp_files[file_id]
-    
-        # When called from scheduler, don't try to return a response
-        # Just log the results
-        logger.info(f"Cleaned up {deleted_count} files older than 60 minutes")
+        
+        total_removed = sum([
+            cleanup_stats.get('temp_files_removed', 0),
+            cleanup_stats.get('session_files_removed', 0),
+            cleanup_stats.get('processed_files_removed', 0),
+            cleanup_stats.get('cache_files_removed', 0)
+        ])
+        
+        logger.info(f"Centralized cleanup completed: {total_removed} files removed")
         return {
-            "success": success,
-            "message": f"Cleaned up {deleted_count} files older than 60 minutes",
-            "deleted_count": deleted_count,
-            "errors": errors if errors else None
+            "success": cleanup_stats.get('errors', 0) == 0,
+            "message": f"Cleaned up {total_removed} expired files across all storage areas",
+            "deleted_count": total_removed,
+            "details": cleanup_stats
         }
                 
     except Exception as e:
         logger.error(f"Error in cleanup_old_files: {str(e)}")
-        # Don't use jsonify here as it requires app context
         return {"error": str(e)}
 
 def allowed_file(filename):

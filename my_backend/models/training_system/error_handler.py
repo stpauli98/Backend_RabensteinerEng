@@ -19,7 +19,7 @@ from contextlib import contextmanager
 
 # Import existing supabase client
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from supabase_client import get_supabase_client
+from services.supabase_client import get_supabase_client
 
 
 class ErrorSeverity(Enum):
