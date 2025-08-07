@@ -245,6 +245,8 @@ def handle_join(data):
             from flask_socketio import join_room
             join_room(upload_id)
             logger.info(f"Client joined Socket.IO room: {upload_id}")
+            
+            # Send status confirmation
             socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
     except Exception as e:
         logger.error(f"Error in join handler: {str(e)}")
