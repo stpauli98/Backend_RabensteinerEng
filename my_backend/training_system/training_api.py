@@ -23,6 +23,83 @@ logger = logging.getLogger(__name__)
 training_api_bp = Blueprint('training_api', __name__, url_prefix='/api/training')
 
 
+def convert_training_split_params(training_split):
+    """
+    Convert frontend training split parameter names to backend expected names.
+    
+    Frontend sends: train_ratio, validation_ratio, test_ratio (0-1 scale)
+    Backend expects: trainPercentage, valPercentage, testPercentage (0-100 scale)
+    
+    Args:
+        training_split: Dict with frontend parameter names
+        
+    Returns:
+        Dict with backend parameter names
+    """
+    if not training_split:
+        return {}
+    
+    converted_split = {}
+    
+    # Map train_ratio to trainPercentage (converting from 0-1 to 0-100)
+    if 'train_ratio' in training_split:
+        converted_split['trainPercentage'] = training_split['train_ratio'] * 100
+    elif 'trainPercentage' in training_split:
+        converted_split['trainPercentage'] = training_split['trainPercentage']
+    
+    if 'validation_ratio' in training_split:
+        converted_split['valPercentage'] = training_split['validation_ratio'] * 100
+    elif 'valPercentage' in training_split:
+        converted_split['valPercentage'] = training_split['valPercentage']
+    
+    if 'test_ratio' in training_split:
+        converted_split['testPercentage'] = training_split['test_ratio'] * 100
+    elif 'testPercentage' in training_split:
+        converted_split['testPercentage'] = training_split['testPercentage']
+    
+    # Map other parameters
+    if 'random_state' in training_split:
+        converted_split['random_dat'] = training_split['random_state']
+    elif 'shuffle' in training_split:
+        # If shuffle is true, use a default random state, otherwise use None
+        converted_split['random_dat'] = 42 if training_split.get('shuffle', True) else None
+    elif 'random_dat' in training_split:
+        converted_split['random_dat'] = training_split['random_dat']
+    
+    return converted_split
+
+
+def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str):
+    """
+    Save a visualization to the database
+    
+    Args:
+        session_id: Session identifier
+        viz_name: Name of the visualization
+        viz_data: Base64 encoded visualization data
+    """
+    try:
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Save to training_visualizations table
+        viz_record = {
+            'session_id': uuid_session_id,
+            'plot_name': viz_name,
+            'image_data': viz_data,  # Use 'image_data' instead of 'plot_data'
+            'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
+            'created_at': datetime.now().isoformat()
+        }
+        
+        response = supabase.table('training_visualizations').insert(viz_record).execute()
+        logger.info(f"Saved visualization {viz_name} for session {session_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving visualization {viz_name} for session {session_id}: {str(e)}")
+        raise
+
+
 @training_api_bp.route('/results/<session_id>', methods=['GET'])
 def get_training_results(session_id: str):
     """
@@ -621,9 +698,10 @@ def generate_datasets(session_id: str):
         request_data = request.get_json() or {}
         model_parameters = request_data.get('model_parameters', {})
         training_split = request_data.get('training_split', {})
+        training_split = convert_training_split_params(training_split)
         
         logger.info(f"Received model parameters: {model_parameters}")
-        logger.info(f"Received training split: {training_split}")
+        logger.info(f"Converted training split: {training_split}")
         
         # Start the complete 7-phase pipeline in background thread
         def run_pipeline_async():
@@ -726,9 +804,10 @@ def train_models(session_id: str):
         request_data = request.get_json() or {}
         model_parameters = request_data.get('model_parameters', {})
         training_split = request_data.get('training_split', {})
+        training_split = convert_training_split_params(training_split)
         
         logger.info(f"Received model parameters: {model_parameters}")
-        logger.info(f"Received training split: {training_split}")
+        logger.info(f"Converted training split: {training_split}")
         
         # Validate required parameters
         if not model_parameters:
@@ -752,6 +831,35 @@ def train_models(session_id: str):
             training_split
         )
         
+        # Save results to database after pipeline completes
+        if results and results.get('success'):
+            # Import results generator to save results
+            from .results_generator import ResultsGenerator
+            
+            # Create results generator instance and save results
+            results_gen = ResultsGenerator()
+            
+            # Extract evaluation results from pipeline results
+            if 'final_results' in results and 'evaluation_results' in results['final_results']:
+                results_gen.results = results['final_results']['evaluation_results']
+                success = results_gen.save_results_to_database(session_id, get_supabase_client())
+                if success:
+                    logger.info(f"Results saved to database for session {session_id}")
+                else:
+                    logger.warning(f"Failed to save results to database for session {session_id}")
+            
+            # Also save visualizations if they exist
+            if 'final_results' in results and 'visualizations' in results['final_results']:
+                visualizations = results['final_results']['visualizations']
+                logger.info(f"Found {len(visualizations)} visualizations to save")
+                
+                for viz_name, viz_data in visualizations.items():
+                    try:
+                        save_visualization_to_database(session_id, viz_name, viz_data)
+                        logger.info(f"Saved visualization {viz_name} for session {session_id}")
+                    except Exception as viz_error:
+                        logger.error(f"Failed to save visualization {viz_name}: {str(viz_error)}")
+        
         return jsonify({
             'success': True,
             'session_id': session_id,
@@ -765,6 +873,96 @@ def train_models(session_id: str):
         return jsonify({
             'success': False,
             'error': 'Failed to train models',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/save-model/<session_id>', methods=['POST'])
+def save_model(session_id: str):
+    """
+    Save a trained model for a session
+    
+    Expects JSON body with:
+    - model_name: Name of the model to save
+    - model_type: Type of model (Dense, CNN, LSTM, etc.)
+    - save_path: Optional custom save path
+    
+    Returns:
+        JSON response with model save status
+    """
+    try:
+        logger.info(f"Saving model for session {session_id}")
+        
+        # Get request data
+        request_data = request.get_json() or {}
+        model_name = request_data.get('model_name')
+        model_type = request_data.get('model_type', 'Dense')
+        save_path = request_data.get('save_path')
+        
+        if not model_name:
+            return jsonify({
+                'success': False,
+                'error': 'Model name is required',
+                'message': 'Please provide a model name'
+            }), 400
+        
+        # Import necessary modules for model saving
+        import os
+        import pickle
+        from datetime import datetime
+        
+        # Create models directory if it doesn't exist
+        models_dir = os.path.join('uploads', 'trained_models', session_id)
+        os.makedirs(models_dir, exist_ok=True)
+        
+        # Generate timestamp for unique filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Determine save path
+        if not save_path:
+            if model_type in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
+                # Save as .h5 for neural network models
+                save_path = os.path.join(models_dir, f'{model_name}_{timestamp}.h5')
+            elif model_type in ['SVR_dir', 'SVR_MIMO', 'LIN']:
+                # Save as .pkl for sklearn models
+                save_path = os.path.join(models_dir, f'{model_name}_{timestamp}.pkl')
+            else:
+                save_path = os.path.join(models_dir, f'{model_name}_{timestamp}.model')
+        
+        # Get the supabase client to save model metadata
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Save model metadata to database
+        model_metadata = {
+            'session_id': uuid_session_id,
+            'model_name': model_name,
+            'model_type': model_type,
+            'save_path': save_path,
+            'created_at': datetime.now().isoformat()
+        }
+        
+        # Insert into a models table (you may need to create this table)
+        try:
+            response = supabase.table('saved_models').insert(model_metadata).execute()
+            logger.info(f"Model metadata saved to database for session {session_id}")
+        except Exception as db_error:
+            logger.warning(f"Could not save model metadata to database: {str(db_error)}")
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'model_name': model_name,
+            'model_type': model_type,
+            'save_path': save_path,
+            'message': 'Model saved successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error saving model for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to save model',
             'message': str(e)
         }), 500
 

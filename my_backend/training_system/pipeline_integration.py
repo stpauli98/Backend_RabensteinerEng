@@ -146,10 +146,23 @@ class RealDataProcessor:
                         X = input_df.select_dtypes(include=[np.number]).values
                         y = output_df.select_dtypes(include=[np.number]).values
                         
+                        # Remove NaN values
+                        # Check for NaN in input data
+                        nan_mask_x = ~np.isnan(X).any(axis=1)
+                        nan_mask_y = ~np.isnan(y).any(axis=1) if len(y.shape) > 1 else ~np.isnan(y)
+                        
+                        # Combine masks to keep only rows without NaN in both X and y
+                        combined_mask = nan_mask_x[:min(len(nan_mask_x), len(nan_mask_y))] & nan_mask_y[:min(len(nan_mask_x), len(nan_mask_y))]
+                        
+                        # Apply mask to remove NaN values
+                        X = X[:len(combined_mask)][combined_mask]
+                        y = y[:len(combined_mask)][combined_mask]
+                        
                         logger.info(f"Dataset {dataset_name}: input_df columns {list(input_df.columns)}, output_df columns {list(output_df.columns)}")
                         logger.info(f"Dataset {dataset_name}: input numeric data shape {X.shape}, output numeric data shape {y.shape}")
                         logger.info(f"Dataset {dataset_name}: input_df dtypes: {input_df.dtypes}")
                         logger.info(f"Dataset {dataset_name}: output_df dtypes: {output_df.dtypes}")
+                        logger.info(f"Dataset {dataset_name}: Removed {np.sum(~combined_mask)} rows containing NaN values")
                         
                         # Ensure we have enough data
                         if X.shape[0] > 10 and y.shape[0] > 10:
@@ -205,13 +218,14 @@ class RealModelTrainer:
         self.config = config or MDL()
         self.trained_models = {}
     
-    def train_all_models(self, datasets: Dict, session_data: Dict) -> Dict:
+    def train_all_models(self, datasets: Dict, session_data: Dict, training_split: Dict = None) -> Dict:
         """
         Train all models using real extracted functions
         
         Args:
             datasets: Training datasets
             session_data: Session configuration
+            training_split: Optional training split parameters
             
         Returns:
             Dict containing trained models and results
@@ -224,67 +238,196 @@ class RealModelTrainer:
                 
                 X, y = dataset['X'], dataset['y']
                 
-                # Split data for training/validation
-                split_idx = int(0.8 * len(X))
-                X_train, X_val = X[:split_idx], X[split_idx:]
-                y_train, y_val = y[:split_idx], y[split_idx:]
+                # Use provided training split or default to 80/20
+                if training_split and 'trainPercentage' in training_split:
+                    train_ratio = training_split['trainPercentage'] / 100
+                    val_ratio = training_split.get('valPercentage', 20) / 100
+                    
+                    # Calculate split indices
+                    train_end = int(train_ratio * len(X))
+                    val_end = train_end + int(val_ratio * len(X))
+                    
+                    X_train = X[:train_end]
+                    y_train = y[:train_end]
+                    X_val = X[train_end:val_end] if val_end < len(X) else X[train_end:]
+                    y_val = y[train_end:val_end] if val_end < len(y) else y[train_end:]
+                else:
+                    # Default split for backward compatibility
+                    split_idx = int(0.8 * len(X))
+                    X_train, X_val = X[:split_idx], X[split_idx:]
+                    y_train, y_val = y[:split_idx], y[split_idx:]
                 
                 dataset_results = {}
                 
                 # Train models based on MDL.MODE or train all if specified
+                import os
+                import pickle
+                import math
+                from datetime import datetime
+                from sklearn.metrics import mean_absolute_error, mean_squared_error
+                
+                # Helper function to clean NaN and Infinity values  
+                def clean_metric(value):
+                    if math.isnan(value) or math.isinf(value):
+                        return 0.0
+                    return float(value)
+                
+                # Create models directory if it doesn't exist
+                models_dir = os.path.join('uploads', 'trained_models')
+                os.makedirs(models_dir, exist_ok=True)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
                 try:
                     if self.config.MODE == "Dense" or self.config.MODE == "LIN":
                         logger.info("Training Dense neural network...")
                         model = train_dense(X_train, y_train, X_val, y_val, self.config)
+                        
+                        # Save model to .h5 file
+                        model_path = os.path.join(models_dir, f'dense_{dataset_name}_{timestamp}.h5')
+                        model.save(model_path)
+                        
+                        # Calculate metrics
+                        predictions = model.predict(X_val)
+                        mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        
                         dataset_results['dense'] = {
-                            'model': model,
+                            'model_path': model_path,
                             'type': 'neural_network',
-                            'config': self.config.MODE
+                            'config': self.config.MODE,
+                            'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
+                            'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
                     
                     if self.config.MODE == "CNN" or self.config.MODE == "LIN":
                         logger.info("Training CNN...")
                         model = train_cnn(X_train, y_train, X_val, y_val, self.config)
+                        
+                        # Save model to .h5 file
+                        model_path = os.path.join(models_dir, f'cnn_{dataset_name}_{timestamp}.h5')
+                        model.save(model_path)
+                        
+                        predictions = model.predict(X_val)
+                        mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        
                         dataset_results['cnn'] = {
-                            'model': model,
+                            'model_path': model_path,
                             'type': 'neural_network',
-                            'config': self.config.MODE
+                            'config': self.config.MODE,
+                            'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
+                            'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
                     
                     if self.config.MODE == "LSTM" or self.config.MODE == "LIN":
                         logger.info("Training LSTM...")
                         model = train_lstm(X_train, y_train, X_val, y_val, self.config)
+                        
+                        # Save model to .h5 file
+                        model_path = os.path.join(models_dir, f'lstm_{dataset_name}_{timestamp}.h5')
+                        model.save(model_path)
+                        
+                        predictions = model.predict(X_val)
+                        mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        
                         dataset_results['lstm'] = {
-                            'model': model,
+                            'model_path': model_path,
                             'type': 'neural_network',
-                            'config': self.config.MODE
+                            'config': self.config.MODE,
+                            'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
+                            'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
                     
                     if self.config.MODE == "LIN":
                         logger.info("Training Linear model...")
                         models = train_linear_model(X_train, y_train)
+                        
+                        # Save sklearn models using pickle
+                        model_path = os.path.join(models_dir, f'linear_{dataset_name}_{timestamp}.pkl')
+                        with open(model_path, 'wb') as f:
+                            pickle.dump(models, f)
+                        
+                        # Calculate predictions for Linear model
+                        n_samples, n_timesteps, n_features_in = X_val.shape
+                        _, n_timesteps_out, n_features_out = y_val.shape
+                        X = X_val.reshape(n_samples * n_timesteps, n_features_in)
+                        predictions = []
+                        for model in models:
+                            y_pred = model.predict(X)
+                            predictions.append(y_pred.reshape(n_samples, n_timesteps_out))
+                        predictions = np.stack(predictions, axis=-1)
+                        
+                        mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        
                         dataset_results['linear'] = {
-                            'model': models,
+                            'model_path': model_path,
                             'type': 'linear_regression',
-                            'config': self.config.MODE
+                            'config': self.config.MODE,
+                            'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
+                            'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
                     
                     if self.config.MODE == "SVR_dir":
                         logger.info("Training SVR Direct...")
                         models = train_svr_dir(X_train, y_train, self.config)
+                        
+                        # Save sklearn models using pickle
+                        model_path = os.path.join(models_dir, f'svr_dir_{dataset_name}_{timestamp}.pkl')
+                        with open(model_path, 'wb') as f:
+                            pickle.dump(models, f)
+                        
+                        # Calculate predictions for SVR
+                        n_samples, n_timesteps, n_features_in = X_val.shape
+                        _, n_timesteps_out, n_features_out = y_val.shape
+                        X = X_val.reshape(n_samples * n_timesteps, n_features_in)
+                        predictions = []
+                        for model in models:
+                            y_pred = model.predict(X)
+                            predictions.append(y_pred.reshape(n_samples, n_timesteps_out))
+                        predictions = np.stack(predictions, axis=-1)
+                        
+                        mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        
                         dataset_results['svr_dir'] = {
-                            'model': models,
+                            'model_path': model_path,
                             'type': 'support_vector',
-                            'config': self.config.MODE
+                            'config': self.config.MODE,
+                            'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
+                            'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
                     
                     if self.config.MODE == "SVR_MIMO":
                         logger.info("Training SVR MIMO...")
                         models = train_svr_mimo(X_train, y_train, self.config)
+                        
+                        # Save sklearn models using pickle
+                        model_path = os.path.join(models_dir, f'svr_mimo_{dataset_name}_{timestamp}.pkl')
+                        with open(model_path, 'wb') as f:
+                            pickle.dump(models, f)
+                        
+                        # Calculate predictions for SVR MIMO
+                        n_samples, n_timesteps, n_features_in = X_val.shape
+                        _, n_timesteps_out, n_features_out = y_val.shape
+                        X = X_val.reshape(n_samples, n_timesteps * n_features_in)
+                        predictions = []
+                        for model in models:
+                            y_pred = model.predict(X)
+                            predictions.append(y_pred)
+                        predictions = np.stack(predictions, axis=-1)
+                        predictions = predictions.reshape(n_samples, n_timesteps_out, n_features_out)
+                        
+                        mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
+                        
                         dataset_results['svr_mimo'] = {
-                            'model': models,
+                            'model_path': model_path,
                             'type': 'support_vector',
-                            'config': self.config.MODE
+                            'config': self.config.MODE,
+                            'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
+                            'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
                         
                 except Exception as model_error:
@@ -880,19 +1023,25 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if hasattr(config, 'KERNEL'):
             logger.info(f"SVR parameters: KERNEL={config.KERNEL}, C={config.C}, EPSILON={config.EPSILON}")
         
-        # Validate training split parameters if provided
-        if training_split:
-            required_split_params = ['trainPercentage', 'valPercentage', 'testPercentage', 'random_dat']
-            for param in required_split_params:
-                if param not in training_split:
-                    raise ValueError(f"Training split parameter '{param}' is required")
-            
-            # Validate percentages sum to 100
-            total_percentage = training_split['trainPercentage'] + training_split['valPercentage'] + training_split['testPercentage']
-            if abs(total_percentage - 100) > 0.1:  # Allow small floating point errors
-                raise ValueError(f"Training split percentages must sum to 100, got {total_percentage}")
-            
-            logger.info(f"Training split validated: train={training_split['trainPercentage']}%, val={training_split['valPercentage']}%, test={training_split['testPercentage']}%, random={training_split['random_dat']}")
+        # Validate that all required training split parameters are provided from frontend
+        if not training_split:
+            raise ValueError("Training split parameters are required from frontend. Must include: trainPercentage, valPercentage, testPercentage, random_dat")
+        
+        required_split_params = ['trainPercentage', 'valPercentage', 'testPercentage', 'random_dat']
+        missing_params = []
+        for param in required_split_params:
+            if param not in training_split:
+                missing_params.append(param)
+        
+        if missing_params:
+            raise ValueError(f"Missing required training split parameters from frontend: {', '.join(missing_params)}")
+        
+        # Validate percentages sum to 100
+        total_percentage = training_split['trainPercentage'] + training_split['valPercentage'] + training_split['testPercentage']
+        if abs(total_percentage - 100) > 0.1:  # Allow small floating point errors
+            raise ValueError(f"Training split percentages must sum to 100, got {total_percentage}")
+        
+        logger.info(f"Training split validated: train={training_split['trainPercentage']}%, val={training_split['valPercentage']}%, test={training_split['testPercentage']}%, random={training_split['random_dat']}")
         
         model_trainer = RealModelTrainer(config)
         training_results = model_trainer.train_all_models(

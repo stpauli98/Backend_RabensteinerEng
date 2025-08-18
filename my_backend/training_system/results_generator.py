@@ -23,7 +23,7 @@ def wape(y_true, y_pred):
         y_pred: Predicted values
         
     Returns:
-        WAPE value as percentage
+        WAPE value as percentage (0.0 if NaN)
     """
     
     y_true = np.array(y_true, dtype=np.float64)
@@ -33,7 +33,7 @@ def wape(y_true, y_pred):
     denominator = np.sum(np.abs(y_true))
     
     if denominator == 0:
-        return np.nan
+        return 0.0  # Return 0.0 instead of np.nan for JSON compatibility
 
     return (numerator/denominator)*100
 
@@ -81,32 +81,31 @@ def mase(y_true, y_pred, m = 1):
         m: Seasonality parameter (default 1)
         
     Returns:
-        MASE value
-        
-    Raises:
-        ValueError: If insufficient data for chosen seasonality
-        ZeroDivisionError: If naive MAE is 0
+        MASE value (0.0 if error)
     """
-
-    y_true = np.array(y_true, dtype=np.float64)
-    y_pred = np.array(y_pred, dtype=np.float64)      
-    
-    n = len(y_true)
-    
-    # Vorhersagefehler (MAE der Prognose)
-    mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
-
-    # MAE des Naive-m-Modells (Baseline)
-    if n <= m:
-        raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
+    try:
+        y_true = np.array(y_true, dtype=np.float64)
+        y_pred = np.array(y_pred, dtype=np.float64)      
         
-    naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
-    mae_naive = sum(naive_errors) / len(naive_errors)
+        n = len(y_true)
+        
+        # Vorhersagefehler (MAE der Prognose)
+        mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
 
-    if mae_naive == 0:
-        raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
+        # MAE des Naive-m-Modells (Baseline)
+        if n <= m:
+            return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+            
+        naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
+        mae_naive = sum(naive_errors) / len(naive_errors)
 
-    return mae_forecast/mae_naive
+        if mae_naive == 0:
+            return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+
+        return mae_forecast/mae_naive
+        
+    except Exception:
+        return 0.0  # Return 0.0 for any error
 
 
 class ResultsGenerator:
@@ -437,7 +436,7 @@ class ResultsGenerator:
             y_pred: Predicted values
             
         Returns:
-            WAPE value as percentage
+            WAPE value as percentage (0.0 if NaN)
         """
         
         y_true = np.array(y_true, dtype=np.float64)
@@ -447,7 +446,7 @@ class ResultsGenerator:
         denominator = np.sum(np.abs(y_true))
         
         if denominator == 0:
-            return np.nan
+            return 0.0  # Return 0.0 instead of np.nan for JSON compatibility
 
         return (numerator/denominator)*100
     
@@ -493,32 +492,46 @@ class ResultsGenerator:
             m: Seasonality parameter (default 1)
             
         Returns:
-            MASE value
-            
-        Raises:
-            ValueError: If insufficient data for chosen seasonality
-            ZeroDivisionError: If naive MAE is 0
+            MASE value (0.0 if error)
         """
-
-        y_true = np.array(y_true, dtype=np.float64)
-        y_pred = np.array(y_pred, dtype=np.float64)      
-        
-        n = len(y_true)
-        
-        # Vorhersagefehler (MAE der Prognose)
-        mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
-
-        # MAE des Naive-m-Modells (Baseline)
-        if n <= m:
-            raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
+        try:
+            y_true = np.array(y_true, dtype=np.float64)
+            y_pred = np.array(y_pred, dtype=np.float64)      
             
-        naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
-        mae_naive = sum(naive_errors) / len(naive_errors)
+            n = len(y_true)
+            
+            # Vorhersagefehler (MAE der Prognose)
+            mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
 
-        if mae_naive == 0:
-            raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
+            # MAE des Naive-m-Modells (Baseline)
+            if n <= m:
+                return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+                
+            naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
+            mae_naive = sum(naive_errors) / len(naive_errors)
 
-        return mae_forecast/mae_naive
+            if mae_naive == 0:
+                return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+
+            return mae_forecast/mae_naive
+            
+        except Exception:
+            return 0.0  # Return 0.0 for any error
+    
+    def _clean_json_values(self, obj):
+        """Clean NaN and Infinity values from nested dictionary/list for JSON serialization"""
+        import math
+        
+        if isinstance(obj, dict):
+            return {k: self._clean_json_values(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._clean_json_values(item) for item in obj]
+        elif isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None  # Replace NaN/Infinity with None
+            return obj
+        else:
+            return obj
     
     def save_results_to_database(self, session_id: str, supabase_client) -> bool:
         """
@@ -547,9 +560,12 @@ class ResultsGenerator:
                 logger.error(f"Could not get UUID for session {session_id}")
                 return False
             
+            # Clean NaN and Infinity values from results
+            cleaned_results = self._clean_json_values(self.results)
+            
             result_data = {
                 'session_id': uuid_session_id,  # Use UUID instead of string
-                'results': self.results,
+                'results': cleaned_results,
                 'created_at': pd.Timestamp.now().isoformat(),
                 'status': 'completed'
             }

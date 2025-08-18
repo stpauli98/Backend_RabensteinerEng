@@ -53,9 +53,11 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
     model.add(tf.keras.layers.Flatten())
     
     # Dense-Layer hinzufügen
+    # Convert activation function to lowercase for Keras compatibility
+    activation_func = MDL.ACTF.lower() if hasattr(MDL.ACTF, 'lower') else MDL.ACTF
     for _ in range(MDL.LAY):
         model.add(tf.keras.layers.Dense(MDL.N,                  # Anzahl an Neuronen
-                                        activation = MDL.ACTF)) # Aktivierungsfunktion
+                                        activation = activation_func)) # Aktivierungsfunktion
     
     # Output-Schicht
     model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
@@ -118,18 +120,21 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     # Modellinitialisierung
     model = tf.keras.Sequential()
     
+    # Convert activation function to lowercase for Keras compatibility
+    activation_func = MDL.ACTF.lower() if hasattr(MDL.ACTF, 'lower') else MDL.ACTF
+    
     # Conv1D-Layer hinzufügen
     for i in range(MDL.LAY):
         if i == 0:
             # Erste Schicht benötigt input_shape
             model.add(tf.keras.layers.Conv1D(filters = MDL.N,
                                            kernel_size = MDL.K,
-                                           activation = MDL.ACTF,
+                                           activation = activation_func,
                                            input_shape = (train_x.shape[1], train_x.shape[2])))
         else:
             model.add(tf.keras.layers.Conv1D(filters = MDL.N,
                                            kernel_size = MDL.K,
-                                           activation = MDL.ACTF))
+                                           activation = activation_func))
     
     # Daten für Dense-Layer vorbereiten
     model.add(tf.keras.layers.Flatten())
@@ -429,12 +434,20 @@ class ModelTrainer:
         Returns:
             Dict containing trained models and results
         """
+        import os
+        import pickle
+        from datetime import datetime
+        
         try:
             results = {}
             
             # Validate training_split is provided
             if not training_split:
                 raise ValueError("Training split parameters are required but not provided")
+            
+            # Create models directory if it doesn't exist
+            models_dir = os.path.join('uploads', 'trained_models')
+            os.makedirs(models_dir, exist_ok=True)
             
             for dataset_name, dataset in datasets.items():
                 X, y = dataset['X'], dataset['y']
@@ -443,28 +456,127 @@ class ModelTrainer:
                 X_train, X_test, y_train, y_test = self._split_data(X, y, training_split)
                 
                 dataset_results = {}
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 
                 # Use the real training functions extracted from original
                 if self.config.MODE == "Dense":
-                    dataset_results['dense'] = train_dense(X_train, y_train, X_test, y_test, self.config)
+                    model = train_dense(X_train, y_train, X_test, y_test, self.config)
+                    # Save Keras model to .h5 file
+                    model_path = os.path.join(models_dir, f'dense_{dataset_name}_{timestamp}.h5')
+                    model.save(model_path)
+                    
+                    # Calculate metrics
+                    predictions = model.predict(X_test)
+                    metrics = self._calculate_metrics(y_test, predictions)
+                    
+                    dataset_results['dense'] = {
+                        'model_path': model_path,
+                        'type': 'neural_network',
+                        'metrics': metrics,
+                        'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+                    }
                 
                 elif self.config.MODE == "CNN":
-                    dataset_results['cnn'] = train_cnn(X_train, y_train, X_test, y_test, self.config)
+                    model = train_cnn(X_train, y_train, X_test, y_test, self.config)
+                    # Save Keras model to .h5 file
+                    model_path = os.path.join(models_dir, f'cnn_{dataset_name}_{timestamp}.h5')
+                    model.save(model_path)
+                    
+                    predictions = model.predict(X_test)
+                    metrics = self._calculate_metrics(y_test, predictions)
+                    
+                    dataset_results['cnn'] = {
+                        'model_path': model_path,
+                        'type': 'neural_network',
+                        'metrics': metrics,
+                        'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+                    }
                 
                 elif self.config.MODE == "LSTM":
-                    dataset_results['lstm'] = train_lstm(X_train, y_train, X_test, y_test, self.config)
+                    model = train_lstm(X_train, y_train, X_test, y_test, self.config)
+                    # Save Keras model to .h5 file
+                    model_path = os.path.join(models_dir, f'lstm_{dataset_name}_{timestamp}.h5')
+                    model.save(model_path)
+                    
+                    predictions = model.predict(X_test)
+                    metrics = self._calculate_metrics(y_test, predictions)
+                    
+                    dataset_results['lstm'] = {
+                        'model_path': model_path,
+                        'type': 'neural_network',
+                        'metrics': metrics,
+                        'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+                    }
                 
                 elif self.config.MODE == "AR LSTM":
-                    dataset_results['ar_lstm'] = train_ar_lstm(X_train, y_train, X_test, y_test, self.config)
+                    model = train_ar_lstm(X_train, y_train, X_test, y_test, self.config)
+                    # Save Keras model to .h5 file
+                    model_path = os.path.join(models_dir, f'ar_lstm_{dataset_name}_{timestamp}.h5')
+                    model.save(model_path)
+                    
+                    predictions = model.predict(X_test)
+                    metrics = self._calculate_metrics(y_test, predictions)
+                    
+                    dataset_results['ar_lstm'] = {
+                        'model_path': model_path,
+                        'type': 'neural_network',
+                        'metrics': metrics,
+                        'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+                    }
                 
                 elif self.config.MODE == "SVR_dir":
-                    dataset_results['svr_dir'] = train_svr_dir(X_train, y_train, self.config)
+                    models = train_svr_dir(X_train, y_train, self.config)
+                    # Save sklearn models using pickle
+                    model_path = os.path.join(models_dir, f'svr_dir_{dataset_name}_{timestamp}.pkl')
+                    with open(model_path, 'wb') as f:
+                        pickle.dump(models, f)
+                    
+                    # Calculate predictions and metrics for SVR
+                    predictions = self._predict_svr(models, X_test, y_test.shape)
+                    metrics = self._calculate_metrics(y_test, predictions)
+                    
+                    dataset_results['svr_dir'] = {
+                        'model_path': model_path,
+                        'type': 'support_vector',
+                        'metrics': metrics,
+                        'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+                    }
                 
                 elif self.config.MODE == "SVR_MIMO":
-                    dataset_results['svr_mimo'] = train_svr_mimo(X_train, y_train, self.config)
+                    models = train_svr_mimo(X_train, y_train, self.config)
+                    # Save sklearn models using pickle
+                    model_path = os.path.join(models_dir, f'svr_mimo_{dataset_name}_{timestamp}.pkl')
+                    with open(model_path, 'wb') as f:
+                        pickle.dump(models, f)
+                    
+                    # Calculate predictions and metrics for SVR MIMO
+                    predictions = self._predict_svr_mimo(models, X_test, y_test.shape)
+                    metrics = self._calculate_metrics(y_test, predictions)
+                    
+                    dataset_results['svr_mimo'] = {
+                        'model_path': model_path,
+                        'type': 'support_vector',
+                        'metrics': metrics,
+                        'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+                    }
                 
                 elif self.config.MODE == "LIN":
-                    dataset_results['linear'] = train_linear_model(X_train, y_train)
+                    models = train_linear_model(X_train, y_train)
+                    # Save sklearn models using pickle
+                    model_path = os.path.join(models_dir, f'linear_{dataset_name}_{timestamp}.pkl')
+                    with open(model_path, 'wb') as f:
+                        pickle.dump(models, f)
+                    
+                    # Calculate predictions and metrics for Linear
+                    predictions = self._predict_linear(models, X_test, y_test.shape)
+                    metrics = self._calculate_metrics(y_test, predictions)
+                    
+                    dataset_results['linear'] = {
+                        'model_path': model_path,
+                        'type': 'linear_regression',
+                        'metrics': metrics,
+                        'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+                    }
                 
                 results[dataset_name] = dataset_results
             
@@ -516,6 +628,151 @@ class ModelTrainer:
         except Exception as e:
             logger.error(f"Error splitting data: {str(e)}")
             raise
+    
+    def _calculate_metrics(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
+        """
+        Calculate evaluation metrics for predictions
+        
+        Args:
+            y_true: True values
+            y_pred: Predicted values
+            
+        Returns:
+            Dict containing metrics
+        """
+        import math
+        
+        try:
+            # Flatten arrays if needed
+            if len(y_true.shape) > 2:
+                y_true = y_true.reshape(y_true.shape[0], -1)
+            if len(y_pred.shape) > 2:
+                y_pred = y_pred.reshape(y_pred.shape[0], -1)
+            
+            # Calculate basic metrics
+            mae = mean_absolute_error(y_true, y_pred)
+            mse = mean_squared_error(y_true, y_pred)
+            rmse = np.sqrt(mse)
+            
+            # Calculate MAPE with zero handling
+            mask = y_true != 0
+            if np.any(mask):
+                mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+            else:
+                mape = 0.0
+            
+            # Clean NaN and Infinity values
+            def clean_metric(value):
+                if math.isnan(value) or math.isinf(value):
+                    return 0.0
+                return float(value)
+            
+            return {
+                'mae': clean_metric(mae),
+                'mse': clean_metric(mse),
+                'rmse': clean_metric(rmse),
+                'mape': clean_metric(mape)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating metrics: {str(e)}")
+            return {
+                'mae': 0.0,
+                'mse': 0.0,
+                'rmse': 0.0,
+                'mape': 0.0
+            }
+    
+    def _predict_svr(self, models: List, X_test: np.ndarray, y_shape: Tuple) -> np.ndarray:
+        """
+        Generate predictions for SVR Direct models
+        
+        Args:
+            models: List of trained SVR models
+            X_test: Test input data
+            y_shape: Shape of target output
+            
+        Returns:
+            Predictions array
+        """
+        try:
+            n_samples, n_timesteps, n_features_in = X_test.shape
+            _, n_timesteps_out, n_features_out = y_shape
+            
+            X = X_test.reshape(n_samples * n_timesteps, n_features_in)
+            
+            predictions = []
+            for i, model in enumerate(models):
+                y_pred = model.predict(X)
+                predictions.append(y_pred.reshape(n_samples, n_timesteps_out))
+            
+            predictions = np.stack(predictions, axis=-1)
+            return predictions
+            
+        except Exception as e:
+            logger.error(f"Error predicting with SVR: {str(e)}")
+            return np.zeros(y_shape)
+    
+    def _predict_svr_mimo(self, models: List, X_test: np.ndarray, y_shape: Tuple) -> np.ndarray:
+        """
+        Generate predictions for SVR MIMO models
+        
+        Args:
+            models: List of trained SVR models
+            X_test: Test input data
+            y_shape: Shape of target output
+            
+        Returns:
+            Predictions array
+        """
+        try:
+            n_samples, n_timesteps, n_features_in = X_test.shape
+            _, n_timesteps_out, n_features_out = y_shape
+            
+            X = X_test.reshape(n_samples, n_timesteps * n_features_in)
+            
+            predictions = []
+            for model in models:
+                y_pred = model.predict(X)
+                predictions.append(y_pred)
+            
+            predictions = np.stack(predictions, axis=-1)
+            predictions = predictions.reshape(n_samples, n_timesteps_out, n_features_out)
+            return predictions
+            
+        except Exception as e:
+            logger.error(f"Error predicting with SVR MIMO: {str(e)}")
+            return np.zeros(y_shape)
+    
+    def _predict_linear(self, models: List, X_test: np.ndarray, y_shape: Tuple) -> np.ndarray:
+        """
+        Generate predictions for Linear models
+        
+        Args:
+            models: List of trained Linear Regression models
+            X_test: Test input data
+            y_shape: Shape of target output
+            
+        Returns:
+            Predictions array
+        """
+        try:
+            n_samples, n_timesteps, n_features_in = X_test.shape
+            _, n_timesteps_out, n_features_out = y_shape
+            
+            X = X_test.reshape(n_samples * n_timesteps, n_features_in)
+            
+            predictions = []
+            for model in models:
+                y_pred = model.predict(X)
+                predictions.append(y_pred.reshape(n_samples, n_timesteps_out))
+            
+            predictions = np.stack(predictions, axis=-1)
+            return predictions
+            
+        except Exception as e:
+            logger.error(f"Error predicting with Linear model: {str(e)}")
+            return np.zeros(y_shape)
 
 
 # Factory function to create model trainer
