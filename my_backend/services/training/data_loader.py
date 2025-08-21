@@ -6,7 +6,8 @@ Handles loading session data from database and downloading files
 import os
 import pandas as pd
 import math
-from supabase import create_client
+# Temporarily disable direct Supabase import
+# from supabase import create_client
 from typing import Dict, List, Optional, Tuple
 import logging
 

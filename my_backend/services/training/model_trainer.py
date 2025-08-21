@@ -13,7 +13,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM, Conv1D, MaxPooling1D, Flatten, Dropout
+from tensorflow.keras.layers import Dense, LSTM, Conv1D, Conv2D, MaxPooling1D, Flatten, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 from typing import Dict, List, Tuple, Optional, Any
 import logging
@@ -25,9 +25,6 @@ logger = logging.getLogger(__name__)
 
 def train_dense(train_x, train_y, val_x, val_y, MDL):    
     """
-    Funktion trainiert und validiert ein Neuronales Netz anhand der 
-    eingegebenen Trainingsdaten (train_x, train_y) und Validierungsdaten 
-    (val_x, val_y).
     
     train_x...Trainingsdaten (Eingabedaten)
     train_y...Trainingsdaten (Ausgabedaten)
@@ -103,17 +100,14 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
 
 def train_cnn(train_x, train_y, val_x, val_y, MDL):    
     """
-    Funktion trainiert und validiert ein Convolutional Neural Network
+    CNN training function using Conv2D layers as in original implementation
     
-    Extracted from training_backend_test_2.py lines 239-320
+    Extracted from training_backend_main.py lines 239-320
     """
     
     # Validation: Check if we have enough features to train CNN
     if train_x.shape[2] == 0:
         raise ValueError(f"Cannot train CNN with 0 features. Input shape: {train_x.shape}")
-    
-    if train_x.shape[2] < MDL.K:
-        raise ValueError(f"Cannot train CNN: kernel size {MDL.K} is larger than feature count {train_x.shape[2]}")
     
     # MODELLDEFINITION ########################################################
     
@@ -123,23 +117,40 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     # Convert activation function to lowercase for Keras compatibility
     activation_func = MDL.ACTF.lower() if hasattr(MDL.ACTF, 'lower') else MDL.ACTF
     
-    # Conv1D-Layer hinzufügen
+    # Konverterierung in ein 4D-Array (Conv2D-Layer erwartet Eingabedaten mit vier Dimensionen)
+    # - batch_size: Anzahl der Trainingsbeispiele
+    # - Höhe und Breite: räumliche Dimensionen deiner Eingabedaten
+    # - Kanäle: Anzahl der Kanäle pro Pixel (z. B. 3 für RGB-Bilder, 1 für Graustufen)
+    train_x_4d = train_x.reshape(train_x.shape[0], train_x.shape[1], train_x.shape[2], 1)
+    val_x_4d = val_x.reshape(val_x.shape[0], val_x.shape[1], val_x.shape[2], 1)
+    
+    # Conv2D-Layer hinzufügen (wie im Original)
     for i in range(MDL.LAY):
         if i == 0:
-            # Erste Schicht benötigt input_shape
-            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
+            # Input-Layer mit Angabe der Input-Shape
+            model.add(tf.keras.layers.Conv2D(filters = MDL.N,
                                            kernel_size = MDL.K,
+                                           padding = 'same',
                                            activation = activation_func,
-                                           input_shape = (train_x.shape[1], train_x.shape[2])))
+                                           input_shape = train_x_4d.shape[1:]))
         else:
-            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
+            model.add(tf.keras.layers.Conv2D(filters = MDL.N,
                                            kernel_size = MDL.K,
+                                           padding = 'same',
                                            activation = activation_func))
     
-    # Daten für Dense-Layer vorbereiten
-    model.add(tf.keras.layers.Flatten())
+    # Output-Layer: Convolution mit 1 Filter (oder Anzahl Kanäle von train_y)
+    # und linearer Aktivierung, damit die Ausgabe dieselbe Form wie train_y hat
+    output_channels = train_y.shape[-1] if len(train_y.shape) == 4 else 1
     
-    # Output-Schicht
+    model.add(tf.keras.layers.Conv2D(filters = output_channels,
+                                     kernel_size = 1,
+                                     padding = 'same',
+                                     activation = 'linear',
+                                     kernel_initializer = tf.initializers.zeros))
+    
+    # Reshape output to match target shape
+    model.add(tf.keras.layers.Flatten())
     model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
                                   kernel_initializer = tf.initializers.zeros))
     model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
@@ -161,13 +172,14 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     
     print("Modell wird trainiert.")
     
+    # Train with 4D data
     model.fit(
-        x               = train_x,
+        x               = train_x_4d,
         y               = train_y,
         epochs          = MDL.EP,
         verbose         = 1,
         callbacks       = [earlystopping],
-        validation_data = (val_x, val_y)
+        validation_data = (val_x_4d, val_y)
         )
          
     print("Modell wurde trainiert.")
@@ -177,7 +189,6 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
 
 def train_lstm(train_x, train_y, val_x, val_y, MDL):
     """
-    Funktion trainiert und validiert ein LSTM Neural Network
     
     Extracted from training_backend_test_2.py lines 321-388
     """
@@ -249,7 +260,6 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
 
 def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
     """
-    Funktion trainiert und validiert ein Autoregressive LSTM
     
     Extracted from training_backend_test_2.py lines 389-457
     """
@@ -323,28 +333,43 @@ def train_svr_dir(train_x, train_y, MDL):
     """
     Funktion trainiert SVR Direktmodell
     
+    Note: This model requires input and output to have same timesteps
     Extracted from training_backend_test_2.py lines 458-492
     """
     
     # MODELLDEFINITION ########################################################
     
     # Daten umformen
-    n_samples, n_timesteps, n_features_in = train_x.shape
-    _, _, n_features_out = train_y.shape
+    n_samples, n_timesteps_in, n_features_in = train_x.shape
+    _, n_timesteps_out, n_features_out = train_y.shape
     
-    X = train_x.reshape(n_samples * n_timesteps, n_features_in)
+    # SVR Direct requires same timesteps for input and output
+    if n_timesteps_in != n_timesteps_out:
+        # Adjust by using only matching timesteps
+        min_timesteps = min(n_timesteps_in, n_timesteps_out)
+        train_x_adj = train_x[:, :min_timesteps, :]
+        train_y_adj = train_y[:, :min_timesteps, :]
+        X = train_x_adj.reshape(n_samples * min_timesteps, n_features_in)
+    else:
+        X = train_x.reshape(n_samples * n_timesteps_in, n_features_in)
+        train_y_adj = train_y
     
     # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
     models = []
     for i in range(n_features_out):
-        y_i = train_y[:, :, i].reshape(-1)
+        y_i = train_y_adj[:, :, i].reshape(-1)
         
-        # SVR Modell erstellen
-        model = SVR(kernel = MDL.KERNEL, 
-                   C = MDL.C, 
-                   epsilon = MDL.EPSILON)
+        # SVR Modell erstellen mit StandardScaler Pipeline
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
+        model = make_pipeline(
+            StandardScaler(),
+            SVR(kernel = MDL.KERNEL, 
+                C = MDL.C, 
+                epsilon = MDL.EPSILON)
+        )
         model.fit(X, y_i)
         models.append(model)
     print("Modell wurde trainiert.")
@@ -388,23 +413,33 @@ def train_linear_model(trn_x, trn_y):
     """
     Funktion trainiert Linear Regression Modell
     
+    Note: This model requires input and output to have same timesteps
     Extracted from training_backend_test_2.py lines 531-551
     """
     
     # MODELLDEFINITION ########################################################
     
     # Daten umformen
-    n_samples, n_timesteps, n_features_in = trn_x.shape
-    _, _, n_features_out = trn_y.shape
+    n_samples, n_timesteps_in, n_features_in = trn_x.shape
+    _, n_timesteps_out, n_features_out = trn_y.shape
     
-    X = trn_x.reshape(n_samples * n_timesteps, n_features_in)   # (390, 2)
+    # Linear model requires same timesteps for input and output
+    if n_timesteps_in != n_timesteps_out:
+        # Adjust by using only matching timesteps
+        min_timesteps = min(n_timesteps_in, n_timesteps_out)
+        trn_x_adj = trn_x[:, :min_timesteps, :]
+        trn_y_adj = trn_y[:, :min_timesteps, :]
+        X = trn_x_adj.reshape(n_samples * min_timesteps, n_features_in)
+    else:
+        X = trn_x.reshape(n_samples * n_timesteps_in, n_features_in)
+        trn_y_adj = trn_y
     
     # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
     models = []
     for i in range(n_features_out):
-        y_i = trn_y[:, :, i].reshape(-1)
+        y_i = trn_y_adj[:, :, i].reshape(-1)
         model = LinearRegression()
         model.fit(X, y_i)
         models.append(model)

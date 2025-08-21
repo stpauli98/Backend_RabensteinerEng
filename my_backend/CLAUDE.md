@@ -61,3 +61,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Outlier Detection**: Statistical outlier removal with customizable thresholds
 - **Visualization**: Matplotlib-based chart generation for data analysis
 - **Machine Learning**: Scikit-learn integration for model training and predictions
+- /Users/posao/Documents/GitHub/Backend_RabensteinerEng/my_backend/trainingMain/training_backend_main.py je glavni kod za training koje je rasjeckan na djelove. sta god ti nije jasno kako funkcionise i kako bi trebalo da funkcionise gledas u training_backend_main.py
