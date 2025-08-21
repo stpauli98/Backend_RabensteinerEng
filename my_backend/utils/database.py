@@ -260,13 +260,16 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
             logger.info(f"Using UUID session_id for zeitschritte: {database_session_id}")
             
         # Prepare data for insertion
+        # Handle both 'offset' and 'offsett' from frontend (frontend sends 'offsett')
+        offset_value = zeitschritte.get("offsett", zeitschritte.get("offset", ""))
         data = {
             "session_id": database_session_id,
             "eingabe": zeitschritte.get("eingabe", ""),
             "ausgabe": zeitschritte.get("ausgabe", ""),
             "zeitschrittweite": zeitschritte.get("zeitschrittweite", ""),
-            "offsett": zeitschritte.get("offset", "")  # Note: column name is 'offsett' with double 't'
+            "offsett": offset_value  # Note: column name is 'offsett' with double 't'
         }
+        logger.info(f"Preparing zeitschritte data with offsett value: '{offset_value}'")
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
         logger.info(f"Checking for existing zeitschritte record for session {database_session_id}")
@@ -665,8 +668,9 @@ def save_session_to_supabase(session_id: str) -> bool:
                 logger.error(f"Failed to get UUID for session {session_id}")
                 return False
             logger.info(f"Successfully converted '{session_id}' to UUID: '{database_session_id}' in save_session_to_supabase")
-        # Base directory for file uploads
-        upload_base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'file_uploads')
+        # Base directory for file uploads - use the api/routes directory where files are actually saved
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Go up to my_backend
+        upload_base_dir = os.path.join(base_path, 'api', 'routes', 'uploads', 'file_uploads')
         session_dir = os.path.join(upload_base_dir, session_id)
         
         # Check if session directory exists

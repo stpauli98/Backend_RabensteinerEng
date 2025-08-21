@@ -18,11 +18,13 @@ def register_socketio_handlers(socketio):
             logger.error(f"Error in connect handler: {str(e)}")
 
     @socketio.on('disconnect')
-    def handle_disconnect():
+    def handle_disconnect(*args, **kwargs):
         try:
             logger.info("Client disconnected")
+            return True  # Return True to indicate successful handling
         except Exception as e:
             logger.error(f"Error in disconnect handler: {str(e)}")
+            return False
 
     # RowData Socket.IO event handlers
     @socketio.on('join_upload_room')
@@ -75,7 +77,7 @@ def register_socketio_handlers(socketio):
         Allow clients to leave training session rooms
         """
         try:
-            session_id = data.get('session_id')
+            session_id = data.get('session_id') if data else None
             if session_id:
                 room = f"training_{session_id}"
                 leave_room(room)
@@ -86,8 +88,10 @@ def register_socketio_handlers(socketio):
                     'session_id': session_id,
                     'message': 'Successfully left training session'
                 })
+            return True
         except Exception as e:
             logger.error(f"Error leaving training session: {str(e)}")
+            return False
 
     @socketio.on('request_training_status')
     def handle_request_training_status(data):

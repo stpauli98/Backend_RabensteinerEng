@@ -16,7 +16,9 @@ def init_extensions(app):
                      logger=False,
                      engineio_logger=False,
                      ping_timeout=60,
-                     ping_interval=25)
+                     ping_interval=25,
+                     transports=['polling', 'websocket'],  # Prioritize polling over websocket
+                     always_connect=True)
     
     # Register socketio in app extensions for current_app access
     app.extensions['socketio'] = socketio
