@@ -4,9 +4,7 @@ import logging
 import uuid
 import base64
 from datetime import datetime
-# Temporarily disable Supabase import due to hanging issue
-# from supabase import create_client, Client
-Client = None
+from supabase import create_client, Client
 from dotenv import load_dotenv
 
 # Configure logging
@@ -31,20 +29,15 @@ def get_supabase_client():
     Returns:
         Client: Supabase client instance
     """
-    # Temporarily disabled due to import hanging issue
-    logger.warning("Supabase client temporarily disabled due to import issue")
-    return None
-    
-    # Original code commented out:
-    # if not SUPABASE_URL or not SUPABASE_KEY:
-    #     logger.error("Supabase URL or key not found in environment variables")
-    #     return None
-    #     
-    # try:
-    #     return create_client(SUPABASE_URL, SUPABASE_KEY)
-    # except Exception as e:
-    #     logger.error(f"Error creating Supabase client: {str(e)}")
-    #     return None
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        logger.error("Supabase URL or key not found in environment variables")
+        return None
+        
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        logger.error(f"Error creating Supabase client: {str(e)}")
+        return None
 
 def create_or_get_session_uuid(session_id: str) -> str:
     """
