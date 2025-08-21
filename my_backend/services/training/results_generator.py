@@ -550,10 +550,7 @@ class ResultsGenerator:
                 return False
             
             # Convert session_id to UUID for database
-            import sys
-            import os
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from supabase_client import create_or_get_session_uuid
+            from utils.database import create_or_get_session_uuid
             
             uuid_session_id = create_or_get_session_uuid(session_id)
             if not uuid_session_id:

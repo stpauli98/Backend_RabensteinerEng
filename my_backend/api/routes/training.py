@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 import tempfile
 import glob
 import shutil
-from supabase_client import save_session_to_supabase, get_string_id_from_uuid
+from utils.database import save_session_to_supabase, get_string_id_from_uuid
 
 # Configure logging
 logging.basicConfig(
@@ -875,7 +875,7 @@ def init_session():
             
         # Create session in Supabase and save session data
         try:
-            from supabase_client import create_or_get_session_uuid
+            from utils.database import create_or_get_session_uuid
             session_uuid = create_or_get_session_uuid(session_id)
             if session_uuid:
                 logger.info(f"Created session UUID {session_uuid} for session {session_id}")
@@ -1037,7 +1037,7 @@ def save_time_info_endpoint():
         logger.info(f"Processing time_info save for session: {session_id}")
         logger.info(f"Time info keys: {list(time_info.keys()) if time_info else 'None'}")
         
-        from supabase_client import save_time_info
+        from utils.database import save_time_info
         success = save_time_info(session_id, time_info)
         
         if success:
@@ -1058,7 +1058,7 @@ def create_database_session():
         data = request.json
         session_id = data.get('sessionId') if data else None
         
-        from supabase_client import create_or_get_session_uuid
+        from utils.database import create_or_get_session_uuid
         session_uuid = create_or_get_session_uuid(session_id)
         
         if session_uuid:
@@ -1079,7 +1079,7 @@ def test_data_loading(session_id):
     """Test endpoint to check if data exists for a session ID."""
     try:
         # Get UUID for session
-        from supabase_client import create_or_get_session_uuid, get_supabase_client
+        from utils.database import create_or_get_session_uuid, get_supabase_client
         session_uuid = create_or_get_session_uuid(session_id)
         
         if not session_uuid:
@@ -1137,7 +1137,7 @@ def get_session_uuid(session_id):
             })
         except (ValueError, TypeError):
             # It's a string session ID, get or create the UUID
-            from supabase_client import create_or_get_session_uuid
+            from utils.database import create_or_get_session_uuid
             session_uuid = create_or_get_session_uuid(session_id)
             
             if session_uuid:
@@ -1196,7 +1196,7 @@ def save_zeitschritte_endpoint():
         logger.info(f"Processing zeitschritte save for session: {session_id}")
         logger.info(f"Zeitschritte keys: {list(zeitschritte.keys()) if zeitschritte else 'None'}")
         
-        from supabase_client import save_zeitschritte
+        from utils.database import save_zeitschritte
         success = save_zeitschritte(session_id, zeitschritte)
         
         if success:
@@ -1276,7 +1276,7 @@ def download_file(session_id, file_type, file_name):
     Downloads a file from Supabase Storage.
     """
     try:
-        from supabase_client import get_supabase_client, get_string_id_from_uuid
+        from utils.database import get_supabase_client, get_string_id_from_uuid
         supabase = get_supabase_client()
         if not supabase:
             return jsonify({'success': False, 'error': 'Supabase client not available'}), 500
@@ -1390,7 +1390,7 @@ def run_analysis(session_id):
 def get_zeitschritte(session_id):
     """Get zeitschritte data for a session."""
     try:
-        from supabase_client import get_supabase_client
+        from utils.database import get_supabase_client
         supabase = get_supabase_client()
         
         # Get zeitschritte from database
@@ -1425,7 +1425,7 @@ def get_zeitschritte(session_id):
 def get_time_info(session_id):
     """Get time info data for a session."""
     try:
-        from supabase_client import get_supabase_client
+        from utils.database import get_supabase_client
         supabase = get_supabase_client()
         
         # Get time_info from database
@@ -1454,7 +1454,7 @@ def get_time_info(session_id):
 def debug_files_table(session_id):
     """Debug endpoint to inspect files table data for a session."""
     try:
-        from supabase_client import get_supabase_client, create_or_get_session_uuid
+        from utils.database import get_supabase_client, create_or_get_session_uuid
         
         # Convert session_id to UUID if needed
         try:

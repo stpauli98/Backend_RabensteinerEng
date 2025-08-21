@@ -13,9 +13,7 @@ from typing import Dict, Optional, Any, List
 import json
 
 # Import existing supabase client
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from supabase_client import get_supabase_client
+from utils.database import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
