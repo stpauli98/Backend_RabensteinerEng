@@ -20,6 +20,6 @@ numpy==1.26.3
 scikit-learn==1.5.1
 matplotlib==3.8.2
 
-# Heavy packages - will be added in next commit
-# seaborn==0.13.1
-# tensorflow==2.16.1
+# Heavy packages
+seaborn==0.13.1
+tensorflow==2.16.1

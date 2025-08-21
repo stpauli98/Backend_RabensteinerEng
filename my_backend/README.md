@@ -1,50 +1,50 @@
 # Backend - Rabensteiner Engineering
 
-Backend aplikacija za Rabensteiner Engineering sistem za obradu podataka i treniranje ML modela.
+Backend application for Rabensteiner Engineering data processing and ML model training system.
 
-## 📋 Pregled
+## 📋 Overview
 
-Backend omogućava:
-- Upload i obradu CSV podataka u chunk-ovima
-- Procesiranje i transformaciju vremenskih serija
-- Treniranje različitih ML modela (Dense, CNN, LSTM, SVR, Linear)
-- Real-time praćenje progresa preko WebSocket-a
-- Cloud integraciju sa Supabase
-- Automatsko čišćenje starih fajlova
+The backend provides:
+- Chunked CSV data upload and processing
+- Time series processing and transformation
+- Training of various ML models (Dense, CNN, LSTM, SVR, Linear)
+- Real-time progress tracking via WebSocket
+- Cloud integration with Supabase
+- Automatic cleanup of old files
 
-## 🚀 Instalacija
+## 🚀 Installation
 
-### Preduslovi
+### Prerequisites
 - Python 3.8+
 - pip
-- Virtual environment (preporučeno)
+- Virtual environment (recommended)
 
-### Koraci instalacije
+### Installation Steps
 
-1. **Kloniraj repozitorijum**
+1. **Clone the repository**
 ```bash
 git clone https://github.com/your-repo/Backend_RabensteinerEng.git
 cd Backend_RabensteinerEng/my_backend
 ```
 
-2. **Kreiraj virtuelno okruženje**
+2. **Create virtual environment**
 ```bash
 python -m venv venv
-source venv/bin/activate  # Na Windows: venv\Scripts\activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. **Instaliraj zavisnosti**
+3. **Install dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-4. **Konfiguriši environment varijable**
+4. **Configure environment variables**
 ```bash
 cp .env.example .env
-# Edituj .env fajl sa tvojim podešavanjima
+# Edit .env file with your settings
 ```
 
-## 🏗️ Arhitektura
+## 🏗️ Architecture
 
 ```
 my_backend/
@@ -73,9 +73,9 @@ my_backend/
 └── app.py               # Entry point
 ```
 
-## 🔧 Konfiguracija
+## 🔧 Configuration
 
-### Environment varijable (.env)
+### Environment Variables (.env)
 
 ```env
 # Flask
@@ -92,16 +92,16 @@ UPLOAD_FOLDER=uploads
 TEMP_FOLDER=temp_uploads
 ```
 
-## 🚦 Pokretanje
+## 🚦 Running the Application
 
-### Development mode
+### Development Mode
 ```bash
 python app.py
 ```
 
-Server će biti dostupan na `http://localhost:8080`
+Server will be available at `http://localhost:8080`
 
-### Production mode
+### Production Mode
 ```bash
 gunicorn -w 4 -b 0.0.0.0:8080 --timeout 300 app:app
 ```
@@ -115,50 +115,50 @@ docker run -p 8080:8080 --env-file .env rabensteiner-backend
 ## 📡 API Endpoints
 
 ### Health Check
-- `GET /` - Status servera
+- `GET /` - Server status
 - `GET /health` - Health check
 
 ### Data Upload
-- `POST /api/loadRowData/upload-chunk` - Upload podataka u chunk-ovima
-- `POST /api/loadRowData/finalize-upload` - Finalizacija upload-a
-- `POST /api/loadRowData/cancel-upload` - Prekini upload
+- `POST /api/loadRowData/upload-chunk` - Upload data in chunks
+- `POST /api/loadRowData/finalize-upload` - Finalize upload
+- `POST /api/loadRowData/cancel-upload` - Cancel upload
 
 ### Data Processing
-- `POST /api/firstProcessing/upload_chunk` - Inicijalna obrada
-- `POST /api/dataProcessingMain/upload-chunk` - Glavna obrada
-- `POST /api/adjustmentsOfData/process` - Prilagođavanje podataka
+- `POST /api/firstProcessing/upload_chunk` - Initial processing
+- `POST /api/dataProcessingMain/upload-chunk` - Main processing
+- `POST /api/adjustmentsOfData/process` - Data adjustments
 
 ### Training
-- `POST /api/training/generate-dataset` - Generisanje dataset-a
-- `POST /api/training/train` - Treniranje modela
-- `GET /api/training/status/<session_id>` - Status treniranja
+- `POST /api/training/generate-dataset` - Generate dataset
+- `POST /api/training/train` - Train models
+- `GET /api/training/status/<session_id>` - Training status
 
 ### Cloud Operations
-- `POST /api/cloud/upload-chunk` - Upload na cloud
-- `POST /api/cloud/clouddata` - Preuzmi cloud podatke
-- `POST /api/cloud/interpolate-chunked` - Interpolacija podataka
+- `POST /api/cloud/upload-chunk` - Cloud upload
+- `POST /api/cloud/clouddata` - Retrieve cloud data
+- `POST /api/cloud/interpolate-chunked` - Data interpolation
 
 ## 🔌 WebSocket Events
 
 ### Client → Server
-- `connect` - Konekcija na server
-- `join` - Pridruži se room-u
-- `join_training_session` - Pridruži se training sesiji
-- `request_training_status` - Zatraži status treniranja
+- `connect` - Connect to server
+- `join` - Join room
+- `join_training_session` - Join training session
+- `request_training_status` - Request training status
 
 ### Server → Client
-- `upload_progress` - Progres upload-a
-- `training_status_update` - Update statusa treniranja
-- `dataset_status_update` - Status generisanja dataset-a
-- `processing_error` - Greška u procesiranju
+- `upload_progress` - Upload progress
+- `training_status_update` - Training status update
+- `dataset_status_update` - Dataset generation status
+- `processing_error` - Processing error
 
-## 🧪 Testiranje
+## 🧪 Testing
 
 ```bash
-# Pokreni unit testove
+# Run unit tests
 python -m pytest tests/
 
-# Sa coverage
+# With coverage
 python -m pytest --cov=. tests/
 ```
 
@@ -171,13 +171,13 @@ gcloud run deploy --image gcr.io/PROJECT_ID/rabensteiner-backend --platform mana
 ```
 
 ### Render.com
-1. Poveži GitHub repozitorijum
-2. Podesi environment varijable
-3. Deploy automatski na push
+1. Connect GitHub repository
+2. Set environment variables
+3. Auto-deploy on push
 
 ## 🐛 Debugging
 
-### Logovi
+### Logging
 ```python
 import logging
 logger = logging.getLogger(__name__)
@@ -188,32 +188,32 @@ logger.error("Error message")
 
 ### Common Issues
 
-**Port već u upotrebi:**
+**Port already in use:**
 ```bash
 lsof -i :8080
 kill -9 <PID>
 ```
 
-**Import greške:**
-Proveri da si u pravom direktorijumu i da je virtuelno okruženje aktivno.
+**Import errors:**
+Check that you're in the correct directory and virtual environment is activated.
 
-**Supabase konekcija:**
-Proveri da su SUPABASE_URL i SUPABASE_KEY ispravno podešeni u .env fajlu.
+**Supabase connection:**
+Verify that SUPABASE_URL and SUPABASE_KEY are correctly set in .env file.
 
-## 📄 Licenca
+## 📄 License
 
 Proprietary - Rabensteiner Engineering
 
-## 👥 Tim
+## 👥 Team
 
 - Backend Development Team
 - ML Engineering Team
 
-## 📞 Kontakt
+## 📞 Contact
 
-Za pitanja i podršku, kontaktiraj development tim.
+For questions and support, contact the development team.
 
 ---
 
-**Verzija:** 1.0.0  
-**Poslednje ažuriranje:** August 2024
+**Version:** 1.0.0  
+**Last Updated:** August 2024
