@@ -261,15 +261,18 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
             
         # Prepare data for insertion
         # Handle both 'offset' and 'offsett' from frontend (frontend sends 'offsett')
+        # IMPORTANT: zeitschritte table uses 'offsett' (double t) in the actual database
+        logger.info(f"Raw zeitschritte data received: {zeitschritte}")
         offset_value = zeitschritte.get("offsett", zeitschritte.get("offset", ""))
         data = {
             "session_id": database_session_id,
             "eingabe": zeitschritte.get("eingabe", ""),
             "ausgabe": zeitschritte.get("ausgabe", ""),
             "zeitschrittweite": zeitschritte.get("zeitschrittweite", ""),
-            "offsett": offset_value  # Note: column name is 'offsett' with double 't'
+            "offsett": offset_value  # Note: column name is 'offsett' with double 't' in zeitschritte table
         }
-        logger.info(f"Preparing zeitschritte data with offsett value: '{offset_value}'")
+        logger.info(f"Preparing zeitschritte data for database: {data}")
+        logger.info(f"Offsett field value: '{offset_value}' (type: {type(offset_value)})")
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
         logger.info(f"Checking for existing zeitschritte record for session {database_session_id}")

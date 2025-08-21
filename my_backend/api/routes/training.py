@@ -1195,6 +1195,7 @@ def save_zeitschritte_endpoint():
         
         logger.info(f"Processing zeitschritte save for session: {session_id}")
         logger.info(f"Zeitschritte keys: {list(zeitschritte.keys()) if zeitschritte else 'None'}")
+        logger.info(f"Zeitschritte data received: {zeitschritte}")
         
         from utils.database import save_zeitschritte
         success = save_zeitschritte(session_id, zeitschritte)
