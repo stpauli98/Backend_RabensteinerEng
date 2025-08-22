@@ -11,16 +11,46 @@ from sklearn.svm import SVR
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM, Conv1D, Conv2D, MaxPooling1D, Flatten, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
 from typing import Dict, List, Tuple, Optional, Any
 import logging
 
 from .config import MDL
 
 logger = logging.getLogger(__name__)
+
+# Lazy loading for TensorFlow
+_tf = None
+_Sequential = None
+_Dense = None
+_LSTM = None
+_Conv1D = None
+_Conv2D = None
+_MaxPooling1D = None
+_Flatten = None
+_Dropout = None
+_EarlyStopping = None
+
+def _get_tensorflow():
+    """Lazy load TensorFlow components"""
+    global _tf, _Sequential, _Dense, _LSTM, _Conv1D, _Conv2D, _MaxPooling1D, _Flatten, _Dropout, _EarlyStopping
+    if _tf is None:
+        import tensorflow as tf
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.layers import Dense, LSTM, Conv1D, Conv2D, MaxPooling1D, Flatten, Dropout
+        from tensorflow.keras.callbacks import EarlyStopping
+        
+        _tf = tf
+        _Sequential = Sequential
+        _Dense = Dense
+        _LSTM = LSTM
+        _Conv1D = Conv1D
+        _Conv2D = Conv2D
+        _MaxPooling1D = MaxPooling1D
+        _Flatten = Flatten
+        _Dropout = Dropout
+        _EarlyStopping = EarlyStopping
+    
+    return _tf, _Sequential, _Dense, _LSTM, _Conv1D, _Conv2D, _MaxPooling1D, _Flatten, _Dropout, _EarlyStopping
 
 
 def train_dense(train_x, train_y, val_x, val_y, MDL):    
@@ -41,19 +71,22 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
        
     # MODELLDEFINITION ########################################################
     
+    # Lazy load TensorFlow components
+    tf, Sequential, Dense, LSTM, Conv1D, Conv2D, MaxPooling1D, Flatten, Dropout, EarlyStopping = _get_tensorflow()
+    
     # Modellinitialisierung (Sequentielles Modell mit linear 
     # hintereinandergeordneten Schichten)
-    model = tf.keras.Sequential()
+    model = Sequential()
     
     # Input-Schicht → Mehrdimensionale Daten werden in einen 1D-Vektor 
     # umgewandelt
-    model.add(tf.keras.layers.Flatten())
+    model.add(Flatten())
     
     # Dense-Layer hinzufügen
     # Convert activation function to lowercase for Keras compatibility
     activation_func = MDL.ACTF.lower() if hasattr(MDL.ACTF, 'lower') else MDL.ACTF
     for _ in range(MDL.LAY):
-        model.add(tf.keras.layers.Dense(MDL.N,                  # Anzahl an Neuronen
+        model.add(Dense(MDL.N,                  # Anzahl an Neuronen
                                         activation = activation_func)) # Aktivierungsfunktion
     
     # Output-Schicht

@@ -34,7 +34,9 @@ def get_supabase_client():
         return None
         
     try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Create client without proxy parameter for newer supabase version
+        client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        return client
     except Exception as e:
         logger.error(f"Error creating Supabase client: {str(e)}")
         return None

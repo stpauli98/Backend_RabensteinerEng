@@ -1451,6 +1451,278 @@ def get_time_info(session_id):
             'error': str(e)
         }), 500
 
+# ============== SUPABASE CRUD ENDPOINTS ==============
+
+@bp.route('/supabase/test-connection', methods=['GET'])
+def test_supabase_connection():
+    """Test Supabase connection and return status."""
+    try:
+        from utils.database import get_supabase_client
+        
+        supabase_client = get_supabase_client()
+        
+        # Test by fetching sessions count
+        response = supabase_client.table('sessions').select('id', count='exact').execute()
+        
+        return jsonify({
+            'status': 'connected',
+            'message': 'Successfully connected to Supabase',
+            'sessions_count': response.count if hasattr(response, 'count') else len(response.data),
+            'database_url': os.environ.get('SUPABASE_URL', 'Not configured')
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Supabase connection test failed: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to connect to Supabase: {str(e)}'
+        }), 500
+
+@bp.route('/supabase/files/create', methods=['POST'])
+def create_file_record():
+    """Create a new file record in Supabase."""
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        import uuid
+        
+        data = request.json
+        session_id = data.get('session_id')
+        file_data = data.get('file_data')
+        
+        if not session_id or not file_data:
+            return jsonify({'success': False, 'error': 'Missing required data'}), 400
+            
+        # Get UUID session ID
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({'success': False, 'error': 'Could not get session UUID'}), 400
+            
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Generate new UUID for file
+        file_id = str(uuid.uuid4())
+        
+        # Prepare file record
+        file_record = {
+            'id': file_id,
+            'session_id': uuid_session_id,
+            'file_name': file_data.get('fileName'),
+            'bezeichnung': file_data.get('bezeichnung'),
+            'utc_min': file_data.get('utcMin'),
+            'utc_max': file_data.get('utcMax'),
+            'zeitschrittweite': str(file_data.get('zeitschrittweite', '')),
+            'min': str(file_data.get('min', '')),
+            'max': str(file_data.get('max', '')),
+            'offsett': str(file_data.get('offset', '')),
+            'datenpunkte': str(file_data.get('datenpunkte', '')),
+            'numerische_datenpunkte': str(file_data.get('numerischeDatenpunkte', '')),
+            'numerischer_anteil': str(file_data.get('numerischerAnteil', '')),
+            'datenform': file_data.get('datenform', ''),
+            'zeithorizont_start': file_data.get('zeithorizontStart', ''),
+            'zeithorizont_end': file_data.get('zeithorizontEnd', ''),
+            'zeitschrittweite_transferierten_daten': str(file_data.get('zeitschrittweiteTransferiertenDaten', '')),
+            'offset_transferierten_daten': str(file_data.get('offsetTransferiertenDaten', '')),
+            'mittelwertbildung_uber_den_zeithorizont': file_data.get('mittelwertbildungÜberDenZeithorizont', 'nein'),
+            'datenanpassung': file_data.get('datenanpassung', ''),
+            'zeitschrittweite_min': str(file_data.get('zeitschrittweiteMinValue', '')),
+            'zeitschrittweite_mittelwert': str(file_data.get('zeitschrittweiteAvgValue', '')),
+            'skalierung': file_data.get('skalierung', 'nein'),
+            'skalierung_max': str(file_data.get('skalierungMax', '')),
+            'skalierung_min': str(file_data.get('skalierungMin', '')),
+            'storage_path': file_data.get('storagePath', f"{uuid_session_id}/{file_data.get('fileName', '')}"),
+            'type': file_data.get('type', 'input')
+        }
+        
+        # Insert into files table
+        response = supabase.table('files').insert(file_record).execute()
+        
+        if response.data:
+            # Also create csv_file_refs entry
+            ref_record = {
+                'file_id': file_id,
+                'session_id': uuid_session_id,
+                'file_name': file_data.get('fileName'),
+                'storage_path': file_record['storage_path'],
+                'file_size': file_data.get('fileSize')
+            }
+            supabase.table('csv_file_refs').insert(ref_record).execute()
+            
+            return jsonify({'success': True, 'file_id': file_id, 'data': response.data[0]})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to create file record'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error creating file record: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/supabase/files/update/<file_id>', methods=['PUT'])
+def update_file_record(file_id):
+    """Update a file record in Supabase."""
+    try:
+        from utils.database import get_supabase_client
+        
+        file_data = request.json
+        
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Prepare update data
+        update_data = {
+            'file_name': file_data.get('fileName'),
+            'bezeichnung': file_data.get('bezeichnung'),
+            'utc_min': file_data.get('utcMin'),
+            'utc_max': file_data.get('utcMax'),
+            'zeitschrittweite': str(file_data.get('zeitschrittweite', '')),
+            'min': str(file_data.get('min', '')),
+            'max': str(file_data.get('max', '')),
+            'offsett': str(file_data.get('offset', '')),
+            'datenpunkte': str(file_data.get('datenpunkte', '')),
+            'numerische_datenpunkte': str(file_data.get('numerischeDatenpunkte', '')),
+            'numerischer_anteil': str(file_data.get('numerischerAnteil', '')),
+            'datenform': file_data.get('datenform', ''),
+            'zeithorizont_start': file_data.get('zeithorizontStart', ''),
+            'zeithorizont_end': file_data.get('zeithorizontEnd', ''),
+            'zeitschrittweite_transferierten_daten': str(file_data.get('zeitschrittweiteTransferiertenDaten', '')),
+            'offset_transferierten_daten': str(file_data.get('offsetTransferiertenDaten', '')),
+            'mittelwertbildung_uber_den_zeithorizont': file_data.get('mittelwertbildungÜberDenZeithorizont', 'nein'),
+            'datenanpassung': file_data.get('datenanpassung', ''),
+            'zeitschrittweite_min': str(file_data.get('zeitschrittweiteMinValue', '')),
+            'zeitschrittweite_mittelwert': str(file_data.get('zeitschrittweiteAvgValue', '')),
+            'skalierung': file_data.get('skalierung', 'nein'),
+            'skalierung_max': str(file_data.get('skalierungMax', '')),
+            'skalierung_min': str(file_data.get('skalierungMin', '')),
+            'storage_path': file_data.get('storagePath', ''),
+            'type': file_data.get('type', 'input')
+        }
+        
+        # Update files table
+        response = supabase.table('files').update(update_data).eq('id', file_id).execute()
+        
+        if response.data:
+            # Update csv_file_refs
+            ref_update = {
+                'file_name': file_data.get('fileName'),
+                'storage_path': update_data['storage_path'],
+                'file_size': file_data.get('fileSize')
+            }
+            supabase.table('csv_file_refs').update(ref_update).eq('file_id', file_id).execute()
+            
+            return jsonify({'success': True, 'data': response.data[0]})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to update file record'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error updating file record: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/supabase/files/delete/<file_id>', methods=['DELETE'])
+def delete_file_record(file_id):
+    """Delete a file record from Supabase."""
+    try:
+        from utils.database import get_supabase_client
+        
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Get file info first
+        file_response = supabase.table('files').select('storage_path, type').eq('id', file_id).single().execute()
+        
+        if file_response.data:
+            storage_path = file_response.data.get('storage_path')
+            file_type = file_response.data.get('type', 'input')
+            
+            # Delete from storage
+            if storage_path:
+                bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+                supabase.storage.from_(bucket_name).remove([storage_path])
+            
+            # Delete references
+            supabase.table('csv_file_refs').delete().eq('file_id', file_id).execute()
+            
+            # Delete file record
+            response = supabase.table('files').delete().eq('id', file_id).execute()
+            
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'File not found'}), 404
+            
+    except Exception as e:
+        logger.error(f"Error deleting file record: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/supabase/sessions/create', methods=['POST'])
+def create_session_record():
+    """Create a new session in Supabase."""
+    try:
+        from utils.database import get_supabase_client
+        import uuid
+        
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Create new session
+        response = supabase.table('sessions').insert({}).execute()
+        
+        if response.data:
+            return jsonify({'success': True, 'session_id': response.data[0]['id']})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to create session'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error creating session: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/supabase/sessions/delete/<session_id>', methods=['DELETE'])
+def delete_session_record(session_id):
+    """Delete a session and all related data from Supabase."""
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        
+        # Get UUID session ID
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({'success': False, 'error': 'Could not get session UUID'}), 400
+            
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Get all files for deletion
+        files_response = supabase.table('files').select('id, storage_path, type').eq('session_id', uuid_session_id).execute()
+        
+        # Delete storage files
+        if files_response.data:
+            for file in files_response.data:
+                if file.get('storage_path'):
+                    bucket_name = 'aus-csv-files' if file.get('type') == 'output' else 'csv-files'
+                    try:
+                        supabase.storage.from_(bucket_name).remove([file['storage_path']])
+                    except:
+                        pass  # Continue even if storage deletion fails
+        
+        # Delete in order (foreign key constraints)
+        supabase.table('csv_file_refs').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('files').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('time_info').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('zeitschritte').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('training_logs').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('training_progress').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('training_results').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('training_visualizations').delete().eq('session_id', uuid_session_id).execute()
+        supabase.table('session_mappings').delete().eq('uuid_session_id', uuid_session_id).execute()
+        supabase.table('sessions').delete().eq('id', uuid_session_id).execute()
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Error deleting session: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @bp.route('/debug-files-table/<session_id>', methods=['GET'])
 def debug_files_table(session_id):
     """Debug endpoint to inspect files table data for a session."""
