@@ -14,8 +14,10 @@ def register_socketio_handlers(socketio):
     def handle_connect():
         try:
             logger.info("Client connected")
+            return True  # Return True to accept the connection
         except Exception as e:
             logger.error(f"Error in connect handler: {str(e)}")
+            return False  # Return False to reject the connection
 
     @socketio.on('disconnect')
     def handle_disconnect(*args, **kwargs):
@@ -198,4 +200,7 @@ def register_socketio_handlers(socketio):
     @socketio.on_error_default
     def default_error_handler(e):
         logger.error(f"SocketIO error: {str(e)}")
-        return False
+        # Don't return False, as it can cause issues with the connection
+        # Instead, emit an error event
+        emit('error', {'message': str(e)})
+        return True

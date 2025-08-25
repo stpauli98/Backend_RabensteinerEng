@@ -1387,6 +1387,96 @@ def run_analysis(session_id):
         logger.error(f"Failed to trigger modern training for session {session_id}: {e}")
         return jsonify({'success': False, 'error': f'Failed to start modern training: {str(e)}'}), 500
 
+@bp.route('/plot-variables/<session_id>', methods=['GET'])
+def get_plot_variables(session_id):
+    """Get plot variables for a session based on uploaded CSV files."""
+    try:
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
+        except (ValueError, TypeError):
+            string_session_id = session_id
+        
+        # Get path to session directory
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+        
+        if not os.path.exists(upload_dir):
+            return jsonify({
+                'success': False,
+                'error': 'Session not found'
+            }), 404
+        
+        input_variables = []
+        output_variables = []
+        
+        # Find CSV files in the session directory
+        csv_files = glob.glob(os.path.join(upload_dir, '*.csv*'))
+        
+        for csv_file in csv_files:
+            try:
+                # Read CSV file to get column names
+                df = pd.read_csv(csv_file)
+                columns = df.columns.tolist()
+                
+                # Remove datetime/time columns from the list
+                columns = [col for col in columns if col.lower() not in ['time', 'datetime', 'timestamp', 'date']]
+                
+                # Determine if this is input or output file based on filename
+                filename = os.path.basename(csv_file)
+                
+                # Check if file type is stored in metadata
+                metadata_path = os.path.join(upload_dir, 'metadata.json')
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                        for chunk in metadata:
+                            if 'params' in chunk and 'fileMetadata' in chunk['params']:
+                                file_metadata = chunk['params']['fileMetadata']
+                                if file_metadata.get('fileName') == filename:
+                                    file_type = file_metadata.get('type', '')
+                                    if file_type == 'eingabe':
+                                        input_variables.extend(columns)
+                                    elif file_type == 'ausgabe':
+                                        output_variables.extend(columns)
+                                    break
+                        else:
+                            # If not found in metadata, use filename convention
+                            if 'input' in filename.lower() or 'eingabe' in filename.lower():
+                                input_variables.extend(columns)
+                            else:
+                                output_variables.extend(columns)
+                else:
+                    # Fallback: use filename convention
+                    if 'input' in filename.lower() or 'eingabe' in filename.lower():
+                        input_variables.extend(columns)
+                    else:
+                        output_variables.extend(columns)
+                        
+            except Exception as e:
+                logger.warning(f"Could not read CSV file {csv_file}: {str(e)}")
+                continue
+        
+        # Remove duplicates while preserving order
+        input_variables = list(dict.fromkeys(input_variables))
+        output_variables = list(dict.fromkeys(output_variables))
+        
+        return jsonify({
+            'success': True,
+            'input_variables': input_variables,
+            'output_variables': output_variables
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @bp.route('/get-zeitschritte/<session_id>', methods=['GET'])
 def get_zeitschritte(session_id):
     """Get zeitschritte data for a session."""
@@ -1398,11 +1488,8 @@ def get_zeitschritte(session_id):
         response = supabase.table('zeitschritte').select('*').eq('session_id', session_id).single().execute()
         
         if response.data:
-            # Transform database data back to frontend format (offsett -> offset)
+            # Database now uses 'offset' directly after migration
             data = dict(response.data)
-            if 'offsett' in data:
-                data['offset'] = data['offsett']
-                del data['offsett']
             
             return jsonify({
                 'success': True,
@@ -1417,6 +1504,147 @@ def get_zeitschritte(session_id):
             
     except Exception as e:
         logger.error(f"Error getting zeitschritte for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@bp.route('/generate-plot', methods=['POST'])
+def generate_plot():
+    """Generate a plot based on the provided configuration."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from io import BytesIO
+        import base64
+        
+        data = request.json
+        session_id = data.get('session_id')
+        plot_config = data.get('plot_config', {})
+        plot_settings = data.get('plot_settings', {})
+        
+        if not session_id:
+            return jsonify({'success': False, 'error': 'Session ID is required'}), 400
+        
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
+        except (ValueError, TypeError):
+            string_session_id = session_id
+        
+        # Get path to session directory
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+        
+        if not os.path.exists(upload_dir):
+            return jsonify({
+                'success': False,
+                'error': 'Session not found'
+            }), 404
+        
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Find and plot data from CSV files
+        csv_files = glob.glob(os.path.join(upload_dir, '*.csv*'))
+        plot_generated = False
+        
+        for csv_file in csv_files:
+            try:
+                df = pd.read_csv(csv_file)
+                
+                # Find time column
+                time_col = None
+                for col in df.columns:
+                    if col.lower() in ['time', 'datetime', 'timestamp', 'date']:
+                        time_col = col
+                        break
+                
+                if time_col:
+                    # Convert to datetime if needed
+                    try:
+                        df[time_col] = pd.to_datetime(df[time_col])
+                    except:
+                        pass
+                
+                # Get filename to determine if input/output
+                filename = os.path.basename(csv_file)
+                
+                # Check plot configuration for this file
+                df_plot_in = plot_config.get('df_plot_in', {})
+                df_plot_out = plot_config.get('df_plot_out', {})
+                df_plot_fcst = plot_config.get('df_plot_fcst', {})
+                
+                # Plot selected variables
+                for col in df.columns:
+                    if col == time_col:
+                        continue
+                    
+                    should_plot = False
+                    line_style = '-'
+                    label_prefix = ''
+                    
+                    # Check if this column should be plotted
+                    if col in df_plot_in and df_plot_in[col].get('plot', False):
+                        should_plot = True
+                        label_prefix = 'Input: '
+                        line_style = '-'
+                    elif col in df_plot_out and df_plot_out[col].get('plot', False):
+                        should_plot = True
+                        label_prefix = 'Output: '
+                        line_style = '--'
+                    elif col in df_plot_fcst and df_plot_fcst[col].get('plot', False):
+                        should_plot = True
+                        label_prefix = 'Forecast: '
+                        line_style = ':'
+                    
+                    if should_plot:
+                        if time_col:
+                            ax.plot(df[time_col], df[col], line_style, label=f'{label_prefix}{col}')
+                        else:
+                            ax.plot(df.index, df[col], line_style, label=f'{label_prefix}{col}')
+                        plot_generated = True
+                        
+            except Exception as e:
+                logger.warning(f"Could not process CSV file {csv_file} for plotting: {str(e)}")
+                continue
+        
+        if not plot_generated:
+            # If no data was plotted, create a simple placeholder
+            ax.text(0.5, 0.5, 'No data selected for plotting', 
+                   horizontalalignment='center', verticalalignment='center',
+                   transform=ax.transAxes, fontsize=14)
+        
+        # Apply plot settings
+        ax.set_xlabel(plot_settings.get('x_sbpl', 'Time'))
+        ax.set_ylabel(plot_settings.get('y_sbpl_set', 'Value'))
+        ax.set_title(f'Plot for Session: {string_session_id}')
+        ax.grid(True, alpha=0.3)
+        
+        if plot_generated:
+            ax.legend(loc='best')
+        
+        plt.tight_layout()
+        
+        # Convert plot to base64 string
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png', dpi=100)
+        buffer.seek(0)
+        plot_base64 = base64.b64encode(buffer.getvalue()).decode()
+        plt.close()
+        
+        return jsonify({
+            'success': True,
+            'plot': f'data:image/png;base64,{plot_base64}',
+            'message': 'Plot generated successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error generating plot: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -1515,7 +1743,7 @@ def create_file_record():
             'zeitschrittweite': str(file_data.get('zeitschrittweite', '')),
             'min': str(file_data.get('min', '')),
             'max': str(file_data.get('max', '')),
-            'offsett': str(file_data.get('offset', '')),
+            'offset': str(file_data.get('offset', '')),
             'datenpunkte': str(file_data.get('datenpunkte', '')),
             'numerische_datenpunkte': str(file_data.get('numerischeDatenpunkte', '')),
             'numerischer_anteil': str(file_data.get('numerischerAnteil', '')),
@@ -1578,7 +1806,7 @@ def update_file_record(file_id):
             'zeitschrittweite': str(file_data.get('zeitschrittweite', '')),
             'min': str(file_data.get('min', '')),
             'max': str(file_data.get('max', '')),
-            'offsett': str(file_data.get('offset', '')),
+            'offset': str(file_data.get('offset', '')),
             'datenpunkte': str(file_data.get('datenpunkte', '')),
             'numerische_datenpunkte': str(file_data.get('numerischeDatenpunkte', '')),
             'numerischer_anteil': str(file_data.get('numerischerAnteil', '')),

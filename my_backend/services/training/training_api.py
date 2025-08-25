@@ -115,11 +115,19 @@ def get_training_results(session_id: str):
         results = _get_results_from_database(session_id, supabase)
         
         if not results:
+            # Return 200 with a status indicating no training has been done yet
             return jsonify({
                 'session_id': session_id,
-                'status': 'not_found',
-                'message': 'No training results found for this session'
-            }), 404
+                'status': 'no_training',
+                'message': 'No training results found for this session. Please start training first.',
+                'evaluation_metrics': {},
+                'model_performance': {},
+                'best_model': {},
+                'summary': {},
+                'visualizations': {},
+                'created_at': None,
+                'completed_at': None
+            }), 200
         
         # Also get visualizations from training_visualizations table
         visualizations = _get_visualizations_from_database(session_id, supabase)
@@ -198,17 +206,17 @@ def get_training_status(session_id: str):
                 'message': 'Training in progress'
             }
         else:
-            # No training found
+            # No training found - return a proper status instead of causing frontend to loop
             status = {
                 'session_id': session_id,
-                'status': 'not_found',
+                'status': 'no_training',
                 'progress': 0,
                 'current_step': 'Not started',
                 'total_steps': 7,
                 'completed_steps': 0,
                 'started_at': None,
                 'completed_at': None,
-                'message': 'No training found for this session'
+                'message': 'No training found for this session. Please start training first.'
             }
         
         return jsonify(status), 200
@@ -288,8 +296,10 @@ def get_training_visualizations(session_id: str):
             return jsonify({
                 'session_id': session_id,
                 'plots': {},
+                'metadata': {},
+                'created_at': None,
                 'message': 'No visualizations found for this session'
-            }), 404
+            }), 200  # Return 200 instead of 404 to prevent polling loops
         
         response_data = {
             'session_id': session_id,
@@ -1469,6 +1479,125 @@ def get_comprehensive_evaluation(session_id: str):
             'error': str(e)
         }), 500
 
+
+@training_api_bp.route('/evaluation-tables/<session_id>', methods=['GET'])
+def get_evaluation_tables(session_id: str):
+    """
+    Get evaluation tables (df_eval and df_eval_ts) for a session
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        JSON response with evaluation tables data
+    """
+    try:
+        supabase = get_supabase_client()
+        results = _get_results_from_database(session_id, supabase)
+        
+        if not results:
+            return jsonify({
+                'success': True,  # Change to True to indicate successful query
+                'session_id': session_id,
+                'tables': {},  # Return empty tables
+                'message': 'No training results found for this session. Model training must be completed first.'
+            }), 200  # Return 200 instead of 404
+        
+        # Get evaluation metrics from results
+        evaluation_metrics = results.get('evaluation_metrics', {})
+        
+        # Transform evaluation metrics into the expected format for frontend
+        tables = {}
+        
+        # For each output variable/dataset
+        for dataset_name, dataset_metrics in evaluation_metrics.items():
+            # Create df_eval table (summary metrics)
+            df_eval_data = []
+            df_eval_columns = ['Model', 'MAE', 'MAPE', 'MSE', 'RMSE', 'NRMSE', 'WAPE', 'sMAPE', 'MASE']
+            
+            # Create df_eval_ts table (time series metrics)
+            df_eval_ts_data = []
+            df_eval_ts_columns = ['Time', 'MAE', 'MAPE', 'MSE', 'RMSE', 'NRMSE', 'WAPE', 'sMAPE', 'MASE']
+            
+            # Add data for each model
+            for model_name, model_metrics in dataset_metrics.items():
+                # Add row to df_eval
+                row = {
+                    'Model': model_name,
+                    'MAE': model_metrics.get('mae', 0),
+                    'MAPE': model_metrics.get('mape', 0),
+                    'MSE': model_metrics.get('mse', 0),
+                    'RMSE': model_metrics.get('rmse', 0),
+                    'NRMSE': model_metrics.get('nrmse', 0),
+                    'WAPE': model_metrics.get('wape', 0),
+                    'sMAPE': model_metrics.get('smape', 0),
+                    'MASE': model_metrics.get('mase', 0)
+                }
+                df_eval_data.append(row)
+                
+                # Add time series data if available
+                if 'time_series_metrics' in model_metrics:
+                    for time_point, ts_metrics in model_metrics['time_series_metrics'].items():
+                        ts_row = {
+                            'Time': time_point,
+                            'MAE': ts_metrics.get('mae', 0),
+                            'MAPE': ts_metrics.get('mape', 0),
+                            'MSE': ts_metrics.get('mse', 0),
+                            'RMSE': ts_metrics.get('rmse', 0),
+                            'NRMSE': ts_metrics.get('nrmse', 0),
+                            'WAPE': ts_metrics.get('wape', 0),
+                            'sMAPE': ts_metrics.get('smape', 0),
+                            'MASE': ts_metrics.get('mase', 0)
+                        }
+                        df_eval_ts_data.append(ts_row)
+            
+            # Store tables for this dataset
+            tables[dataset_name] = {
+                'df_eval': {
+                    'title': f'Model Evaluation Metrics - {dataset_name}',
+                    'description': 'Summary of model performance metrics',
+                    'columns': df_eval_columns,
+                    'data': df_eval_data
+                },
+                'df_eval_ts': {
+                    'title': f'Time Series Evaluation - {dataset_name}',
+                    'description': 'Time series evaluation metrics',
+                    'columns': df_eval_ts_columns,
+                    'data': df_eval_ts_data if df_eval_ts_data else [{'Time': 'N/A', 'MAE': 0, 'MAPE': 0, 'MSE': 0, 'RMSE': 0, 'NRMSE': 0, 'WAPE': 0, 'sMAPE': 0, 'MASE': 0}]
+                }
+            }
+        
+        # If no tables were created, create default ones
+        if not tables:
+            tables['default'] = {
+                'df_eval': {
+                    'title': 'Model Evaluation Metrics',
+                    'description': 'No evaluation data available',
+                    'columns': ['Model', 'MAE', 'MAPE', 'MSE', 'RMSE', 'NRMSE', 'WAPE', 'sMAPE', 'MASE'],
+                    'data': []
+                },
+                'df_eval_ts': {
+                    'title': 'Time Series Evaluation',
+                    'description': 'No time series data available',
+                    'columns': ['Time', 'MAE', 'MAPE', 'MSE', 'RMSE', 'NRMSE', 'WAPE', 'sMAPE', 'MASE'],
+                    'data': []
+                }
+            }
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'tables': tables,
+            'total_datasets': len(tables),
+            'generated_at': results.get('completed_at', datetime.now().isoformat())
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving evaluation tables for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to retrieve evaluation tables: {str(e)}'
+        }), 500
 
 @training_api_bp.route('/pipeline-overview/<session_id>', methods=['GET'])
 def get_pipeline_overview(session_id: str):

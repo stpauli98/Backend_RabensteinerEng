@@ -262,19 +262,16 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
             logger.info(f"Using UUID session_id for zeitschritte: {database_session_id}")
             
         # Prepare data for insertion
-        # Handle both 'offset' and 'offsett' from frontend (frontend sends 'offsett')
-        # IMPORTANT: zeitschritte table uses 'offsett' (double t) in the actual database
+        # Database now uses 'offset' (single t) after migration
         logger.info(f"Raw zeitschritte data received: {zeitschritte}")
-        offset_value = zeitschritte.get("offsett", zeitschritte.get("offset", ""))
         data = {
             "session_id": database_session_id,
             "eingabe": zeitschritte.get("eingabe", ""),
             "ausgabe": zeitschritte.get("ausgabe", ""),
             "zeitschrittweite": zeitschritte.get("zeitschrittweite", ""),
-            "offsett": offset_value  # Note: column name is 'offsett' with double 't' in zeitschritte table
+            "offset": zeitschritte.get("offset", "")  # Database column is now 'offset'
         }
         logger.info(f"Preparing zeitschritte data for database: {data}")
-        logger.info(f"Offsett field value: '{offset_value}' (type: {type(offset_value)})")
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
         logger.info(f"Checking for existing zeitschritte record for session {database_session_id}")
@@ -379,7 +376,7 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             "bezeichnung": file_info.get("bezeichnung", ""),
             "min": str(file_info.get("min", "")),
             "max": str(file_info.get("max", "")),
-            "offsett": str(file_info.get("offset", "")),
+            "offset": str(file_info.get("offset", "")),  # Database column is now 'offset'
             "datenpunkte": str(file_info.get("datenpunkte", "")),
             "numerische_datenpunkte": str(file_info.get("numerischeDatenpunkte", "")),
             "numerischer_anteil": str(file_info.get("numerischerAnteil", "")),
