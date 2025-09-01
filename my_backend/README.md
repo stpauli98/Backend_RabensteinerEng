@@ -41,8 +41,12 @@ pip install -r requirements.txt
 4. **Configure environment variables**
 ```bash
 cp .env.example .env
-# Edit .env file with your settings
+# Edit .env file with your Supabase settings
 ```
+
+Required environment variables:
+- `SUPABASE_URL`: Your Supabase project URL (e.g., https://xyzcompany.supabase.co)
+- `SUPABASE_KEY`: Your Supabase anon/public key
 
 ## 🏗️ Architecture
 

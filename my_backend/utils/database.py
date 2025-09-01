@@ -30,10 +30,12 @@ def get_supabase_client() -> Client:
         Client: Supabase client instance
     """
     if not SUPABASE_URL or not SUPABASE_KEY:
-        logger.error("Supabase URL or key not found in environment variables")
+        logger.warning("Supabase URL or key not found in environment variables. Database features will be disabled.")
         return None
         
     try:
+        # Create client with only the supported parameters
+        # Note: supabase==2.3.3 doesn't support the proxy parameter
         return create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as e:
         logger.error(f"Error creating Supabase client: {str(e)}")

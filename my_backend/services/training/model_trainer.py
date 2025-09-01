@@ -11,10 +11,24 @@ from sklearn.svm import SVR
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM, Conv1D, MaxPooling1D, Flatten, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import Dense, LSTM, Conv1D, MaxPooling1D, Flatten, Dropout
+    from tensorflow.keras.callbacks import EarlyStopping
+    TENSORFLOW_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"TensorFlow not available: {e}")
+    TENSORFLOW_AVAILABLE = False
+    # Create dummy classes for type hints
+    Sequential = None
+    Dense = None
+    LSTM = None
+    Conv1D = None
+    MaxPooling1D = None
+    Flatten = None
+    Dropout = None
+    EarlyStopping = None
 from typing import Dict, List, Tuple, Optional, Any
 import logging
 
@@ -37,6 +51,10 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
     
     Extracted from training_backend_test_2.py lines 170-238
     """
+    
+    if not TENSORFLOW_AVAILABLE:
+        logger.warning("TensorFlow not available, skipping dense neural network training")
+        return None, float('inf'), 0
     
     # Validation: Check if we have enough features to train Dense network
     if train_x.shape[2] == 0:
@@ -107,6 +125,10 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     
     Extracted from training_backend_test_2.py lines 239-320
     """
+    
+    if not TENSORFLOW_AVAILABLE:
+        logger.warning("TensorFlow not available, skipping CNN training")
+        return None, float('inf'), 0
     
     # Validation: Check if we have enough features to train CNN
     if train_x.shape[2] == 0:
@@ -181,6 +203,10 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
     
     Extracted from training_backend_test_2.py lines 321-388
     """
+    
+    if not TENSORFLOW_AVAILABLE:
+        logger.warning("TensorFlow not available, skipping LSTM training")
+        return None, float('inf'), 0
     
     # MODELLDEFINITION ########################################################
     
