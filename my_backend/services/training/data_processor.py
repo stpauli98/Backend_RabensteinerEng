@@ -166,7 +166,6 @@ class DataProcessor:
             for file_path in file_paths:
                 df = pd.read_csv(file_path)
                 data[file_path] = df
-                logger.info(f"Loaded {file_path}: {df.shape}")
             
             return data
             

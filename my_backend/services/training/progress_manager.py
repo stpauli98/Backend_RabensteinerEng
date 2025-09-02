@@ -65,7 +65,6 @@ class ProgressManager:
         # Start background services
         self._start_background_services()
         
-        logger.info(f"ProgressManager initialized with process_id: {self.process_id}")
     
     def acquire_session_lock(self, session_id: str) -> bool:
         """
@@ -78,7 +77,6 @@ class ProgressManager:
             True if lock acquired successfully, False otherwise
         """
         try:
-            logger.info(f"Attempting to acquire session lock for {session_id}")
             
             # Use PostgreSQL function for atomic locking
             response = self.supabase.rpc('acquire_session_lock', {
@@ -112,7 +110,6 @@ class ProgressManager:
                 self.last_heartbeat[session_id] = time.time()
                 self.last_db_update[session_id] = time.time()
                 
-                logger.info(f"✅ Successfully acquired session lock for {session_id}")
                 
                 # Emit initial progress to frontend
                 self._emit_progress(session_id)
@@ -138,7 +135,6 @@ class ProgressManager:
             True if released successfully
         """
         try:
-            logger.info(f"Releasing session lock for {session_id} with status: {status}")
             
             # Update progress cache with final status
             if session_id in self.progress_cache:
@@ -173,7 +169,6 @@ class ProgressManager:
             # Keep progress cache for a bit in case frontend needs it
             # Will be cleaned up by background thread
             
-            logger.info(f"✅ Successfully released session lock for {session_id}")
             return True
             
         except Exception as e:
@@ -393,7 +388,6 @@ class ProgressManager:
             response = self.supabase.table('training_progress').upsert(db_data).execute()
             
             if response.data:
-                logger.debug(f"Progress saved to database for {session_id}")
                 return True
             else:
                 logger.warning(f"No data returned when saving progress for {session_id}")
@@ -418,7 +412,6 @@ class ProgressManager:
                 # Emit to specific session room
                 self.socketio.emit('training_progress', progress_data, room=session_id)
                 
-                logger.debug(f"Emitted progress update for {session_id}")
                 
         except Exception as e:
             logger.error(f"Error emitting progress for {session_id}: {str(e)}")
@@ -442,7 +435,6 @@ class ProgressManager:
             )
             self._cleanup_thread.start()
             
-            logger.info("Background services started successfully")
             
         except Exception as e:
             logger.error(f"Error starting background services: {str(e)}")
@@ -464,7 +456,6 @@ class ProgressManager:
                         
                         if response.data:
                             self.last_heartbeat[session_id] = current_time
-                            logger.debug(f"Heartbeat sent for {session_id}")
                         else:
                             logger.warning(f"Heartbeat failed for {session_id}")
                             
@@ -487,7 +478,7 @@ class ProgressManager:
                 cleanup_count = response.data
                 
                 if cleanup_count > 0:
-                    logger.info(f"Cleaned up {cleanup_count} abandoned sessions")
+                    pass  # Sessions cleaned up
                 
                 # Cleanup old progress cache entries
                 current_time = time.time()
@@ -508,7 +499,6 @@ class ProgressManager:
                 # Remove old cache entries
                 for session_id in sessions_to_remove:
                     self.progress_cache.pop(session_id, None)
-                    logger.debug(f"Removed old cache entry for {session_id}")
                 
                 # Wait before next cleanup
                 self._shutdown_event.wait(120)  # Run every 2 minutes
@@ -520,7 +510,6 @@ class ProgressManager:
     def shutdown(self):
         """Gracefully shutdown the progress manager"""
         try:
-            logger.info("Shutting down ProgressManager...")
             
             # Signal shutdown to background threads
             self._shutdown_event.set()
@@ -536,7 +525,6 @@ class ProgressManager:
             if self._cleanup_thread and self._cleanup_thread.is_alive():
                 self._cleanup_thread.join(timeout=5)
             
-            logger.info("ProgressManager shutdown complete")
             
         except Exception as e:
             logger.error(f"Error during shutdown: {str(e)}")

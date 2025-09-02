@@ -571,7 +571,6 @@ class ResultsGenerator:
             response = supabase_client.table('training_results').insert(result_data).execute()
             
             if response.data:
-                logger.info(f"Results saved to database for session {session_id}")
                 return True
             else:
                 logger.error(f"Failed to save results to database for session {session_id}")

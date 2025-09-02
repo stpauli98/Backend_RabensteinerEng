@@ -62,10 +62,8 @@ def run_exact_training_pipeline(
         - metadata: Additional training metadata
     """
     
-    logger.info("Starting EXACT training pipeline matching training_original.py")
     
     # Step 1: Create training arrays using main time loop (lines 1068-1760)
-    logger.info("Step 1: Creating training arrays with main time loop...")
     (i_array_3D, o_array_3D, 
      i_combined_array, o_combined_array, 
      utc_ref_log) = create_training_arrays(
@@ -74,10 +72,8 @@ def run_exact_training_pipeline(
     
     # Get number of datasets (line 1757)
     n_dat = i_array_3D.shape[0]
-    logger.info(f"Created {n_dat} datasets")
     
     # Step 2: Process and scale data (lines 1764-2210)
-    logger.info("Step 2: Processing and scaling data...")
     scaling_result = process_and_scale_data(
         i_array_3D, o_array_3D,
         i_combined_array, o_combined_array,
@@ -98,12 +94,10 @@ def run_exact_training_pipeline(
     utc_ref_log = scaling_result['utc_ref_log']
     
     # Step 3: Calculate split indices (lines 2040-2042)
-    logger.info("Step 3: Splitting data into train/val/test...")
     n_train = round(0.7 * n_dat)  # EXACT as line 2040
     n_val = round(0.2 * n_dat)    # EXACT as line 2041
     n_test = n_dat - n_train - n_val  # EXACT as line 2042
     
-    logger.info(f"Split: train={n_train}, val={n_val}, test={n_test}")
     
     # SCALED DATASETS (lines 2217-2224)
     trn_x = i_array_3D[:n_train]
@@ -124,7 +118,6 @@ def run_exact_training_pipeline(
     tst_y_orig = o_array_3D_orig[(n_train+n_val):]
     
     # Step 4: Train model based on MDL.MODE (lines 2240-2259)
-    logger.info("Step 4: Training model...")
     
     if mdl_config is None:
         mdl_config = MDL()  # Use default "LIN" mode
@@ -132,37 +125,29 @@ def run_exact_training_pipeline(
     mdl = None
     
     if mdl_config.MODE == "Dense":
-        logger.info("Training Dense neural network...")
         mdl = train_dense(trn_x, trn_y, val_x, val_y, mdl_config)
         
     elif mdl_config.MODE == "CNN":
-        logger.info("Training CNN...")
         mdl = train_cnn(trn_x, trn_y, val_x, val_y, mdl_config)
         
     elif mdl_config.MODE == "LSTM":
-        logger.info("Training LSTM...")
         mdl = train_lstm(trn_x, trn_y, val_x, val_y, mdl_config)
         
     elif mdl_config.MODE == "AR LSTM":
-        logger.info("Training AR LSTM...")
         mdl = train_ar_lstm(trn_x, trn_y, val_x, val_y, mdl_config)
         
     elif mdl_config.MODE == "SVR_dir":
-        logger.info("Training SVR_dir...")
         mdl = train_svr_dir(trn_x, trn_y, mdl_config)
         
     elif mdl_config.MODE == "SVR_MIMO":
-        logger.info("Training SVR_MIMO...")
         mdl = train_svr_mimo(trn_x, trn_y, mdl_config)
         
     elif mdl_config.MODE == "LIN":
-        logger.info("Training Linear model...")
         mdl = train_linear_model(trn_x, trn_y)
     
     else:
         raise ValueError(f"Unknown model mode: {mdl_config.MODE}")
     
-    logger.info("Training complete!")
     
     # Return all results
     return {

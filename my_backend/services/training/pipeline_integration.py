@@ -49,7 +49,6 @@ class RealDataProcessor:
             Dict containing processed data ready for training
         """
         try:
-            logger.info(f"Starting real data processing for session {session_id}")
             
             # Step 1: Load session data from database using real DataLoader
             session_data = self.data_loader.load_session_data(session_id)
@@ -69,12 +68,10 @@ class RealDataProcessor:
                     file_name = file_path.split('/')[-1].replace('.csv', '')
                     dat[file_name] = df
                     
-                    logger.info(f"Loaded input file: {file_name}, shape: {df.shape}, columns: {list(df.columns)}")
                     
                     # Use real load() function to extract metadata
                     dat, inf = self.data_loader.process_csv_data(dat, inf)
                     
-                    logger.info(f"Processed input file: {file_name}, shape: {df.shape}, processed successfully")
                     
                 except Exception as e:
                     logger.error(f"Error processing input file {file_path}: {str(e)}")
@@ -89,7 +86,6 @@ class RealDataProcessor:
                     file_name = file_path.split('/')[-1].replace('.csv', '')
                     output_dat[file_name] = df
                     
-                    logger.info(f"Loaded output file: {file_name}, shape: {df.shape}, columns: {list(df.columns)}")
                     
                 except Exception as e:
                     logger.error(f"Error processing output file {file_path}: {str(e)}")
@@ -106,7 +102,6 @@ class RealDataProcessor:
                 data_processor = DataProcessor(MTS())
                 transformed_inf = data_processor.transform_data(inf, N, OFST)
                 
-                logger.info(f"Applied transformations: {len(transformed_inf)} entries processed")
             
             # Step 5: Create datasets for ML training
             train_datasets = self._create_ml_datasets(dat, output_dat, session_data)
@@ -162,11 +157,6 @@ class RealDataProcessor:
                         X = X[:len(combined_mask)][combined_mask]
                         y = y[:len(combined_mask)][combined_mask]
                         
-                        logger.info(f"Dataset {dataset_name}: input_df columns {list(input_df.columns)}, output_df columns {list(output_df.columns)}")
-                        logger.info(f"Dataset {dataset_name}: input numeric data shape {X.shape}, output numeric data shape {y.shape}")
-                        logger.info(f"Dataset {dataset_name}: input_df dtypes: {input_df.dtypes}")
-                        logger.info(f"Dataset {dataset_name}: output_df dtypes: {output_df.dtypes}")
-                        logger.info(f"Dataset {dataset_name}: Removed {np.sum(~combined_mask)} rows containing NaN values")
                         
                         # Ensure we have enough data
                         if X.shape[0] > 10 and y.shape[0] > 10:
@@ -201,7 +191,6 @@ class RealDataProcessor:
                                         'output_features': y.shape[1] if len(y.shape) > 1 else 1
                                     }
                                     
-                                    logger.info(f"Created dataset {dataset_name}: X{X_reshaped.shape}, y{y_reshaped.shape}")
             
             if not datasets:
                 logger.warning("No valid datasets created from input data")
@@ -238,7 +227,6 @@ class RealModelTrainer:
             results = {}
             
             for dataset_name, dataset in datasets.items():
-                logger.info(f"Training models for dataset: {dataset_name}")
                 
                 X, y = dataset['X'], dataset['y']
                 
@@ -343,7 +331,6 @@ class RealModelTrainer:
                 
                 try:
                     if self.config.MODE == "Dense" or self.config.MODE == "LIN":
-                        logger.info("Training Dense neural network...")
                         model = train_dense(X_train, y_train, X_val, y_val, self.config)
                         
                         # Save model to .h5 file
@@ -364,7 +351,6 @@ class RealModelTrainer:
                         }
                     
                     if self.config.MODE == "CNN" or self.config.MODE == "LIN":
-                        logger.info("Training CNN...")
                         model = train_cnn(X_train, y_train, X_val, y_val, self.config)
                         
                         # Save model to .h5 file
@@ -384,7 +370,6 @@ class RealModelTrainer:
                         }
                     
                     if self.config.MODE == "LSTM" or self.config.MODE == "LIN":
-                        logger.info("Training LSTM...")
                         model = train_lstm(X_train, y_train, X_val, y_val, self.config)
                         
                         # Save model to .h5 file
@@ -404,7 +389,6 @@ class RealModelTrainer:
                         }
                     
                     if self.config.MODE == "LIN":
-                        logger.info("Training Linear model...")
                         models = train_linear_model(X_train, y_train)
                         
                         # Save sklearn models using pickle
@@ -434,7 +418,6 @@ class RealModelTrainer:
                         }
                     
                     if self.config.MODE == "SVR_dir":
-                        logger.info("Training SVR Direct...")
                         models = train_svr_dir(X_train, y_train, self.config)
                         
                         # Save sklearn models using pickle
@@ -464,7 +447,6 @@ class RealModelTrainer:
                         }
                     
                     if self.config.MODE == "SVR_MIMO":
-                        logger.info("Training SVR MIMO...")
                         models = train_svr_mimo(X_train, y_train, self.config)
                         
                         # Save sklearn models using pickle
@@ -499,7 +481,6 @@ class RealModelTrainer:
                     continue
                 
                 results[dataset_name] = dataset_results
-                logger.info(f"Completed training for {dataset_name}: {len(dataset_results)} models")
             
             return results
             
@@ -568,7 +549,6 @@ class RealResultsGenerator:
                             'config': model_info.get('config', 'unknown')
                         }
                         
-                        logger.info(f"Generated metrics for {model_name}: WAPE={metrics['wape']:.4f}")
                         
                     except Exception as model_error:
                         logger.error(f"Error evaluating {model_name}: {str(model_error)}")
@@ -677,7 +657,6 @@ class RealVisualizationGenerator:
                 violin_plots = self.visualizer.create_violin_plots(data_arrays)
                 visualizations.update(violin_plots)
                 
-                logger.info(f"Created {len(violin_plots)} violin plots")
             
             # Create additional visualizations
             # TODO: Add more visualization types as needed
@@ -704,7 +683,6 @@ def run_dataset_generation_pipeline(session_id: str, supabase_client, socketio_i
         Dataset generation results with violin plots
     """
     try:
-        logger.info(f"Starting dataset generation pipeline for session {session_id}")
         
         # Step 1: Real data processing
         data_processor = RealDataProcessor(supabase_client)
@@ -733,7 +711,6 @@ def run_dataset_generation_pipeline(session_id: str, supabase_client, socketio_i
             'processed_data': processed_data  # Store for later training
         }
         
-        logger.info(f"Dataset generation completed for session {session_id}: {results['dataset_count']} datasets")
         return results
         
     except Exception as e:
@@ -756,7 +733,6 @@ def run_real_training_pipeline(session_id: str, supabase_client, socketio_instan
         Complete training results
     """
     try:
-        logger.info(f"Starting real training pipeline for session {session_id}")
         
         # Step 1: Real data processing
         data_processor = RealDataProcessor(supabase_client)
@@ -801,7 +777,6 @@ def run_real_training_pipeline(session_id: str, supabase_client, socketio_instan
             }
         }
         
-        logger.info(f"Real training pipeline completed for session {session_id}")
         return final_results
         
     except Exception as e:
@@ -825,7 +800,6 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
         Training results
     """
     try:
-        logger.info(f"Starting model training pipeline for session {session_id} with params: {model_params}")
         
         # Step 1: Load previously generated datasets
         # (In real implementation, we'd store processed_data in database or cache)
@@ -853,7 +827,6 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
             config.C = float(model_params.get('c_parameter', 1.0))
             config.EPSILON = float(model_params.get('epsilon', 0.1))
         
-        logger.info(f"Training configuration: MODE={config.MODE}, LAY={config.LAY}, N={config.N}, EP={config.EP}")
         
         # Step 3: Train models with user configuration
         model_trainer = RealModelTrainer(config)
@@ -895,7 +868,6 @@ def run_model_training_pipeline(session_id: str, model_params: Dict, supabase_cl
             }
         }
         
-        logger.info(f"Model training pipeline completed for session {session_id}")
         return final_results
         
     except Exception as e:
@@ -917,7 +889,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         Dict containing comprehensive training and evaluation results
     """
     try:
-        logger.info(f"Starting complete 7-phase pipeline for session {session_id}")
         
         # Initialize progress tracking
         phases = [
@@ -941,7 +912,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if progress_callback:
             progress_callback(session_id, 1, "Data Loading & Configuration", 0)
         
-        logger.info(f"PHASE 1: {phases[0]}")
         
         # Use existing data processor
         data_processor = RealDataProcessor()
@@ -964,7 +934,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if progress_callback:
             progress_callback(session_id, 2, "Output Data Setup", 0)
         
-        logger.info(f"PHASE 2: {phases[1]}")
         
         # For now, use existing output data processing
         # TODO: Implement comprehensive output data setup from original code
@@ -985,7 +954,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if progress_callback:
             progress_callback(session_id, 3, "Dataset Creation - Time Features", 0)
         
-        logger.info(f"PHASE 3: {phases[2]}")
         
         # For now, use existing dataset creation
         # TODO: Implement time-based feature extraction (Y, M, W, D, H cycles)
@@ -1007,7 +975,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if progress_callback:
             progress_callback(session_id, 4, "Data Preparation - Scaling & Splitting", 0)
         
-        logger.info(f"PHASE 4: {phases[3]}")
         
         # For now, use existing data preparation
         # TODO: Implement comprehensive scaling and train/val/test splitting
@@ -1030,7 +997,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if progress_callback:
             progress_callback(session_id, 5, "Model Training", 0)
         
-        logger.info(f"PHASE 5: {phases[4]}")
         
         # Validate and use ONLY user parameters - NO DEFAULTS
         if not model_parameters:
@@ -1079,13 +1045,7 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         else:
             raise ValueError(f"Unknown model type: {config.MODE}")
         
-        logger.info(f"Model configuration validated: MODE={config.MODE}")
-        if hasattr(config, 'LAY'):
-            logger.info(f"Neural network parameters: LAY={config.LAY}, N={config.N}, EP={config.EP}, ACTF={config.ACTF}")
-        if hasattr(config, 'K'):
-            logger.info(f"CNN parameters: K={config.K}")
-        if hasattr(config, 'KERNEL'):
-            logger.info(f"SVR parameters: KERNEL={config.KERNEL}, C={config.C}, EPSILON={config.EPSILON}")
+        # Config attributes are already validated above
         
         # Validate that all required training split parameters are provided from frontend
         if not training_split:
@@ -1105,7 +1065,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if abs(total_percentage - 100) > 0.1:  # Allow small floating point errors
             raise ValueError(f"Training split percentages must sum to 100, got {total_percentage}")
         
-        logger.info(f"Training split validated: train={training_split['trainPercentage']}%, val={training_split['valPercentage']}%, test={training_split['testPercentage']}%, random={training_split['random_dat']}")
         
         model_trainer = RealModelTrainer(config)
         training_results = model_trainer.train_all_models(
@@ -1130,7 +1089,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if progress_callback:
             progress_callback(session_id, 6, "Model Testing - Predictions", 0)
         
-        logger.info(f"PHASE 6: {phases[5]}")
         
         # For now, predictions are generated within training results
         # TODO: Implement separate prediction generation phase
@@ -1152,7 +1110,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         if progress_callback:
             progress_callback(session_id, 7, "Re-scaling & Comprehensive Evaluation", 0)
         
-        logger.info(f"PHASE 7: {phases[6]}")
         
         # Use existing evaluation with enhancements
         results_generator = RealResultsGenerator()
@@ -1169,7 +1126,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
             phase4_data  # Contains processed input/output data
         )
         
-        logger.info(f"Generated {len(visualizations)} visualizations including violin plots")
         
         # TODO: Implement comprehensive evaluation metrics (WAPE, SMAPE, MASE, etc.)
         
@@ -1207,7 +1163,6 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         # Add success flag for training_api.py
         results['success'] = True
         
-        logger.info(f"Complete 7-phase pipeline finished successfully for session {session_id}")
         return results
         
     except Exception as e:

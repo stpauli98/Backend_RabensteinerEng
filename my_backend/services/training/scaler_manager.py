@@ -105,7 +105,6 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
             
             # Progress logging
             prog_2 = scal_i / scal_all * 100 if scal_all > 0 else 0
-            logger.debug(f"Setting scaler: {prog_2:.2f}%")
             
             # Create and fit scaler (lines 1827-1830)
             scaler = MinMaxScaler(feature_range=(i_scal_min_list[i], i_scal_max_list[i]))
@@ -116,7 +115,6 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
             
             # Progress logging
             prog_2 = scal_i / scal_all * 100 if scal_all > 0 else 0
-            logger.debug(f"Setting scaler: {prog_2:.2f}%")
         else:
             i_scalers[i] = None
     
@@ -129,7 +127,6 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
             
             # Progress logging
             prog_2 = scal_i / scal_all * 100 if scal_all > 0 else 0
-            logger.debug(f"Setting scaler: {prog_2:.2f}%")
             
             # Create and fit scaler (lines 1850-1853)
             scaler = MinMaxScaler(feature_range=(o_scal_min_list[i], o_scal_max_list[i]))
@@ -140,12 +137,10 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
             
             # Progress logging
             prog_2 = scal_i / scal_all * 100 if scal_all > 0 else 0
-            logger.debug(f"Setting scaler: {prog_2:.2f}%")
         else:
             o_scalers[i] = None
     
-    logger.info(f"Created {len([s for s in i_scalers.values() if s is not None])} input scalers "
-                f"and {len([s for s in o_scalers.values() if s is not None])} output scalers")
+    # Scalers prepared
     
     return i_scalers, o_scalers
 
@@ -177,7 +172,6 @@ def apply_scaling(i_array_3D: np.ndarray, o_array_3D: np.ndarray,
         
         # Progress logging
         prog_3 = i / n_dat * 100
-        logger.debug(f"Scaling datasets: {prog_3:.2f}%")
         
         # Loop through input features (lines 2188-2196)
         for i1 in range(n_ft_i):
@@ -197,7 +191,6 @@ def apply_scaling(i_array_3D: np.ndarray, o_array_3D: np.ndarray,
     
     # Progress logging
     prog_3 = 100
-    logger.debug(f"Scaling datasets: {prog_3:.2f}%")
     
     return i_array_3D, o_array_3D
 

@@ -67,7 +67,6 @@ def load_and_extract_info(file_path: str) -> Tuple[pd.DataFrame, Dict]:
         if numeric_columns:
             info['data_stats'] = df[numeric_columns].describe().to_dict()
         
-        logger.info(f"Loaded file {file_path}: {df.shape}, time range: {info.get('time_range', 'N/A')}")
         
         return df, info
         
@@ -248,7 +247,6 @@ def convert_timezone(df: pd.DataFrame, utc_column: str = 'UTC',
             # Convert to target timezone
             df[utc_column] = df[utc_column].dt.tz_convert(target_timezone)
             
-            logger.info(f"Converted timezone from UTC to {target_timezone}")
         
         return df
         
@@ -297,7 +295,6 @@ def resample_time_series(df: pd.DataFrame, utc_column: str = 'UTC',
                 # Reset index
                 df_resampled.reset_index(inplace=True)
                 
-                logger.info(f"Resampled data from {len(df)} to {len(df_resampled)} rows using {method} method")
                 
                 return df_resampled
             else:
@@ -352,7 +349,7 @@ def detect_outliers(df: pd.DataFrame, columns: List[str] = None,
                 
                 outlier_count = df[outlier_col].sum()
                 if outlier_count > 0:
-                    logger.info(f"Detected {outlier_count} outliers in column '{col}' using {method} method")
+                    pass  # Outliers detected
         
         return df
         

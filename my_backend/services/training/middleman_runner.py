@@ -52,7 +52,6 @@ class ModernMiddlemanRunner:
             Dict containing training results and status
         """
         try:
-            logger.info(f"Starting verified training pipeline for session {session_id}")
             
             # First try to get files from filesystem (for testing)
             import glob
@@ -70,12 +69,9 @@ class ModernMiddlemanRunner:
             data_loader = DataLoader(self.supabase)
             
             if found_files:
-                logger.info(f"Found {len(found_files)} files in filesystem for session {session_id}")
                 # Use filesystem files directly
                 input_files = [f for f in found_files if "Leistung" in f]
                 output_files = [f for f in found_files if "Temp" in f]
-                logger.info(f"Input files: {input_files}")
-                logger.info(f"Output files: {output_files}")
             else:
                 # Fall back to database
                 session_data = data_loader.load_session_data(session_id)
@@ -178,7 +174,6 @@ class ModernMiddlemanRunner:
             # Since th_strt = -1 (1 hour before), we need at least 1 hour of data before utc_strt
             # Add buffer to ensure interpolation can work
             utc_strt = utc_strt + pd.Timedelta(hours=1.5)  # Skip first 1.5 hours to ensure enough history
-            logger.info(f"Adjusted time boundaries: {utc_strt} to {utc_end}")
             
             # Create MDL configuration from model_params or use defaults
             mdl_config = None
@@ -220,7 +215,6 @@ class ModernMiddlemanRunner:
                         mdl_config.EPSILON = model_params['EPSILON']
             
             # Run the verified pipeline
-            logger.info("Executing verified pipeline_exact with model configuration")
             results = run_exact_training_pipeline(
                 i_dat=i_dat,
                 o_dat=o_dat,
@@ -232,10 +226,8 @@ class ModernMiddlemanRunner:
                 mdl_config=mdl_config
             )
             
-            logger.info(f"Training pipeline completed successfully for session {session_id}")
             
             # Generate visualizations
-            logger.info("Generating visualizations...")
             violin_plots = {}
             try:
                 from services.training.visualization import Visualizer
@@ -271,7 +263,6 @@ class ModernMiddlemanRunner:
                 # Create violin plots
                 if viz_data['i_combined_array'] is not None or viz_data['o_combined_array'] is not None:
                     violin_plots = visualizer.create_violin_plots(viz_data)
-                    logger.info(f"Generated {len(violin_plots)} violin plots")
                 else:
                     logger.warning("No data available for creating violin plots")
                     
@@ -348,7 +339,6 @@ class ModernMiddlemanRunner:
                 logger.error(f"No output files found for session {session_id}")
                 return False
             
-            logger.info(f"Session {session_id} validated: {len(input_files)} input files, {len(output_files)} output files")
             return True
             
         except Exception as e:
@@ -369,7 +359,6 @@ class ModernMiddlemanRunner:
             }
             
             self.supabase.table('training_results').insert(error_data).execute()
-            logger.info(f"Error saved to database for session {session_id} (UUID: {uuid_session_id})")
             
         except Exception as e:
             logger.error(f"Failed to save error to database: {str(e)}")

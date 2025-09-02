@@ -214,7 +214,6 @@ class DataLoader:
             # Determine bucket based on file type
             bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
             
-            logger.info(f"Downloading {file_name} from bucket {bucket_name} at path {storage_path}")
             
             # Download from the appropriate bucket
             response = self.supabase.storage.from_(bucket_name).download(storage_path)
@@ -223,7 +222,6 @@ class DataLoader:
             with open(local_file_path, 'wb') as f:
                 f.write(response)
             
-            logger.info(f"Downloaded {storage_path} to {local_file_path}")
             return local_file_path
             
         except Exception as e:
@@ -283,7 +281,6 @@ class DataLoader:
             else:
                 raise ValueError(f"CSV file must have at least 2 columns, found {len(df.columns)}")
             
-            logger.info(f"Loaded CSV data from {file_path}: {df.shape}, columns: {list(df.columns)}")
             return df
             
         except Exception as e:
@@ -306,7 +303,6 @@ class DataLoader:
             
             for file_path in files_to_remove:
                 os.remove(file_path)
-                logger.info(f"Removed temporary file: {file_path}")
             
         except Exception as e:
             logger.error(f"Error cleaning up temp files: {str(e)}")

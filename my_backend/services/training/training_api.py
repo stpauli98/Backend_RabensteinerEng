@@ -91,7 +91,6 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str
         }
         
         response = supabase.table('training_visualizations').insert(viz_record).execute()
-        logger.info(f"Saved visualization {viz_name} for session {session_id}")
         return True
         
     except Exception as e:
@@ -123,7 +122,6 @@ def get_training_results(session_id: str):
         
         # Also get visualizations from training_visualizations table
         visualizations = _get_visualizations_from_database(session_id, supabase)
-        logger.info(f"Retrieved visualizations for {session_id}: {visualizations}")
         
         response_data = {
             'session_id': session_id,
@@ -137,7 +135,6 @@ def get_training_results(session_id: str):
             'completed_at': results.get('completed_at'),
             'message': 'Training results retrieved successfully'
         }
-        logger.info(f"API response includes visualizations: {'visualizations' in response_data}")
         
         return jsonify(response_data), 200
         
@@ -691,7 +688,6 @@ def generate_datasets(session_id: str):
     import threading
     
     try:
-        logger.info(f"Starting dataset generation for session {session_id}")
         
         # Get request data for model parameters and training split
         request_data = request.get_json() or {}
@@ -699,24 +695,20 @@ def generate_datasets(session_id: str):
         training_split = request_data.get('training_split', {})
         training_split = convert_training_split_params(training_split)
         
-        logger.info(f"Received model parameters: {model_parameters}")
-        logger.info(f"Converted training split: {training_split}")
         
         # Start the complete 7-phase pipeline in background thread
         def run_pipeline_async():
             try:
-                logger.info(f"Running complete original pipeline for session {session_id}")
                 
                 # Import and run the complete pipeline with user parameters
                 result = run_complete_original_pipeline(
                     session_id=session_id,
                     model_parameters=model_parameters,
                     training_split=training_split,
-                    progress_callback=lambda session_id, phase, msg, progress: logger.info(f"Phase {phase}: {msg} ({progress}%)")
+                    progress_callback=lambda session_id, phase, msg, progress: None
                 )
                 
                 if result.get('success'):
-                    logger.info(f"Pipeline completed successfully for session {session_id}")
                     
                     # Save results to database
                     try:
@@ -727,15 +719,12 @@ def generate_datasets(session_id: str):
                         if 'final_results' in result and 'evaluation_results' in result['final_results']:
                             results_gen.results = result['final_results']['evaluation_results']
                             success = results_gen.save_results_to_database(session_id, get_supabase_client())
-                            if success:
-                                logger.info(f"Results saved to database for session {session_id}")
-                            else:
+                            if not success:
                                 logger.warning(f"Failed to save results to database for session {session_id}")
                         
                         # Also save violin plots if they exist
                         if 'final_results' in result and 'visualizations' in result['final_results']:
                             visualizations = result['final_results']['visualizations']
-                            logger.info(f"Found {len(visualizations)} visualizations to save")
                             
                             # Save each visualization to database
                             supabase = get_supabase_client()
@@ -751,7 +740,6 @@ def generate_datasets(session_id: str):
                                             'plot_type': 'violin_plot' if 'distribution' in plot_name else 'other'
                                         }
                                         response = supabase.table('training_visualizations').insert(viz_record).execute()
-                                        logger.info(f"Saved visualization {plot_name} for session {session_id}")
                                 except Exception as viz_error:
                                     logger.error(f"Error saving visualization {plot_name}: {str(viz_error)}")
                             
@@ -797,7 +785,6 @@ def train_models(session_id: str):
         JSON response with training status
     """
     try:
-        logger.info(f"Starting model training for session {session_id}")
         
         # Get request data
         request_data = request.get_json() or {}
@@ -805,8 +792,6 @@ def train_models(session_id: str):
         training_split = request_data.get('training_split', {})
         training_split = convert_training_split_params(training_split)
         
-        logger.info(f"Received model parameters: {model_parameters}")
-        logger.info(f"Converted training split: {training_split}")
         
         # Validate required parameters
         if not model_parameters:
@@ -842,20 +827,16 @@ def train_models(session_id: str):
             if 'final_results' in results and 'evaluation_results' in results['final_results']:
                 results_gen.results = results['final_results']['evaluation_results']
                 success = results_gen.save_results_to_database(session_id, get_supabase_client())
-                if success:
-                    logger.info(f"Results saved to database for session {session_id}")
-                else:
+                if not success:
                     logger.warning(f"Failed to save results to database for session {session_id}")
             
             # Also save visualizations if they exist
             if 'final_results' in results and 'visualizations' in results['final_results']:
                 visualizations = results['final_results']['visualizations']
-                logger.info(f"Found {len(visualizations)} visualizations to save")
                 
                 for viz_name, viz_data in visualizations.items():
                     try:
                         save_visualization_to_database(session_id, viz_name, viz_data)
-                        logger.info(f"Saved visualization {viz_name} for session {session_id}")
                     except Exception as viz_error:
                         logger.error(f"Failed to save visualization {viz_name}: {str(viz_error)}")
         
@@ -890,7 +871,6 @@ def save_model(session_id: str):
         JSON response with model save status
     """
     try:
-        logger.info(f"Saving model for session {session_id}")
         
         # Get request data
         request_data = request.get_json() or {}
@@ -944,7 +924,6 @@ def save_model(session_id: str):
         # Insert into a models table (you may need to create this table)
         try:
             response = supabase.table('saved_models').insert(model_metadata).execute()
-            logger.info(f"Model metadata saved to database for session {session_id}")
         except Exception as db_error:
             logger.warning(f"Could not save model metadata to database: {str(db_error)}")
         
@@ -1255,7 +1234,6 @@ def start_complete_pipeline(session_id: str):
         JSON response with pipeline start status
     """
     try:
-        logger.info(f"Starting complete 7-phase pipeline for session {session_id}")
         
         # Get request data
         request_data = request.get_json() or {}
@@ -1290,7 +1268,6 @@ def start_complete_pipeline(session_id: str):
                 total_progress = sum(p['progress'] for p in _phase_progress[session_id]['phases'].values())
                 _phase_progress[session_id]['overall_progress'] = total_progress / 7
                 
-                logger.info(f"Phase {phase_num} ({phase_name}): {progress}%")
         
         # Start pipeline in background (in production, use Celery or similar)
         # For now, run synchronously

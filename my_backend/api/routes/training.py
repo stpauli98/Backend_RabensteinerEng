@@ -164,7 +164,7 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
         
         # Logiraj uspješno sastavljanje datoteke
         file_size = os.path.getsize(assembled_file_path)
-        logger.info(f"Successfully assembled file {filename} from {len(file_chunks)} chunks, total size: {file_size} bytes")
+        # logger.info(f"Successfully assembled file {filename} from {len(file_chunks)} chunks, total size: {file_size} bytes")
         
         return assembled_file_path
     except Exception as e:
@@ -185,7 +185,7 @@ def save_session_metadata_locally(session_id: str, metadata: dict) -> bool:
         with open(session_metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        logger.info(f"Session metadata saved locally to: {session_metadata_path}")
+        # logger.info(f"Session metadata saved locally to: {session_metadata_path}")
         return True
     except Exception as e:
         logger.error(f"Error saving session metadata locally: {str(e)}")
@@ -222,7 +222,7 @@ def print_session_files(session_id, files_data):
     """
     try:
         # Only log minimal information unless in debug mode
-        logger.info(f"Session {session_id} contains {len(files_data)} files")
+        # logger.info(f"Session {session_id} contains {len(files_data)} files")
         
         # Skip detailed logging if not in debug mode
         if not logger.isEnabledFor(logging.DEBUG):
@@ -234,35 +234,38 @@ def print_session_files(session_id, files_data):
         # Log timeInfo parameters
         time_info = metadata.get('timeInfo', {})
         if time_info:
-            logger.debug(f"Time info: {json.dumps(time_info, indent=2)}")
+            # logger.debug(f"Time info: {json.dumps(time_info, indent=2)}")
+            pass
         
         # Process each file
         for file_name, file_data in files_data.items():
-            logger.debug(f"File: {file_name}, Size: {len(file_data)} bytes")
+            # logger.debug(f"File: {file_name}, Size: {len(file_data)} bytes")
             
             # Try to parse as CSV but only log basic info
             try:
                 df = pd.read_csv(BytesIO(file_data), encoding='utf-8')
-                logger.debug(f"CSV rows: {len(df)}, columns: {len(df.columns)}")
+                # logger.debug(f"CSV rows: {len(df)}, columns: {len(df.columns)}")
             except Exception as e:
-                logger.debug(f"Not parseable as CSV: {str(e)}")
+                # logger.debug(f"Not parseable as CSV: {str(e)}")
+                pass
                 
             try:
                 file_type = magic.from_buffer(file_data[:1024], mime=True)
-                logger.debug(f"File type: {file_type}")
+                # logger.debug(f"File type: {file_type}")
             except ImportError:
                 # Ako magic modul nije dostupan, pokušaj odrediti tip na osnovu ekstenzije
                 _, ext = os.path.splitext(file_name)
-                logger.debug(f"File extension: {ext}")
+                # logger.debug(f"File extension: {ext}")
                     
             # Ako je tekstualna datoteka, prikaži preview
             try:
                 preview = file_data.decode('utf-8')[:1000]
-                logger.debug("\nFile preview:")
-                logger.debug(preview)
+                # logger.debug("\nFile preview:")
+                # logger.debug(preview)
             except UnicodeDecodeError:
-                logger.debug("Error decoding file as UTF-8 for preview")
-                logger.debug(f"Binary file, size: {len(file_data)} bytes")
+                # logger.debug("Error decoding file as UTF-8 for preview")
+                # logger.debug(f"Binary file, size: {len(file_data)} bytes")
+                pass
                 
     except Exception as e:
         logger.error(f"Error processing session files: {str(e)}")
@@ -284,7 +287,7 @@ def upload_chunk():
             return jsonify({'success': False, 'error': 'No metadata provided'}), 400
             
         metadata = json.loads(request.form['metadata'])
-        logger.info(f"Received chunk {metadata['chunkIndex']} of {metadata['totalChunks']} for {metadata['fileName']}")
+        # logger.info(f"Received chunk {metadata['chunkIndex']} of {metadata['totalChunks']} for {metadata['fileName']}")
         
         # Pročitaj podatke chunka
         chunk_data = chunk_file.read()
@@ -357,18 +360,19 @@ def upload_chunk():
         
         # Logiraj parametre koji se spremaju
         if frontend_params:
-            logger.info(f"Saving chunk with parameters: {', '.join(frontend_params.keys())}")
+            # logger.info(f"Saving chunk with parameters: {', '.join(frontend_params.keys())}")
             
             # Detaljni ispis samo u debug modu
             if logger.isEnabledFor(logging.DEBUG):
                 # Osnovni podaci iz metadata
-                logger.debug(f"Session ID: {upload_id}")
-                logger.debug(f"File name: {metadata.get('fileName', 'N/A')}")
+                # logger.debug(f"Session ID: {upload_id}")
+                # logger.debug(f"File name: {metadata.get('fileName', 'N/A')}")
                 
                 # Podaci iz fileMetadata ako postoje
                 file_metadata = frontend_params.get('fileMetadata', {})
                 if file_metadata:
-                    logger.debug(f"File metadata: {json.dumps(file_metadata, indent=2)}")
+                    # logger.debug(f"File metadata: {json.dumps(file_metadata, indent=2)}")
+                    pass
         
         # Kreiraj metapodatke o chunku
         chunk_info = {
@@ -436,7 +440,7 @@ def upload_chunk():
             file_exists = False
             for i, existing_file in enumerate(session_metadata.get('files', [])):
                 if existing_file.get('fileName') == file_name:
-                    logger.debug(f"DEBUG: Updating existing file metadata for {file_name}: {file_metadata}")
+                    # logger.debug(f"DEBUG: Updating existing file metadata for {file_name}: {file_metadata}")
                     # Ažuriraj postojeće metapodatke
                     session_metadata['files'][i] = file_metadata
                     file_exists = True
@@ -444,7 +448,7 @@ def upload_chunk():
                     
             # Ako datoteka ne postoji u metapodacima, dodaj je
             if not file_exists and file_metadata:
-                logger.debug(f"DEBUG: Adding new file metadata for {file_name}: {file_metadata}")
+                # logger.debug(f"DEBUG: Adding new file metadata for {file_name}: {file_metadata}")
                 session_metadata['files'].append(file_metadata)
             
             # Ažuriraj vrijeme zadnje promjene
@@ -454,7 +458,7 @@ def upload_chunk():
             with open(session_metadata_path, 'w') as f:
                 json.dump(session_metadata, f, indent=2)
             
-            logger.info(f"Saved session metadata for session {upload_id} with file {file_name}")
+            # logger.info(f"Saved session metadata for session {upload_id} with file {file_name}")
         
         # Ako je ovo zadnji chunk, sastavi datoteku
         if metadata['chunkIndex'] == metadata['totalChunks'] - 1:
@@ -464,12 +468,12 @@ def upload_chunk():
                 
                 # Prikaži samo osnovne informacije o datoteci
                 file_size = os.path.getsize(assembled_file_path)
-                logger.info(f"Successfully assembled file: {metadata['fileName']} at {assembled_file_path}, size: {file_size/1024:.2f} KB")
+                # logger.info(f"Successfully assembled file: {metadata['fileName']} at {assembled_file_path}, size: {file_size/1024:.2f} KB")
                 
                 # Učitaj datoteku kao DataFrame ako je CSV i prikaži osnovne informacije
                 try:
                     df = pd.read_csv(assembled_file_path)
-                    logger.info(f"CSV file processed: {len(df)} rows, {len(df.columns)} columns")
+                    # logger.info(f"CSV file processed: {len(df)} rows, {len(df.columns)} columns")
                 except Exception:
                     # Nije CSV ili nije moguće učitati - preskoci
                     pass
@@ -569,7 +573,7 @@ def save_session_to_database(session_id):
     try:
         supabase_result = save_session_to_supabase(session_id)
         if supabase_result:
-            logger.info(f"Session {session_id} data saved to Supabase successfully")
+            # logger.info(f"Session {session_id} data saved to Supabase successfully")
             return True
         else:
             logger.warning(f"Failed to save session {session_id} data to Supabase")
@@ -594,7 +598,7 @@ def finalize_session():
         # 2. Verify files and update metadata
         final_metadata, file_count = verify_session_files(session_id, updated_metadata)
         
-        logger.info(f"Session {session_id} finalized with {file_count} files")
+        # logger.info(f"Session {session_id} finalized with {file_count} files")
 
         # 3. Save session data to Supabase
         try:
@@ -878,12 +882,13 @@ def init_session():
             from utils.database import create_or_get_session_uuid
             session_uuid = create_or_get_session_uuid(session_id)
             if session_uuid:
-                logger.info(f"Created session UUID {session_uuid} for session {session_id}")
+                # logger.info(f"Created session UUID {session_uuid} for session {session_id}")
                 
                 # Save session data to Supabase
                 success = save_session_to_supabase(session_id)
                 if success:
-                    logger.info(f"Session {session_id} data saved to Supabase successfully")
+                    # logger.info(f"Session {session_id} data saved to Supabase successfully")
+                    pass
                 else:
                     logger.warning(f"Failed to save session {session_id} data to Supabase")
             else:
@@ -892,7 +897,7 @@ def init_session():
             logger.error(f"Error saving session data to Supabase: {str(e)}")
             # Continue even if Supabase save fails - don't block the response
             
-        logger.info(f"Session {session_id} initialized successfully")
+        # logger.info(f"Session {session_id} initialized successfully")
         return jsonify({
             'success': True,
             'sessionId': session_id,
@@ -1002,10 +1007,10 @@ def save_time_info_endpoint():
     """Save time information via API endpoint."""
     try:
         # Log the raw request data for debugging
-        logger.info(f"Received save-time-info request from {request.remote_addr}")
-        logger.info(f"Request headers: {dict(request.headers)}")
-        logger.info(f"Request content type: {request.content_type}")
-        logger.info(f"Request content length: {request.content_length}")
+        # logger.info(f"Received save-time-info request from {request.remote_addr}")
+        # logger.info(f"Request headers: {dict(request.headers)}")
+        # logger.info(f"Request content type: {request.content_type}")
+        # logger.info(f"Request content length: {request.content_length}")
         
         # Check content type
         if not request.is_json:
@@ -1020,7 +1025,7 @@ def save_time_info_endpoint():
             return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'}), 400
         
         # Log the parsed data
-        logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
+        # logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
         
         if not data or 'sessionId' not in data or 'timeInfo' not in data:
             logger.error("Missing required fields in request")
@@ -1034,14 +1039,14 @@ def save_time_info_endpoint():
             logger.error(f"Invalid session_id format: {session_id}")
             return jsonify({'success': False, 'error': 'Invalid session_id format'}), 400
         
-        logger.info(f"Processing time_info save for session: {session_id}")
-        logger.info(f"Time info keys: {list(time_info.keys()) if time_info else 'None'}")
+        # logger.info(f"Processing time_info save for session: {session_id}")
+        # logger.info(f"Time info keys: {list(time_info.keys()) if time_info else 'None'}")
         
         from utils.database import save_time_info
         success = save_time_info(session_id, time_info)
         
         if success:
-            logger.info(f"Successfully saved time_info for session {session_id}")
+            # logger.info(f"Successfully saved time_info for session {session_id}")
             return jsonify({'success': True, 'message': 'Time info saved successfully'})
         else:
             logger.error(f"Failed to save time_info for session {session_id}")
@@ -1161,10 +1166,10 @@ def save_zeitschritte_endpoint():
     """Save zeitschritte information via API endpoint."""
     try:
         # Log the raw request data for debugging
-        logger.info(f"Received save-zeitschritte request from {request.remote_addr}")
-        logger.info(f"Request headers: {dict(request.headers)}")
-        logger.info(f"Request content type: {request.content_type}")
-        logger.info(f"Request content length: {request.content_length}")
+        # logger.info(f"Received save-zeitschritte request from {request.remote_addr}")
+        # logger.info(f"Request headers: {dict(request.headers)}")
+        # logger.info(f"Request content type: {request.content_type}")
+        # logger.info(f"Request content length: {request.content_length}")
         
         # Check content type
         if not request.is_json:
@@ -1179,7 +1184,7 @@ def save_zeitschritte_endpoint():
             return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'}), 400
         
         # Log the parsed data
-        logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
+        # logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
         
         if not data or 'sessionId' not in data or 'zeitschritte' not in data:
             logger.error("Missing required fields in request")
@@ -1193,14 +1198,14 @@ def save_zeitschritte_endpoint():
             logger.error(f"Invalid session_id format: {session_id}")
             return jsonify({'success': False, 'error': 'Invalid session_id format'}), 400
         
-        logger.info(f"Processing zeitschritte save for session: {session_id}")
-        logger.info(f"Zeitschritte keys: {list(zeitschritte.keys()) if zeitschritte else 'None'}")
+        # logger.info(f"Processing zeitschritte save for session: {session_id}")
+        # logger.info(f"Zeitschritte keys: {list(zeitschritte.keys()) if zeitschritte else 'None'}")
         
         from utils.database import save_zeitschritte
         success = save_zeitschritte(session_id, zeitschritte)
         
         if success:
-            logger.info(f"Successfully saved zeitschritte for session {session_id}")
+            # logger.info(f"Successfully saved zeitschritte for session {session_id}")
             return jsonify({'success': True, 'message': 'Zeitschritte saved successfully'})
         else:
             logger.error(f"Failed to save zeitschritte for session {session_id}")
@@ -1241,7 +1246,7 @@ def delete_session(session_id):
                 file_path = os.path.join(root, file)
                 try:
                     os.remove(file_path)
-                    logger.info(f"Deleted file: {file_path}")
+                    # logger.info(f"Deleted file: {file_path}")
                 except Exception as e:
                     logger.error(f"Error deleting file {file_path}: {str(e)}")
             
@@ -1250,14 +1255,14 @@ def delete_session(session_id):
                 dir_path = os.path.join(root, dir)
                 try:
                     os.rmdir(dir_path)
-                    logger.info(f"Deleted directory: {dir_path}")
+                    # logger.info(f"Deleted directory: {dir_path}")
                 except Exception as e:
                     logger.error(f"Error deleting directory {dir_path}: {str(e)}")
         
         # Na kraju obriši glavni direktorij
         try:
             os.rmdir(upload_dir)
-            logger.info(f"Deleted session directory: {upload_dir}")
+            # logger.info(f"Deleted session directory: {upload_dir}")
         except Exception as e:
             logger.error(f"Error deleting session directory {upload_dir}: {str(e)}")
         
@@ -1294,7 +1299,7 @@ def download_file(session_id, file_type, file_name):
         bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
         storage_path = f"{uuid_session_id}/{file_name}"
 
-        logger.info(f"Attempting to download file {file_name} from bucket {bucket_name} at path {storage_path}")
+        # logger.info(f"Attempting to download file {file_name} from bucket {bucket_name} at path {storage_path}")
 
         try:
             response = supabase.storage.from_(bucket_name).download(storage_path)
@@ -1339,11 +1344,11 @@ def run_analysis(session_id):
         # Run training in background thread to avoid blocking the request
         def run_training_async():
             try:
-                logger.info(f"Starting async training for session {session_id}")
+                # logger.info(f"Starting async training for session {session_id}")
                 result = runner.run_training_script(session_id)
                 
                 if result['success']:
-                    logger.info(f"Training completed successfully for session {session_id}")
+                    # logger.info(f"Training completed successfully for session {session_id}")
                     # Emit completion event via SocketIO
                     if socketio_instance:
                         socketio_instance.emit('training_completed', {
@@ -1375,7 +1380,7 @@ def run_analysis(session_id):
         training_thread.daemon = True
         training_thread.start()
         
-        logger.info(f"Modern training pipeline for session {session_id} triggered successfully.")
+        # logger.info(f"Modern training pipeline for session {session_id} triggered successfully.")
         return jsonify({
             'success': True, 
             'message': f'Modern training pipeline for session {session_id} started.',
@@ -1463,7 +1468,7 @@ def get_training_results(session_id):
         # Get or create UUID for session ID
         uuid_session_id = create_or_get_session_uuid(session_id)
         
-        logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
+        # logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
         
         # Get training results from database
         response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').execute()
@@ -1476,7 +1481,7 @@ def get_training_results(session_id):
             })
         else:
             # No results found - this is normal if training hasn't been run yet
-            logger.info(f"No training results found for session {session_id}")
+            # logger.info(f"No training results found for session {session_id}")
             return jsonify({
                 'success': True,
                 'message': 'No training results yet - training may not have been started',
@@ -1506,9 +1511,9 @@ def generate_datasets(session_id):
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
         
-        logger.info(f"Generating datasets for session {session_id}")
-        logger.info(f"Model parameters: {model_parameters}")
-        logger.info(f"Training split: {training_split}")
+        # logger.info(f"Generating datasets for session {session_id}")
+        # logger.info(f"Model parameters: {model_parameters}")
+        # logger.info(f"Training split: {training_split}")
         
         # Import ModernMiddlemanRunner
         from services.training.middleman_runner import ModernMiddlemanRunner
@@ -1540,7 +1545,7 @@ def generate_datasets(session_id):
         result = runner.run_training_script(session_id, model_config)
         
         if result['success']:
-            logger.info(f"Dataset generation completed for session {session_id}")
+            # logger.info(f"Dataset generation completed for session {session_id}")
             
             # Save visualizations to database
             violin_plots = result.get('violin_plots', {})
@@ -1551,7 +1556,7 @@ def generate_datasets(session_id):
                     try:
                         if plot_data:  # Only save if data exists
                             save_visualization_to_database(session_id, plot_name, plot_data)
-                            logger.info(f"Saved visualization {plot_name} for session {session_id}")
+                            # logger.info(f"Saved visualization {plot_name} for session {session_id}")
                     except Exception as viz_error:
                         logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
                         # Continue even if one visualization fails to save
@@ -1588,8 +1593,8 @@ def train_models(session_id):
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
         
-        logger.info(f"Training models for session {session_id}")
-        logger.info(f"Model parameters: {model_parameters}")
+        # logger.info(f"Training models for session {session_id}")
+        # logger.info(f"Model parameters: {model_parameters}")
         
         import threading
         from services.training.middleman_runner import ModernMiddlemanRunner
@@ -1620,11 +1625,11 @@ def train_models(session_id):
         # Run training in background thread
         def run_training_async():
             try:
-                logger.info(f"Starting async training for session {session_id}")
+                # logger.info(f"Starting async training for session {session_id}")
                 result = runner.run_training_script(session_id, model_config)
                 
                 if result['success']:
-                    logger.info(f"Training completed successfully for session {session_id}")
+                    # logger.info(f"Training completed successfully for session {session_id}")
                     if socketio_instance:
                         socketio_instance.emit('training_completed', {
                             'session_id': session_id,
@@ -1687,12 +1692,12 @@ def debug_files_table(session_id):
         # Get all files for this session
         response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
         
-        logger.info(f"Debug: Files table query for session {session_id} (UUID: {uuid_session_id})")
-        logger.info(f"Debug: Found {len(response.data)} files")
+        # logger.info(f"Debug: Files table query for session {session_id} (UUID: {uuid_session_id})")
+        # logger.info(f"Debug: Found {len(response.data)} files")
         
         # Also check csv_file_refs table
         refs_response = supabase.table('csv_file_refs').select('*').eq('session_id', uuid_session_id).execute()
-        logger.info(f"Debug: Found {len(refs_response.data)} CSV file references")
+        # logger.info(f"Debug: Found {len(refs_response.data)} CSV file references")
         
         result = {
             'success': True,

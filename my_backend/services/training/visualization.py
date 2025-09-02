@@ -567,7 +567,7 @@ class Visualizer:
                         )
                         
                         if response:
-                            logger.info(f"Saved plot {plot_name} to storage")
+                            pass  # Response saved successfully
                     except Exception as e:
                         logger.error(f"Error saving plot {plot_name}: {str(e)}")
                         continue

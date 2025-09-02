@@ -45,7 +45,6 @@ class DataScaler:
             Dict containing scaler information
         """
         try:
-            logger.info("Preparing data scalers")
             
             # Extract scaling lists from configuration
             i_scal_list = [config.get('scale', False) for config in input_scaling_config]
@@ -77,7 +76,6 @@ class DataScaler:
                     
                     current_op += 1
                     
-                    logger.info(f"Created input scaler {i}: range=({i_scal_min_list[i]}, {i_scal_max_list[i]})")
                     
                 else:
                     self.input_scalers[i] = None
@@ -99,7 +97,6 @@ class DataScaler:
                     
                     current_op += 1
                     
-                    logger.info(f"Created output scaler {i}: range=({o_scal_min_list[i]}, {o_scal_max_list[i]})")
                     
                 else:
                     self.output_scalers[i] = None
@@ -115,7 +112,6 @@ class DataScaler:
             if progress_callback:
                 progress_callback("Scalers setup completed", 100)
             
-            logger.info(f"Prepared {self.scaling_config['input_scalers_count']} input scalers and {self.scaling_config['output_scalers_count']} output scalers")
             
             return self.scaling_config
             
@@ -139,7 +135,6 @@ class DataScaler:
             Tuple of scaled (input_array_3d, output_array_3d)
         """
         try:
-            logger.info("Applying scaling to data arrays")
             
             # Make copies to avoid modifying original data
             scaled_input = copy.deepcopy(input_array_3d)
@@ -192,7 +187,6 @@ class DataScaler:
             if progress_callback:
                 progress_callback("Data scaling completed", 100)
             
-            logger.info(f"Applied scaling to {n_samples} samples with {n_input_features} input and {n_output_features} output features")
             
             return scaled_input, scaled_output
             
@@ -214,7 +208,6 @@ class DataScaler:
             Unscaled predictions in original units
         """
         try:
-            logger.info("Applying inverse transform to predictions")
             
             # Make copy to avoid modifying original data
             unscaled_predictions = copy.deepcopy(scaled_predictions)
@@ -244,7 +237,6 @@ class DataScaler:
             if progress_callback:
                 progress_callback("Inverse scaling completed", 100)
             
-            logger.info(f"Applied inverse transform to {n_samples} samples with {n_features} features")
             
             return unscaled_predictions
             
@@ -276,7 +268,6 @@ class DataScaler:
             Dict containing train/val/test splits
         """
         try:
-            logger.info("Splitting data into train/validation/test sets")
             
             # Validate ratios
             total_ratio = train_ratio + val_ratio + test_ratio
@@ -293,7 +284,6 @@ class DataScaler:
             n_val = int(val_ratio * n_samples)
             n_test = n_samples - n_train - n_val  # Ensure all samples are used
             
-            logger.info(f"Split sizes: train={n_train}, val={n_val}, test={n_test}")
             
             # Create indices
             indices = np.arange(n_samples)
@@ -303,7 +293,6 @@ class DataScaler:
                 if random_seed is not None:
                     np.random.seed(random_seed)
                 np.random.shuffle(indices)
-                logger.info("Data shuffled before splitting")
             
             # Split indices
             train_indices = indices[:n_train]
@@ -332,7 +321,6 @@ class DataScaler:
                 }
             }
             
-            logger.info(f"Data split completed: train={len(splits['train_x'])}, val={len(splits['val_x'])}, test={len(splits['test_x'])}")
             
             return splits
             
@@ -430,7 +418,6 @@ def create_default_scaling_config(data_info: Dict,
                     'scaler_type': 'MinMaxScaler'
                 })
         
-        logger.info(f"Created default scaling config for {len(config)} features")
         return config
         
     except Exception as e:
@@ -457,7 +444,6 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
         Dict containing prepared data and metadata
     """
     try:
-        logger.info("Starting complete data preparation pipeline")
         
         # Default configurations
         if scaling_config is None:
@@ -539,7 +525,6 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
             }
         }
         
-        logger.info("Data preparation pipeline completed successfully")
         return results
         
     except Exception as e:

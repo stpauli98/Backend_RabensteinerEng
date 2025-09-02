@@ -60,7 +60,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     # Main time loop (lines 1080-1748)
     iteration_count = 0
     total_iterations = int((utc_end - utc_ref).total_seconds() / 60 / mts.DELT)
-    logger.info(f"Starting main time loop with estimated {total_iterations} iterations")
     
     while True:
         
@@ -71,11 +70,10 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
         # Log progress every 100 iterations
         iteration_count += 1
         if iteration_count % 100 == 0:
-            logger.info(f"Processing iteration {iteration_count}/{total_iterations} ({100*iteration_count/total_iterations:.1f}%)")
+            pass  # Progress tracking
         
         # Progress logging (lines 1086-1087)
         prog_1 = (utc_ref - utc_strt) / (utc_end - utc_strt) * 100
-        logger.debug(f"Creating datasets: {prog_1:.2f}%")
         
         # Initialize DataFrames for this iteration (lines 1089-1090)
         df_int_i = pd.DataFrame()
@@ -84,10 +82,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
         #######################################################################
         # PROCESS INPUT DATA (lines 1099-1244)
         #######################################################################
-        logger.debug(f"Processing {len(i_dat)} input files, i_dat_inf columns: {list(i_dat_inf.columns)}")
-        logger.debug(f"i_dat_inf content:\n{i_dat_inf}")
         for i, (key, df) in enumerate(i_dat.items()):
-            logger.debug(f"Processing input key: {key}, df shape: {df.shape if hasattr(df, 'shape') else 'N/A'}")
             
             # HISTORICAL DATA (lines 1107-1244)
             if i_dat_inf.loc[key, "spec"] == "Historische Daten":
@@ -117,10 +112,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     # Initialize value list
                     val_list = []
                     
-                    logger.debug(f"Linear interpolation for {key}:")
-                    logger.debug(f"  utc_th_strt: {utc_th_strt}")
-                    logger.debug(f"  utc_th_end: {utc_th_end}")
-                    logger.debug(f"  delt_transf: {i_dat_inf.loc[key, 'delt_transf']}")
                     
                     # Create time stamps for transformation (lines 1146-1161)
                     try:
@@ -129,9 +120,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             end=utc_th_end,
                             freq=f'{i_dat_inf.loc[key, "delt_transf"]}min'
                         ).to_list()
-                        logger.debug(f"  Created time horizon with pd.date_range: {len(utc_th)} points")
                     except Exception as e:
-                        logger.debug(f"  pd.date_range failed: {e}, using manual generation")
                         # Calculate timedelta
                         delt = pd.to_timedelta(i_dat_inf.loc[key, "delt_transf"], unit="min")
                         # Generate time series manually
@@ -140,15 +129,11 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         for i1 in range(mts.I_N):
                             utc_th.append(utc)
                             utc += delt
-                        logger.debug(f"  Created time horizon manually: {len(utc_th)} points")
                     
                     if len(utc_th) > 0:
-                        logger.debug(f"  Time horizon range: {utc_th[0]} to {utc_th[-1]}")
-                    
-                    # Get data time range for comparison
-                    data_utc_min = i_dat[key].iloc[0, 0]
-                    data_utc_max = i_dat[key].iloc[-1, 0]
-                    logger.debug(f"  Data time range: {data_utc_min} to {data_utc_max}")
+                        # Get data time range for comparison
+                        data_utc_min = i_dat[key].iloc[0, 0]
+                        data_utc_max = i_dat[key].iloc[-1, 0]
                     
                     # LINEAR INTERPOLATION (lines 1164-1210)
                     if i_dat_inf.loc[key, "meth"] == "Lineare Interpolation":
@@ -162,7 +147,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             
                             # Check time boundaries
                             if idx1 is None or idx2 is None:
-                                logger.debug(f"    Point {i1}: utc_th={utc_th[i1]}, idx1={idx1}, idx2={idx2} - OUT OF BOUNDS")
                                 error = True
                                 break
                             
@@ -188,9 +172,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         
                         if not error:
                             df_int_i[key] = val_list
-                            logger.debug(f"Added column {key} to df_int_i with {len(val_list)} values")
                         else:
-                            logger.debug(f"Error in interpolation for input {key}, skipping")
+                            pass  # Continue
                     
                     # TRANSFERIERUNG DURCH MITTELWERTBILDUNG (lines 1207-1208)
                     elif i_dat_inf.loc[key, "meth"] == "Mittelwertbildung":
@@ -544,8 +527,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["h"] = [1 if lT.date() in [h.date() for h in hol_d] else 0] * mts.I_N
         
         # Debug: Check what's in the DataFrames before appending
-        logger.debug(f"df_int_i shape: {df_int_i.shape}, columns: {list(df_int_i.columns)}")
-        logger.debug(f"df_int_o shape: {df_int_o.shape}, columns: {list(df_int_o.columns)}")
         
         # Append arrays and log (lines 1741-1744)
         # Only append if both arrays have data (not empty)
@@ -554,7 +535,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
             o_arrays.append(df_int_o.values)
             utc_ref_log.append(utc_ref)
         else:
-            logger.debug(f"Skipping empty dataset at utc_ref={utc_ref}")
+            pass  # No data for this iteration
         
         # Increment time reference (line 1748) - MUST BE INSIDE WHILE LOOP!
         utc_ref = utc_ref + datetime.timedelta(minutes=mts.DELT)
@@ -585,6 +566,5 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     # Clean up
     del i_arrays, o_arrays
     
-    logger.info(f"Created {n_dat} datasets with shapes: i_array_3D {i_array_3D.shape}, o_array_3D {o_array_3D.shape}")
     
     return i_array_3D, o_array_3D, i_combined_array, o_combined_array, utc_ref_log

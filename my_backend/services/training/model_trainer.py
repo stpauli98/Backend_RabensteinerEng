@@ -696,7 +696,6 @@ class ModelTrainer:
             # Use randomization setting from user
             random_state = None if training_split['random_dat'] else 42
             
-            logger.info(f"Using user split parameters: test_size={test_size}, random_state={random_state}")
             
             return train_test_split(X, y, test_size=test_size, random_state=random_state)
             

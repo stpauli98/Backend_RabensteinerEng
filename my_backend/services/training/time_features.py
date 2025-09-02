@@ -114,7 +114,6 @@ class TimeFeatureExtractor:
                         features["y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
                         features["y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
             
-            logger.info(f"Extracted yearly features for {len(timestamps)} timestamps")
             return features
             
         except Exception as e:
@@ -186,7 +185,6 @@ class TimeFeatureExtractor:
                         features["m_sin"] = np.sin(sec / 2629800 * 2 * np.pi)
                         features["m_cos"] = np.cos(sec / 2629800 * 2 * np.pi)
             
-            logger.info(f"Extracted monthly features for {len(timestamps)} timestamps")
             return features
             
         except Exception as e:
@@ -233,7 +231,6 @@ class TimeFeatureExtractor:
                 features["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
                 features["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
             
-            logger.info(f"Extracted weekly features for {len(timestamps)} timestamps")
             return features
             
         except Exception as e:
@@ -279,7 +276,6 @@ class TimeFeatureExtractor:
                 features["d_sin"] = np.sin(sec / 86400 * 2 * np.pi)
                 features["d_cos"] = np.cos(sec / 86400 * 2 * np.pi)
             
-            logger.info(f"Extracted daily features for {len(timestamps)} timestamps")
             return features
             
         except Exception as e:
@@ -323,7 +319,6 @@ class TimeFeatureExtractor:
                 features["h_sin"] = np.sin(sec / 3600 * 2 * np.pi)
                 features["h_cos"] = np.cos(sec / 3600 * 2 * np.pi)
             
-            logger.info(f"Extracted hourly features for {len(timestamps)} timestamps")
             return features
             
         except Exception as e:
@@ -379,7 +374,6 @@ class TimeFeatureExtractor:
                 hourly_features = self.extract_hourly_features(timestamps, use_local_time)
                 all_features.update(hourly_features)
             
-            logger.info(f"Extracted {len(all_features)} time features for {len(timestamps)} timestamps")
             return all_features
             
         except Exception as e:
@@ -463,7 +457,6 @@ def detect_holidays(timestamps: List[datetime.datetime],
             )
             holidays.append(is_holiday)
         
-        logger.info(f"Detected {sum(holidays)} holidays out of {len(timestamps)} timestamps")
         return holidays
         
     except Exception as e:

@@ -61,7 +61,6 @@ class TrainingPipeline:
         """
         try:
             self.current_session_id = session_id
-            logger.info(f"Starting real training pipeline for session {session_id}")
             
             # Initialize progress tracking
             self._update_progress(0, 'Initializing real training pipeline')
@@ -77,7 +76,6 @@ class TrainingPipeline:
             # Mark as completed
             self._update_progress(7, 'Training completed successfully', completed=True)
             
-            logger.info(f"Real training pipeline completed successfully for session {session_id}")
             return final_results
             
         except Exception as e:
@@ -105,7 +103,6 @@ class TrainingPipeline:
         """
         try:
             self.current_session_id = session_id
-            logger.info(f"Starting dataset generation for session {session_id}")
             
             # Initialize progress tracking
             self._update_progress(0, 'Generating datasets and violin plots')
@@ -120,7 +117,6 @@ class TrainingPipeline:
             # Mark as completed
             self._update_progress(2, 'Dataset generation completed successfully', completed=True)
             
-            logger.info(f"Dataset generation completed successfully for session {session_id}")
             return results
             
         except Exception as e:
@@ -149,7 +145,6 @@ class TrainingPipeline:
         """
         try:
             self.current_session_id = session_id
-            logger.info(f"Starting model training for session {session_id} with params: {model_params}")
             
             # Initialize progress tracking
             self._update_progress(0, 'Training models with user parameters')
@@ -164,7 +159,6 @@ class TrainingPipeline:
             # Mark as completed
             self._update_progress(7, 'Model training completed successfully', completed=True)
             
-            logger.info(f"Model training completed successfully for session {session_id}")
             return results
             
         except Exception as e:
@@ -200,7 +194,6 @@ class TrainingPipeline:
             # Download files
             input_files, output_files = data_loader.prepare_file_paths(session_id)
             
-            logger.info(f"Loaded session data for {session_id}: {len(input_files)} input files, {len(output_files)} output files")
             
             return session_data, input_files, output_files
             
@@ -230,7 +223,6 @@ class TrainingPipeline:
             # Process data
             processed_data = data_processor.process_session_data(session_data, input_files, output_files)
             
-            logger.info(f"Data processing completed. Datasets: {len(processed_data.get('train_datasets', {}))}")
             
             return processed_data
             
@@ -262,7 +254,6 @@ class TrainingPipeline:
                 session_data
             )
             
-            logger.info(f"Model training completed. Results: {len(training_results)} datasets")
             
             return training_results
             
@@ -288,7 +279,6 @@ class TrainingPipeline:
             # Generate evaluation results
             evaluation_results = results_generator.generate_results(training_results, session_data)
             
-            logger.info(f"Model evaluation completed")
             
             return evaluation_results
             
@@ -314,7 +304,6 @@ class TrainingPipeline:
             # Create all visualizations
             visualizations = visualizer.create_all_visualizations(training_results, evaluation_results)
             
-            logger.info(f"Visualizations created: {len(visualizations)} plots")
             
             return visualizations
             
@@ -429,7 +418,6 @@ class TrainingPipeline:
                 # Save visualizations to separate table
                 self._save_visualizations_to_database(session_id, visualizations)
                 
-                logger.info(f"Results saved to database for session {session_id}, result_id: {result_id}")
                 return True
             else:
                 logger.error(f"Failed to save results to database for session {session_id}")
@@ -453,7 +441,6 @@ class TrainingPipeline:
                 
                 self.supabase.table('training_visualizations').insert(viz_data).execute()
                 
-            logger.info(f"Saved {len(visualizations)} visualizations for session {session_id}")
             
         except Exception as e:
             logger.error(f"Error saving visualizations: {str(e)}")
@@ -510,7 +497,6 @@ class TrainingPipeline:
                 if visualizations:
                     self._save_visualizations_to_database(session_id, visualizations)
                 
-                logger.info(f"Dataset generation results saved to database for session {session_id}")
                 return True
             else:
                 logger.error(f"Failed to save dataset generation results for session {session_id}")
@@ -551,7 +537,6 @@ class TrainingPipeline:
             # Save progress to database
             self._save_progress_to_database()
             
-            logger.info(f"Progress: {self.progress['overall']}% - {message}")
             
         except Exception as e:
             logger.error(f"Error updating progress: {str(e)}")
