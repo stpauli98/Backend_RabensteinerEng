@@ -1541,11 +1541,26 @@ def generate_datasets(session_id):
         
         if result['success']:
             logger.info(f"Dataset generation completed for session {session_id}")
+            
+            # Save visualizations to database
+            violin_plots = result.get('violin_plots', {})
+            if violin_plots:
+                from services.training.training_api import save_visualization_to_database
+                
+                for plot_name, plot_data in violin_plots.items():
+                    try:
+                        if plot_data:  # Only save if data exists
+                            save_visualization_to_database(session_id, plot_name, plot_data)
+                            logger.info(f"Saved visualization {plot_name} for session {session_id}")
+                    except Exception as viz_error:
+                        logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
+                        # Continue even if one visualization fails to save
+            
             return jsonify({
                 'success': True,
                 'message': 'Datasets generated successfully',
                 'dataset_count': result.get('dataset_count', 10),
-                'violin_plots': result.get('violin_plots', {})
+                'violin_plots': violin_plots
             })
         else:
             logger.error(f"Dataset generation failed: {result.get('error')}")
