@@ -21,18 +21,18 @@
   },
   "zeitschritte": {
     "eingabe": "1",
-    "ausgabe": "3",
-    "zeitschrittweite": "1",
-    "offset": "2"
+    "ausgabe": "2",
+    "zeitschrittweite": "3",
+    "offset": "4"
   },
   "sessionInfo": {
-    "sessionId": "session_1756815816982_wq29wok",
+    "sessionId": "session_1756822641637_3474pzh",
     "totalFiles": 0
   },
-  "lastUpdated": "2025-09-02T14:23:38.083398",
+  "lastUpdated": "2025-09-02T16:17:22.398892",
   "files": [
     {
-      "id": "1756815731190",
+      "id": "1756822574758",
       "fileName": "Leistung.csv",
       "bezeichnung": "Leistung",
       "utcMin": "2023-09-13 13:27:00",
@@ -44,15 +44,15 @@
       "datenpunkte": "499",
       "numerischeDatenpunkte": "499",
       "numerischerAnteil": "100.00",
-      "datenform": "",
-      "zeithorizontStart": "",
-      "zeithorizontEnd": "",
-      "zeitschrittweiteTransferiertenDaten": "",
-      "offsetTransferiertenDaten": "",
-      "mittelwertbildung\u00dcberDenZeithorizont": "nein",
-      "datenanpassung": "",
-      "zeitschrittweiteMinValue": "",
-      "zeitschrittweiteAvgValue": "",
+      "datenform": "Historische Daten",
+      "zeithorizontStart": "3",
+      "zeithorizontEnd": "4",
+      "zeitschrittweiteTransferiertenDaten": "4",
+      "offsetTransferiertenDaten": "4",
+      "mittelwertbildung\u00dcberDenZeithorizont": "ja",
+      "datenanpassung": "4",
+      "zeitschrittweiteMinValue": "4",
+      "zeitschrittweiteAvgValue": "4",
       "skalierung": "nein",
       "skalierungMax": "",
       "skalierungMin": "",
@@ -62,7 +62,7 @@
       "updatedAt": ""
     },
     {
-      "id": "1756815731192",
+      "id": "1756822574761",
       "fileName": "Temp.csv",
       "bezeichnung": "Temp",
       "utcMin": "2023-09-13 13:27:00",
@@ -74,15 +74,15 @@
       "datenpunkte": "499",
       "numerischeDatenpunkte": "499",
       "numerischerAnteil": "100.00",
-      "datenform": "",
-      "zeithorizontStart": "",
-      "zeithorizontEnd": "",
-      "zeitschrittweiteTransferiertenDaten": "",
-      "offsetTransferiertenDaten": "",
-      "mittelwertbildung\u00dcberDenZeithorizont": "nein",
-      "datenanpassung": "",
-      "zeitschrittweiteMinValue": "",
-      "zeitschrittweiteAvgValue": "",
+      "datenform": "Aktueller Wert",
+      "zeithorizontStart": "12",
+      "zeithorizontEnd": "2",
+      "zeitschrittweiteTransferiertenDaten": "1",
+      "offsetTransferiertenDaten": "4",
+      "mittelwertbildung\u00dcberDenZeithorizont": "ja",
+      "datenanpassung": "3",
+      "zeitschrittweiteMinValue": "1",
+      "zeitschrittweiteAvgValue": "12",
       "skalierung": "nein",
       "skalierungMax": "",
       "skalierungMin": "",
@@ -93,5 +93,5 @@
     }
   ],
   "finalized": true,
-  "finalizationTime": "2025-09-02T14:23:38.089408"
+  "finalizationTime": "2025-09-02T16:17:22.406537"
 }
