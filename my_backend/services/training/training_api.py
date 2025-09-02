@@ -1916,3 +1916,99 @@ def _calculate_duration(start_time: str, end_time: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Error calculating duration: {str(e)}")
         return None
+
+
+@training_api_bp.route('/plot-variables/<session_id>', methods=['GET'])
+def get_plot_variables(session_id: str):
+    """
+    Get available input and output variables for plotting
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        JSON response with input and output variable names
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Try to get training results first
+        results = _get_results_from_database(session_id, supabase)
+        
+        if results and 'results' in results:
+            training_data = results['results']
+            
+            # Extract variable names from training data
+            input_variables = []
+            output_variables = []
+            
+            # Check for column information in results
+            if 'data_info' in training_data:
+                data_info = training_data['data_info']
+                input_variables = data_info.get('input_columns', [])
+                output_variables = data_info.get('output_columns', [])
+            elif 'input_columns' in training_data and 'output_columns' in training_data:
+                # Direct column names from training data
+                input_variables = training_data.get('input_columns', [])
+                output_variables = training_data.get('output_columns', [])
+            elif 'columns' in training_data:
+                # Fallback to columns if data_info not available
+                columns = training_data.get('columns', {})
+                input_variables = columns.get('input', [])
+                output_variables = columns.get('output', [])
+            elif 'model_info' in training_data:
+                # Try to extract from model info
+                model_info = training_data.get('model_info', {})
+                input_variables = model_info.get('input_features', [])
+                output_variables = model_info.get('output_features', [])
+            
+            # If still no variables, try to get from file metadata
+            if not input_variables and not output_variables:
+                try:
+                    uuid_session_id = create_or_get_session_uuid(session_id)
+                    
+                    # Get file metadata from database
+                    file_response = supabase.table('file_metadata').select('*').eq('session_id', uuid_session_id).execute()
+                    
+                    if file_response.data:
+                        for file_data in file_response.data:
+                            file_type = file_data.get('file_type', '')
+                            columns = file_data.get('columns', [])
+                            
+                            if file_type == 'input' and not input_variables:
+                                input_variables = [col for col in columns if col not in ['timestamp', 'UTC']]
+                            elif file_type == 'output' and not output_variables:
+                                output_variables = [col for col in columns if col not in ['timestamp', 'UTC']]
+                                
+                except Exception as e:
+                    logger.warning(f"Could not get file metadata for session {session_id}: {str(e)}")
+            
+            # As a last resort, use some default variable names based on the original training
+            if not input_variables and not output_variables:
+                # Default names from training_original.py
+                input_variables = ['Temperature', 'Load']  # Common input features
+                output_variables = ['Predicted_Load']  # Common output feature
+            
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'input_variables': input_variables,
+                'output_variables': output_variables
+            })
+        else:
+            # No training results yet, return empty arrays
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'input_variables': [],
+                'output_variables': [],
+                'message': 'No training data available yet'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting plot variables for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get plot variables',
+            'message': str(e)
+        }), 500

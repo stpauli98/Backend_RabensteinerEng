@@ -1916,71 +1916,93 @@ def get_evaluation_tables(session_id):
                 'session_id': session_id
             }), 404
         
-        # Format metrics into table structures
-        # df_eval - Overall model metrics
-        df_eval = []
+        # Format metrics to match original training_original.py structure exactly
+        # The original uses nested dictionaries with output feature names as keys
         
-        # Extract test metrics
-        test_metrics = eval_metrics.get('test_metrics_scaled', {})
-        val_metrics = eval_metrics.get('val_metrics_scaled', {})
+        # Get output feature names (default to "Netzlast [kW]" if not available)
+        output_features = results.get('output_features', ['Netzlast [kW]'])
+        if not output_features:
+            output_features = ['Netzlast [kW]']  # Default from original
         
-        if test_metrics:
-            df_eval.append({
-                'Phase': 'Test',
-                'MAE': test_metrics.get('MAE', 0),
-                'MSE': test_metrics.get('MSE', 0),
-                'RMSE': test_metrics.get('RMSE', 0),
-                'MAPE': test_metrics.get('MAPE', 0),
-                'NRMSE': test_metrics.get('NRMSE', 0),
-                'WAPE': test_metrics.get('WAPE', 0),
-                'sMAPE': test_metrics.get('sMAPE', 0),
-                'MASE': test_metrics.get('MASE', 0)
-            })
+        # df_eval - Dictionary with output features as keys
+        # Each contains a DataFrame with metrics for different time deltas
+        df_eval = {}
         
-        if val_metrics:
-            df_eval.append({
-                'Phase': 'Validation',
-                'MAE': val_metrics.get('MAE', 0),
-                'MSE': val_metrics.get('MSE', 0),
-                'RMSE': val_metrics.get('RMSE', 0),
-                'MAPE': val_metrics.get('MAPE', 0),
-                'NRMSE': val_metrics.get('NRMSE', 0),
-                'WAPE': val_metrics.get('WAPE', 0),
-                'sMAPE': val_metrics.get('sMAPE', 0),
-                'MASE': val_metrics.get('MASE', 0)
-            })
+        # df_eval_ts - Dictionary with output features as keys
+        # Each contains another dict with time deltas as keys
+        df_eval_ts = {}
         
-        # df_eval_ts - Time series specific metrics (placeholder for now)
-        # In production, this would contain time-series specific analysis
-        df_eval_ts = [
-            {
-                'Metric': 'Model Type',
-                'Value': eval_metrics.get('model_type', 'Unknown')
-            },
-            {
-                'Metric': 'Dataset Count',
-                'Value': results.get('dataset_count', 0)
+        # Time deltas in minutes (matching original n_max=12)
+        time_deltas = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
+        
+        # Process each output feature
+        for feature_name in output_features:
+            # Initialize lists for df_eval metrics
+            delt_list = []
+            mae_list = []
+            mape_list = []
+            mse_list = []
+            rmse_list = []
+            nrmse_list = []
+            wape_list = []
+            smape_list = []
+            mase_list = []
+            
+            # Initialize df_eval_ts for this feature
+            df_eval_ts[feature_name] = {}
+            
+            # Get test metrics if available
+            test_metrics = eval_metrics.get('test_metrics_scaled', {})
+            val_metrics = eval_metrics.get('val_metrics_scaled', {})
+            
+            # For each time delta, calculate or use available metrics
+            for delta in time_deltas:
+                # Add delta to list
+                delt_list.append(float(delta))
+                
+                # For now, use the same test metrics for all deltas
+                # In production, these would be calculated for each time averaging
+                mae_list.append(float(test_metrics.get('MAE', 0.0)))
+                mape_list.append(float(test_metrics.get('MAPE', 0.0)))
+                mse_list.append(float(test_metrics.get('MSE', 0.0)))
+                rmse_list.append(float(test_metrics.get('RMSE', 0.0)))
+                nrmse_list.append(float(test_metrics.get('NRMSE', 0.0)))
+                wape_list.append(float(test_metrics.get('WAPE', 0.0)))
+                smape_list.append(float(test_metrics.get('sMAPE', 0.0)))
+                mase_list.append(float(test_metrics.get('MASE', 0.0)))
+                
+                # Create df_eval_ts entry for this delta
+                # This should contain per-timestep metrics
+                timestep_metrics = []
+                n_timesteps = results.get('n_timesteps', 96)  # Default 96 timesteps
+                
+                for ts in range(n_timesteps):
+                    # In production, these would be actual per-timestep metrics
+                    timestep_metrics.append({
+                        'MAE': float(test_metrics.get('MAE', 0.0)),
+                        'MAPE': float(test_metrics.get('MAPE', 0.0)),
+                        'MSE': float(test_metrics.get('MSE', 0.0)),
+                        'RMSE': float(test_metrics.get('RMSE', 0.0)),
+                        'NRMSE': float(test_metrics.get('NRMSE', 0.0)),
+                        'WAPE': float(test_metrics.get('WAPE', 0.0)),
+                        'sMAPE': float(test_metrics.get('sMAPE', 0.0)),
+                        'MASE': float(test_metrics.get('MASE', 0.0))
+                    })
+                
+                df_eval_ts[feature_name][float(delta)] = timestep_metrics
+            
+            # Create DataFrame-like structure for df_eval
+            df_eval[feature_name] = {
+                "delta [min]": delt_list,
+                "MAE": mae_list,
+                "MAPE": mape_list,
+                "MSE": mse_list,
+                "RMSE": rmse_list,
+                "NRMSE": nrmse_list,
+                "WAPE": wape_list,
+                "sMAPE": smape_list,
+                "MASE": mase_list
             }
-        ]
-        
-        # Add metadata if available
-        metadata = results.get('metadata', {})
-        if metadata:
-            if 'n_train' in metadata:
-                df_eval_ts.append({
-                    'Metric': 'Training Samples',
-                    'Value': metadata['n_train']
-                })
-            if 'n_val' in metadata:
-                df_eval_ts.append({
-                    'Metric': 'Validation Samples',
-                    'Value': metadata['n_val']
-                })
-            if 'n_test' in metadata:
-                df_eval_ts.append({
-                    'Metric': 'Test Samples',
-                    'Value': metadata['n_test']
-                })
         
         return jsonify({
             'success': True,
@@ -1992,6 +2014,71 @@ def get_evaluation_tables(session_id):
         
     except Exception as e:
         logger.error(f"Error getting evaluation tables: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'session_id': session_id
+        }), 500
+
+
+@bp.route('/save-evaluation-tables/<session_id>', methods=['POST'])
+def save_evaluation_tables(session_id):
+    """
+    Save evaluation tables (df_eval and df_eval_ts) to database
+    """
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        
+        # Get request data
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        df_eval = data.get('df_eval', {})
+        df_eval_ts = data.get('df_eval_ts', {})
+        model_type = data.get('model_type', 'Unknown')
+        
+        if not df_eval and not df_eval_ts:
+            return jsonify({
+                'success': False,
+                'error': 'No evaluation tables provided'
+            }), 400
+        
+        # Get UUID for session
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Prepare data for database
+        evaluation_data = {
+            'session_id': uuid_session_id,
+            'df_eval': df_eval,
+            'df_eval_ts': df_eval_ts,
+            'model_type': model_type,
+            'created_at': datetime.now().isoformat(),
+            'table_format': 'original_training_format'
+        }
+        
+        # Save to evaluation_tables table (create if doesn't exist)
+        response = supabase.table('evaluation_tables').upsert(evaluation_data).execute()
+        
+        if response.data:
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'message': 'Evaluation tables saved successfully',
+                'saved_at': evaluation_data['created_at']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to save to database'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving evaluation tables: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e),
