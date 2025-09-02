@@ -1,0 +1,97 @@
+{
+  "timeInfo": {
+    "session_id": "",
+    "jahr": true,
+    "monat": false,
+    "woche": false,
+    "tag": false,
+    "feiertag": false,
+    "zeitzone": "UTC",
+    "category_data": {
+      "jahr": {
+        "detaillierteBerechnung": true,
+        "datenform": "Zeit Horizont",
+        "zeithorizontStart": "1",
+        "zeithorizontEnd": "12",
+        "skalierung": "nein",
+        "skalierungMin": "",
+        "skalierungMax": ""
+      }
+    }
+  },
+  "zeitschritte": {
+    "eingabe": "1",
+    "ausgabe": "3",
+    "zeitschrittweite": "1",
+    "offset": "2"
+  },
+  "sessionInfo": {
+    "sessionId": "session_1756815816982_wq29wok",
+    "totalFiles": 0
+  },
+  "lastUpdated": "2025-09-02T14:23:38.083398",
+  "files": [
+    {
+      "id": "1756815731190",
+      "fileName": "Leistung.csv",
+      "bezeichnung": "Leistung",
+      "utcMin": "2023-09-13 13:27:00",
+      "utcMax": "2023-09-14 14:21:00",
+      "zeitschrittweite": "3",
+      "min": "0.07",
+      "max": "0.63",
+      "offset": "0",
+      "datenpunkte": "499",
+      "numerischeDatenpunkte": "499",
+      "numerischerAnteil": "100.00",
+      "datenform": "",
+      "zeithorizontStart": "",
+      "zeithorizontEnd": "",
+      "zeitschrittweiteTransferiertenDaten": "",
+      "offsetTransferiertenDaten": "",
+      "mittelwertbildung\u00dcberDenZeithorizont": "nein",
+      "datenanpassung": "",
+      "zeitschrittweiteMinValue": "",
+      "zeitschrittweiteAvgValue": "",
+      "skalierung": "nein",
+      "skalierungMax": "",
+      "skalierungMin": "",
+      "storagePath": "",
+      "type": "input",
+      "createdAt": "",
+      "updatedAt": ""
+    },
+    {
+      "id": "1756815731192",
+      "fileName": "Temp.csv",
+      "bezeichnung": "Temp",
+      "utcMin": "2023-09-13 13:27:00",
+      "utcMax": "2023-09-14 14:21:00",
+      "zeitschrittweite": "3",
+      "min": "68.65",
+      "max": "85.77",
+      "offset": "0",
+      "datenpunkte": "499",
+      "numerischeDatenpunkte": "499",
+      "numerischerAnteil": "100.00",
+      "datenform": "",
+      "zeithorizontStart": "",
+      "zeithorizontEnd": "",
+      "zeitschrittweiteTransferiertenDaten": "",
+      "offsetTransferiertenDaten": "",
+      "mittelwertbildung\u00dcberDenZeithorizont": "nein",
+      "datenanpassung": "",
+      "zeitschrittweiteMinValue": "",
+      "zeitschrittweiteAvgValue": "",
+      "skalierung": "nein",
+      "skalierungMax": "",
+      "skalierungMin": "",
+      "storagePath": "",
+      "type": "output",
+      "createdAt": "",
+      "updatedAt": ""
+    }
+  ],
+  "finalized": true,
+  "finalizationTime": "2025-09-02T14:23:38.089408"
+}

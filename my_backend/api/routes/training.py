@@ -1321,7 +1321,7 @@ def run_analysis(session_id):
     Now uses TrainingPipeline directly instead of subprocess.
     """
     import threading
-    from middleman_runner import ModernMiddlemanRunner
+    from services.training.middleman_runner import ModernMiddlemanRunner
     from flask import current_app
 
     if not session_id:
@@ -1449,6 +1449,205 @@ def get_time_info(session_id):
             'success': False,
             'error': str(e)
         }), 500
+
+@bp.route('/results/<session_id>', methods=['GET'])
+def get_training_results(session_id):
+    """
+    Get training results for a session.
+    Checks both UUID and string session IDs.
+    """
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        supabase = get_supabase_client()
+        
+        # Get or create UUID for session ID
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
+        
+        # Get training results from database
+        response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').execute()
+        
+        if response.data and len(response.data) > 0:
+            return jsonify({
+                'success': True,
+                'results': response.data,
+                'count': len(response.data)
+            })
+        else:
+            # No results found - this is normal if training hasn't been run yet
+            logger.info(f"No training results found for session {session_id}")
+            return jsonify({
+                'success': True,
+                'message': 'No training results yet - training may not have been started',
+                'results': [],
+                'count': 0
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error getting training results for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@bp.route('/generate-datasets/<session_id>', methods=['POST'])
+def generate_datasets(session_id):
+    """
+    Generate datasets and violin plots with model configuration.
+    This is phase 1 of the training workflow.
+    """
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        # Extract model parameters and training split
+        model_parameters = data.get('model_parameters', {})
+        training_split = data.get('training_split', {})
+        
+        logger.info(f"Generating datasets for session {session_id}")
+        logger.info(f"Model parameters: {model_parameters}")
+        logger.info(f"Training split: {training_split}")
+        
+        # Import ModernMiddlemanRunner
+        from services.training.middleman_runner import ModernMiddlemanRunner
+        from flask import current_app
+        
+        # Get SocketIO instance
+        socketio_instance = current_app.extensions.get('socketio')
+        
+        # Create runner with model parameters
+        runner = ModernMiddlemanRunner()
+        if socketio_instance:
+            runner.set_socketio(socketio_instance)
+        
+        # Prepare model configuration
+        model_config = {
+            'MODE': model_parameters.get('MODE', 'Linear'),
+            'LAY': model_parameters.get('LAY'),
+            'N': model_parameters.get('N'),
+            'EP': model_parameters.get('EP'),
+            'ACTF': model_parameters.get('ACTF'),
+            'K': model_parameters.get('K'),
+            'KERNEL': model_parameters.get('KERNEL'),
+            'C': model_parameters.get('C'),
+            'EPSILON': model_parameters.get('EPSILON'),
+            'random_dat': not training_split.get('shuffle', True)  # Inverted logic
+        }
+        
+        # For now, run full training pipeline (will separate later)
+        result = runner.run_training_script(session_id, model_config)
+        
+        if result['success']:
+            logger.info(f"Dataset generation completed for session {session_id}")
+            return jsonify({
+                'success': True,
+                'message': 'Datasets generated successfully',
+                'dataset_count': result.get('dataset_count', 10),
+                'violin_plots': result.get('violin_plots', {})
+            })
+        else:
+            logger.error(f"Dataset generation failed: {result.get('error')}")
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Dataset generation failed')
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error in generate_datasets: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/train-models/<session_id>', methods=['POST'])
+def train_models(session_id):
+    """
+    Train models with user-specified parameters.
+    This is phase 2 of the training workflow.
+    """
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        # Extract model parameters
+        model_parameters = data.get('model_parameters', {})
+        training_split = data.get('training_split', {})
+        
+        logger.info(f"Training models for session {session_id}")
+        logger.info(f"Model parameters: {model_parameters}")
+        
+        import threading
+        from services.training.middleman_runner import ModernMiddlemanRunner
+        from flask import current_app
+        
+        # Get SocketIO instance
+        socketio_instance = current_app.extensions.get('socketio')
+        
+        # Create runner
+        runner = ModernMiddlemanRunner()
+        if socketio_instance:
+            runner.set_socketio(socketio_instance)
+        
+        # Prepare full model configuration
+        model_config = {
+            'MODE': model_parameters.get('MODE', 'Linear'),
+            'LAY': model_parameters.get('LAY'),
+            'N': model_parameters.get('N'),
+            'EP': model_parameters.get('EP'),
+            'ACTF': model_parameters.get('ACTF'),
+            'K': model_parameters.get('K'),
+            'KERNEL': model_parameters.get('KERNEL'),
+            'C': model_parameters.get('C'),
+            'EPSILON': model_parameters.get('EPSILON'),
+            'random_dat': not training_split.get('shuffle', True)
+        }
+        
+        # Run training in background thread
+        def run_training_async():
+            try:
+                logger.info(f"Starting async training for session {session_id}")
+                result = runner.run_training_script(session_id, model_config)
+                
+                if result['success']:
+                    logger.info(f"Training completed successfully for session {session_id}")
+                    if socketio_instance:
+                        socketio_instance.emit('training_completed', {
+                            'session_id': session_id,
+                            'status': 'completed',
+                            'results': result.get('results', {})
+                        }, room=session_id)
+                else:
+                    logger.error(f"Training failed: {result.get('error')}")
+                    if socketio_instance:
+                        socketio_instance.emit('training_error', {
+                            'session_id': session_id,
+                            'status': 'failed',
+                            'error': result.get('error', 'Unknown error')
+                        }, room=session_id)
+                        
+            except Exception as e:
+                logger.error(f"Async training error: {str(e)}")
+                if socketio_instance:
+                    socketio_instance.emit('training_error', {
+                        'session_id': session_id,
+                        'status': 'failed',
+                        'error': str(e)
+                    }, room=session_id)
+        
+        # Start training in background
+        training_thread = threading.Thread(target=run_training_async)
+        training_thread.daemon = True
+        training_thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Model training started for session {session_id}',
+            'note': 'Training is running in background, listen for SocketIO events for progress'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in train_models: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @bp.route('/debug-files-table/<session_id>', methods=['GET'])
 def debug_files_table(session_id):

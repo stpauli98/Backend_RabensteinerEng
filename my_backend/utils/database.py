@@ -54,6 +54,13 @@ def create_or_get_session_uuid(session_id: str) -> str:
     if not session_id:
         logger.error("session_id cannot be empty")
         return None
+    
+    # Check if session_id is already a UUID
+    import re
+    uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+    if uuid_pattern.match(session_id):
+        logger.info(f"Session ID {session_id} is already a UUID, returning as-is")
+        return session_id
 
     supabase = get_supabase_client()
     if not supabase:
@@ -269,9 +276,9 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
             "eingabe": zeitschritte.get("eingabe", ""),
             "ausgabe": zeitschritte.get("ausgabe", ""),
             "zeitschrittweite": zeitschritte.get("zeitschrittweite", ""),
-            "offsett": offset_value  # Note: column name is 'offsett' with double 't'
+            "offset": offset_value  # Database column is 'offset' with single 't'
         }
-        logger.info(f"Preparing zeitschritte data with offsett value: '{offset_value}'")
+        logger.info(f"Preparing zeitschritte data with offset value: '{offset_value}'")
         
         # Prvo proverimo da li već postoji zapis za ovu sesiju
         logger.info(f"Checking for existing zeitschritte record for session {database_session_id}")
@@ -376,7 +383,7 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             "bezeichnung": file_info.get("bezeichnung", ""),
             "min": str(file_info.get("min", "")),
             "max": str(file_info.get("max", "")),
-            "offsett": str(file_info.get("offset", "")),
+            "offset": str(file_info.get("offset", "")),
             "datenpunkte": str(file_info.get("datenpunkte", "")),
             "numerische_datenpunkte": str(file_info.get("numerischeDatenpunkte", "")),
             "numerischer_anteil": str(file_info.get("numerischerAnteil", "")),
@@ -461,7 +468,7 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
 
 def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_path: str, file_type: str) -> bool:
     """
-    Save CSV file content to Supabase Storage and save reference in the database.
+    Save CSV file content to Supabase Storage.
     
     Args:
         file_id: ID of the file (from files table)
@@ -476,6 +483,7 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
     try:
         supabase = get_supabase_client()
         if not supabase:
+            logger.error("Supabase client not available")
             return False
 
         # Determine the bucket name based on the file type
@@ -488,54 +496,67 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
             
         # Get file size
         file_size = os.path.getsize(file_path)
+        logger.info(f"File size: {file_size} bytes")
         
         # Definisanje putanje u Storage-u
         storage_path = f"{session_id}/{file_name}"
         
         try:
-            # Upload fajla u Supabase Storage
-            storage_response = supabase.storage.from_(bucket_name).upload(
-                path=storage_path,
-                file=file_content,
-                file_options={"content-type": "text/csv"}
-            )
-            
-            # Proveri da li je file_id u UUID formatu, ako nije generiši novi UUID
+            # Check if file already exists in storage
             try:
-                # Pokušaj konverziju u UUID format
+                existing_files = supabase.storage.from_(bucket_name).list(session_id)
+                file_exists = any(f['name'] == file_name for f in existing_files)
+                
+                if file_exists:
+                    logger.info(f"File {file_name} already exists in storage, updating...")
+                    # Update existing file
+                    storage_response = supabase.storage.from_(bucket_name).update(
+                        path=storage_path,
+                        file=file_content,
+                        file_options={"content-type": "text/csv"}
+                    )
+                else:
+                    # Upload new file
+                    storage_response = supabase.storage.from_(bucket_name).upload(
+                        path=storage_path,
+                        file=file_content,
+                        file_options={"content-type": "text/csv"}
+                    )
+            except Exception as list_error:
+                logger.warning(f"Could not check if file exists, attempting upload: {str(list_error)}")
+                # Try to upload anyway
+                storage_response = supabase.storage.from_(bucket_name).upload(
+                    path=storage_path,
+                    file=file_content,
+                    file_options={"content-type": "text/csv"}
+                )
+            
+            logger.info(f"Successfully uploaded {file_name} to {bucket_name}/{storage_path}")
+            
+            # Update the storage_path in files table if file_id is valid
+            try:
                 uuid_obj = uuid.UUID(file_id)
                 valid_file_id = str(uuid_obj)
-            except (ValueError, TypeError, AttributeError):
-                # Ako konverzija ne uspe, generiši novi UUID
-                valid_file_id = str(uuid.uuid4())
-                logger.info(f"Generated new UUID {valid_file_id} for file reference {file_name}")
                 
-            # Čuvanje reference u bazi
-            data = {
-                "file_id": valid_file_id,
-                "session_id": session_id,
-                "file_name": file_name,
-                "storage_path": storage_path,
-                "file_size": file_size
-            }
+                # Update files table with storage path
+                update_response = supabase.table("files").update({
+                    "storage_path": storage_path
+                }).eq("id", valid_file_id).execute()
+                
+                if update_response.data:
+                    logger.info(f"Updated storage_path in files table for file_id {valid_file_id}")
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning(f"Could not update files table - invalid file_id: {file_id}, error: {str(e)}")
+                # Continue anyway - file is uploaded to storage
             
-            # Proveravamo da li već postoji zapis za ovaj fajl
-            existing = supabase.table("csv_file_refs").select("*").eq("file_id", valid_file_id).execute()
-            
-            if existing.data and len(existing.data) > 0:
-                # Ažuriramo postojeći zapis
-                db_response = supabase.table("csv_file_refs").update(data).eq("file_id", valid_file_id).execute()
-                logger.info(f"Updated existing reference for file {file_name}")
-            else:
-                # Dodajemo novi zapis
-                db_response = supabase.table("csv_file_refs").insert(data).execute()
-                logger.info(f"Created new reference for file {file_name}")
-            
-            logger.info(f"Successfully saved CSV file {file_name} to storage for session {session_id}")
             return True
             
         except Exception as storage_error:
             logger.error(f"Error uploading to storage: {str(storage_error)}")
+            # If error is "already exists", treat as success
+            if "already exists" in str(storage_error).lower():
+                logger.info(f"File already exists in storage, considering as success")
+                return True
             return False
         
     except Exception as e:
@@ -721,10 +742,15 @@ def save_session_to_supabase(session_id: str) -> bool:
                     file_path = os.path.join(session_dir, file_name)
                     
                     if os.path.exists(file_path):
+                        logger.info(f"Uploading file {file_name} to Supabase Storage...")
                         # Koristi valid_uuid umesto originalnog file_id
-                        save_csv_file_content(valid_uuid, database_session_id, file_name, file_path, file_type)
+                        upload_success = save_csv_file_content(valid_uuid, database_session_id, file_name, file_path, file_type)
+                        if upload_success:
+                            logger.info(f"✅ Successfully uploaded {file_name} to storage")
+                        else:
+                            logger.error(f"❌ Failed to upload {file_name} to storage")
                     else:
-                        logger.warning(f"CSV file not found: {file_path}")
+                        logger.warning(f"CSV file not found locally: {file_path}")
                 else:
                     logger.warning(f"Failed to save file info for {file_info.get('fileName', 'unknown')}, skipping content upload")
         

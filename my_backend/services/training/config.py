@@ -199,24 +199,59 @@ class T:
 
 class MDL:
     """
-    Model configuration class - NO DEFAULT VALUES
-    All parameters must be provided by user or validation will fail
+    Model configuration class EXACTLY as in training_original.py lines 2046-2141
+    Sets parameters conditionally based on MODE
     """
     
-    def __init__(self, mode: str = None):
-        # Only set MODE if provided, everything else is None
-        if mode:
-            self.MODE = mode
+    def __init__(self, mode: str = "LIN"):
+        # Set MODE (default is "LIN" as in original line 2055)
+        self.MODE = mode
         
-        # Initialize all attributes as None - user MUST provide values
-        self.LAY = None
-        self.N = None
-        self.EP = None
-        self.ACTF = None
-        self.K = None
-        self.KERNEL = None
-        self.C = None
-        self.EPSILON = None
+        # Initialize parameters based on MODE (exactly as in original)
+        if self.MODE == "Dense":
+            # Lines 2057-2069
+            self.LAY = 3         # Anzahl an Layer
+            self.N = 512         # Anzahl der Neuronen pro Layer
+            self.EP = 20         # Max. Anzahl der Trainingsdurchläufe
+            self.ACTF = "ReLU"   # Aktivierungsfunktion
+            
+        elif self.MODE == "CNN":
+            # Lines 2071-2086
+            self.LAY = 3         # Anzahl an Layer
+            self.N = 512         # Anzahl der Filter pro Layer
+            self.K = 3           # Kernelgröße
+            self.EP = 20         # Max. Anzahl der Trainingsdurchläufe
+            self.ACTF = "ReLU"   # Aktivierungsfunktion
+            
+        elif self.MODE == "LSTM":
+            # Lines 2089-2101
+            self.LAY = 3         # Anzahl an Layer
+            self.N = 512         # Anzahl der Neuronen pro Layer
+            self.EP = 20         # Max. Anzahl der Trainingsdurchläufe
+            self.ACTF = "ReLU"   # Aktivierungsfunktion
+            
+        elif self.MODE == "AR LSTM":
+            # Lines 2103-2115
+            self.LAY = 3         # Anzahl an Layer
+            self.N = 512         # Anzahl der Neuronen pro Layer
+            self.EP = 20         # Max. Anzahl der Trainingsdurchläufe
+            self.ACTF = "ReLU"   # Aktivierungsfunktion
+            
+        elif self.MODE == "SVR_dir":
+            # Lines 2117-2126
+            self.KERNEL = "poly" # Art der Modellierung von Nichtlinearitäten
+            self.C = 1           # Regulationsparameter (Trade-off Bias vs. Varianz)
+            self.EPSILON = 0.1   # Toleranz für Abweichungen
+            
+        elif self.MODE == "SVR_MIMO":
+            # Lines 2128-2137
+            self.KERNEL = "poly" # Art der Modellierung von Nichtlinearitäten
+            self.C = 1           # Regulationsparameter (Trade-off Bias vs. Varianz)
+            self.EPSILON = 0.1   # Toleranz für Abweichungen
+            
+        elif self.MODE == "LIN":
+            # Line 2139-2140
+            pass  # No specific parameters for LIN mode
 
 
 # INFORMATIONEN ZU DEN FEIERTAGEN (DIE KEINE SONNTAGE SIND)

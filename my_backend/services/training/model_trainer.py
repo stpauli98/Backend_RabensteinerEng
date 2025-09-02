@@ -36,6 +36,36 @@ from .config import MDL
 
 logger = logging.getLogger(__name__)
 
+# ACTIVATION FUNCTION MAPPING
+# Maps string names to TensorFlow activation functions
+# Exactly as used in training_original.py
+ACTIVATION_FUNCTIONS = {
+    'relu': 'relu',
+    'ReLU': 'relu',
+    'sigmoid': 'sigmoid',
+    'tanh': 'tanh',
+    'softmax': 'softmax',
+    'linear': 'linear',
+    'elu': 'elu',
+    'selu': 'selu',
+    'softplus': 'softplus',
+    'softsign': 'softsign',
+    'swish': 'swish',
+    'gelu': 'gelu'
+}
+
+def get_activation(activation_name: str) -> str:
+    """
+    Get TensorFlow activation function from string name.
+    
+    Args:
+        activation_name: Name of activation function
+        
+    Returns:
+        TensorFlow activation function name
+    """
+    return ACTIVATION_FUNCTIONS.get(activation_name, activation_name.lower())
+
 
 def train_dense(train_x, train_y, val_x, val_y, MDL):    
     """
@@ -71,8 +101,8 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
     model.add(tf.keras.layers.Flatten())
     
     # Dense-Layer hinzufügen
-    # Convert activation function to lowercase for Keras compatibility
-    activation_func = MDL.ACTF.lower() if hasattr(MDL.ACTF, 'lower') else MDL.ACTF
+    # Use activation function mapping
+    activation_func = get_activation(MDL.ACTF)
     for _ in range(MDL.LAY):
         model.add(tf.keras.layers.Dense(MDL.N,                  # Anzahl an Neuronen
                                         activation = activation_func)) # Aktivierungsfunktion
@@ -121,7 +151,15 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
 
 def train_cnn(train_x, train_y, val_x, val_y, MDL):    
     """
-    Funktion trainiert und validiert ein Convolutional Neural Network
+    Funktion trainiert und validiert ein CNN anhand der 
+    eingegebenen Trainingsdaten (train_x, train_y) und Validierungsdaten 
+    (val_x, val_y).
+    
+    train_x...Trainingsdaten (Eingabedaten)
+    train_y...Trainingsdaten (Ausgabedaten)
+    val_x.....Validierungsdaten (Eingabedaten)
+    val_y.....Validierungsdaten (Ausgabedaten)
+    MDL.......Informationen zum Modell
     
     Extracted from training_backend_test_2.py lines 239-320
     """
@@ -130,58 +168,69 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
         logger.warning("TensorFlow not available, skipping CNN training")
         return None, float('inf'), 0
     
-    # Validation: Check if we have enough features to train CNN
-    if train_x.shape[2] == 0:
-        raise ValueError(f"Cannot train CNN with 0 features. Input shape: {train_x.shape}")
-    
-    if train_x.shape[2] < MDL.K:
-        raise ValueError(f"Cannot train CNN: kernel size {MDL.K} is larger than feature count {train_x.shape[2]}")
-    
     # MODELLDEFINITION ########################################################
     
-    # Modellinitialisierung
+    # Modellinitialisierung (Sequentielles Modell mit linear 
+    # hintereinandergeordneten Schichten)    
     model = tf.keras.Sequential()
+       
+    # Konverterierung in ein 4D-Array (Conv2D-Layer erwartet Eingabedaten mit vier Dimensionen)
+    # - batch_size: Anzahl der Trainingsbeispiele
+    # - Höhe und Breite: räumliche Dimensionen deiner Eingabedaten
+    # - Kanäle: Anzahl der Kanäle pro Pixel (z. B. 3 für RGB-Bilder, 1 für Graustufen)
+    # FIX: Use train_x instead of trn_x (bug in original)
+    # Also reshape validation data for Conv2D compatibility
+    train_x = train_x.reshape(train_x.shape[0], train_x.shape[1], train_x.shape[2], 1)
+    val_x = val_x.reshape(val_x.shape[0], val_x.shape[1], val_x.shape[2], 1)
+    train_y = train_y.reshape(train_y.shape[0], train_y.shape[1], train_y.shape[2], 1)
+    val_y = val_y.reshape(val_y.shape[0], val_y.shape[1], val_y.shape[2], 1)
     
-    # Convert activation function to lowercase for Keras compatibility
-    activation_func = MDL.ACTF.lower() if hasattr(MDL.ACTF, 'lower') else MDL.ACTF
+    # Use activation function mapping
+    activation_func = get_activation(MDL.ACTF)
     
-    # Conv1D-Layer hinzufügen
     for i in range(MDL.LAY):
         if i == 0:
-            # Erste Schicht benötigt input_shape
-            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
-                                           kernel_size = MDL.K,
-                                           activation = activation_func,
-                                           input_shape = (train_x.shape[1], train_x.shape[2])))
+            # Input-Layer mit Angabe der Input-Shape
+            model.add(tf.keras.layers.Conv2D(filters        = MDL.N, 
+                                             kernel_size    = MDL.K,
+                                             padding        = 'same',
+                                             activation     = activation_func,
+                                             input_shape    = train_x.shape[1:]))
         else:
-            model.add(tf.keras.layers.Conv1D(filters = MDL.N,
-                                           kernel_size = MDL.K,
-                                           activation = activation_func))
+            model.add(tf.keras.layers.Conv2D(filters        = MDL.N, 
+                                             kernel_size    = MDL.K,
+                                             padding        = 'same',
+                                             activation     = activation_func))
     
-    # Daten für Dense-Layer vorbereiten
-    model.add(tf.keras.layers.Flatten())
+    # Output-Layer: Convolution mit 1 Filter (oder Anzahl Kanäle von train_y)
+    # und linearer Aktivierung, damit die Ausgabe dieselbe Form wie train_y hat.
+    # Falls train_y z.B. (Batch, H, W, C), dann Filteranzahl = C.
     
-    # Output-Schicht
-    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
-                                  kernel_initializer = tf.initializers.zeros))
-    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    output_channels = train_y.shape[-1] if len(train_y.shape) == 4 else 1
     
-    # Early Stopping
-    earlystopping = tf.keras.callbacks.\
-        EarlyStopping(monitor  = "val_loss", 
-        mode                   = "min", 
-        patience               = 2, 
-        restore_best_weights   = True)
-
-    # Konfiguration des Modells für das Training    
+    model.add(tf.keras.layers.Conv2D(filters            = output_channels,
+                                     kernel_size        = 1,
+                                     padding            = 'same',
+                                     activation         = 'linear',
+                                     kernel_initializer = tf.initializers.zeros))
+    
+    # Callback EarlyStopping
+    earlystopping = tf.keras.callbacks.EarlyStopping(
+        monitor                 = "val_loss",
+        mode                    = "min",
+        patience                = 2,
+        restore_best_weights    = True)
+    
     model.compile(
-        optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
-        loss = tf.keras.losses.MeanSquaredError(),
-        metrics = [tf.keras.metrics.RootMeanSquaredError()])
+        optimizer   = tf.keras.optimizers.Adam(learning_rate = 0.001),
+        loss        = tf.keras.losses.MeanSquaredError(),
+        metrics     = [tf.keras.metrics.RootMeanSquaredError()]
+    )
     
     # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
+    # NOTE: Original has MDL.EP = 20 here, but we don't override user's value
     
     model.fit(
         x               = train_x,
@@ -190,10 +239,10 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
         verbose         = 1,
         callbacks       = [earlystopping],
         validation_data = (val_x, val_y)
-        )
-         
+    )
+    
     print("Modell wurde trainiert.")
-            
+    
     return model
 
 
@@ -219,22 +268,22 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
             # Erste Schicht benötigt input_shape
             if i == MDL.LAY - 1:  # Letzte Schicht
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              input_shape = (train_x.shape[1], train_x.shape[2]),
                                              return_sequences = False))
             else:
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              input_shape = (train_x.shape[1], train_x.shape[2]),
                                              return_sequences = True))
         else:
             if i == MDL.LAY - 1:  # Letzte Schicht
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              return_sequences = False))
             else:
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              return_sequences = True))
     
     # Output-Schicht
@@ -291,22 +340,22 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
             # Erste Schicht benötigt input_shape
             if i == MDL.LAY - 1:  # Letzte Schicht
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              input_shape = (train_x.shape[1], train_x.shape[2]),
                                              return_sequences = False))
             else:
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              input_shape = (train_x.shape[1], train_x.shape[2]),
                                              return_sequences = True))
         else:
             if i == MDL.LAY - 1:  # Letzte Schicht
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              return_sequences = False))
             else:
                 model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = MDL.ACTF,
+                                             activation = get_activation(MDL.ACTF),
                                              return_sequences = True))
     
     # Output-Schicht für Autoregressive

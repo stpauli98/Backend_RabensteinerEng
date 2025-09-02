@@ -10,10 +10,12 @@ import datetime
 import math
 import pytz
 import calendar
+import copy
 from typing import Dict, List, Tuple, Optional
 import logging
 
 from .config import MTS, HOL
+from .data_loader import utc_idx_pre, utc_idx_post, transf
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +427,74 @@ class DataProcessor:
         except Exception as e:
             logger.error(f"Error transforming data: {str(e)}")
             raise
+    
+    def linear_interpolation(self, data: pd.DataFrame, utc_timestamps: List, 
+                            avg: bool = False, utc_th_strt=None, utc_th_end=None) -> List:
+        """
+        Perform linear interpolation on data
+        Exact implementation from training_original.py lines 1303-1344
+        
+        Args:
+            data: DataFrame with UTC and value columns
+            utc_timestamps: List of timestamps to interpolate at
+            avg: If True, compute average instead of interpolation
+            utc_th_strt: Start time for averaging
+            utc_th_end: End time for averaging
+            
+        Returns:
+            List of interpolated values
+        """
+        val_list = []
+        
+        # AVERAGING MODE (Mittelwertbildung)
+        if avg and utc_th_strt and utc_th_end:
+            # First index
+            idx1 = utc_idx_post(data, utc_th_strt)
+            # Second index
+            idx2 = utc_idx_pre(data, utc_th_end)
+            
+            # Calculate mean
+            val = data.iloc[idx1:idx2, 1].mean()
+            
+            # Check if mean calculation was possible
+            if math.isnan(float(val)):
+                raise ValueError("Cannot calculate mean - no numeric data")
+            
+            # Return mean value repeated for all timestamps
+            return [val] * len(utc_timestamps)
+        
+        # LINEAR INTERPOLATION MODE
+        for utc in utc_timestamps:
+            # First index (previous timestamp)
+            idx1 = utc_idx_pre(data, utc)
+            # Second index (next timestamp)
+            idx2 = utc_idx_post(data, utc)
+            
+            # Check time boundaries
+            if idx1 is None or idx2 is None:
+                raise ValueError(f"Timestamp {utc} outside data range")
+            
+            if idx1 == idx2:
+                # Exact match found
+                val = data.iloc[idx1, 1]
+            else:
+                # Interpolate between two points
+                utc1 = data.iloc[idx1, 0]
+                utc2 = data.iloc[idx2, 0]
+                
+                val1 = data.iloc[idx1, 1]
+                val2 = data.iloc[idx2, 1]
+                
+                # Linear interpolation formula
+                val = (utc - utc1) / (utc2 - utc1) * (val2 - val1) + val1
+            
+            # Check if value is a number
+            if math.isnan(float(val)):
+                raise ValueError(f"NaN value at timestamp {utc}")
+            
+            val_list.append(val)
+        
+        return val_list
     
     def _extract_metadata(self, input_data: Dict, output_data: Dict) -> Dict:
         """

@@ -1,11 +1,15 @@
 """
-Data loadere module for training system
+Data loader module for training system
 Handles loading session data from database and downloading files
+Contains exact load() and transf() functions from training_original.py
 """
 
 import os
 import pandas as pd
+import numpy as np
 import math
+import datetime
+import pytz
 from supabase import create_client
 from typing import Dict, List, Optional, Tuple
 import logging
@@ -403,69 +407,188 @@ class DataLoader:
         except Exception as e:
             logger.error(f"Error processing CSV data: {str(e)}")
             raise
-    
-    def utc_idx_pre(self, dat: pd.DataFrame, utc) -> Optional[int]:
-        """
-        Find the index of the first element that is less than or equal to 'utc'
-        
-        Args:
-            dat: DataFrame with UTC column
-            utc: UTC timestamp to search for
-            
-        Returns:
-            Index or None if not found
-        """
-        try:
-            # Index of first element that is less than or equal to "utc"
-            idx = dat["UTC"].searchsorted(utc, side='right')
-
-            # Return the value
-            if idx > 0:
-                return dat.index[idx-1]
-
-            # No matching entry
-            return None    
-            
-        except Exception as e:
-            logger.error(f"Error finding UTC index pre: {str(e)}")
-            return None
-    
-    def utc_idx_post(self, dat: pd.DataFrame, utc) -> Optional[int]:
-        """
-        Find the index of the first element that is greater than or equal to 'utc'
-        
-        Args:
-            dat: DataFrame with UTC column
-            utc: UTC timestamp to search for
-            
-        Returns:
-            Index or None if not found
-        """
-        try:
-            # Index of first element that is greater than or equal to "utc"
-            idx = dat["UTC"].searchsorted(utc, side='left')
-
-            # Return the value
-            if idx < len(dat):
-                return dat.index[idx]
-
-            # No matching entry
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error finding UTC index post: {str(e)}")
-            return None
 
 
-# Factory function to create data loader
-def create_data_loader(supabase_client=None) -> DataLoader:
+# EXACT FUNCTIONS FROM training_original.py ###################################
+
+def load(dat, inf):
     """
-    Create and return a DataLoader instance
+    FUNKTION ZUR AUSGABE DER INFORMATIONEN
+    Exact copy from training_original.py lines 37-109
     
     Args:
-        supabase_client: Configured Supabase client (optional, will use existing client if None)
+        dat: Dictionary of DataFrames
+        inf: Information DataFrame
         
     Returns:
-        DataLoader instance
+        Tuple of updated (dat, inf)
     """
-    return DataLoader(supabase_client)
+    
+    # Zuletzt geladener Dataframe
+    df_name, df = next(reversed(dat.items()))
+
+    # UTC in datetime umwandeln
+    df["UTC"] = pd.to_datetime(df["UTC"], 
+                               format = "%Y-%m-%d %H:%M:%S")
+
+    # Startzeit
+    utc_min = df["UTC"].iloc[0]
+    
+    # Endzeit
+    utc_max = df["UTC"].iloc[-1]
+    
+    # Anzahl der Datenpunkte
+    n_all = len(df)
+    
+    # Zeitschrittweite [min]
+    delt = (df["UTC"].iloc[-1]-df["UTC"].iloc[0]).total_seconds()/(60*(n_all-1))
+
+    # Konstanter Offset
+    if round(60/delt) == 60/delt:
+        
+        ofst = (df["UTC"].iloc[0]-
+                (df["UTC"].iloc[0]).replace(minute      = 0, 
+                                            second      = 0, 
+                                            microsecond = 0)).total_seconds()/60
+        while ofst-delt >= 0:
+           ofst -= delt
+    
+    # Variabler Offset
+    else:
+        
+        ofst = "var"
+
+    # Anzahl der numerischen Datenpunkte
+    n_num = n_all
+    for i in range(n_all):
+        try:
+            float(df.iloc[i, 1])
+            if math.isnan(float(df.iloc[i, 1])):
+               n_num -= 1
+        except:
+            n_num -= 1  
+    
+    # Anteil an numerischen Datenpunkten [%]
+    rate_num = round(n_num/n_all*100, 2)
+        
+    # Maximalwert [#]
+    val_max = df.iloc[:, 1].max() 
+    
+    # Minimalwert [#]
+    val_min = df.iloc[:, 1].min()
+    
+    # Dataframe aktualisieren
+    dat[df_name] = df
+
+    # Information einfügen
+    # Initialize DataFrame columns if empty
+    if inf.empty:
+        inf = pd.DataFrame(columns=["utc_min", "utc_max", "delt", "ofst", "n_all", 
+                                   "n_num", "rate_num", "val_min", "val_max", "scal", "avg"])
+    
+    inf.loc[df_name] = {
+        "utc_min":  utc_min,
+        "utc_max":  utc_max, 
+        "delt":     delt,
+        "ofst":     ofst,
+        "n_all":    n_all,
+        "n_num":    n_num,
+        "rate_num": rate_num,
+        "val_min":  val_min,
+        "val_max":  val_max,
+        "scal":     False,
+        "avg":      False}
+ 
+    return dat, inf 
+
+
+def transf(inf, N, OFST):
+    """
+    FUNKTION ZUR BERECHNUNG DER ZEITSCHRITTWEITE UND DES OFFSETS DER TRANSFERIERTEN DATEN
+    Exact copy from training_original.py lines 111-141
+    
+    Args:
+        inf: Information DataFrame
+        N: Number of time steps
+        OFST: Offset value
+        
+    Returns:
+        Updated inf DataFrame
+    """
+
+    for i in range(len(inf)):
+        
+        key = inf.index[i]
+        
+        inf.loc[key, "delt_transf"] = \
+            (inf.loc[key, "th_end"]-\
+             inf.loc[key, "th_strt"])*60/(N-1)
+        
+        # OFFSET KANN BERECHNET WERDEN
+        if round(60/inf.loc[key, "delt_transf"]) == \
+            60/inf.loc[key, "delt_transf"]:
+              
+            # Offset [min]
+            ofst_transf = OFST-(inf.loc[key, "th_strt"]-
+                                math.floor(inf.loc[key, "th_strt"]))*60+60
+            
+            while ofst_transf-inf.loc[key, "delt_transf"] >= 0:
+               ofst_transf -= inf.loc[key, "delt_transf"]
+            
+            
+            inf.loc[key, "ofst_transf"] = ofst_transf
+                
+        # OFFSET KANN NICHT BERECHNET WERDEN
+        else: 
+            inf.loc[key, "ofst_transf"] = "var"
+            
+    return inf
+
+
+def utc_idx_pre(dat, utc):
+    """
+    FUNKTION ZUR ERMITTLUNG DES VORHERIGEN INDEX
+    Exact copy from training_original.py lines 143-154
+    
+    Args:
+        dat: DataFrame with UTC column
+        utc: UTC timestamp to search for
+        
+    Returns:
+        Index of element <= utc, or None if not found
+    """
+        
+    # Index des ersten Elements, das kleinergleich "utc" ist
+    idx = dat["UTC"].searchsorted(utc, side = 'right')
+
+    # Ausgabe des Wertes
+    if idx > 0:
+        return dat.index[idx-1]
+
+    # Kein passender Eintrag
+    return None    
+
+
+def utc_idx_post(dat, utc):
+    """
+    FUNKTION ZUR ERMITTLUNG DES NACHFOLGENDEN INDEX
+    Exact copy from training_original.py lines 156-167
+    
+    Args:
+        dat: DataFrame with UTC column
+        utc: UTC timestamp to search for
+        
+    Returns:
+        Index of element >= utc, or None if not found
+    """
+
+    # Index des ersten Elements, das größergleich "utc" ist
+    idx = dat["UTC"].searchsorted(utc, side = 'left')
+
+    # Ausgabe des Wertes
+    if idx < len(dat):
+        return dat.index[idx]
+
+    # Kein passender Eintrag
+    return None
+        

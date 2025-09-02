@@ -6,6 +6,7 @@ Connects TrainingPipeline with real extracted functions from training_backend_te
 import logging
 import numpy as np
 import pandas as pd
+import copy
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 
@@ -20,6 +21,9 @@ from .model_trainer import (
 from .results_generator import wape, smape, mase, ResultsGenerator
 from .visualization import Visualizer
 from .config import MTS, T, MDL, HOL
+from .data_transformer import create_training_arrays
+from .scaler_manager import process_and_scale_data
+from .pipeline_exact import run_exact_training_pipeline, prepare_data_for_training
 
 logger = logging.getLogger(__name__)
 
@@ -238,26 +242,86 @@ class RealModelTrainer:
                 
                 X, y = dataset['X'], dataset['y']
                 
-                # Use provided training split or default to 80/20
+                # Use provided training split or default to 70/20/10 (matching original)
                 if training_split and 'trainPercentage' in training_split:
                     train_ratio = training_split['trainPercentage'] / 100
                     val_ratio = training_split.get('valPercentage', 20) / 100
-                    
-                    # Calculate split indices
-                    train_end = int(train_ratio * len(X))
-                    val_end = train_end + int(val_ratio * len(X))
-                    
-                    X_train = X[:train_end]
-                    y_train = y[:train_end]
-                    X_val = X[train_end:val_end] if val_end < len(X) else X[train_end:]
-                    y_val = y[train_end:val_end] if val_end < len(y) else y[train_end:]
+                    test_ratio = training_split.get('testPercentage', 10) / 100
                 else:
-                    # Default split for backward compatibility
-                    split_idx = int(0.8 * len(X))
-                    X_train, X_val = X[:split_idx], X[split_idx:]
-                    y_train, y_val = y[:split_idx], y[split_idx:]
+                    # Default split matching original training_original.py (70/20/10)
+                    train_ratio = 0.7
+                    val_ratio = 0.2
+                    test_ratio = 0.1
+                
+                # Calculate split indices (matching original: n_train = round(0.7*n_dat))
+                n_dat = len(X)
+                n_train = round(train_ratio * n_dat)
+                n_val = round(val_ratio * n_dat)
+                n_test = n_dat - n_train - n_val  # Remaining data for test
+                
+                # Preserve original unscaled data (matching original lines 2173-2175)
+                X_orig = copy.deepcopy(X)
+                y_orig = copy.deepcopy(y)
+                
+                # Create combined arrays for scaling (matching original lines 1759-1760)
+                # Reshape to 2D for scaling: (total_samples, features)
+                X_combined = X.reshape(-1, X.shape[-1]) if len(X.shape) > 2 else X
+                y_combined = y.reshape(-1, y.shape[-1]) if len(y.shape) > 2 else y
+                
+                # Create scalers dictionaries (matching original lines 1814, 1842)
+                from sklearn.preprocessing import MinMaxScaler
+                X_scalers = {}
+                y_scalers = {}
+                
+                # Apply scaling per feature column (matching original lines 1826-1861)
+                # Note: In original, scaling is controlled by i_scal_list and o_scal_list
+                # For now, we'll scale all features
+                for i in range(X_combined.shape[1]):
+                    scaler = MinMaxScaler(feature_range=(0, 1))
+                    X_combined[:, i:i+1] = scaler.fit_transform(X_combined[:, i:i+1])
+                    X_scalers[i] = scaler
+                
+                for i in range(y_combined.shape[1]):
+                    scaler = MinMaxScaler(feature_range=(0, 1))
+                    y_combined[:, i:i+1] = scaler.fit_transform(y_combined[:, i:i+1])
+                    y_scalers[i] = scaler
+                
+                # Reshape back to original shape
+                X = X_combined.reshape(X.shape) if len(X.shape) > 2 else X_combined
+                y = y_combined.reshape(y.shape) if len(y.shape) > 2 else y_combined
+                
+                # Apply data shuffling if enabled (matching original lines 2162-2170)
+                random_dat = self.session_data.get('random_data', False)
+                if random_dat:
+                    indices = np.random.permutation(n_dat)
+                    X = X[indices]
+                    y = y[indices]
+                    X_orig = X_orig[indices]
+                    y_orig = y_orig[indices]
+                
+                # Split data into train, validation, and test sets
+                X_train = X[:n_train]
+                y_train = y[:n_train]
+                X_val = X[n_train:n_train+n_val]
+                y_val = y[n_train:n_train+n_val]
+                X_test = X[n_train+n_val:] if n_test > 0 else None
+                y_test = y[n_train+n_val:] if n_test > 0 else None
+                
+                # Also split original unscaled data
+                X_train_orig = X_orig[:n_train]
+                y_train_orig = y_orig[:n_train]
+                X_val_orig = X_orig[n_train:n_train+n_val]
+                y_val_orig = y_orig[n_train:n_train+n_val]
+                X_test_orig = X_orig[n_train+n_val:] if n_test > 0 else None
+                y_test_orig = y_orig[n_train+n_val:] if n_test > 0 else None
                 
                 dataset_results = {}
+                
+                # Store scalers for inverse transformations later
+                dataset_results['scalers'] = {
+                    'X_scalers': X_scalers,
+                    'y_scalers': y_scalers
+                }
                 
                 # Train models based on MDL.MODE or train all if specified
                 import os
