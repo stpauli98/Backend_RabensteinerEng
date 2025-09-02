@@ -677,6 +677,148 @@ def save_zeitschritte():
         }), 500
 
 
+@training_api_bp.route('/evaluation-tables/<session_id>', methods=['GET'])
+def get_evaluation_tables(session_id: str):
+    """
+    Get evaluation tables (df_eval and df_eval_ts) for a training session
+    
+    Returns:
+        JSON response with evaluation tables data formatted for frontend display
+    """
+    try:
+        logger.info(f"📊 Getting evaluation tables for session: {session_id}")
+        
+        # Convert string session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                logger.warning(f"Could not get UUID for session {session_id}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid session ID',
+                    'session_id': session_id
+                }), 400
+        
+        # Get training results from database
+        supabase = get_supabase_client()
+        results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).execute()
+        
+        if not results_response.data or len(results_response.data) == 0:
+            return jsonify({
+                'success': False,
+                'error': 'Model training must be completed first. Please train the model to generate evaluation tables.',
+                'session_id': session_id
+            }), 404
+        
+        training_result = results_response.data[0]
+        
+        # Check if training is completed
+        if training_result.get('status') != 'completed':
+            return jsonify({
+                'success': False,
+                'error': f'Training is {training_result.get("status", "unknown")}. Please wait for training to complete.',
+                'session_id': session_id
+            }), 400
+        
+        # Get evaluation metrics
+        evaluation_metrics = training_result.get('evaluation_metrics', {})
+        if not evaluation_metrics:
+            return jsonify({
+                'success': False,
+                'error': 'No evaluation metrics found. Please ensure model training completed successfully.',
+                'session_id': session_id
+            }), 404
+        
+        # Format tables for each dataset
+        tables = {}
+        
+        for dataset_name, dataset_metrics in evaluation_metrics.items():
+            # Create df_eval table (overall metrics)
+            df_eval_data = []
+            df_eval_columns = ['Model', 'MAE', 'MSE', 'RMSE', 'MAPE', 'NRMSE', 'WAPE', 'sMAPE', 'MASE']
+            
+            for model_name, metrics in dataset_metrics.items():
+                row = {
+                    'Model': model_name,
+                    'MAE': metrics.get('mae', 0.0),
+                    'MSE': metrics.get('mse', 0.0),
+                    'RMSE': metrics.get('rmse', 0.0),
+                    'MAPE': metrics.get('mape', 0.0),
+                    'NRMSE': metrics.get('nrmse', 0.0),
+                    'WAPE': metrics.get('wape', 0.0),
+                    'sMAPE': metrics.get('smape', 0.0),
+                    'MASE': metrics.get('mase', 0.0)
+                }
+                df_eval_data.append(row)
+            
+            # Create df_eval_ts table (time series metrics - placeholder for now)
+            # In the original file, this contains per-timestep metrics
+            df_eval_ts_data = []
+            df_eval_ts_columns = ['delta [min]', 'MAE', 'MSE', 'RMSE', 'MAPE', 'NRMSE', 'WAPE', 'sMAPE', 'MASE']
+            
+            # Generate time delta rows (similar to original file)
+            time_deltas = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
+            for delta in time_deltas:
+                # Get aggregated metrics for this time delta if available
+                # For now, using placeholder values - should be computed from actual predictions
+                row = {
+                    'delta [min]': delta,
+                    'MAE': 0.0,
+                    'MSE': 0.0,
+                    'RMSE': 0.0,
+                    'MAPE': 0.0,
+                    'NRMSE': 0.0,
+                    'WAPE': 0.0,
+                    'sMAPE': 0.0,
+                    'MASE': 0.0
+                }
+                
+                # If we have time-series specific metrics, use them
+                if 'time_series_metrics' in dataset_metrics:
+                    ts_metrics = dataset_metrics['time_series_metrics'].get(str(delta), {})
+                    for metric_name in ['MAE', 'MSE', 'RMSE', 'MAPE', 'NRMSE', 'WAPE', 'sMAPE', 'MASE']:
+                        row[metric_name] = ts_metrics.get(metric_name.lower(), row[metric_name])
+                
+                df_eval_ts_data.append(row)
+            
+            tables[dataset_name] = {
+                'df_eval': {
+                    'title': f'Model Performance Metrics - {dataset_name}',
+                    'description': 'Overall evaluation metrics for each model',
+                    'columns': df_eval_columns,
+                    'data': df_eval_data
+                },
+                'df_eval_ts': {
+                    'title': f'Time Series Evaluation - {dataset_name}',
+                    'description': 'Metrics aggregated by time delta',
+                    'columns': df_eval_ts_columns,
+                    'data': df_eval_ts_data
+                }
+            }
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'tables': tables,
+            'total_datasets': len(tables),
+            'generated_at': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting evaluation tables: {str(e)}")
+        logger.exception(e)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get evaluation tables',
+            'message': str(e),
+            'session_id': session_id
+        }), 500
+
+
 @training_api_bp.route('/generate-datasets/<session_id>', methods=['POST'])
 def generate_datasets(session_id: str):
     """
@@ -785,16 +927,24 @@ def train_models(session_id: str):
         JSON response with training status
     """
     try:
+        logger.info(f"📥 train_models endpoint called for session: {session_id}")
         
         # Get request data
         request_data = request.get_json() or {}
-        model_parameters = request_data.get('model_parameters', {})
-        training_split = request_data.get('training_split', {})
-        training_split = convert_training_split_params(training_split)
+        logger.info(f"📋 Raw request data: {request_data}")
         
+        model_parameters = request_data.get('model_parameters', {})
+        logger.info(f"🔧 Model parameters received: {model_parameters}")
+        
+        training_split = request_data.get('training_split', {})
+        logger.info(f"📊 Training split before conversion: {training_split}")
+        
+        training_split = convert_training_split_params(training_split)
+        logger.info(f"📊 Training split after conversion: {training_split}")
         
         # Validate required parameters
         if not model_parameters:
+            logger.error("❌ No model parameters provided")
             return jsonify({
                 'success': False,
                 'error': 'Model parameters are required',
@@ -802,6 +952,7 @@ def train_models(session_id: str):
             }), 400
         
         if not training_split:
+            logger.error("❌ No training split parameters provided")
             return jsonify({
                 'success': False,
                 'error': 'Training split parameters are required',
@@ -840,13 +991,25 @@ def train_models(session_id: str):
                     except Exception as viz_error:
                         logger.error(f"Failed to save visualization {viz_name}: {str(viz_error)}")
         
-        return jsonify({
+        # Don't include full results in response as it may contain non-serializable objects
+        # Only return essential information
+        response_data = {
             'success': True,
             'session_id': session_id,
             'message': 'Model training completed successfully',
-            'status': 'completed',
-            'results': results
-        }), 200
+            'status': 'completed'
+        }
+        
+        # Safely extract only serializable parts from results
+        if results and isinstance(results, dict):
+            if 'summary' in results:
+                response_data['summary'] = results['summary']
+            if 'final_results' in results and 'summary' in results['final_results']:
+                response_data['summary'] = results['final_results']['summary']
+            if 'success' in results:
+                response_data['training_success'] = results['success']
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         logger.error(f"Error training models for {session_id}: {str(e)}")

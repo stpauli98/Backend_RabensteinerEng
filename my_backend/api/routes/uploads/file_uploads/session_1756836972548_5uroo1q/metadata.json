@@ -3,15 +3,15 @@
     "chunkIndex": 0,
     "totalChunks": 1,
     "fileName": "Temp.csv",
-    "filePath": "/Users/nmil/Documents/GitHub/Posao/Backend_RabensteinerEng/my_backend/api/routes/uploads/file_uploads/session_1756822641637_3474pzh/Temp.csv_0",
+    "filePath": "/Users/nmil/Documents/GitHub/Posao/Backend_RabensteinerEng/my_backend/api/routes/uploads/file_uploads/session_1756836972548_5uroo1q/Temp.csv_0",
     "fileType": "output",
-    "createdAt": "2025-09-02T16:17:22.398448",
+    "createdAt": "2025-09-02T20:16:13.438833",
     "params": {
       "chunkSize": 13430,
       "totalSize": 13430,
       "fileHash": "2a353f3f1e9f2c965eb9b9ae62e834aba762f157c57bb46d4e5256e3cce88b1c",
       "fileMetadata": {
-        "id": "1756822574761",
+        "id": "1756836894140",
         "fileName": "Temp.csv",
         "bezeichnung": "Temp",
         "utcMin": "2023-09-13 13:27:00",
@@ -23,15 +23,15 @@
         "datenpunkte": "499",
         "numerischeDatenpunkte": "499",
         "numerischerAnteil": "100.00",
-        "datenform": "Aktueller Wert",
-        "zeithorizontStart": "12",
-        "zeithorizontEnd": "2",
-        "zeitschrittweiteTransferiertenDaten": "1",
-        "offsetTransferiertenDaten": "4",
-        "mittelwertbildung\u00dcberDenZeithorizont": "ja",
+        "datenform": "Prognose aus historischen Daten",
+        "zeithorizontStart": "24",
+        "zeithorizontEnd": "0",
+        "zeitschrittweiteTransferiertenDaten": "12",
+        "offsetTransferiertenDaten": "22",
+        "mittelwertbildung\u00dcberDenZeithorizont": "nein",
         "datenanpassung": "3",
-        "zeitschrittweiteMinValue": "1",
-        "zeitschrittweiteAvgValue": "12",
+        "zeitschrittweiteMinValue": "5",
+        "zeitschrittweiteAvgValue": "25",
         "skalierung": "nein",
         "skalierungMax": "",
         "skalierungMin": "",
@@ -41,7 +41,7 @@
         "updatedAt": ""
       },
       "sessionInfo": {
-        "sessionId": "session_1756822641637_3474pzh",
+        "sessionId": "session_1756836972548_5uroo1q",
         "totalFiles": 2
       },
       "timeInfo": {
@@ -56,8 +56,8 @@
           "jahr": {
             "detaillierteBerechnung": true,
             "datenform": "Zeit Horizont",
-            "zeithorizontStart": "1",
-            "zeithorizontEnd": "12",
+            "zeithorizontStart": "12",
+            "zeithorizontEnd": "24",
             "skalierung": "nein",
             "skalierungMin": "",
             "skalierungMax": ""

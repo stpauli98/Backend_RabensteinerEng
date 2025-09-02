@@ -1631,10 +1631,12 @@ def train_models(session_id):
                 if result['success']:
                     # logger.info(f"Training completed successfully for session {session_id}")
                     if socketio_instance:
+                        # Don't send full results as they may contain non-serializable objects
+                        # Only send essential information
                         socketio_instance.emit('training_completed', {
                             'session_id': session_id,
                             'status': 'completed',
-                            'results': result.get('results', {})
+                            'message': 'Training completed successfully'
                         }, room=session_id)
                 else:
                     logger.error(f"Training failed: {result.get('error')}")

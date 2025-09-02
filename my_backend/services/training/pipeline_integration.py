@@ -349,6 +349,10 @@ class RealModelTrainer:
                             'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
                             'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
+                        
+                        # Clear model reference to avoid serialization issues
+                        del model
+                        model = None
                     
                     if self.config.MODE == "CNN" or self.config.MODE == "LIN":
                         model = train_cnn(X_train, y_train, X_val, y_val, self.config)
@@ -368,6 +372,10 @@ class RealModelTrainer:
                             'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
                             'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
+                        
+                        # Clear model reference to avoid serialization issues
+                        del model
+                        model = None
                     
                     if self.config.MODE == "LSTM" or self.config.MODE == "LIN":
                         model = train_lstm(X_train, y_train, X_val, y_val, self.config)
@@ -387,6 +395,10 @@ class RealModelTrainer:
                             'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
                             'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
+                        
+                        # Clear model reference to avoid serialization issues
+                        del model
+                        model = None
                     
                     if self.config.MODE == "LIN":
                         models = train_linear_model(X_train, y_train)
@@ -438,6 +450,7 @@ class RealModelTrainer:
                         mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
                         mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
                         
+                        # Don't include raw model objects, only metadata
                         dataset_results['svr_dir'] = {
                             'model_path': model_path,
                             'type': 'support_vector',
@@ -445,6 +458,9 @@ class RealModelTrainer:
                             'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
                             'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
+                        
+                        # Important: Don't store the model objects themselves
+                        models = None  # Clear reference to avoid serialization issues
                     
                     if self.config.MODE == "SVR_MIMO":
                         models = train_svr_mimo(X_train, y_train, self.config)
@@ -468,6 +484,7 @@ class RealModelTrainer:
                         mae = mean_absolute_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
                         mse = mean_squared_error(y_val.reshape(y_val.shape[0], -1), predictions.reshape(predictions.shape[0], -1))
                         
+                        # Don't include raw model objects, only metadata
                         dataset_results['svr_mimo'] = {
                             'model_path': model_path,
                             'type': 'support_vector',
@@ -475,6 +492,9 @@ class RealModelTrainer:
                             'metrics': {'mae': clean_metric(mae), 'mse': clean_metric(mse), 'rmse': clean_metric(np.sqrt(mse))},
                             'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else predictions
                         }
+                        
+                        # Important: Don't store the model objects themselves
+                        models = None  # Clear reference to avoid serialization issues
                         
                 except Exception as model_error:
                     logger.error(f"Error training model for {dataset_name}: {str(model_error)}")
@@ -1000,22 +1020,38 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
         
         # Validate and use ONLY user parameters - NO DEFAULTS
         if not model_parameters:
+            logger.error("No model parameters provided in request")
             raise ValueError("Model parameters are required but not provided")
         
+        logger.info(f"Received model parameters: {model_parameters}")
         config = MDL()
         
         # Core model parameters - REQUIRED
         if 'MODE' not in model_parameters:
-            raise ValueError("Model MODE parameter is required")
+            logger.error(f"MODE parameter missing. Received params: {list(model_parameters.keys())}")
+            raise ValueError("Model MODE parameter is required. Please select a model type (Dense, CNN, LSTM, etc.)")
         config.MODE = model_parameters['MODE']
         
         # Validate parameters based on model type
         if config.MODE in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
             # Neural network parameters - ALL REQUIRED
             required_params = ['LAY', 'N', 'EP', 'ACTF']
+            missing_params = []
+            
             for param in required_params:
                 if param not in model_parameters or model_parameters[param] is None or model_parameters[param] == '':
-                    raise ValueError(f"Neural network parameter '{param}' is required for model type '{config.MODE}'")
+                    missing_params.append(param)
+            
+            if missing_params:
+                param_descriptions = {
+                    'LAY': 'Number of Layers',
+                    'N': 'Number of Neurons/Filters',
+                    'EP': 'Number of Epochs',
+                    'ACTF': 'Activation Function'
+                }
+                missing_desc = [f"{param} ({param_descriptions.get(param, param)})" for param in missing_params]
+                logger.error(f"Missing neural network parameters for {config.MODE}: {missing_params}")
+                raise ValueError(f"Missing required parameters for {config.MODE} model: {', '.join(missing_desc)}")
             
             config.LAY = model_parameters['LAY']
             config.N = model_parameters['N']
@@ -1025,15 +1061,28 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
             # CNN-specific parameters
             if config.MODE == 'CNN':
                 if 'K' not in model_parameters or model_parameters['K'] is None:
+                    logger.error("CNN model missing K (kernel size) parameter")
                     raise ValueError("CNN parameter 'K' (kernel size) is required for CNN model")
                 config.K = model_parameters['K']
             
         elif config.MODE in ['SVR_dir', 'SVR_MIMO']:
             # SVR parameters - ALL REQUIRED
             required_params = ['KERNEL', 'C', 'EPSILON']
+            missing_params = []
+            
             for param in required_params:
                 if param not in model_parameters or model_parameters[param] is None or model_parameters[param] == '':
-                    raise ValueError(f"SVR parameter '{param}' is required for model type '{config.MODE}'")
+                    missing_params.append(param)
+            
+            if missing_params:
+                param_descriptions = {
+                    'KERNEL': 'Kernel Type (rbf, linear, poly)',
+                    'C': 'C Regularization Parameter',
+                    'EPSILON': 'Epsilon Value'
+                }
+                missing_desc = [f"{param} ({param_descriptions.get(param, param)})" for param in missing_params]
+                logger.error(f"Missing SVR parameters for {config.MODE}: {missing_params}")
+                raise ValueError(f"Missing required parameters for {config.MODE} model: {', '.join(missing_desc)}")
             
             config.KERNEL = model_parameters['KERNEL']
             config.C = model_parameters['C']
@@ -1041,9 +1090,11 @@ def run_complete_original_pipeline(session_id: str, model_parameters: dict = Non
             
         elif config.MODE == 'LIN':
             # Linear model has minimal configuration but still validate MODE
+            logger.info("Linear model selected - no additional parameters required")
             pass
         else:
-            raise ValueError(f"Unknown model type: {config.MODE}")
+            logger.error(f"Unknown model type received: {config.MODE}")
+            raise ValueError(f"Unknown model type: {config.MODE}. Valid types are: Dense, CNN, LSTM, AR LSTM, SVR_dir, SVR_MIMO, LIN")
         
         # Config attributes are already validated above
         
