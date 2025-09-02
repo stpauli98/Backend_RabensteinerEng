@@ -271,6 +271,10 @@ class ModernMiddlemanRunner:
                 import traceback as tb
                 logger.error(tb.format_exc())
             
+            # Extract metrics for easy access
+            evaluation_metrics = results.get('evaluation_metrics', {})
+            metrics = results.get('metrics', evaluation_metrics)  # Use either key
+            
             # Return structured response
             return {
                 'success': True,
@@ -278,6 +282,8 @@ class ModernMiddlemanRunner:
                 'results': results,
                 'violin_plots': violin_plots,
                 'dataset_count': results.get('metadata', {}).get('n_dat', 0),
+                'evaluation_metrics': evaluation_metrics,
+                'metrics': metrics,
                 'message': 'Training completed successfully using extracted modules'
             }
             

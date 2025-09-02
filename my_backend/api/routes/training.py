@@ -1696,13 +1696,20 @@ def train_models(session_id):
                                     return str(obj)
                         
                         # Clean the results for JSON serialization
+                        # Get metrics from multiple possible locations
+                        evaluation_metrics = result.get('evaluation_metrics', {})
+                        if not evaluation_metrics:
+                            evaluation_metrics = training_results.get('evaluation_metrics', {})
+                        if not evaluation_metrics:
+                            evaluation_metrics = training_results.get('metrics', {})
+                        
                         cleaned_results = clean_for_json({
                             'model_type': model_config.get('MODE', 'Dense'),
                             'parameters': model_config,
-                            'metrics': training_results.get('metrics', {}),
+                            'metrics': evaluation_metrics,
                             'training_split': training_split,
                             'dataset_count': result.get('dataset_count', 0),
-                            'evaluation_metrics': training_results.get('evaluation_metrics', {}),
+                            'evaluation_metrics': evaluation_metrics,
                             'metadata': training_results.get('metadata', {})
                         })
                         
@@ -1720,18 +1727,39 @@ def train_models(session_id):
                         # Save violin plots if available
                         if result.get('violin_plots'):
                             try:
-                                viz_data = {
-                                    'session_id': uuid_session_id,
-                                    'visualizations': result['violin_plots'],
-                                    'metadata': {
-                                        'dataset_count': result.get('dataset_count', 0),
-                                        'generated_during': 'model_training'
-                                    }
-                                }
-                                supabase.table('training_visualizations').insert(viz_data).execute()
-                                logger.info(f"Violin plots saved for session {uuid_session_id}")
+                                # Check if violin_plots is a dictionary
+                                violin_plots = result.get('violin_plots')
+                                if isinstance(violin_plots, dict):
+                                    # Save each violin plot separately
+                                    for plot_name, plot_data in violin_plots.items():
+                                        # Extract just the base64 part if it includes data URI prefix
+                                        if isinstance(plot_data, str) and plot_data.startswith('data:image'):
+                                            # Keep the full data URI for display
+                                            base64_data = plot_data
+                                        else:
+                                            base64_data = plot_data
+                                        
+                                        viz_data = {
+                                            'session_id': uuid_session_id,
+                                            'plot_type': 'violin',
+                                            'plot_name': plot_name,
+                                            'dataset_name': plot_name.replace('_distribution', '').replace('_plot', ''),
+                                            'model_name': model_config.get('MODE', 'Linear'),
+                                            'plot_data_base64': base64_data,  # The base64 encoded image with data URI
+                                            'metadata': {
+                                                'dataset_count': result.get('dataset_count', 0),
+                                                'generated_during': 'model_training',
+                                                'created_at': datetime.now().isoformat()
+                                            }
+                                        }
+                                        supabase.table('training_visualizations').insert(viz_data).execute()
+                                    logger.info(f"Violin plots saved for session {uuid_session_id}")
+                                else:
+                                    logger.warning(f"Violin plots not in expected format: {type(violin_plots)}")
                             except Exception as viz_error:
                                 logger.error(f"Failed to save violin plots: {str(viz_error)}")
+                                import traceback
+                                logger.error(traceback.format_exc())
                         
                     except Exception as e:
                         logger.error(f"Failed to save training results: {str(e)}")
@@ -1837,3 +1865,135 @@ def debug_files_table(session_id):
     except Exception as e:
         logger.error(f"Error debugging files table for {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/evaluation-tables/<session_id>', methods=['GET'])
+def get_evaluation_tables(session_id):
+    """
+    Get evaluation metrics formatted as tables for display.
+    Returns df_eval and df_eval_ts structures matching the original training output.
+    """
+    try:
+        # Get UUID for session
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Get latest training results
+        response = supabase.table('training_results') \
+            .select('results') \
+            .eq('session_id', uuid_session_id) \
+            .order('created_at.desc') \
+            .limit(1) \
+            .execute()
+        
+        if not response.data:
+            return jsonify({
+                'success': False,
+                'error': 'No training results found for this session',
+                'session_id': session_id
+            }), 404
+        
+        results = response.data[0]['results']
+        
+        # Check for evaluation metrics
+        eval_metrics = results.get('evaluation_metrics', {})
+        if not eval_metrics or eval_metrics.get('error'):
+            # Try alternative location
+            eval_metrics = results.get('metrics', {})
+        
+        # Debug: Log what we found
+        logger.info(f"Found eval_metrics keys: {eval_metrics.keys() if eval_metrics else 'None'}")
+        
+        # If we have metrics but they contain an error, still try to use them if test/val metrics exist
+        if eval_metrics and eval_metrics.get('test_metrics_scaled'):
+            # We have some metrics, proceed
+            pass
+        elif not eval_metrics or (eval_metrics.get('error') and not eval_metrics.get('test_metrics_scaled')):
+            return jsonify({
+                'success': False,
+                'error': f"No valid evaluation metrics found. Metrics: {eval_metrics}",
+                'session_id': session_id
+            }), 404
+        
+        # Format metrics into table structures
+        # df_eval - Overall model metrics
+        df_eval = []
+        
+        # Extract test metrics
+        test_metrics = eval_metrics.get('test_metrics_scaled', {})
+        val_metrics = eval_metrics.get('val_metrics_scaled', {})
+        
+        if test_metrics:
+            df_eval.append({
+                'Phase': 'Test',
+                'MAE': test_metrics.get('MAE', 0),
+                'MSE': test_metrics.get('MSE', 0),
+                'RMSE': test_metrics.get('RMSE', 0),
+                'MAPE': test_metrics.get('MAPE', 0),
+                'NRMSE': test_metrics.get('NRMSE', 0),
+                'WAPE': test_metrics.get('WAPE', 0),
+                'sMAPE': test_metrics.get('sMAPE', 0),
+                'MASE': test_metrics.get('MASE', 0)
+            })
+        
+        if val_metrics:
+            df_eval.append({
+                'Phase': 'Validation',
+                'MAE': val_metrics.get('MAE', 0),
+                'MSE': val_metrics.get('MSE', 0),
+                'RMSE': val_metrics.get('RMSE', 0),
+                'MAPE': val_metrics.get('MAPE', 0),
+                'NRMSE': val_metrics.get('NRMSE', 0),
+                'WAPE': val_metrics.get('WAPE', 0),
+                'sMAPE': val_metrics.get('sMAPE', 0),
+                'MASE': val_metrics.get('MASE', 0)
+            })
+        
+        # df_eval_ts - Time series specific metrics (placeholder for now)
+        # In production, this would contain time-series specific analysis
+        df_eval_ts = [
+            {
+                'Metric': 'Model Type',
+                'Value': eval_metrics.get('model_type', 'Unknown')
+            },
+            {
+                'Metric': 'Dataset Count',
+                'Value': results.get('dataset_count', 0)
+            }
+        ]
+        
+        # Add metadata if available
+        metadata = results.get('metadata', {})
+        if metadata:
+            if 'n_train' in metadata:
+                df_eval_ts.append({
+                    'Metric': 'Training Samples',
+                    'Value': metadata['n_train']
+                })
+            if 'n_val' in metadata:
+                df_eval_ts.append({
+                    'Metric': 'Validation Samples',
+                    'Value': metadata['n_val']
+                })
+            if 'n_test' in metadata:
+                df_eval_ts.append({
+                    'Metric': 'Test Samples',
+                    'Value': metadata['n_test']
+                })
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'df_eval': df_eval,
+            'df_eval_ts': df_eval_ts,
+            'model_type': eval_metrics.get('model_type', 'Unknown')
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting evaluation tables: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'session_id': session_id
+        }), 500

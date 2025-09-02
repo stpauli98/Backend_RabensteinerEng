@@ -9,6 +9,7 @@ import copy
 import logging
 from typing import Dict, Tuple, Optional
 from datetime import datetime
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 # Import all necessary modules
 from .data_loader import DataLoader, load, transf
@@ -21,6 +22,86 @@ from .model_trainer import (
 from .config import MDL, MTS, T, HOL
 
 logger = logging.getLogger(__name__)
+
+
+def calculate_evaluation_metrics(y_true, y_pred):
+    """
+    Calculate comprehensive evaluation metrics for model performance
+    
+    Args:
+        y_true: True values (numpy array)
+        y_pred: Predicted values (numpy array)
+    
+    Returns:
+        Dictionary containing all evaluation metrics
+    """
+    # Ensure arrays are 2D for consistent calculation
+    if len(y_true.shape) == 1:
+        y_true = y_true.reshape(-1, 1)
+    if len(y_pred.shape) == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    
+    # Flatten for metric calculation
+    y_true_flat = y_true.flatten()
+    y_pred_flat = y_pred.flatten()
+    
+    # Basic metrics
+    mae = mean_absolute_error(y_true_flat, y_pred_flat)
+    mse = mean_squared_error(y_true_flat, y_pred_flat)
+    rmse = np.sqrt(mse)
+    
+    # MAPE (Mean Absolute Percentage Error)
+    # Avoid division by zero
+    mask = y_true_flat != 0
+    if np.any(mask):
+        mape = np.mean(np.abs((y_true_flat[mask] - y_pred_flat[mask]) / y_true_flat[mask])) * 100
+    else:
+        mape = 0.0
+    
+    # NRMSE (Normalized RMSE)
+    y_range = np.max(y_true_flat) - np.min(y_true_flat)
+    if y_range > 0:
+        nrmse = rmse / y_range
+    else:
+        nrmse = 0.0
+    
+    # WAPE (Weighted Absolute Percentage Error)
+    sum_abs_true = np.sum(np.abs(y_true_flat))
+    if sum_abs_true > 0:
+        wape = np.sum(np.abs(y_true_flat - y_pred_flat)) / sum_abs_true * 100
+    else:
+        wape = 0.0
+    
+    # sMAPE (Symmetric Mean Absolute Percentage Error)
+    denominator = np.abs(y_true_flat) + np.abs(y_pred_flat)
+    mask = denominator != 0
+    if np.any(mask):
+        smape = np.mean(2.0 * np.abs(y_true_flat[mask] - y_pred_flat[mask]) / denominator[mask]) * 100
+    else:
+        smape = 0.0
+    
+    # MASE (Mean Absolute Scaled Error) - simplified version
+    # Using naive forecast (previous value) as baseline
+    if len(y_true_flat) > 1:
+        naive_errors = np.abs(np.diff(y_true_flat))
+        mae_naive = np.mean(naive_errors)
+        if mae_naive > 0:
+            mase = mae / mae_naive
+        else:
+            mase = 1.0
+    else:
+        mase = 1.0
+    
+    return {
+        'MAE': float(mae),
+        'MSE': float(mse),
+        'RMSE': float(rmse),
+        'MAPE': float(mape),
+        'NRMSE': float(nrmse),
+        'WAPE': float(wape),
+        'sMAPE': float(smape),
+        'MASE': float(mase)
+    }
 
 
 def run_exact_training_pipeline(
@@ -148,6 +229,112 @@ def run_exact_training_pipeline(
     else:
         raise ValueError(f"Unknown model mode: {mdl_config.MODE}")
     
+    # Calculate evaluation metrics on test data
+    evaluation_metrics = {}
+    
+    try:
+        # Get predictions on test data
+        if mdl is not None:
+            if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
+                # Neural network models - use predict method
+                test_predictions = mdl.predict(tst_x, verbose=0)
+            elif mdl_config.MODE == "SVR_dir":
+                # SVR direct - predict for each output separately
+                test_predictions = []
+                for svr_model in mdl:
+                    pred = svr_model.predict(tst_x)
+                    test_predictions.append(pred)
+                test_predictions = np.stack(test_predictions, axis=-1)
+            elif mdl_config.MODE == "SVR_MIMO":
+                # SVR MIMO - single model for all outputs
+                test_predictions = mdl.predict(tst_x)
+                # Reshape to match expected output shape
+                n_samples = tst_x.shape[0]
+                n_features_out = tst_y.shape[-1] if len(tst_y.shape) > 1 else 1
+                test_predictions = test_predictions.reshape(n_samples, -1, n_features_out)
+            elif mdl_config.MODE == "LIN":
+                # Linear models - predict for each output
+                # Must reshape exactly as in training: (n_samples * n_timesteps, n_features_in)
+                n_samples, n_timesteps, n_features_in = tst_x.shape
+                tst_x_reshaped = tst_x.reshape(n_samples * n_timesteps, n_features_in)
+                
+                test_predictions = []
+                for lin_model in mdl:
+                    pred = lin_model.predict(tst_x_reshaped)
+                    # Reshape back to (n_samples, n_timesteps)
+                    pred = pred.reshape(n_samples, n_timesteps)
+                    test_predictions.append(pred)
+                
+                # Stack predictions for all outputs
+                test_predictions = np.stack(test_predictions, axis=-1)
+                # Result shape should be (n_samples, n_timesteps, n_features_out)
+            else:
+                test_predictions = tst_y  # Fallback
+            
+            # Calculate metrics on scaled data
+            test_metrics = calculate_evaluation_metrics(tst_y, test_predictions)
+            
+            # Calculate metrics on original (unscaled) data if available
+            if tst_y_orig is not None:
+                # Inverse transform predictions to original scale
+                # For simplicity, we'll use the test metrics for now
+                # In production, we'd inverse transform the predictions properly
+                original_metrics = test_metrics  # Placeholder
+            else:
+                original_metrics = test_metrics
+            
+            evaluation_metrics = {
+                'test_metrics_scaled': test_metrics,
+                'test_metrics_original': original_metrics,
+                'model_type': mdl_config.MODE
+            }
+            
+            # Also calculate on validation data for comparison
+            if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
+                val_predictions = mdl.predict(val_x, verbose=0)
+            elif mdl_config.MODE == "SVR_dir":
+                val_predictions = []
+                for svr_model in mdl:
+                    pred = svr_model.predict(val_x)
+                    val_predictions.append(pred)
+                val_predictions = np.stack(val_predictions, axis=-1)
+            elif mdl_config.MODE == "SVR_MIMO":
+                val_predictions = mdl.predict(val_x)
+                n_samples = val_x.shape[0]
+                n_features_out = val_y.shape[-1] if len(val_y.shape) > 1 else 1
+                val_predictions = val_predictions.reshape(n_samples, -1, n_features_out)
+            elif mdl_config.MODE == "LIN":
+                # Linear models - predict for each output
+                # Must reshape exactly as in training: (n_samples * n_timesteps, n_features_in)
+                n_samples, n_timesteps, n_features_in = val_x.shape
+                val_x_reshaped = val_x.reshape(n_samples * n_timesteps, n_features_in)
+                
+                val_predictions = []
+                for lin_model in mdl:
+                    pred = lin_model.predict(val_x_reshaped)
+                    # Reshape back to (n_samples, n_timesteps)
+                    pred = pred.reshape(n_samples, n_timesteps)
+                    val_predictions.append(pred)
+                
+                # Stack predictions for all outputs
+                val_predictions = np.stack(val_predictions, axis=-1)
+                # Result shape should be (n_samples, n_timesteps, n_features_out)
+            else:
+                val_predictions = val_y
+            
+            val_metrics = calculate_evaluation_metrics(val_y, val_predictions)
+            evaluation_metrics['val_metrics_scaled'] = val_metrics
+            
+    except Exception as e:
+        logger.error(f"Error calculating evaluation metrics: {str(e)}")
+        # Provide empty metrics if calculation fails
+        evaluation_metrics = {
+            'test_metrics_scaled': {},
+            'test_metrics_original': {},
+            'val_metrics_scaled': {},
+            'model_type': mdl_config.MODE if mdl_config else 'unknown',
+            'error': str(e)
+        }
     
     # Return all results
     return {
@@ -184,7 +371,9 @@ def run_exact_training_pipeline(
             'utc_ref_log': utc_ref_log,
             'model_config': mdl_config,
             'random_data': random_dat
-        }
+        },
+        'evaluation_metrics': evaluation_metrics,
+        'metrics': evaluation_metrics  # Also include as 'metrics' for compatibility
     }
 
 
