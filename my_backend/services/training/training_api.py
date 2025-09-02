@@ -857,6 +857,169 @@ def train_models(session_id: str):
         }), 500
 
 
+@training_api_bp.route('/list-models/<session_id>', methods=['GET'])
+def list_models(session_id: str):
+    """
+    List all available trained models for a session
+    
+    Returns:
+        JSON response with list of available models
+    """
+    try:
+        import os
+        import glob
+        from datetime import datetime
+        
+        # Check if models directory exists
+        models_dir = os.path.join('uploads', 'trained_models')
+        session_models_dir = os.path.join(models_dir, session_id)
+        
+        # Find existing trained models for this session
+        existing_models = []
+        search_dirs = [models_dir, session_models_dir] if os.path.exists(session_models_dir) else [models_dir]
+        
+        for search_dir in search_dirs:
+            if os.path.exists(search_dir):
+                model_patterns = [
+                    os.path.join(search_dir, '*.h5'),
+                    os.path.join(search_dir, '*.pkl')
+                ]
+                
+                for pattern in model_patterns:
+                    found_files = glob.glob(pattern)
+                    for file_path in found_files:
+                        # Extract model info from filename
+                        filename = os.path.basename(file_path)
+                        file_size = os.path.getsize(file_path)
+                        modified_time = os.path.getmtime(file_path)
+                        
+                        # Try to parse model type from filename
+                        model_type = 'Unknown'
+                        if 'dense' in filename.lower():
+                            model_type = 'Dense'
+                        elif 'cnn' in filename.lower():
+                            model_type = 'CNN'
+                        elif 'lstm' in filename.lower():
+                            model_type = 'LSTM'
+                        elif 'svr' in filename.lower():
+                            model_type = 'SVR'
+                        elif 'linear' in filename.lower():
+                            model_type = 'Linear'
+                        
+                        existing_models.append({
+                            'filename': filename,
+                            'path': file_path,
+                            'model_type': model_type,
+                            'file_size': file_size,
+                            'file_size_mb': round(file_size / (1024 * 1024), 2),
+                            'modified_time': datetime.fromtimestamp(modified_time).isoformat(),
+                            'format': 'h5' if file_path.endswith('.h5') else 'pkl'
+                        })
+        
+        # Sort by modification time (newest first)
+        existing_models.sort(key=lambda x: x['modified_time'], reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'models': existing_models,
+            'count': len(existing_models)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error listing models for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to list models',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/download-model/<session_id>', methods=['GET'])
+def download_model(session_id: str):
+    """
+    Download a trained model file for a session
+    
+    Returns:
+        Model file as attachment or JSON error response
+    """
+    try:
+        from flask import send_file
+        import os
+        import glob
+        
+        # Get optional model name from query params
+        model_name = request.args.get('model_name')
+        model_type = request.args.get('model_type')
+        
+        # Check if models directory exists
+        models_dir = os.path.join('uploads', 'trained_models')
+        session_models_dir = os.path.join(models_dir, session_id)
+        
+        # Find existing trained models for this session
+        existing_models = []
+        search_dirs = [models_dir, session_models_dir] if os.path.exists(session_models_dir) else [models_dir]
+        
+        for search_dir in search_dirs:
+            if os.path.exists(search_dir):
+                model_patterns = [
+                    os.path.join(search_dir, '*.h5'),
+                    os.path.join(search_dir, '*.pkl')
+                ]
+                
+                for pattern in model_patterns:
+                    found_files = glob.glob(pattern)
+                    existing_models.extend(found_files)
+        
+        if not existing_models:
+            return jsonify({
+                'success': False,
+                'error': 'No models found',
+                'message': f'No trained models found for session {session_id}'
+            }), 404
+        
+        # Sort by modification time and get the most recent or filter by name
+        if model_name:
+            # Filter by model name if provided
+            filtered_models = [m for m in existing_models if model_name in os.path.basename(m)]
+            if filtered_models:
+                existing_models = filtered_models
+        
+        # Get the most recent model
+        existing_models.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        model_path = existing_models[0]
+        
+        # Determine mime type based on file extension
+        if model_path.endswith('.h5'):
+            mimetype = 'application/x-hdf'
+        elif model_path.endswith('.pkl'):
+            mimetype = 'application/octet-stream'
+        else:
+            mimetype = 'application/octet-stream'
+        
+        # Ensure absolute path
+        if not os.path.isabs(model_path):
+            import pathlib
+            base_dir = pathlib.Path(__file__).parent.parent.parent
+            model_path = os.path.join(base_dir, model_path)
+        
+        # Send the file
+        return send_file(
+            model_path,
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=os.path.basename(model_path)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error downloading model for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to download model',
+            'message': str(e)
+        }), 500
+
+
 @training_api_bp.route('/save-model/<session_id>', methods=['POST'])
 def save_model(session_id: str):
     """
@@ -888,25 +1051,68 @@ def save_model(session_id: str):
         # Import necessary modules for model saving
         import os
         import pickle
+        import glob
         from datetime import datetime
         
-        # Create models directory if it doesn't exist
-        models_dir = os.path.join('uploads', 'trained_models', session_id)
-        os.makedirs(models_dir, exist_ok=True)
+        # Check if models directory exists (models should already be saved during training)
+        models_dir = os.path.join('uploads', 'trained_models')
+        session_models_dir = os.path.join(models_dir, session_id)
         
+        # Find existing trained models for this session
+        existing_models = []
+        if os.path.exists(models_dir):
+            # Look for models with any pattern (models are saved as modeltype_datasetname_timestamp)
+            # Since we don't have session_id in the filename, we need to look for all models
+            # and filter by creation time or look in session-specific directory
+            model_patterns = [
+                os.path.join(models_dir, '*.h5'),
+                os.path.join(models_dir, '*.pkl'),
+                # Also check session-specific directory if it exists
+                os.path.join(session_models_dir, '*.h5'),
+                os.path.join(session_models_dir, '*.pkl')
+            ]
+            
+            for pattern in model_patterns:
+                found_files = glob.glob(pattern)
+                existing_models.extend(found_files)
+                
+            # Log what we found
+            if existing_models:
+                logger.info(f"Found {len(existing_models)} model files: {existing_models}")
+        
+        if not existing_models:
+            logger.warning(f"No trained models found for session {session_id}")
+            # Create directory for future use
+            os.makedirs(session_models_dir, exist_ok=True)
+            
         # Generate timestamp for unique filename
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        # Determine save path
-        if not save_path:
-            if model_type in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
-                # Save as .h5 for neural network models
-                save_path = os.path.join(models_dir, f'{model_name}_{timestamp}.h5')
-            elif model_type in ['SVR_dir', 'SVR_MIMO', 'LIN']:
-                # Save as .pkl for sklearn models
-                save_path = os.path.join(models_dir, f'{model_name}_{timestamp}.pkl')
-            else:
-                save_path = os.path.join(models_dir, f'{model_name}_{timestamp}.model')
+        # If we found existing models, use the most recent one
+        if existing_models:
+            # Sort by modification time and get the most recent
+            existing_models.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            most_recent_model = existing_models[0]
+            logger.info(f"Found existing model: {most_recent_model}")
+            save_path = most_recent_model
+            
+            # Detect model type from file extension
+            if most_recent_model.endswith('.h5'):
+                model_type = model_type or 'Dense'  # Default to Dense for .h5 files
+            elif most_recent_model.endswith('.pkl'):
+                model_type = model_type or 'Linear'  # Default to Linear for .pkl files
+        else:
+            # Determine save path for metadata only (no actual model file)
+            if not save_path:
+                os.makedirs(session_models_dir, exist_ok=True)
+                if model_type in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
+                    # Save as .h5 for neural network models
+                    save_path = os.path.join(session_models_dir, f'{model_name}_{timestamp}.h5')
+                elif model_type in ['SVR_dir', 'SVR_MIMO', 'LIN', 'Linear']:
+                    # Save as .pkl for sklearn models
+                    save_path = os.path.join(session_models_dir, f'{model_name}_{timestamp}.pkl')
+                else:
+                    save_path = os.path.join(session_models_dir, f'{model_name}_{timestamp}.model')
         
         # Get the supabase client to save model metadata
         supabase = get_supabase_client()
@@ -927,14 +1133,30 @@ def save_model(session_id: str):
         except Exception as db_error:
             logger.warning(f"Could not save model metadata to database: {str(db_error)}")
         
-        return jsonify({
+        # Prepare response with model information
+        response_data = {
             'success': True,
             'session_id': session_id,
             'model_name': model_name,
             'model_type': model_type,
             'save_path': save_path,
-            'message': 'Model saved successfully'
-        }), 200
+            'message': 'Model metadata saved successfully' if not existing_models else 'Model found and metadata saved successfully',
+            'model_info': {
+                'session_id': session_id,
+                'model_name': model_name,
+                'model_format': model_type,
+                'save_timestamp': timestamp,
+                'file_exists': os.path.exists(save_path) if save_path else False,
+                'file_size': os.path.getsize(save_path) if save_path and os.path.exists(save_path) else 0
+            }
+        }
+        
+        # Add information about all found models
+        if existing_models:
+            response_data['found_models'] = [os.path.basename(m) for m in existing_models]
+            response_data['models_count'] = len(existing_models)
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         logger.error(f"Error saving model for {session_id}: {str(e)}")
