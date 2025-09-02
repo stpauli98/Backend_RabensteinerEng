@@ -267,6 +267,8 @@ def process_and_scale_data(i_array_3D: np.ndarray, o_array_3D: np.ndarray,
         'o_array_3D_orig': o_array_3D_orig,
         'i_scalers': i_scalers,
         'o_scalers': o_scalers,
+        'i_combined_array': i_combined_array,
+        'o_combined_array': o_combined_array,
         'utc_ref_log': utc_ref_log,
         'n_dat': n_dat
     }

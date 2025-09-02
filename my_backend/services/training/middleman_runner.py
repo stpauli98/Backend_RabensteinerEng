@@ -183,21 +183,41 @@ class ModernMiddlemanRunner:
             # Create MDL configuration from model_params or use defaults
             mdl_config = None
             if model_params:
-                mdl_config = MDL()
-                mdl_config.MODE = model_params.get('MODE', 'Linear')
+                # Map frontend mode names to backend mode names
+                mode_mapping = {
+                    'Linear': 'LIN',
+                    'Dense': 'Dense',
+                    'CNN': 'CNN',
+                    'LSTM': 'LSTM',
+                    'AR LSTM': 'AR LSTM',
+                    'SVR_dir': 'SVR_dir',
+                    'SVR_MIMO': 'SVR_MIMO'
+                }
+                
+                frontend_mode = model_params.get('MODE', 'Linear')
+                backend_mode = mode_mapping.get(frontend_mode, 'LIN')
+                
+                mdl_config = MDL(mode=backend_mode)
                 
                 # Set parameters based on model type
-                if mdl_config.MODE in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
-                    mdl_config.LAY = model_params.get('LAY', 2)
-                    mdl_config.N = model_params.get('N', 64)
-                    mdl_config.EP = model_params.get('EP', 10)
-                    mdl_config.ACTF = model_params.get('ACTF', 'relu')
-                    if mdl_config.MODE == 'CNN':
-                        mdl_config.K = model_params.get('K', 3)
-                elif mdl_config.MODE in ['SVR_dir', 'SVR_MIMO']:
-                    mdl_config.KERNEL = model_params.get('KERNEL', 'rbf')
-                    mdl_config.C = model_params.get('C', 1.0)
-                    mdl_config.EPSILON = model_params.get('EPSILON', 0.1)
+                if backend_mode in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
+                    if 'LAY' in model_params:
+                        mdl_config.LAY = model_params['LAY']
+                    if 'N' in model_params:
+                        mdl_config.N = model_params['N']
+                    if 'EP' in model_params:
+                        mdl_config.EP = model_params['EP']
+                    if 'ACTF' in model_params:
+                        mdl_config.ACTF = model_params['ACTF']
+                    if backend_mode == 'CNN' and 'K' in model_params:
+                        mdl_config.K = model_params['K']
+                elif backend_mode in ['SVR_dir', 'SVR_MIMO']:
+                    if 'KERNEL' in model_params:
+                        mdl_config.KERNEL = model_params['KERNEL']
+                    if 'C' in model_params:
+                        mdl_config.C = model_params['C']
+                    if 'EPSILON' in model_params:
+                        mdl_config.EPSILON = model_params['EPSILON']
             
             # Run the verified pipeline
             logger.info("Executing verified pipeline_exact with model configuration")
@@ -214,21 +234,70 @@ class ModernMiddlemanRunner:
             
             logger.info(f"Training pipeline completed successfully for session {session_id}")
             
+            # Generate visualizations
+            logger.info("Generating visualizations...")
+            violin_plots = {}
+            try:
+                from services.training.visualization import Visualizer
+                visualizer = Visualizer()
+                
+                # Prepare data for visualization
+                viz_data = {
+                    'i_combined_array': results.get('scalers', {}).get('i_combined_array'),
+                    'o_combined_array': results.get('scalers', {}).get('o_combined_array')
+                }
+                
+                # If combined arrays not in scalers, try to get from metadata
+                if viz_data['i_combined_array'] is None:
+                    # Use train/val/test data
+                    import numpy as np
+                    train_x = results.get('train_data', {}).get('X_orig')
+                    val_x = results.get('val_data', {}).get('X_orig')
+                    test_x = results.get('test_data', {}).get('X_orig')
+                    
+                    if train_x is not None and val_x is not None and test_x is not None:
+                        # Combine all data for visualization
+                        all_x = np.vstack([train_x, val_x, test_x])
+                        viz_data['i_combined_array'] = all_x.reshape(-1, all_x.shape[-1])
+                    
+                    train_y = results.get('train_data', {}).get('y_orig')
+                    val_y = results.get('val_data', {}).get('y_orig')
+                    test_y = results.get('test_data', {}).get('y_orig')
+                    
+                    if train_y is not None and val_y is not None and test_y is not None:
+                        all_y = np.vstack([train_y, val_y, test_y])
+                        viz_data['o_combined_array'] = all_y.reshape(-1, all_y.shape[-1])
+                
+                # Create violin plots
+                if viz_data['i_combined_array'] is not None or viz_data['o_combined_array'] is not None:
+                    violin_plots = visualizer.create_violin_plots(viz_data)
+                    logger.info(f"Generated {len(violin_plots)} violin plots")
+                else:
+                    logger.warning("No data available for creating violin plots")
+                    
+            except Exception as e:
+                logger.error(f"Error generating visualizations: {str(e)}")
+                import traceback as tb
+                logger.error(tb.format_exc())
+            
             # Return structured response
             return {
                 'success': True,
                 'session_id': session_id,
                 'results': results,
+                'violin_plots': violin_plots,
+                'dataset_count': results.get('metadata', {}).get('n_dat', 0),
                 'message': 'Training completed successfully using extracted modules'
             }
             
         except Exception as e:
             error_msg = f"Training failed for session {session_id}: {str(e)}"
             logger.error(error_msg)
-            logger.error(traceback.format_exc())
+            import traceback as tb
+            logger.error(tb.format_exc())
             
             # Save error to database
-            self._save_error_to_database(session_id, str(e), traceback.format_exc())
+            self._save_error_to_database(session_id, str(e), tb.format_exc())
             
             return {
                 'success': False,

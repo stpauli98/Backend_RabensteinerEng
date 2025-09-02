@@ -93,6 +93,8 @@ def run_exact_training_pipeline(
     o_array_3D_orig = scaling_result['o_array_3D_orig']
     i_scalers = scaling_result['i_scalers']
     o_scalers = scaling_result['o_scalers']
+    i_combined_array = scaling_result.get('i_combined_array')
+    o_combined_array = scaling_result.get('o_combined_array')
     utc_ref_log = scaling_result['utc_ref_log']
     
     # Step 3: Calculate split indices (lines 2040-2042)
@@ -185,7 +187,9 @@ def run_exact_training_pipeline(
         },
         'scalers': {
             'input': i_scalers,
-            'output': o_scalers
+            'output': o_scalers,
+            'i_combined_array': i_combined_array,
+            'o_combined_array': o_combined_array
         },
         'metadata': {
             'n_dat': n_dat,
