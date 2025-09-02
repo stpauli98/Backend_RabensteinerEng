@@ -1,0 +1,43 @@
+{
+  "timeInfo": {
+    "id": "348e5ac7-828a-49e8-9f93-244e6f6f0b3b",
+    "session_id": "34e2ab71-f793-4721-bbc4-dbcc7b48aafe",
+    "jahr": true,
+    "woche": false,
+    "monat": false,
+    "feiertag": false,
+    "tag": false,
+    "zeitzone": "UTC",
+    "category_data": {
+      "jahr": {
+        "datenform": "Zeit Horizont",
+        "skalierung": "nein",
+        "skalierungMax": "",
+        "skalierungMin": "",
+        "zeithorizontEnd": "12",
+        "zeithorizontStart": "1",
+        "detaillierteBerechnung": true
+      }
+    },
+    "created_at": "2025-09-02T14:17:22.183001+00:00",
+    "updated_at": "2025-09-02T14:17:22.652668+00:00"
+  },
+  "zeitschritte": {
+    "id": "6ad17ece-5bdc-455d-95c4-79587bb34f43",
+    "session_id": "34e2ab71-f793-4721-bbc4-dbcc7b48aafe",
+    "eingabe": "1",
+    "ausgabe": "2",
+    "zeitschrittweite": "3",
+    "offset": "4",
+    "created_at": "2025-09-02T14:17:22.356384+00:00",
+    "updated_at": "2025-09-02T14:17:22.866542+00:00"
+  },
+  "sessionInfo": {
+    "sessionId": "session_1756832668011_wuzv07n",
+    "totalFiles": 0
+  },
+  "lastUpdated": "2025-09-02T19:04:28.019259",
+  "finalized": true,
+  "finalizationTime": "2025-09-02T19:04:28.868411",
+  "files": []
+}
