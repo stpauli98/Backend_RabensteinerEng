@@ -1630,6 +1630,112 @@ def train_models(session_id):
                 
                 if result['success']:
                     # logger.info(f"Training completed successfully for session {session_id}")
+                    
+                    # Save training results to database
+                    try:
+                        from utils.database import get_supabase_client, create_or_get_session_uuid
+                        import json
+                        import numpy as np
+                        import pandas as pd
+                        from datetime import datetime
+                        
+                        supabase = get_supabase_client()
+                        uuid_session_id = create_or_get_session_uuid(session_id)
+                        
+                        # Extract and clean results from training
+                        training_results = result.get('results', {})
+                        
+                        # Helper function to clean non-serializable objects
+                        def clean_for_json(obj):
+                            # Check for custom MDL class
+                            if hasattr(obj, '__class__') and obj.__class__.__name__ == 'MDL':
+                                # Convert MDL object to dict with its attributes
+                                return {
+                                    'MODE': getattr(obj, 'MODE', 'Dense'),
+                                    'LAY': getattr(obj, 'LAY', None),
+                                    'N': getattr(obj, 'N', None),
+                                    'EP': getattr(obj, 'EP', None),
+                                    'ACTF': getattr(obj, 'ACTF', None),
+                                    'K': getattr(obj, 'K', None),
+                                    'KERNEL': getattr(obj, 'KERNEL', None),
+                                    'C': getattr(obj, 'C', None),
+                                    'EPSILON': getattr(obj, 'EPSILON', None)
+                                }
+                            # Check numpy array first before other checks
+                            elif isinstance(obj, np.ndarray):
+                                return obj.tolist()
+                            elif isinstance(obj, (pd.Timestamp, datetime)):
+                                return obj.isoformat()
+                            elif isinstance(obj, (np.int64, np.int32)):
+                                return int(obj)
+                            elif isinstance(obj, (np.float64, np.float32)):
+                                return float(obj)
+                            elif isinstance(obj, (np.integer)):
+                                return int(obj)
+                            elif isinstance(obj, (np.floating)):
+                                return float(obj)
+                            elif isinstance(obj, dict):
+                                return {k: clean_for_json(v) for k, v in obj.items()}
+                            elif isinstance(obj, (list, tuple)):
+                                return [clean_for_json(item) for item in obj]
+                            # Check for NaN after numpy types since pd.isna might fail on arrays
+                            elif obj is None:
+                                return None
+                            else:
+                                try:
+                                    if pd.isna(obj):
+                                        return None
+                                except (ValueError, TypeError):
+                                    pass
+                                # Try to convert unknown objects to string as last resort
+                                try:
+                                    import json
+                                    json.dumps(obj)
+                                    return obj
+                                except (TypeError, ValueError):
+                                    return str(obj)
+                        
+                        # Clean the results for JSON serialization
+                        cleaned_results = clean_for_json({
+                            'model_type': model_config.get('MODE', 'Dense'),
+                            'parameters': model_config,
+                            'metrics': training_results.get('metrics', {}),
+                            'training_split': training_split,
+                            'dataset_count': result.get('dataset_count', 0),
+                            'evaluation_metrics': training_results.get('evaluation_metrics', {}),
+                            'metadata': training_results.get('metadata', {})
+                        })
+                        
+                        # Prepare results data for database
+                        # The training_results table expects: session_id, results, created_at, status
+                        training_data = {
+                            'session_id': uuid_session_id,
+                            'results': cleaned_results,
+                            'status': 'completed'
+                        }
+                        
+                        supabase.table('training_results').insert(training_data).execute()
+                        logger.info(f"Training results saved for session {uuid_session_id}")
+                        
+                        # Save violin plots if available
+                        if result.get('violin_plots'):
+                            try:
+                                viz_data = {
+                                    'session_id': uuid_session_id,
+                                    'visualizations': result['violin_plots'],
+                                    'metadata': {
+                                        'dataset_count': result.get('dataset_count', 0),
+                                        'generated_during': 'model_training'
+                                    }
+                                }
+                                supabase.table('training_visualizations').insert(viz_data).execute()
+                                logger.info(f"Violin plots saved for session {uuid_session_id}")
+                            except Exception as viz_error:
+                                logger.error(f"Failed to save violin plots: {str(viz_error)}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to save training results: {str(e)}")
+                    
                     if socketio_instance:
                         # Don't send full results as they may contain non-serializable objects
                         # Only send essential information
