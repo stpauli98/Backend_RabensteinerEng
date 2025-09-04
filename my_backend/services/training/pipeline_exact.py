@@ -240,18 +240,33 @@ def run_exact_training_pipeline(
                 test_predictions = mdl.predict(tst_x, verbose=0)
             elif mdl_config.MODE == "SVR_dir":
                 # SVR direct - predict for each output separately
+                # Must reshape input data to 2D for SVR (same as in training)
+                n_samples, n_timesteps, n_features_in = tst_x.shape
+                tst_x_reshaped = tst_x.reshape(n_samples * n_timesteps, n_features_in)
+                
                 test_predictions = []
                 for svr_model in mdl:
-                    pred = svr_model.predict(tst_x)
+                    pred = svr_model.predict(tst_x_reshaped)
+                    # Reshape back to (n_samples, n_timesteps)
+                    pred = pred.reshape(n_samples, n_timesteps)
                     test_predictions.append(pred)
                 test_predictions = np.stack(test_predictions, axis=-1)
             elif mdl_config.MODE == "SVR_MIMO":
-                # SVR MIMO - single model for all outputs
-                test_predictions = mdl.predict(tst_x)
-                # Reshape to match expected output shape
-                n_samples = tst_x.shape[0]
-                n_features_out = tst_y.shape[-1] if len(tst_y.shape) > 1 else 1
-                test_predictions = test_predictions.reshape(n_samples, -1, n_features_out)
+                # SVR MIMO - list of models, one for each output dimension
+                # Must reshape input data to 2D for SVR
+                n_samples, n_timesteps, n_features_in = tst_x.shape
+                tst_x_reshaped = tst_x.reshape(n_samples * n_timesteps, n_features_in)
+                
+                test_predictions = []
+                for svr_model in mdl:
+                    pred = svr_model.predict(tst_x_reshaped)
+                    # Reshape back to (n_samples, n_timesteps)
+                    pred = pred.reshape(n_samples, n_timesteps)
+                    test_predictions.append(pred)
+                
+                # Stack predictions for all outputs
+                test_predictions = np.stack(test_predictions, axis=-1)
+                # Result shape should be (n_samples, n_timesteps, n_features_out)
             elif mdl_config.MODE == "LIN":
                 # Linear models - predict for each output
                 # Must reshape exactly as in training: (n_samples * n_timesteps, n_features_in)
@@ -293,16 +308,33 @@ def run_exact_training_pipeline(
             if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
                 val_predictions = mdl.predict(val_x, verbose=0)
             elif mdl_config.MODE == "SVR_dir":
+                # Must reshape input data to 2D for SVR (same as in training)
+                n_samples, n_timesteps, n_features_in = val_x.shape
+                val_x_reshaped = val_x.reshape(n_samples * n_timesteps, n_features_in)
+                
                 val_predictions = []
                 for svr_model in mdl:
-                    pred = svr_model.predict(val_x)
+                    pred = svr_model.predict(val_x_reshaped)
+                    # Reshape back to (n_samples, n_timesteps)
+                    pred = pred.reshape(n_samples, n_timesteps)
                     val_predictions.append(pred)
                 val_predictions = np.stack(val_predictions, axis=-1)
             elif mdl_config.MODE == "SVR_MIMO":
-                val_predictions = mdl.predict(val_x)
-                n_samples = val_x.shape[0]
-                n_features_out = val_y.shape[-1] if len(val_y.shape) > 1 else 1
-                val_predictions = val_predictions.reshape(n_samples, -1, n_features_out)
+                # SVR MIMO - list of models, one for each output dimension
+                # Must reshape input data to 2D for SVR
+                n_samples, n_timesteps, n_features_in = val_x.shape
+                val_x_reshaped = val_x.reshape(n_samples * n_timesteps, n_features_in)
+                
+                val_predictions = []
+                for svr_model in mdl:
+                    pred = svr_model.predict(val_x_reshaped)
+                    # Reshape back to (n_samples, n_timesteps)
+                    pred = pred.reshape(n_samples, n_timesteps)
+                    val_predictions.append(pred)
+                
+                # Stack predictions for all outputs
+                val_predictions = np.stack(val_predictions, axis=-1)
+                # Result shape should be (n_samples, n_timesteps, n_features_out)
             elif mdl_config.MODE == "LIN":
                 # Linear models - predict for each output
                 # Must reshape exactly as in training: (n_samples * n_timesteps, n_features_in)

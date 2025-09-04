@@ -101,11 +101,9 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
     model.add(tf.keras.layers.Flatten())
     
     # Dense-Layer hinzufügen
-    # Use activation function mapping
-    activation_func = get_activation(MDL.ACTF)
     for _ in range(MDL.LAY):
         model.add(tf.keras.layers.Dense(MDL.N,                  # Anzahl an Neuronen
-                                        activation = activation_func)) # Aktivierungsfunktion
+                                        activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF)) # Aktivierungsfunktion
     
     # Output-Schicht
     model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
@@ -160,13 +158,7 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     val_x.....Validierungsdaten (Eingabedaten)
     val_y.....Validierungsdaten (Ausgabedaten)
     MDL.......Informationen zum Modell
-    
-    Extracted from training_backend_test_2.py lines 239-320
     """
-    
-    if not TENSORFLOW_AVAILABLE:
-        logger.warning("TensorFlow not available, skipping CNN training")
-        return None, float('inf'), 0
     
     # MODELLDEFINITION ########################################################
     
@@ -178,15 +170,10 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     # - batch_size: Anzahl der Trainingsbeispiele
     # - Höhe und Breite: räumliche Dimensionen deiner Eingabedaten
     # - Kanäle: Anzahl der Kanäle pro Pixel (z. B. 3 für RGB-Bilder, 1 für Graustufen)
-    # FIX: Use train_x instead of trn_x (bug in original)
-    # Also reshape validation data for Conv2D compatibility
+    # NOTE: Original has bug here - uses trn_x instead of train_x
+    # We'll keep it EXACTLY as original with the variable name fix for it to work
     train_x = train_x.reshape(train_x.shape[0], train_x.shape[1], train_x.shape[2], 1)
-    val_x = val_x.reshape(val_x.shape[0], val_x.shape[1], val_x.shape[2], 1)
-    train_y = train_y.reshape(train_y.shape[0], train_y.shape[1], train_y.shape[2], 1)
-    val_y = val_y.reshape(val_y.shape[0], val_y.shape[1], val_y.shape[2], 1)
     
-    # Use activation function mapping
-    activation_func = get_activation(MDL.ACTF)
     
     for i in range(MDL.LAY):
         if i == 0:
@@ -194,13 +181,13 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
             model.add(tf.keras.layers.Conv2D(filters        = MDL.N, 
                                              kernel_size    = MDL.K,
                                              padding        = 'same',
-                                             activation     = activation_func,
+                                             activation     = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
                                              input_shape    = train_x.shape[1:]))
         else:
             model.add(tf.keras.layers.Conv2D(filters        = MDL.N, 
                                              kernel_size    = MDL.K,
                                              padding        = 'same',
-                                             activation     = activation_func))
+                                             activation     = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF))
     
     # Output-Layer: Convolution mit 1 Filter (oder Anzahl Kanäle von train_y)
     # und linearer Aktivierung, damit die Ausgabe dieselbe Form wie train_y hat.
@@ -230,8 +217,7 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
-    # NOTE: Original has MDL.EP = 20 here, but we don't override user's value
-    
+    # Use user-provided EP value, don't hardcode
     model.fit(
         x               = train_x,
         y               = train_y,
@@ -262,34 +248,24 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
     # Modellinitialisierung
     model = tf.keras.Sequential()
     
-    # LSTM-Layer hinzufügen
+    # LSTM-Layer hinzufügen - EXACTLY as in original lines 1507-1517
     for i in range(MDL.LAY):
         if i == 0:
-            # Erste Schicht benötigt input_shape
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = True))
+            # First layer - always with return_sequences=True as in original
+            model.add(tf.keras.layers.LSTM(MDL.N,
+                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         input_shape = (train_x.shape[1], train_x.shape[2]),
+                                         return_sequences = True))
         else:
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             return_sequences = True))
+            # All other layers also with return_sequences=True as in original
+            model.add(tf.keras.layers.LSTM(MDL.N,
+                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         return_sequences = True))
     
-    # Output-Schicht
-    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
-                                  kernel_initializer = tf.initializers.zeros))
-    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    # Output-Schicht - using TimeDistributed as in original line 1519
+    model.add(tf.keras.layers.TimeDistributed(
+        tf.keras.layers.Dense(train_y.shape[2], 
+                           kernel_initializer = tf.initializers.zeros)))
     
     # Early Stopping
     earlystopping = tf.keras.callbacks.\
@@ -334,34 +310,24 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
     # Modellinitialisierung
     model = tf.keras.Sequential()
     
-    # LSTM-Layer hinzufügen (ähnlich wie LSTM aber mit anderem Output)
+    # LSTM-Layer hinzufügen - EXACTLY as in original lines 408-420
     for i in range(MDL.LAY):
         if i == 0:
-            # Erste Schicht benötigt input_shape
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             input_shape = (train_x.shape[1], train_x.shape[2]),
-                                             return_sequences = True))
+            # First layer - always with return_sequences=True as in original
+            model.add(tf.keras.layers.LSTM(MDL.N,
+                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         input_shape = (train_x.shape[1], train_x.shape[2]),
+                                         return_sequences = True))
         else:
-            if i == MDL.LAY - 1:  # Letzte Schicht
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             return_sequences = False))
-            else:
-                model.add(tf.keras.layers.LSTM(MDL.N,
-                                             activation = get_activation(MDL.ACTF),
-                                             return_sequences = True))
+            # All other layers also with return_sequences=True as in original
+            model.add(tf.keras.layers.LSTM(MDL.N,
+                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         return_sequences = True))
     
-    # Output-Schicht für Autoregressive
-    model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
-                                  kernel_initializer = tf.initializers.zeros))
-    model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
+    # Output-Schicht - using TimeDistributed as in original lines 423-427
+    model.add(tf.keras.layers.TimeDistributed(
+        tf.keras.layers.Dense(train_y.shape[2], 
+                           kernel_initializer = tf.initializers.zeros)))
     
     # Early Stopping
     earlystopping = tf.keras.callbacks.\
@@ -396,67 +362,73 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
 
 def train_svr_dir(train_x, train_y, MDL):
     """
-    Funktion trainiert SVR Direktmodell
+    Funktion trainiert ein SVR-Modell anhand der 
+    eingegebenen Trainingsdaten (train_x, train_y).
     
-    Extracted from training_backend_test_2.py lines 458-492
+    train_x...Trainingsdaten (Eingabedaten) [n_samples, n_timesteps, n_features_in]
+    train_y...Trainingsdaten (Ausgabedaten) [n_samples, n_timesteps, n_features_out]
+    MDL.......Informationen zum Modell
     """
     
     # MODELLDEFINITION ########################################################
     
-    # Daten umformen
-    n_samples, n_timesteps, n_features_in = train_x.shape
-    _, _, n_features_out = train_y.shape
+    n_samples, n_timesteps, n_features = train_x.shape
+    X = train_x.reshape(n_samples * n_timesteps, n_features)
     
-    X = train_x.reshape(n_samples * n_timesteps, n_features_in)
-    
+    y = []
+    for i in range(n_features):
+        y.append(train_y[:, :, i].reshape(-1))
+
     # TRAINIEREN ##############################################################
-    
+
     print("Modell wird trainiert.")
-    models = []
-    for i in range(n_features_out):
-        y_i = train_y[:, :, i].reshape(-1)
-        
-        # SVR Modell erstellen
-        model = SVR(kernel = MDL.KERNEL, 
-                   C = MDL.C, 
-                   epsilon = MDL.EPSILON)
-        model.fit(X, y_i)
-        models.append(model)
-    print("Modell wurde trainiert.")
-    return models
+    
+    model = []
+    for i in range(n_features):
+        model.append(make_pipeline(StandardScaler(), 
+                                   SVR(kernel  = MDL.KERNEL,
+                                       C       = MDL.C, 
+                                       epsilon = MDL.EPSILON)))
+        model[-1].fit(X, y[i])
+
+    print("Modell wurde trainiert.")  
+    
+    return model
 
 
 def train_svr_mimo(train_x, train_y, MDL):
     """
     Funktion trainiert SVR MIMO Modell
-    
-    Extracted from training_backend_test_2.py lines 493-530
+    EXACTLY as in training_original.py lines 493-530
     """
     
     # MODELLDEFINITION ########################################################
     
-    # Daten umformen für MIMO
     n_samples, n_timesteps, n_features_in = train_x.shape
-    _, n_timesteps_out, n_features_out = train_y.shape
+    _, _, n_features_out = train_y.shape
     
-    X = train_x.reshape(n_samples, n_timesteps * n_features_in)
-    Y = train_y.reshape(n_samples, n_timesteps_out * n_features_out)
+    # Eingabedaten 2D umformen: (n_samples * n_timesteps, n_features_in)
+    X = train_x.reshape(n_samples * n_timesteps, n_features_in)
     
     # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
-    models = []
-    for i in range(Y.shape[1]):  # Für jeden Output
-        y_i = Y[:, i]
+    
+    model = []
+    for i in range(n_features_out):
+        # Für jedes Ausgabefeature das passende Ziel erstellen
+        y_i = train_y[:, :, i].reshape(-1)
         
-        # SVR Modell erstellen
-        model = SVR(kernel = MDL.KERNEL, 
-                   C = MDL.C, 
-                   epsilon = MDL.EPSILON)
-        model.fit(X, y_i)
-        models.append(model)
+        # Pipeline mit StandardScaler + SVR (EXACTLY as original)
+        svr = make_pipeline(StandardScaler(),
+                            SVR(kernel=MDL.KERNEL,
+                                C=MDL.C,
+                                epsilon=MDL.EPSILON))
+        svr.fit(X, y_i)
+        model.append(svr)
+    
     print("Modell wurde trainiert.")
-    return models
+    return model
 
 
 def train_linear_model(trn_x, trn_y):
