@@ -2064,54 +2064,74 @@ def generate_plot():
         logger.info(f"Output variables selected: {[k for k, v in df_plot_out.items() if v]}")
         logger.info(f"Forecast variables selected: {[k for k, v in df_plot_fcst.items() if v]}")
         
-        # Since model data is not stored in database with full data,
-        # we need to re-run a quick prediction to generate plot data
-        # This is a temporary solution until we store full model data
-        
-        # Import necessary libraries
-        import numpy as np
-        import pandas as pd
-        
-        # Create dummy data for plotting
-        # In production, this should load actual test data
+        # Load model data from database
         try:
-            # Create sample data based on selected variables
-            num_samples = 17  # Match num_sbpl
-            timesteps = 13    # Standard timesteps for the models
+            from utils.database import create_or_get_session_uuid
+            from supabase import create_client
+            import numpy as np
+            import pandas as pd
+            import os
             
-            # Count selected variables
-            input_vars = [k for k, v in df_plot_in.items() if v]
-            output_vars = [k for k, v in df_plot_out.items() if v]
-            forecast_vars = [k for k, v in df_plot_fcst.items() if v]
-            
-            # Create dummy test data
-            n_features_in = len(input_vars) if input_vars else 3
-            n_features_out = len(output_vars) if output_vars else 1
-            
-            # Generate synthetic test data
-            tst_x = np.random.randn(num_samples, timesteps, n_features_in)
-            tst_y = np.random.randn(num_samples, timesteps, n_features_out)
-            tst_fcst = tst_y + np.random.randn(num_samples, timesteps, n_features_out) * 0.1
-            
-            # Set to None to use dummy model
-            trained_model = None
-            test_data = {'X_test': tst_x, 'y_test': tst_y}
-            metadata = {'input_features': input_vars, 'output_features': output_vars}
-            scalers = {}
-            
-            # Get test predictions and ground truth
-            tst_x = test_data.get('X_test')
-            tst_y = test_data.get('y_test')
-            
-            if tst_x is None or tst_y is None:
+            # Get UUID for session
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
                 return jsonify({
                     'success': False,
-                    'error': 'Test data not available'
-                }), 400
+                    'error': 'Session not found'
+                }), 404
             
-            # Use pre-generated forecast data since we're using dummy data
-            # In production, this would use the actual trained model to predict
-            # tst_fcst is already generated above as synthetic data
+            # Get Supabase client
+            supabase_url = os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_KEY')
+            supabase = create_client(supabase_url, supabase_key)
+            
+            # Fetch training results from database
+            response = supabase.table('training_results')\
+                .select('results')\
+                .eq('session_id', uuid_session_id)\
+                .order('created_at', desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if not response.data or len(response.data) == 0:
+                return jsonify({
+                    'success': False,
+                    'error': 'Model not trained yet. Please train the model first.'
+                }), 400
+                
+            # Extract model data from results
+            results = response.data[0]['results']
+            
+            # Get model data from results
+            trained_model = results.get('trained_model')
+            test_data = results.get('test_data', {})
+            metadata = results.get('metadata', {})
+            scalers = results.get('scalers', {})
+            
+            # Check if we have test data
+            if not test_data or 'X_test' not in test_data:
+                logger.error(f"No test data found in database for session {session_id}")
+                return jsonify({
+                    'success': False,
+                    'error': 'No training data available for this session',
+                    'message': 'Please train a model first before generating plots'
+                }), 400
+            else:
+                # Use real test data from database
+                tst_x = np.array(test_data.get('X_test'))
+                tst_y = np.array(test_data.get('y_test'))
+                
+                # Generate predictions using trained model if available
+                if trained_model and hasattr(trained_model, 'predict'):
+                    tst_fcst = trained_model.predict(tst_x)
+                else:
+                    # If model is not available, return error
+                    logger.error(f"Trained model not available for session {session_id}")
+                    return jsonify({
+                        'success': False,
+                        'error': 'Trained model not available',
+                        'message': 'Model data is missing or corrupted. Please retrain the model.'
+                    }), 400
             
             # Import matplotlib for plotting
             import matplotlib
@@ -2235,18 +2255,12 @@ def generate_plot():
             plot_data = base64.b64encode(buffer.getvalue()).decode()
             plt.close()
             
-            # Save plot to file as well
-            plot_path = os.path.join(session_path, 'generated_plot.png')
-            with open(plot_path, 'wb') as f:
-                f.write(base64.b64decode(plot_data))
-            
             logger.info(f"Plot generated successfully for session {session_id}")
             
             return jsonify({
                 'success': True,
                 'session_id': session_id,
                 'plot_data': f'data:image/png;base64,{plot_data}',
-                'plot_path': plot_path,
                 'message': 'Plot generated successfully'
             })
             

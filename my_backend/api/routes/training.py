@@ -1703,6 +1703,8 @@ def train_models(session_id):
                         if not evaluation_metrics:
                             evaluation_metrics = training_results.get('metrics', {})
                         
+                        # IMPORTANT: Save ALL training data for plotting
+                        # This includes the trained model, test data, scalers, etc.
                         cleaned_results = clean_for_json({
                             'model_type': model_config.get('MODE', 'Dense'),
                             'parameters': model_config,
@@ -1710,7 +1712,15 @@ def train_models(session_id):
                             'training_split': training_split,
                             'dataset_count': result.get('dataset_count', 0),
                             'evaluation_metrics': evaluation_metrics,
-                            'metadata': training_results.get('metadata', {})
+                            'metadata': training_results.get('metadata', {}),
+                            # Add full training results for plotting
+                            'trained_model': training_results.get('trained_model'),
+                            'train_data': training_results.get('train_data', {}),
+                            'val_data': training_results.get('val_data', {}),
+                            'test_data': training_results.get('test_data', {}),
+                            'scalers': training_results.get('scalers', {}),
+                            'input_features': training_results.get('metadata', {}).get('input_features', []),
+                            'output_features': training_results.get('metadata', {}).get('output_features', [])
                         })
                         
                         # Prepare results data for database
