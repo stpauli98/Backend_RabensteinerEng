@@ -1499,50 +1499,99 @@ def get_training_results(session_id):
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
 def generate_datasets(session_id):
     """
-    Generate datasets and violin plots with model configuration.
-    This is phase 1 of the training workflow.
+    Generate datasets and violin plots WITHOUT training models.
+    This is phase 1 of the training workflow - data visualization only.
+    Following the original implementation approach.
     """
     try:
         data = request.json
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
         
-        # Extract model parameters and training split
+        # Extract model parameters and training split for data preparation
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
         
-        # logger.info(f"Generating datasets for session {session_id}")
-        # logger.info(f"Model parameters: {model_parameters}")
-        # logger.info(f"Training split: {training_split}")
+        logger.info(f"Generating violin plots for session {session_id} WITHOUT training")
         
-        # Import ModernMiddlemanRunner
-        from services.training.middleman_runner import ModernMiddlemanRunner
-        from flask import current_app
+        # Import the new violin plot generator
+        import numpy as np
+        from services.training.violin_plot_generator import (
+            generate_violin_plots_from_data, 
+            get_data_for_violin_plots
+        )
+        from services.training.data_preparation import prepare_data_for_training
+        from utils.database import get_supabase_client, create_or_get_session_uuid
         
-        # Get SocketIO instance
-        socketio_instance = current_app.extensions.get('socketio')
+        # Get processed data for the session
+        try:
+            # First, try to prepare data if needed
+            supabase = get_supabase_client()
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            
+            # Check if we have processed data
+            data_result = prepare_data_for_training(
+                session_id,
+                training_split.get('train', 0.7),
+                training_split.get('val', 0.2),
+                not training_split.get('shuffle', True)  # random_dat parameter
+            )
+            
+            if not data_result['success']:
+                # If no processed data, get from file metadata
+                data_info = get_data_for_violin_plots(session_id)
+                if not data_info['success']:
+                    return jsonify({
+                        'success': False,
+                        'error': 'No data available for visualization',
+                        'message': 'Please upload and process data first'
+                    }), 400
+                    
+                # Generate plots from available data
+                plot_result = generate_violin_plots_from_data(
+                    session_id,
+                    input_data=data_info.get('input_data'),
+                    output_data=data_info.get('output_data'),
+                    input_features=data_info.get('input_features'),
+                    output_features=data_info.get('output_features')
+                )
+            else:
+                # Use prepared data for plots
+                input_data = np.vstack([
+                    data_result['train']['X'],
+                    data_result['val']['X'],
+                    data_result['test']['X']
+                ]) if all(k in data_result for k in ['train', 'val', 'test']) else None
+                
+                output_data = np.vstack([
+                    data_result['train']['y'],
+                    data_result['val']['y'],
+                    data_result['test']['y']
+                ]) if all(k in data_result for k in ['train', 'val', 'test']) else None
+                
+                # Generate plots
+                plot_result = generate_violin_plots_from_data(
+                    session_id,
+                    input_data=input_data,
+                    output_data=output_data,
+                    input_features=data_result.get('input_features'),
+                    output_features=data_result.get('output_features')
+                )
+            
+        except Exception as e:
+            logger.error(f"Error preparing data for violin plots: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'message': 'Failed to prepare data for visualization'
+            }), 500
         
-        # Create runner with model parameters
-        runner = ModernMiddlemanRunner()
-        if socketio_instance:
-            runner.set_socketio(socketio_instance)
-        
-        # Prepare model configuration
-        model_config = {
-            'MODE': model_parameters.get('MODE', 'Linear'),
-            'LAY': model_parameters.get('LAY'),
-            'N': model_parameters.get('N'),
-            'EP': model_parameters.get('EP'),
-            'ACTF': model_parameters.get('ACTF'),
-            'K': model_parameters.get('K'),
-            'KERNEL': model_parameters.get('KERNEL'),
-            'C': model_parameters.get('C'),
-            'EPSILON': model_parameters.get('EPSILON'),
-            'random_dat': not training_split.get('shuffle', True)  # Inverted logic
+        # Return plot results without training
+        result = {
+            'success': plot_result['success'],
+            'violin_plots': plot_result.get('plots', {}),
+            'message': 'Violin plots generated successfully (no training performed)'
         }
-        
-        # For now, run full training pipeline (will separate later)
-        result = runner.run_training_script(session_id, model_config)
         
         if result['success']:
             # logger.info(f"Dataset generation completed for session {session_id}")
@@ -1642,6 +1691,22 @@ def train_models(session_id):
                         supabase = get_supabase_client()
                         uuid_session_id = create_or_get_session_uuid(session_id)
                         
+                        # Check if we got a valid UUID
+                        if not uuid_session_id:
+                            logger.error(f"Failed to get UUID for session {session_id}")
+                            # Try once more after a short delay
+                            import time
+                            time.sleep(1)
+                            uuid_session_id = create_or_get_session_uuid(session_id)
+                            
+                            if not uuid_session_id:
+                                logger.error(f"Failed to get UUID for session {session_id} after retry")
+                                return jsonify({
+                                    'success': False,
+                                    'error': 'Failed to save training results - session mapping error',
+                                    'message': 'Please try training again'
+                                }), 500
+                        
                         # Extract and clean results from training
                         training_results = result.get('results', {})
                         
@@ -1687,6 +1752,26 @@ def train_models(session_id):
                                         return None
                                 except (ValueError, TypeError):
                                     pass
+                                
+                                # Special handling for ML models - serialize to base64
+                                try:
+                                    # Check if it's a Keras/TensorFlow model
+                                    if hasattr(obj, 'predict') and hasattr(obj, 'fit'):
+                                        import pickle
+                                        import base64
+                                        # Serialize model to bytes
+                                        model_bytes = pickle.dumps(obj)
+                                        # Encode to base64 for JSON storage
+                                        model_b64 = base64.b64encode(model_bytes).decode('utf-8')
+                                        return {
+                                            '_model_type': 'serialized_model',
+                                            '_model_class': obj.__class__.__name__,
+                                            '_model_data': model_b64
+                                        }
+                                except Exception as e:
+                                    logger.warning(f"Could not serialize model: {e}")
+                                    pass
+                                
                                 # Try to convert unknown objects to string as last resort
                                 try:
                                     import json

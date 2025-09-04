@@ -1984,7 +1984,7 @@ def get_plot_variables(session_id: str):
                                 output_variables = [col for col in columns if col not in ['timestamp', 'UTC']]
                                 
                 except Exception as e:
-                    logger.warning(f"Could not get file metadata for session {session_id}: {str(e)}")
+                    logger.debug(f"Could not get file metadata for session {session_id}: {str(e)}")
             
             # As a last resort, use some default variable names based on the original training
             if not input_variables and not output_variables:
@@ -2102,14 +2102,47 @@ def generate_plot():
             # Extract model data from results
             results = response.data[0]['results']
             
-            # Get model data from results
-            trained_model = results.get('trained_model')
+            # Get model data from results and deserialize if needed
+            model_data = results.get('trained_model')
+            
+            # Deserialize model if it's in serialized format
+            trained_model = None
+            if model_data:
+                if isinstance(model_data, dict) and model_data.get('_model_type') == 'serialized_model':
+                    try:
+                        import pickle
+                        import base64
+                        # Decode base64 and deserialize model
+                        model_bytes = base64.b64decode(model_data['_model_data'])
+                        trained_model = pickle.loads(model_bytes)
+                        logger.info(f"Successfully deserialized model of type {model_data.get('_model_class')}")
+                    except Exception as e:
+                        logger.error(f"Failed to deserialize model: {e}")
+                        trained_model = None
+                else:
+                    # Legacy format - model stored as string or other format
+                    trained_model = model_data
+            
             test_data = results.get('test_data', {})
             metadata = results.get('metadata', {})
             scalers = results.get('scalers', {})
             
-            # Check if we have test data
-            if not test_data or 'X_test' not in test_data:
+            # Check if we have test data - support both naming conventions
+            has_test_data = False
+            if test_data:
+                # Check for both possible naming conventions
+                if 'X' in test_data and 'y' in test_data:
+                    # New format: X, y
+                    tst_x = np.array(test_data.get('X'))
+                    tst_y = np.array(test_data.get('y'))
+                    has_test_data = True
+                elif 'X_test' in test_data and 'y_test' in test_data:
+                    # Old format: X_test, y_test
+                    tst_x = np.array(test_data.get('X_test'))
+                    tst_y = np.array(test_data.get('y_test'))
+                    has_test_data = True
+            
+            if not has_test_data:
                 logger.error(f"No test data found in database for session {session_id}")
                 return jsonify({
                     'success': False,
@@ -2117,20 +2150,18 @@ def generate_plot():
                     'message': 'Please train a model first before generating plots'
                 }), 400
             else:
-                # Use real test data from database
-                tst_x = np.array(test_data.get('X_test'))
-                tst_y = np.array(test_data.get('y_test'))
                 
                 # Generate predictions using trained model if available
+                # Note: Currently models are stored as string representations, not actual objects
                 if trained_model and hasattr(trained_model, 'predict'):
                     tst_fcst = trained_model.predict(tst_x)
                 else:
-                    # If model is not available, return error
-                    logger.error(f"Trained model not available for session {session_id}")
+                    # Model is not available as object, cannot generate predictions
+                    logger.error(f"Model is not available as an object for session {session_id} (stored as: {type(trained_model).__name__})")
                     return jsonify({
                         'success': False,
-                        'error': 'Trained model not available',
-                        'message': 'Model data is missing or corrupted. Please retrain the model.'
+                        'error': 'Model not available for predictions',
+                        'message': 'The trained model cannot be used for predictions. Please retrain the model.'
                     }), 400
             
             # Import matplotlib for plotting
