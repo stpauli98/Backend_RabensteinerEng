@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 import tempfile
 import glob
 import shutil
-from utils.database import save_session_to_supabase, get_string_id_from_uuid
+from utils.database import save_session_to_supabase, get_string_id_from_uuid, create_or_get_session_uuid, get_supabase_client
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +57,55 @@ def extract_file_metadata_fields(file_metadata):
         'skalierungMin': file_metadata.get('skalierungMin', ''),
         'type': file_metadata.get('type', '') # Dodajemo 'type' polje
     }
+
+def calculate_n_dat_from_session(session_id):
+    """
+    Calculate n_dat (total number of data samples) from uploaded CSV files in a session.
+    This mimics the n_dat = i_array_3D.shape[0] calculation from training_original.py
+    
+    Args:
+        session_id: ID of the session
+        
+    Returns:
+        int: Total number of data samples (n_dat)
+    """
+    try:
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+        if not os.path.exists(upload_dir):
+            logger.warning(f"Upload directory not found for session {session_id}")
+            return 0
+        
+        total_samples = 0
+        csv_files = []
+        
+        # Find all CSV files in the upload directory
+        for file_name in os.listdir(upload_dir):
+            if file_name.lower().endswith('.csv') and os.path.isfile(os.path.join(upload_dir, file_name)):
+                csv_files.append(file_name)
+        
+        if not csv_files:
+            logger.warning(f"No CSV files found in session {session_id}")
+            return 0
+        
+        # Process each CSV file to count data samples
+        for csv_file in csv_files:
+            file_path = os.path.join(upload_dir, csv_file)
+            try:
+                # Read CSV file to count rows (excluding header)
+                df = pd.read_csv(file_path)
+                file_samples = len(df)
+                total_samples += file_samples
+                logger.info(f"File {csv_file}: {file_samples} samples")
+            except Exception as e:
+                logger.error(f"Error reading CSV file {csv_file}: {str(e)}")
+                continue
+        
+        logger.info(f"Session {session_id} total n_dat: {total_samples}")
+        return total_samples
+        
+    except Exception as e:
+        logger.error(f"Error calculating n_dat for session {session_id}: {str(e)}")
+        return 0
 
 def extract_file_metadata(session_id):
     """
@@ -560,18 +609,20 @@ def verify_session_files(session_id, metadata):
     
     return metadata, file_count
 
-def save_session_to_database(session_id):
+def save_session_to_database(session_id, n_dat=None, file_count=None):
     """
     Save session data to Supabase database.
-    
+
     Args:
         session_id: ID of the session
-        
+        n_dat: Total number of data samples (optional)
+        file_count: Number of files in the session (optional)
+
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        supabase_result = save_session_to_supabase(session_id)
+        supabase_result = save_session_to_supabase(session_id, n_dat, file_count)
         if supabase_result:
             # logger.info(f"Session {session_id} data saved to Supabase successfully")
             return True
@@ -598,11 +649,18 @@ def finalize_session():
         # 2. Verify files and update metadata
         final_metadata, file_count = verify_session_files(session_id, updated_metadata)
         
+        # 3. Calculate n_dat (total number of data samples)
+        n_dat = calculate_n_dat_from_session(session_id)
+        final_metadata['n_dat'] = n_dat
+        
+        # Save updated metadata with n_dat
+        save_session_metadata_locally(session_id, final_metadata)
+        
         # logger.info(f"Session {session_id} finalized with {file_count} files")
 
-        # 3. Save session data to Supabase
+        # 4. Save session data to Supabase
         try:
-            success = save_session_to_database(session_id)
+            success = save_session_to_database(session_id, n_dat, file_count)
             if not success:
                 logger.warning(f"Failed to save session {session_id} to database, but continuing")
         except Exception as e:
@@ -612,7 +670,9 @@ def finalize_session():
         return jsonify({
             'success': True,
             'message': f"Session {session_id} finalized successfully",
-            'sessionId': session_id
+            'sessionId': session_id,
+            'n_dat': n_dat,
+            'file_count': file_count
         })
         
     except Exception as e:
@@ -726,6 +786,8 @@ def get_session(session_id):
             'timeInfo': session_metadata.get('timeInfo', {}),
             'zeitschritte': session_metadata.get('zeitschritte', {}),
             'finalized': session_metadata.get('finalized', False),
+            'n_dat': session_metadata.get('n_dat', 0),
+            'file_count': len(files),
             'createdAt': datetime.fromtimestamp(os.path.getctime(upload_dir)).isoformat(),
             'lastUpdated': datetime.fromtimestamp(os.path.getmtime(upload_dir)).isoformat()
         }
@@ -736,6 +798,97 @@ def get_session(session_id):
         })
     except Exception as e:
         logger.error(f"Error getting session {session_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/session/<session_id>/database', methods=['GET'])
+def get_session_from_database(session_id):
+    """Get detailed information about a specific session from Supabase database."""
+    try:
+        if not session_id:
+            return jsonify({'success': False, 'error': 'No session ID provided'}), 400
+
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
+            database_session_id = session_id
+        except (ValueError, TypeError):
+            string_session_id = session_id
+            database_session_id = create_or_get_session_uuid(session_id)
+            if not database_session_id:
+                return jsonify({'success': False, 'error': 'Could not find or create database session'}), 404
+
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection not available'}), 500
+
+        # Get session data from database
+        session_response = supabase.table('sessions').select('*').eq('id', database_session_id).single().execute()
+        
+        if not session_response.data:
+            return jsonify({'success': False, 'error': 'Session not found in database'}), 404
+        
+        session_data = session_response.data
+        
+        # Get files data
+        files_response = supabase.table('files').select('*').eq('session_id', database_session_id).execute()
+        files_data = files_response.data if files_response.data else []
+        
+        # Get time info
+        time_info_response = supabase.table('time_info').select('*').eq('session_id', database_session_id).execute()
+        time_info_data = time_info_response.data[0] if time_info_response.data else {}
+        
+        # Get zeitschritte
+        zeitschritte_response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).execute()
+        zeitschritte_data = zeitschritte_response.data[0] if zeitschritte_response.data else {}
+
+        # Format the response
+        session_info = {
+            'sessionId': string_session_id,
+            'databaseSessionId': database_session_id,
+            'n_dat': session_data.get('n_dat', 0),
+            'finalized': session_data.get('finalized', False),
+            'file_count': session_data.get('file_count', 0),
+            'files': [
+                {
+                    'id': f['id'],
+                    'fileName': f['file_name'],
+                    'bezeichnung': f['bezeichnung'],
+                    'min': f['min'],
+                    'max': f['max'],
+                    'datenpunkte': f['datenpunkte'],
+                    'type': f['type']
+                } for f in files_data
+            ],
+            'timeInfo': {
+                'jahr': time_info_data.get('jahr', False),
+                'monat': time_info_data.get('monat', False),
+                'woche': time_info_data.get('woche', False),
+                'tag': time_info_data.get('tag', False),
+                'feiertag': time_info_data.get('feiertag', False),
+                'zeitzone': time_info_data.get('zeitzone', 'UTC'),
+                'category_data': time_info_data.get('category_data', {})
+            },
+            'zeitschritte': {
+                'eingabe': zeitschritte_data.get('eingabe', ''),
+                'ausgabe': zeitschritte_data.get('ausgabe', ''),
+                'zeitschrittweite': zeitschritte_data.get('zeitschrittweite', ''),
+                'offset': zeitschritte_data.get('offset', '')
+            },
+            'createdAt': session_data.get('created_at'),
+            'updatedAt': session_data.get('updated_at')
+        }
+        
+        return jsonify({
+            'success': True,
+            'session': session_info
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting session from database {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @bp.route('/session-status/<session_id>', methods=['GET'])

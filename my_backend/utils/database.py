@@ -667,13 +667,15 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
     
     return new_time_info
 
-def save_session_to_supabase(session_id: str) -> bool:
+def save_session_to_supabase(session_id: str, n_dat: int = None, file_count: int = None) -> bool:
     """
     Save all session data to Supabase.
-    
+
     Args:
         session_id: ID of the session (string format)
-        
+        n_dat: Total number of data samples (optional)
+        file_count: Number of files in the session (optional)
+
     Returns:
         bool: True if successful, False otherwise
     """
@@ -754,6 +756,28 @@ def save_session_to_supabase(session_id: str) -> bool:
                 else:
                     logger.warning(f"Failed to save file info for {file_info.get('fileName', 'unknown')}, skipping content upload")
         
+        # Update sessions table with finalization data
+        if n_dat is not None or file_count is not None:
+            session_update_data = {
+                "finalized": True,
+                "updated_at": datetime.now().isoformat()
+            }
+            if n_dat is not None:
+                session_update_data["n_dat"] = n_dat
+            if file_count is not None:
+                session_update_data["file_count"] = file_count
+
+            try:
+                supabase = get_supabase_client()
+                if supabase:
+                    session_response = supabase.table("sessions").update(session_update_data).eq("id", database_session_id).execute()
+                    if hasattr(session_response, 'error') and session_response.error:
+                        logger.error(f"Error updating sessions table: {session_response.error}")
+                    else:
+                        logger.info(f"Successfully updated sessions table with n_dat={n_dat}, file_count={file_count}")
+            except Exception as e:
+                logger.error(f"Error updating sessions table: {str(e)}")
+
         logger.info(f"Successfully saved session {session_id} to Supabase")
         return True
         
