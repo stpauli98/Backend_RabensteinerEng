@@ -71,10 +71,49 @@ def convert_training_split_params(training_split):
     return converted_split
 
 
+def cleanup_duplicate_visualizations(session_id: str):
+    """
+    Clean up duplicate visualizations for a session, keeping only the most recent ones.
+    
+    Args:
+        session_id: Session identifier
+    """
+    try:
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Get all visualizations for this session
+        response = supabase.table('training_visualizations').select('*').eq('session_id', uuid_session_id).execute()
+        
+        if not response.data:
+            return
+        
+        # Group by plot_name and keep only the most recent for each
+        from collections import defaultdict
+        plots_by_name = defaultdict(list)
+        
+        for viz in response.data:
+            plots_by_name[viz['plot_name']].append(viz)
+        
+        # For each plot name, keep only the most recent and delete the rest
+        for plot_name, visualizations in plots_by_name.items():
+            if len(visualizations) > 1:
+                # Sort by created_at desc to get most recent first
+                visualizations.sort(key=lambda x: x['created_at'], reverse=True)
+                
+                # Keep the first (most recent), delete the rest
+                for viz_to_delete in visualizations[1:]:
+                    delete_response = supabase.table('training_visualizations').delete().eq('id', viz_to_delete['id']).execute()
+                    logger.info(f"Deleted duplicate visualization {plot_name} with id {viz_to_delete['id']} for session {session_id}")
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up duplicate visualizations for session {session_id}: {str(e)}")
+
+
 def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str):
     """
-    Save a visualization to the database
-    
+    Save a visualization to the database (with duplicate check)
+
     Args:
         session_id: Session identifier
         viz_name: Name of the visualization
@@ -83,17 +122,31 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str
     try:
         supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id)
-        
-        # Save to training_visualizations table
-        viz_record = {
-            'session_id': uuid_session_id,
-            'plot_name': viz_name,
-            'image_data': viz_data,  # Use 'image_data' instead of 'plot_data'
-            'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
-            'created_at': datetime.now().isoformat()
-        }
-        
-        response = supabase.table('training_visualizations').insert(viz_record).execute()
+
+        # Check if visualization already exists
+        existing = supabase.table('training_visualizations').select('id').eq('session_id', uuid_session_id).eq('plot_name', viz_name).execute()
+
+        if existing.data:
+            # Update existing record instead of creating duplicate
+            viz_record = {
+                'image_data': viz_data,
+                'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
+                'created_at': datetime.now().isoformat()
+            }
+            response = supabase.table('training_visualizations').update(viz_record).eq('session_id', uuid_session_id).eq('plot_name', viz_name).execute()
+            logger.info(f"Updated existing visualization {viz_name} for session {session_id}")
+        else:
+            # Create new record
+            viz_record = {
+                'session_id': uuid_session_id,
+                'plot_name': viz_name,
+                'image_data': viz_data,
+                'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
+                'created_at': datetime.now().isoformat()
+            }
+            response = supabase.table('training_visualizations').insert(viz_record).execute()
+            logger.info(f"Created new visualization {viz_name} for session {session_id}")
+
         return True
         
     except Exception as e:
@@ -282,6 +335,15 @@ def get_training_visualizations(session_id: str):
     """
     try:
         supabase = get_supabase_client()
+        
+        # Clean up any duplicate visualizations first
+        cleanup_duplicate_visualizations(session_id)
+        
+        # Log how many visualizations we have after cleanup
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        count_response = supabase.table('training_visualizations').select('id').eq('session_id', uuid_session_id).execute()
+        logger.info(f"Found {len(count_response.data) if count_response.data else 0} visualizations for session {session_id} after cleanup")
+        
         visualizations = _get_visualizations_from_database(session_id, supabase)
         
         if not visualizations or not visualizations.get('plots'):
@@ -420,6 +482,49 @@ def cancel_training(session_id: str):
         logger.error(f"Error cancelling training for {session_id}: {str(e)}")
         return jsonify({
             'error': 'Failed to cancel training',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/cleanup-duplicates/<session_id>', methods=['POST'])
+def cleanup_duplicate_visualizations_endpoint(session_id: str):
+    """
+    Clean up duplicate visualizations for a session
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        JSON response with cleanup status
+    """
+    try:
+        logger.info(f"🧹 Starting duplicate cleanup for session {session_id}")
+        
+        # Clean up duplicates
+        cleanup_duplicate_visualizations(session_id)
+        
+        # Get count after cleanup
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        count_response = supabase.table('training_visualizations').select('id, plot_name').eq('session_id', uuid_session_id).execute()
+        
+        remaining_count = len(count_response.data) if count_response.data else 0
+        plot_names = [viz['plot_name'] for viz in count_response.data] if count_response.data else []
+        
+        logger.info(f"✅ Cleanup completed. {remaining_count} visualizations remaining: {plot_names}")
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'remaining_visualizations': remaining_count,
+            'plot_names': plot_names,
+            'message': f'Duplicate cleanup completed for session {session_id}'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up duplicates for {session_id}: {str(e)}")
+        return jsonify({
+            'error': 'Failed to cleanup duplicates',
             'message': str(e)
         }), 500
 

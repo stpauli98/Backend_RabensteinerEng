@@ -79,192 +79,21 @@ class Visualizer:
     
     def create_violin_plots(self, data_arrays: Dict) -> Dict:
         """
-        Create violin plots for data distribution
-        Extracted from training_backend_test_2.py lines 1876-2026
-        
-        Args:
-            data_arrays: Dict containing i_combined_array and o_combined_array
-            
-        Returns:
-            Dict containing violin plots as base64 strings
+        Create violin plots for data distribution - DEPRECATED
+        Use violin_plot_generator.generate_violin_plots_from_data instead
         """
-        try:
-            violin_plots = {}
-            
-            # Input data violin plots (lines 1876-1962)
-            if 'i_combined_array' in data_arrays:
-                input_plot = self._create_input_distribution_plot(data_arrays['i_combined_array'])
-                violin_plots['input_distribution'] = input_plot
-                
-            # Output data violin plots (lines 1965-2026) 
-            if 'o_combined_array' in data_arrays:
-                output_plot = self._create_output_distribution_plot(
-                    data_arrays['o_combined_array'], 
-                    data_arrays.get('i_combined_array')
-                )
-                violin_plots['output_distribution'] = output_plot
-            
-            return violin_plots
-            
-        except Exception as e:
-            logger.error(f"Error creating violin plots: {str(e)}")
-            raise
+        logger.warning("create_violin_plots is deprecated. Use violin_plot_generator.generate_violin_plots_from_data instead")
+        return {}
     
     def _create_input_distribution_plot(self, i_combined_array: np.ndarray) -> str:
-        """
-        Create input data distribution violin plot
-        Extracted from training_backend_test_2.py lines 1876-1962
-        """
-        try:
-            # Farbpalette (exactly as in original)
-            palette = sns.color_palette("tab20", i_combined_array.shape[1])
-            
-            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (simplified for extracted version)
-            i_list = [f"Feature_{i}" for i in range(i_combined_array.shape[1])]
-            
-            # DICTIONARY FÜR VIOLINENPLOT
-            df = pd.DataFrame(i_combined_array)
-            data = {}
-            for i, name in enumerate(i_list):
-                values = df.iloc[:,i]
-                data[name] = values
-            
-            # Anzahl der Merkmale der Eingabedaten
-            n_ft_i = i_combined_array.shape[1]
-            
-            fig, axes = plt.subplots(1,                         # Eine Zeile an Subplots
-                                   n_ft_i,                    # Anzahl an Subplots nebeneinander
-                                   figsize = (2*n_ft_i, 6))   # Größe des gesamten Plots
-            
-            if len(data) <= 1:
-                
-                for i, (name, values) in enumerate(data.items()):
-                        
-                    sns.violinplot(y            = values, 
-                                   ax           = axes, 
-                                   color        = palette[i], 
-                                   inner        = "quartile", 
-                                   linewidth    = 1.5)
-                     
-                    # Titel über jedem Subplot
-                    axes.set_title(name)
-                    
-                    # Entfernen der Achsenbeschriftungen
-                    axes.set_xlabel("")
-                    axes.set_ylabel("")
-                
-            else:
-                
-                # Violinplot in jeden Subplot
-                for i, (name, values) in enumerate(data.items()):
-                        
-                    sns.violinplot(y            = values, 
-                                   ax           = axes[i], 
-                                   color        = palette[i], 
-                                   inner        = "quartile", 
-                                   linewidth    = 1.5)
-                     
-                    # Titel über jedem Subplot
-                    axes[i].set_title(name)
-                    
-                    # Entfernen der Achsenbeschriftungen
-                    axes[i].set_xlabel("")
-                    axes[i].set_ylabel("")
-            
-            plt.suptitle("Datenverteilung \nder Eingabedaten",
-                         fontsize   = 15,
-                         fontweight = "bold")
-            
-            plt.tight_layout()
-            
-            # Convert to base64
-            plot_base64 = self._figure_to_base64(fig)
-            plt.close(fig)
-            
-            return plot_base64
-            
-        except Exception as e:
-            logger.error(f"Error creating input distribution plot: {str(e)}")
-            raise
+        """DEPRECATED - Use violin_plot_generator instead"""
+        logger.warning("_create_input_distribution_plot is deprecated")
+        raise NotImplementedError("Use violin_plot_generator.generate_violin_plots_from_data instead")
     
     def _create_output_distribution_plot(self, o_combined_array: np.ndarray, i_combined_array: np.ndarray = None) -> str:
-        """
-        Create output data distribution violin plot
-        Extracted from training_backend_test_2.py lines 1965-2026
-        """
-        try:
-            # Calculate color offset
-            n_ft_i = i_combined_array.shape[1] if i_combined_array is not None else 0
-            total_features = n_ft_i + o_combined_array.shape[1]
-            palette = sns.color_palette("tab20", total_features)
-            
-            # LISTE MIT DEN EINEZELNEN PLOTNAMEN (simplified for extracted version)
-            o_list = [f"Output_{i}" for i in range(o_combined_array.shape[1])]
-            
-            # DICTIONARY FÜR VIOLINENPLOT
-            df = pd.DataFrame(o_combined_array)
-            data = {}
-            for i, name in enumerate(o_list):
-                values = df.iloc[:,i]
-                data[name] = values
-            
-            # Anzahl der Merkmale der Ausgabedaten
-            n_ft_o = o_combined_array.shape[1]
-            
-            fig, axes = plt.subplots(1,                         # Eine Zeile an Subplots
-                                   n_ft_o,                    # Anzahl an Subplots nebeneinander
-                                   figsize = (2*n_ft_o, 6))   # Größe des gesamten Plots
-            
-            if len(data) <= 1:
-                
-                for i, (name, values) in enumerate(data.items()):
-                        
-                    sns.violinplot(y            = values, 
-                                   ax           = axes, 
-                                   color        = palette[i+n_ft_i], 
-                                   inner        = "quartile", 
-                                   linewidth    = 1.5)
-                    
-                    # Titel über jedem Subplot
-                    axes.set_title(name)
-                    
-                    # Entfernen der Achsenbeschriftungen
-                    axes.set_xlabel("")
-                    axes.set_ylabel("")
-                    
-            else:
-                
-                # Violinplot in jeden Subplot
-                for i, (name, values) in enumerate(data.items()):
-                        
-                    sns.violinplot(y            = values, 
-                                   ax           = axes[i], 
-                                   color        = palette[i+n_ft_i], 
-                                   inner        = "quartile", 
-                                   linewidth    = 1.5)
-                    
-                    # Titel über jedem Subplot
-                    axes[i].set_title(name)
-                    
-                    # Entfernen der Achsenbeschriftungen
-                    axes[i].set_xlabel("")
-                    axes[i].set_ylabel("")
-            
-            plt.suptitle("Datenverteilung \nder Ausgabedaten",
-                         fontsize   = 15,
-                         fontweight = "bold")
-            
-            plt.tight_layout()
-            
-            # Convert to base64
-            plot_base64 = self._figure_to_base64(fig)
-            plt.close(fig)
-            
-            return plot_base64
-            
-        except Exception as e:
-            logger.error(f"Error creating output distribution plot: {str(e)}")
-            raise
+        """DEPRECATED - Use violin_plot_generator instead"""
+        logger.warning("_create_output_distribution_plot is deprecated")
+        raise NotImplementedError("Use violin_plot_generator.generate_violin_plots_from_data instead")
     
     def create_forecast_plots(self, training_results: Dict, evaluation_results: Dict) -> Dict:
         """

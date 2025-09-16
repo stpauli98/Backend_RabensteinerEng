@@ -288,7 +288,7 @@ class TrainingPipeline:
     
     def _create_visualizations(self, training_results: Dict, evaluation_results: Dict) -> Dict:
         """
-        Create visualizations
+        Create visualizations using consolidated approach
         
         Args:
             training_results: Training results
@@ -298,12 +298,26 @@ class TrainingPipeline:
             Visualizations
         """
         try:
-            # Create visualizer
+            visualizations = {}
+            
+            # Create non-violin visualizations using visualization.py
             visualizer = create_visualizer()
             
-            # Create all visualizations
-            visualizations = visualizer.create_all_visualizations(training_results, evaluation_results)
+            # Create forecast plots
+            forecast_plots = visualizer.create_forecast_plots(training_results, evaluation_results)
+            visualizations.update(forecast_plots)
             
+            # Create metrics comparison plots
+            comparison_plots = visualizer.create_metrics_comparison_plots(evaluation_results)
+            visualizations.update(comparison_plots)
+            
+            # Create training history plots
+            history_plots = visualizer.create_training_history_plots(training_results)
+            visualizations.update(history_plots)
+            
+            # Create violin plots using consolidated violin_plot_generator
+            # Note: Violin plots are typically created separately during training
+            # This is a fallback if they're needed at this stage
             
             return visualizations
             

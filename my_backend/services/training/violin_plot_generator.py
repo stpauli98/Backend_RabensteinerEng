@@ -16,6 +16,48 @@ from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+def create_violin_plots_from_viz_data(session_id: str, data_arrays: Dict) -> Dict:
+    """
+    Adapter function to maintain compatibility with visualization.py interface
+    Converts data_arrays format to generate_violin_plots_from_data format
+    
+    Args:
+        session_id: Session identifier
+        data_arrays: Dict containing 'i_combined_array' and 'o_combined_array'
+        
+    Returns:
+        Dictionary containing violin plots (same format as visualization.py)
+    """
+    try:
+        # Extract data arrays
+        input_data = data_arrays.get('i_combined_array')
+        output_data = data_arrays.get('o_combined_array')
+        
+        # Generate feature names if data exists
+        input_features = None
+        if input_data is not None and len(input_data.shape) > 1:
+            input_features = [f"Input_Feature_{i+1}" for i in range(input_data.shape[1])]
+        
+        output_features = None 
+        if output_data is not None and len(output_data.shape) > 1:
+            output_features = [f"Output_Feature_{i+1}" for i in range(output_data.shape[1])]
+        
+        # Generate plots using the unified function
+        result = generate_violin_plots_from_data(
+            session_id=session_id,
+            input_data=input_data,
+            output_data=output_data,
+            input_features=input_features,
+            output_features=output_features
+        )
+        
+        # Return just the plots dict (to match visualization.py interface)
+        return result.get('plots', {})
+        
+    except Exception as e:
+        logger.error(f"Error in create_violin_plots_from_viz_data: {str(e)}")
+        return {}
+
 def generate_violin_plots_from_data(
     session_id: str,
     input_data: Optional[np.ndarray] = None,

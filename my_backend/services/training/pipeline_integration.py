@@ -19,7 +19,7 @@ from .model_trainer import (
     ModelTrainer
 )
 from .results_generator import wape, smape, mase, ResultsGenerator
-from .visualization import Visualizer
+from .violin_plot_generator import create_violin_plots_from_viz_data
 from .config import MTS, T, MDL, HOL
 from .data_transformer import create_training_arrays
 from .scaler_manager import process_and_scale_data
@@ -624,7 +624,8 @@ class RealVisualizationGenerator:
     """
     
     def __init__(self):
-        self.visualizer = Visualizer()
+        # Violin plots now handled by violin_plot_generator
+        pass
     
     def create_visualizations(self, training_results: Dict, evaluation_results: Dict, processed_data: Dict) -> Dict:
         """
@@ -674,7 +675,7 @@ class RealVisualizationGenerator:
             
             # Create violin plots using real extracted functions
             if data_arrays:
-                violin_plots = self.visualizer.create_violin_plots(data_arrays)
+                violin_plots = create_violin_plots_from_viz_data(session_id, data_arrays)
                 visualizations.update(violin_plots)
                 
             

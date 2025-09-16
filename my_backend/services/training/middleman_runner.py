@@ -230,8 +230,7 @@ class ModernMiddlemanRunner:
             # Generate visualizations
             violin_plots = {}
             try:
-                from services.training.visualization import Visualizer
-                visualizer = Visualizer()
+                from services.training.violin_plot_generator import create_violin_plots_from_viz_data
                 
                 # Prepare data for visualization
                 viz_data = {
@@ -262,7 +261,7 @@ class ModernMiddlemanRunner:
                 
                 # Create violin plots
                 if viz_data['i_combined_array'] is not None or viz_data['o_combined_array'] is not None:
-                    violin_plots = visualizer.create_violin_plots(viz_data)
+                    violin_plots = create_violin_plots_from_viz_data(session_id, viz_data)
                 else:
                     logger.warning("No data available for creating violin plots")
                     
