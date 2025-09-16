@@ -5,8 +5,8 @@
     "monat": false,
     "woche": false,
     "tag": false,
-    "feiertag": false,
-    "zeitzone": "America/Los_Angeles",
+    "feiertag": true,
+    "zeitzone": "UTC",
     "category_data": {
       "jahr": {
         "detaillierteBerechnung": true,
@@ -16,6 +16,16 @@
         "skalierung": "nein",
         "skalierungMin": "",
         "skalierungMax": ""
+      },
+      "feiertag": {
+        "detaillierteBerechnung": true,
+        "datenform": "Zeit Horizont",
+        "zeithorizontStart": "1",
+        "zeithorizontEnd": "12",
+        "skalierung": "nein",
+        "skalierungMin": "",
+        "skalierungMax": "",
+        "land": "\u00d6sterreich"
       }
     }
   },
@@ -26,15 +36,15 @@
     "offset": "4"
   },
   "sessionInfo": {
-    "sessionId": "session_1757013221773_icxno0o",
+    "sessionId": "session_1758018859676_rn0r1kc",
     "totalFiles": 0
   },
-  "lastUpdated": "2025-09-04T21:13:43.152953",
+  "lastUpdated": "2025-09-16T12:34:20.906560",
   "files": [
     {
-      "id": "1757013133083",
+      "id": "1758018790147",
       "fileName": "Leistung.csv",
-      "bezeichnung": "Leistung",
+      "bezeichnung": "Test1",
       "utcMin": "2023-09-13 13:27:00",
       "utcMax": "2023-09-14 14:21:00",
       "zeitschrittweite": "3",
@@ -44,27 +54,27 @@
       "datenpunkte": "499",
       "numerischeDatenpunkte": "499",
       "numerischerAnteil": "100.00",
-      "datenform": "Prognose aus historischen Daten",
-      "zeithorizontStart": "12",
-      "zeithorizontEnd": "1",
-      "zeitschrittweiteTransferiertenDaten": "2",
-      "offsetTransferiertenDaten": "3",
-      "mittelwertbildung\u00dcberDenZeithorizont": "ja",
-      "datenanpassung": "3",
-      "zeitschrittweiteMinValue": "2",
-      "zeitschrittweiteAvgValue": "2",
-      "skalierung": "ja",
-      "skalierungMax": "20",
-      "skalierungMin": "1",
+      "datenform": "Historische Daten",
+      "zeithorizontStart": "1",
+      "zeithorizontEnd": "2",
+      "zeitschrittweiteTransferiertenDaten": "3",
+      "offsetTransferiertenDaten": "4",
+      "mittelwertbildung\u00dcberDenZeithorizont": "nein",
+      "datenanpassung": "5",
+      "zeitschrittweiteMinValue": "6",
+      "zeitschrittweiteAvgValue": "5",
+      "skalierung": "nein",
+      "skalierungMax": "",
+      "skalierungMin": "",
       "storagePath": "",
       "type": "input",
       "createdAt": "",
       "updatedAt": ""
     },
     {
-      "id": "1757013133086",
+      "id": "1758018790148",
       "fileName": "Temp.csv",
-      "bezeichnung": "Temp",
+      "bezeichnung": "Test2",
       "utcMin": "2023-09-13 13:27:00",
       "utcMax": "2023-09-14 14:21:00",
       "zeitschrittweite": "3",
@@ -74,15 +84,15 @@
       "datenpunkte": "499",
       "numerischeDatenpunkte": "499",
       "numerischerAnteil": "100.00",
-      "datenform": "Prognose aus historischen Daten",
-      "zeithorizontStart": "3",
+      "datenform": "Aktueller Wert",
+      "zeithorizontStart": "1",
       "zeithorizontEnd": "2",
-      "zeitschrittweiteTransferiertenDaten": "2",
-      "offsetTransferiertenDaten": "13",
+      "zeitschrittweiteTransferiertenDaten": "3",
+      "offsetTransferiertenDaten": "4",
       "mittelwertbildung\u00dcberDenZeithorizont": "nein",
-      "datenanpassung": "22",
-      "zeitschrittweiteMinValue": "22",
-      "zeitschrittweiteAvgValue": "11",
+      "datenanpassung": "4",
+      "zeitschrittweiteMinValue": "5",
+      "zeitschrittweiteAvgValue": "4",
       "skalierung": "nein",
       "skalierungMax": "",
       "skalierungMin": "",
@@ -93,5 +103,5 @@
     }
   ],
   "finalized": true,
-  "finalizationTime": "2025-09-04T21:13:43.158210"
+  "finalizationTime": "2025-09-16T12:34:20.910431"
 }

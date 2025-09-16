@@ -1,0 +1,62 @@
+{
+  "timeInfo": {
+    "id": "f0ffbf31-1538-4773-a308-5b29b6a60a0b",
+    "session_id": "6edecc2c-b97c-4623-8fef-6f64fe83ca7a",
+    "jahr": true,
+    "woche": false,
+    "monat": true,
+    "feiertag": true,
+    "tag": false,
+    "zeitzone": "Europe/Vienna",
+    "category_data": {
+      "jahr": {
+        "datenform": "Aktuelle zeit",
+        "skalierung": "nein",
+        "skalierungMax": "",
+        "skalierungMin": "",
+        "zeithorizontEnd": "12",
+        "zeithorizontStart": "1",
+        "detaillierteBerechnung": true
+      },
+      "monat": {
+        "datenform": "Zeit Horizont",
+        "skalierung": "nein",
+        "skalierungMax": "",
+        "skalierungMin": "",
+        "zeithorizontEnd": "12",
+        "zeithorizontStart": "1",
+        "detaillierteBerechnung": true
+      },
+      "feiertag": {
+        "land": "\u00d6sterreich",
+        "datenform": "Zeit Horizont",
+        "skalierung": "nein",
+        "skalierungMax": "",
+        "skalierungMin": "",
+        "zeithorizontEnd": "12",
+        "zeithorizontStart": "1",
+        "detaillierteBerechnung": true
+      }
+    },
+    "created_at": "2025-09-16T10:43:17.724146+00:00",
+    "updated_at": "2025-09-16T10:43:18.171787+00:00"
+  },
+  "zeitschritte": {
+    "id": "fa79380a-102d-4ff3-816c-caa221e47bd0",
+    "session_id": "6edecc2c-b97c-4623-8fef-6f64fe83ca7a",
+    "eingabe": "11",
+    "ausgabe": "12",
+    "zeitschrittweite": "13",
+    "offset": "14",
+    "created_at": "2025-09-16T10:43:17.885175+00:00",
+    "updated_at": "2025-09-16T10:43:18.378013+00:00"
+  },
+  "sessionInfo": {
+    "sessionId": "session_1758019414604_0rqgbsx",
+    "totalFiles": 0
+  },
+  "lastUpdated": "2025-09-16T12:43:34.611246",
+  "finalized": true,
+  "finalizationTime": "2025-09-16T12:43:35.191949",
+  "files": []
+}

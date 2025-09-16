@@ -1,0 +1,85 @@
+[
+  {
+    "chunkIndex": 0,
+    "totalChunks": 1,
+    "fileName": "Temp.csv",
+    "filePath": "/Users/nmil/Documents/GitHub/Posao/Backend_RabensteinerEng/my_backend/api/routes/uploads/file_uploads/session_1758018859676_rn0r1kc/Temp.csv_0",
+    "fileType": "output",
+    "createdAt": "2025-09-16T12:34:20.906258",
+    "params": {
+      "chunkSize": 13430,
+      "totalSize": 13430,
+      "fileHash": "2a353f3f1e9f2c965eb9b9ae62e834aba762f157c57bb46d4e5256e3cce88b1c",
+      "fileMetadata": {
+        "id": "1758018790148",
+        "fileName": "Temp.csv",
+        "bezeichnung": "Test2",
+        "utcMin": "2023-09-13 13:27:00",
+        "utcMax": "2023-09-14 14:21:00",
+        "zeitschrittweite": "3",
+        "min": "68.65",
+        "max": "85.77",
+        "offset": "0",
+        "datenpunkte": "499",
+        "numerischeDatenpunkte": "499",
+        "numerischerAnteil": "100.00",
+        "datenform": "Aktueller Wert",
+        "zeithorizontStart": "1",
+        "zeithorizontEnd": "2",
+        "zeitschrittweiteTransferiertenDaten": "3",
+        "offsetTransferiertenDaten": "4",
+        "mittelwertbildung\u00dcberDenZeithorizont": "nein",
+        "datenanpassung": "4",
+        "zeitschrittweiteMinValue": "5",
+        "zeitschrittweiteAvgValue": "4",
+        "skalierung": "nein",
+        "skalierungMax": "",
+        "skalierungMin": "",
+        "storagePath": "",
+        "type": "output",
+        "createdAt": "",
+        "updatedAt": ""
+      },
+      "sessionInfo": {
+        "sessionId": "session_1758018859676_rn0r1kc",
+        "totalFiles": 2
+      },
+      "timeInfo": {
+        "session_id": "",
+        "jahr": true,
+        "monat": false,
+        "woche": false,
+        "tag": false,
+        "feiertag": true,
+        "zeitzone": "UTC",
+        "category_data": {
+          "jahr": {
+            "detaillierteBerechnung": true,
+            "datenform": "Aktuelle zeit",
+            "zeithorizontStart": "1",
+            "zeithorizontEnd": "12",
+            "skalierung": "nein",
+            "skalierungMin": "",
+            "skalierungMax": ""
+          },
+          "feiertag": {
+            "detaillierteBerechnung": true,
+            "datenform": "Zeit Horizont",
+            "zeithorizontStart": "1",
+            "zeithorizontEnd": "12",
+            "skalierung": "nein",
+            "skalierungMin": "",
+            "skalierungMax": "",
+            "land": "\u00d6sterreich"
+          }
+        }
+      },
+      "zeitschritte": {
+        "eingabe": "1",
+        "ausgabe": "2",
+        "zeitschrittweite": "3",
+        "offset": "4"
+      }
+    }
+  }
+]

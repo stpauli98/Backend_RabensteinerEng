@@ -3,17 +3,17 @@
     "chunkIndex": 0,
     "totalChunks": 1,
     "fileName": "Temp.csv",
-    "filePath": "/Users/nmil/Documents/GitHub/Posao/Backend_RabensteinerEng/my_backend/api/routes/uploads/file_uploads/session_1757013221773_icxno0o/Temp.csv_0",
+    "filePath": "/Users/nmil/Documents/GitHub/Posao/Backend_RabensteinerEng/my_backend/api/routes/uploads/file_uploads/session_1758019397028_fmzv79y/Temp.csv_0",
     "fileType": "output",
-    "createdAt": "2025-09-04T21:13:43.152714",
+    "createdAt": "2025-09-16T12:43:17.882037",
     "params": {
       "chunkSize": 13430,
       "totalSize": 13430,
       "fileHash": "2a353f3f1e9f2c965eb9b9ae62e834aba762f157c57bb46d4e5256e3cce88b1c",
       "fileMetadata": {
-        "id": "1757013133086",
+        "id": "1758019312866",
         "fileName": "Temp.csv",
-        "bezeichnung": "Temp",
+        "bezeichnung": "Test2",
         "utcMin": "2023-09-13 13:27:00",
         "utcMax": "2023-09-14 14:21:00",
         "zeitschrittweite": "3",
@@ -23,14 +23,14 @@
         "datenpunkte": "499",
         "numerischeDatenpunkte": "499",
         "numerischerAnteil": "100.00",
-        "datenform": "Prognose aus historischen Daten",
-        "zeithorizontStart": "3",
-        "zeithorizontEnd": "2",
-        "zeitschrittweiteTransferiertenDaten": "2",
-        "offsetTransferiertenDaten": "13",
+        "datenform": "Historische Prognosen",
+        "zeithorizontStart": "2",
+        "zeithorizontEnd": "12",
+        "zeitschrittweiteTransferiertenDaten": "3",
+        "offsetTransferiertenDaten": "4",
         "mittelwertbildung\u00dcberDenZeithorizont": "nein",
-        "datenanpassung": "22",
-        "zeitschrittweiteMinValue": "22",
+        "datenanpassung": "4",
+        "zeitschrittweiteMinValue": "1",
         "zeitschrittweiteAvgValue": "11",
         "skalierung": "nein",
         "skalierungMax": "",
@@ -41,17 +41,17 @@
         "updatedAt": ""
       },
       "sessionInfo": {
-        "sessionId": "session_1757013221773_icxno0o",
+        "sessionId": "session_1758019397028_fmzv79y",
         "totalFiles": 2
       },
       "timeInfo": {
         "session_id": "",
         "jahr": true,
-        "monat": false,
+        "monat": true,
         "woche": false,
         "tag": false,
-        "feiertag": false,
-        "zeitzone": "America/Los_Angeles",
+        "feiertag": true,
+        "zeitzone": "Europe/Vienna",
         "category_data": {
           "jahr": {
             "detaillierteBerechnung": true,
@@ -61,14 +61,33 @@
             "skalierung": "nein",
             "skalierungMin": "",
             "skalierungMax": ""
+          },
+          "monat": {
+            "detaillierteBerechnung": true,
+            "datenform": "Zeit Horizont",
+            "zeithorizontStart": "1",
+            "zeithorizontEnd": "12",
+            "skalierung": "nein",
+            "skalierungMin": "",
+            "skalierungMax": ""
+          },
+          "feiertag": {
+            "detaillierteBerechnung": true,
+            "datenform": "Zeit Horizont",
+            "zeithorizontStart": "1",
+            "zeithorizontEnd": "12",
+            "skalierung": "nein",
+            "skalierungMin": "",
+            "skalierungMax": "",
+            "land": "\u00d6sterreich"
           }
         }
       },
       "zeitschritte": {
-        "eingabe": "1",
-        "ausgabe": "2",
-        "zeitschrittweite": "3",
-        "offset": "4"
+        "eingabe": "11",
+        "ausgabe": "12",
+        "zeitschrittweite": "13",
+        "offset": "14"
       }
     }
   }

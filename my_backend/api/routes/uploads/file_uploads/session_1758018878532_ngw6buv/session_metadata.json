@@ -1,0 +1,53 @@
+{
+  "timeInfo": {
+    "id": "14b07d99-43d4-40d1-9e5a-5338a9b3de03",
+    "session_id": "19981485-aafe-4e35-919f-bcfdb54484ec",
+    "jahr": true,
+    "woche": false,
+    "monat": false,
+    "feiertag": true,
+    "tag": false,
+    "zeitzone": "UTC",
+    "category_data": {
+      "jahr": {
+        "datenform": "Aktuelle zeit",
+        "skalierung": "nein",
+        "skalierungMax": "",
+        "skalierungMin": "",
+        "zeithorizontEnd": "12",
+        "zeithorizontStart": "1",
+        "detaillierteBerechnung": true
+      },
+      "feiertag": {
+        "land": "\u00d6sterreich",
+        "datenform": "Zeit Horizont",
+        "skalierung": "nein",
+        "skalierungMax": "",
+        "skalierungMin": "",
+        "zeithorizontEnd": "12",
+        "zeithorizontStart": "1",
+        "detaillierteBerechnung": true
+      }
+    },
+    "created_at": "2025-09-16T10:34:20.708873+00:00",
+    "updated_at": "2025-09-16T10:34:21.216682+00:00"
+  },
+  "zeitschritte": {
+    "id": "d8c588c4-245d-4a93-a187-15b52832ffc3",
+    "session_id": "19981485-aafe-4e35-919f-bcfdb54484ec",
+    "eingabe": "1",
+    "ausgabe": "2",
+    "zeitschrittweite": "3",
+    "offset": "4",
+    "created_at": "2025-09-16T10:34:20.893263+00:00",
+    "updated_at": "2025-09-16T10:34:21.388286+00:00"
+  },
+  "sessionInfo": {
+    "sessionId": "session_1758018878532_ngw6buv",
+    "totalFiles": 0
+  },
+  "lastUpdated": "2025-09-16T12:34:38.538713",
+  "finalized": true,
+  "finalizationTime": "2025-09-16T12:34:39.135301",
+  "files": []
+}
