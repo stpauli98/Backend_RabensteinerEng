@@ -1438,6 +1438,236 @@ def save_model(session_id: str):
         }), 500
 
 
+@training_api_bp.route('/download-model-h5/<session_id>', methods=['GET'])
+def download_model_h5(session_id: str):
+    """
+    Download trained model in .h5 format from Supabase database
+    
+    Args:
+        session_id: Training session ID
+    
+    Returns:
+        Model file for download or error response
+    """
+    try:
+        import pickle
+        import base64
+        import tempfile
+        import os
+        from flask import send_file
+        from datetime import datetime
+        
+        # Get supabase client and convert session_id to UUID
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Query training_results table for the model
+        response = supabase.table('training_results')\
+            .select('results')\
+            .eq('session_id', uuid_session_id)\
+            .eq('status', 'completed')\
+            .order('created_at', desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if not response.data:
+            return jsonify({
+                'success': False,
+                'error': 'No trained model found',
+                'message': f'No completed training found for session {session_id}'
+            }), 404
+        
+        # Extract model data from results
+        results = response.data[0]['results']
+        trained_model = None
+        model_type = None
+        
+        # Search for serialized model in results structure
+        def find_serialized_model(obj, path=""):
+            if isinstance(obj, dict):
+                if '_model_type' in obj and obj.get('_model_type') == 'serialized_model':
+                    return obj
+                for key, value in obj.items():
+                    result = find_serialized_model(value, f"{path}.{key}" if path else key)
+                    if result:
+                        return result
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    result = find_serialized_model(item, f"{path}[{i}]" if path else f"[{i}]")
+                    if result:
+                        return result
+            return None
+        
+        serialized_model = find_serialized_model(results)
+        
+        if not serialized_model:
+            return jsonify({
+                'success': False,
+                'error': 'No serialized model found',
+                'message': 'Model data not found in training results'
+            }), 404
+        
+        # Extract model information
+        model_class = serialized_model.get('_model_class', 'Unknown')
+        model_b64 = serialized_model.get('_model_data')
+        
+        if not model_b64:
+            return jsonify({
+                'success': False,
+                'error': 'Model data not found',
+                'message': 'Base64 model data is missing'
+            }), 404
+        
+        # Deserialize model from base64
+        try:
+            model_bytes = base64.b64decode(model_b64)
+            model = pickle.loads(model_bytes)
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to deserialize model',
+                'message': f'Error deserializing model: {str(e)}'
+            }), 500
+        
+        # Check if model has save method (Keras/TensorFlow models)
+        if not hasattr(model, 'save'):
+            return jsonify({
+                'success': False,
+                'error': 'Model format not supported',
+                'message': f'Model class {model_class} does not support .h5 export'
+            }), 400
+        
+        # Create temporary file for .h5 export
+        temp_dir = tempfile.mkdtemp()
+        temp_file = os.path.join(temp_dir, f'model_{session_id}.h5')
+        
+        try:
+            # Save model as .h5 file
+            model.save(temp_file)
+            
+            # Verify file was created
+            if not os.path.exists(temp_file):
+                raise Exception("Failed to create .h5 file")
+            
+            # Generate download filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            download_name = f'trained_model_{model_class}_{session_id}_{timestamp}.h5'
+            
+            # Return file for download
+            return send_file(
+                temp_file,
+                as_attachment=True,
+                download_name=download_name,
+                mimetype='application/octet-stream'
+            )
+            
+        except Exception as save_error:
+            # Clean up temp file
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            if os.path.exists(temp_dir):
+                os.rmdir(temp_dir)
+                
+            return jsonify({
+                'success': False,
+                'error': 'Failed to export model',
+                'message': f'Error saving model as .h5: {str(save_error)}'
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"Error downloading model for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e)
+        }), 500
+
+
+@training_api_bp.route('/list-models-database/<session_id>', methods=['GET'])
+def list_models_database(session_id: str):
+    """
+    List available trained models from Supabase database
+    
+    Args:
+        session_id: Training session ID
+    
+    Returns:
+        JSON response with list of available models
+    """
+    try:
+        # Get supabase client and convert session_id to UUID  
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Query training_results table - get only the most recent completed training
+        response = supabase.table('training_results')\
+            .select('results, created_at')\
+            .eq('session_id', uuid_session_id)\
+            .eq('status', 'completed')\
+            .order('created_at', desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if not response.data:
+            return jsonify({
+                'success': True,
+                'data': {'models': [], 'count': 0},
+                'message': 'No trained models found'
+            })
+        
+        models = []
+        
+        # Since we're getting only the latest record, process it directly
+        if response.data:
+            record = response.data[0]  # Get the most recent record
+            results = record['results']
+            created_at = record['created_at']
+            
+            # Search for serialized models in results
+            def extract_models_info(obj, path=""):
+                found_models = []
+                if isinstance(obj, dict):
+                    if '_model_type' in obj and obj.get('_model_type') == 'serialized_model':
+                        model_class = obj.get('_model_class', 'Unknown')
+                        model_data_size = len(obj.get('_model_data', ''))
+                        
+                        found_models.append({
+                            'filename': f'model_{model_class}_{session_id}.h5',
+                            'path': f'database://{path}',
+                            'model_type': model_class,
+                            'file_size': model_data_size,
+                            'file_size_mb': round(model_data_size / (1024 * 1024), 2),
+                            'modified_time': created_at,
+                            'format': 'h5'
+                        })
+                    
+                    for key, value in obj.items():
+                        found_models.extend(extract_models_info(value, f"{path}.{key}" if path else key))
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        found_models.extend(extract_models_info(item, f"{path}[{i}]" if path else f"[{i}]"))
+                
+                return found_models
+            
+            models = extract_models_info(results)
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'models': models,
+                'count': len(models)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error listing models for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to list models',
+            'message': str(e)
+        }), 500
+
+
 @training_api_bp.route('/get-training-status/<session_id>', methods=['GET'])
 def get_training_status_details(session_id: str):
     """
