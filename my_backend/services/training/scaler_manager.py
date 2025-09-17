@@ -100,14 +100,24 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
     scal_i = 0
     
     # Fit input scalers (lines 1819-1838)
+    # Check if arrays have valid data before accessing shape[1]
+    if i_combined_array.size == 0 or len(i_combined_array.shape) < 2:
+        logger.error("i_combined_array is empty or has invalid shape")
+        return {}, {}
+        
     for i in range(i_combined_array.shape[1]):
         if i < len(i_scal_list) and i_scal_list[i] == True:
             
             # Progress logging
             prog_2 = scal_i / scal_all * 100 if scal_all > 0 else 0
             
-            # Create and fit scaler (lines 1827-1830)
-            scaler = MinMaxScaler(feature_range=(i_scal_min_list[i], i_scal_max_list[i]))
+            # Create and fit scaler (lines 1827-1830) with bounds checking
+            min_val = i_scal_min_list[i] if i < len(i_scal_min_list) else 0
+            max_val = i_scal_max_list[i] if i < len(i_scal_max_list) else 1
+            # Ensure min < max
+            if min_val >= max_val:
+                min_val, max_val = 0, 1
+            scaler = MinMaxScaler(feature_range=(min_val, max_val))
             scaler.fit_transform(i_combined_array[:, i].reshape(-1, 1))
             i_scalers[i] = scaler
             
@@ -122,14 +132,24 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
     o_scalers = {}
     
     # Fit output scalers (lines 1844-1861)
+    # Check if arrays have valid data before accessing shape[1]
+    if o_combined_array.size == 0 or len(o_combined_array.shape) < 2:
+        logger.error("o_combined_array is empty or has invalid shape")
+        return {}, {}
+        
     for i in range(o_combined_array.shape[1]):
         if i < len(o_scal_list) and o_scal_list[i] == True:
             
             # Progress logging
             prog_2 = scal_i / scal_all * 100 if scal_all > 0 else 0
             
-            # Create and fit scaler (lines 1850-1853)
-            scaler = MinMaxScaler(feature_range=(o_scal_min_list[i], o_scal_max_list[i]))
+            # Create and fit scaler (lines 1850-1853) with bounds checking
+            min_val = o_scal_min_list[i] if i < len(o_scal_min_list) else 0
+            max_val = o_scal_max_list[i] if i < len(o_scal_max_list) else 1
+            # Ensure min < max
+            if min_val >= max_val:
+                min_val, max_val = 0, 1
+            scaler = MinMaxScaler(feature_range=(min_val, max_val))
             scaler.fit_transform(o_combined_array[:, i].reshape(-1, 1))
             o_scalers[i] = scaler
             
@@ -163,9 +183,19 @@ def apply_scaling(i_array_3D: np.ndarray, o_array_3D: np.ndarray,
         Tuple of scaled (i_array_3D, o_array_3D)
     """
     
+    # Validate arrays have the correct shape before accessing dimensions
+    if i_array_3D.size == 0 or len(i_array_3D.shape) < 3:
+        logger.error("i_array_3D is empty or has invalid shape for scaling")
+        return i_array_3D, o_array_3D
+    
+    if o_array_3D.size == 0 or len(o_array_3D.shape) < 3:
+        logger.error("o_array_3D is empty or has invalid shape for scaling")
+        return i_array_3D, o_array_3D
+    
     # Get dimensions
     n_dat = i_array_3D.shape[0]
     n_ft_i = i_array_3D.shape[2]
+    n_ft_o = o_array_3D.shape[2]
     
     # Loop through datasets (lines 2182-2209)
     for i in range(n_dat):

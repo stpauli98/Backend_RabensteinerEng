@@ -87,8 +87,13 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
         return None, float('inf'), 0
     
     # Validation: Check if we have enough features to train Dense network
+    if train_x.size == 0 or len(train_x.shape) < 3:
+        logger.error(f"train_x is empty or has invalid shape: {train_x.shape}")
+        return None, float('inf'), 0
+        
     if train_x.shape[2] == 0:
-        raise ValueError(f"Cannot train Dense network with 0 features. Input shape: {train_x.shape}")
+        logger.error(f"Cannot train Dense network with 0 features. Input shape: {train_x.shape}")
+        return None, float('inf'), 0
        
     # MODELLDEFINITION ########################################################
     
