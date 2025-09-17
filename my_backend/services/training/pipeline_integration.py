@@ -1,6 +1,6 @@
 """
 Pipeline integration module
-Connects TrainingPipeline with real extracted functions from training_backend_test_2.py
+Connects TrainingPipeline with real extracted functions from training_backend_test_22.py
 """
 
 import logging
