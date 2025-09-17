@@ -1237,8 +1237,14 @@ def debug_env():
     """Debug endpoint to check environment variables and Supabase connection."""
     try:
         import os
+        import httpx
+        import supabase
         from utils.database import get_supabase_client
         from supabase import create_client
+        
+        # Check versions
+        httpx_version = httpx.__version__
+        supabase_version = supabase.__version__
         
         # Check environment variables
         supabase_url = os.getenv("SUPABASE_URL")
@@ -1257,6 +1263,8 @@ def debug_env():
         
         return jsonify({
             'success': True,
+            'httpx_version': httpx_version,
+            'supabase_version': supabase_version,
             'supabase_url_present': bool(supabase_url),
             'supabase_url_length': len(supabase_url) if supabase_url else 0,
             'supabase_key_present': bool(supabase_key),
