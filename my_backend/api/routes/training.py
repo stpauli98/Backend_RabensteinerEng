@@ -1238,12 +1238,21 @@ def debug_env():
     try:
         import os
         from utils.database import get_supabase_client
+        from supabase import create_client
         
         # Check environment variables
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         
-        # Try to create Supabase client
+        # Try to create Supabase client directly
+        direct_client = None
+        direct_error = None
+        try:
+            direct_client = create_client(supabase_url, supabase_key)
+        except Exception as e:
+            direct_error = str(e)
+        
+        # Try to create via our function
         supabase = get_supabase_client()
         
         return jsonify({
@@ -1253,6 +1262,8 @@ def debug_env():
             'supabase_key_present': bool(supabase_key),
             'supabase_key_length': len(supabase_key) if supabase_key else 0,
             'supabase_client_created': bool(supabase),
+            'direct_client_created': bool(direct_client),
+            'direct_error': direct_error,
             'message': 'Environment debug complete'
         })
         
