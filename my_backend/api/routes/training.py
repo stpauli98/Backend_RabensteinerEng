@@ -1232,6 +1232,37 @@ def create_database_session():
         logger.error(f"Error creating database session: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@bp.route('/debug-env', methods=['GET'])
+def debug_env():
+    """Debug endpoint to check environment variables and Supabase connection."""
+    try:
+        import os
+        from utils.database import get_supabase_client
+        
+        # Check environment variables
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        
+        # Try to create Supabase client
+        supabase = get_supabase_client()
+        
+        return jsonify({
+            'success': True,
+            'supabase_url_present': bool(supabase_url),
+            'supabase_url_length': len(supabase_url) if supabase_url else 0,
+            'supabase_key_present': bool(supabase_key),
+            'supabase_key_length': len(supabase_key) if supabase_key else 0,
+            'supabase_client_created': bool(supabase),
+            'message': 'Environment debug complete'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Debug failed'
+        }), 500
+
 @bp.route('/test-data-loading/<session_id>', methods=['GET'])
 def test_data_loading(session_id):
     """Test endpoint to check if data exists for a session ID."""
