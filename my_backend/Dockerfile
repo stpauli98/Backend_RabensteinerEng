@@ -1,4 +1,4 @@
-# Minimal Dockerfile for fast deployment
+# Minimal Dockerfile for fast deploymentt
 FROM python:3.9-slim
 
 # Install system dependencies
