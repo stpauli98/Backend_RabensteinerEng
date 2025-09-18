@@ -28,4 +28,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
 # Run with proper configuration for Cloud Run
-CMD ["gunicorn", "-k", "eventlet", "-w", "1", "-b", "0.0.0.0:8080", "--timeout", "300", "app:app"]
+CMD ["gunicorn", "-k", "sync", "-w", "1", "--threads", "8", "-b", "0.0.0.0:8080", "--timeout", "300", "app:app"]
