@@ -1,5 +1,4 @@
 import os
-import os
 import json
 import logging
 import uuid
@@ -7,6 +6,15 @@ import base64
 from datetime import datetime
 from supabase import create_client, Client
 from dotenv import load_dotenv
+
+# Configure httpx timeout globally to avoid DNS timeout issues in Docker
+import httpx
+httpx._config.DEFAULT_TIMEOUT_CONFIG = httpx.Timeout(
+    connect=30.0,
+    read=60.0,
+    write=30.0,
+    pool=30.0
+)
 
 # Configure logging
 logging.basicConfig(
@@ -35,12 +43,47 @@ def get_supabase_client() -> Client:
         return None
         
     try:
-        # Create client with only the supported parameters
-        # Note: supabase==2.3.3 doesn't support the proxy parameter
+        # Create client with basic configuration
+        # The timeout issue should be resolved at the httpx level
         return create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as e:
         logger.error(f"Error creating Supabase client: {str(e)}")
         return None
+
+def retry_database_operation(operation_func, max_retries=3, initial_delay=1.0):
+    """
+    Retry database operations with exponential backoff for DNS timeout issues.
+    
+    Args:
+        operation_func: Function to retry
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay in seconds
+        
+    Returns:
+        Result of operation_func or None if all retries failed
+    """
+    import time
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return operation_func()
+        except Exception as e:
+            error_msg = str(e)
+            if "Lookup timed out" in error_msg or "timeout" in error_msg.lower():
+                if attempt < max_retries:
+                    delay = initial_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(f"Database operation failed (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay}s: {error_msg}")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Database operation failed after {max_retries + 1} attempts: {error_msg}")
+                    return None
+            else:
+                # Non-timeout error, don't retry
+                logger.error(f"Database operation failed with non-timeout error: {error_msg}")
+                return None
+    
+    return None
 
 def create_or_get_session_uuid(session_id: str) -> str:
     """
@@ -67,19 +110,25 @@ def create_or_get_session_uuid(session_id: str) -> str:
     if not supabase:
         return None
 
-    # 1. Check if a mapping already exists
-    try:
+    # 1. Check if a mapping already exists (with retry logic)
+    def check_existing_mapping():
         response = supabase.table('session_mappings').select('uuid_session_id').eq('string_session_id', session_id).single().execute()
         if response.data:
             uuid_session_id = response.data['uuid_session_id']
             logger.info(f"Found existing mapping for {session_id}: {uuid_session_id}")
             return uuid_session_id
-    except Exception as e:
-        logger.info(f"No existing mapping found for {session_id}, will create a new one. Error: {e}")
+        return None
+    
+    # Try to find existing mapping with retry
+    existing_uuid = retry_database_operation(check_existing_mapping, max_retries=2, initial_delay=0.5)
+    if existing_uuid:
+        return existing_uuid
+    
+    logger.info(f"No existing mapping found for {session_id}, will create a new one.")
 
 
-    # 2. If no mapping exists, create a new session and a new mapping
-    try:
+    # 2. If no mapping exists, create a new session and a new mapping (with retry logic)
+    def create_new_session_mapping():
         # Create a new session in the 'sessions' table
         session_response = supabase.table('sessions').insert({}).execute()
         
@@ -102,10 +151,14 @@ def create_or_get_session_uuid(session_id: str) -> str:
 
         logger.info(f"Created new session and mapping for {session_id}: {new_uuid_session_id}")
         return new_uuid_session_id
-
-    except Exception as e:
-        logger.error(f"Failed to create session and mapping for {session_id}: {e}")
-        return None
+    
+    # Try to create new session with retry
+    new_uuid = retry_database_operation(create_new_session_mapping, max_retries=2, initial_delay=1.0)
+    if new_uuid:
+        return new_uuid
+    
+    logger.error(f"Failed to create session and mapping for {session_id} after retries")
+    return None
 
 def get_string_id_from_uuid(uuid_session_id: str) -> str:
     """
