@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import hashlib
+import uuid
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -1598,11 +1599,20 @@ def run_analysis(session_id):
 def get_zeitschritte(session_id):
     """Get zeitschritte data for a session."""
     try:
-        from utils.database import get_supabase_client
+        from utils.database import get_supabase_client, create_or_get_session_uuid
         supabase = get_supabase_client()
         
+        # Convert session_id to UUID format if needed
+        try:
+            uuid.UUID(session_id)
+            database_session_id = session_id
+        except (ValueError, TypeError):
+            database_session_id = create_or_get_session_uuid(session_id)
+            if not database_session_id:
+                return jsonify({'success': False, 'error': 'Invalid session ID'}), 400
+        
         # Get zeitschritte from database
-        response = supabase.table('zeitschritte').select('*').eq('session_id', session_id).single().execute()
+        response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).single().execute()
         
         if response.data:
             # Transform database data back to frontend format (offsett -> offset)
@@ -1633,11 +1643,20 @@ def get_zeitschritte(session_id):
 def get_time_info(session_id):
     """Get time info data for a session."""
     try:
-        from utils.database import get_supabase_client
+        from utils.database import get_supabase_client, create_or_get_session_uuid
         supabase = get_supabase_client()
         
+        # Convert session_id to UUID format if needed
+        try:
+            uuid.UUID(session_id)
+            database_session_id = session_id
+        except (ValueError, TypeError):
+            database_session_id = create_or_get_session_uuid(session_id)
+            if not database_session_id:
+                return jsonify({'success': False, 'error': 'Invalid session ID'}), 400
+        
         # Get time_info from database
-        response = supabase.table('time_info').select('*').eq('session_id', session_id).single().execute()
+        response = supabase.table('time_info').select('*').eq('session_id', database_session_id).single().execute()
         
         if response.data:
             return jsonify({
@@ -1653,6 +1672,242 @@ def get_time_info(session_id):
             
     except Exception as e:
         logger.error(f"Error getting time info for {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# CSV Files Management Endpoints
+
+@bp.route('/csv-files/<session_id>', methods=['GET'])
+def get_csv_files(session_id):
+    """Get all CSV files for a session."""
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        supabase = get_supabase_client()
+        
+        # Convert session_id to UUID format if needed
+        try:
+            uuid.UUID(session_id)
+            database_session_id = session_id
+        except (ValueError, TypeError):
+            database_session_id = create_or_get_session_uuid(session_id)
+            if not database_session_id:
+                return jsonify({'success': False, 'error': 'Invalid session ID'}), 400
+        
+        # Get file type filter from query params
+        file_type = request.args.get('type', None)  # 'input' or 'output'
+        
+        # Build query
+        query = supabase.table('files').select('*').eq('session_id', database_session_id)
+        if file_type:
+            query = query.eq('type', file_type)
+        
+        response = query.execute()
+        
+        if response.data:
+            return jsonify({
+                'success': True,
+                'data': response.data
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'data': [],
+                'message': f'No CSV files found for session {session_id}'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting CSV files for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@bp.route('/csv-files', methods=['POST'])
+def create_csv_file():
+    """Create a new CSV file entry."""
+    try:
+        from utils.database import save_file_info, save_csv_file_content
+        
+        # Get JSON data and file from request
+        if 'file' in request.files:
+            # Handle file upload with form data
+            file = request.files['file']
+            session_id = request.form.get('sessionId')
+            file_data = request.form.to_dict()
+        else:
+            # Handle JSON data only
+            data = request.get_json()
+            if not data:
+                return jsonify({'success': False, 'error': 'No data provided'}), 400
+            
+            session_id = data.get('sessionId')
+            file_data = data.get('fileData', {})
+            file = None
+        
+        if not session_id:
+            return jsonify({'success': False, 'error': 'Session ID is required'}), 400
+            
+        # Save file metadata to database
+        success, file_uuid = save_file_info(session_id, file_data)
+        if not success:
+            return jsonify({'success': False, 'error': 'Failed to save file metadata'}), 500
+            
+        # If file was uploaded, save to storage
+        if file and file_uuid:
+            # Save file temporarily
+            import tempfile
+            import os
+            
+            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                file.save(temp_file.name)
+                temp_path = temp_file.name
+            
+            try:
+                # Upload to Supabase storage
+                file_type = file_data.get('type', 'input')
+                storage_success = save_csv_file_content(
+                    file_uuid, session_id, file.filename, temp_path, file_type
+                )
+                
+                if not storage_success:
+                    logger.warning(f"Failed to upload file to storage for file {file_uuid}")
+                    
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'id': file_uuid,
+                'message': 'CSV file created successfully'
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error creating CSV file: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@bp.route('/csv-files/<file_id>', methods=['PUT'])
+def update_csv_file(file_id):
+    """Update CSV file metadata."""
+    try:
+        from utils.database import get_supabase_client
+        supabase = get_supabase_client()
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        # Validate file_id is UUID
+        try:
+            uuid.UUID(file_id)
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'error': 'Invalid file ID format'}), 400
+        
+        # Prepare update data (only allow specific fields to be updated)
+        allowed_fields = [
+            'file_name', 'bezeichnung', 'min', 'max', 'offset', 'datenpunkte',
+            'numerische_datenpunkte', 'numerischer_anteil', 'datenform', 
+            'datenanpassung', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
+            'zeitschrittweite_min', 'skalierung', 'skalierung_max', 'skalierung_min',
+            'zeithorizont_start', 'zeithorizont_end', 'type'
+        ]
+        
+        update_data = {}
+        for field in allowed_fields:
+            if field in data:
+                # Convert numbers to strings for database storage
+                if field in ['min', 'max', 'offset', 'datenpunkte', 'numerische_datenpunkte', 
+                           'numerischer_anteil', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
+                           'zeitschrittweite_min', 'skalierung_max', 'skalierung_min']:
+                    update_data[field] = str(data[field])
+                else:
+                    update_data[field] = data[field]
+        
+        if not update_data:
+            return jsonify({'success': False, 'error': 'No valid fields to update'}), 400
+        
+        # Update file in database
+        response = supabase.table('files').update(update_data).eq('id', file_id).execute()
+        
+        if response.data:
+            return jsonify({
+                'success': True,
+                'data': response.data[0]
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'File not found or update failed'
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error updating CSV file {file_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@bp.route('/csv-files/<file_id>', methods=['DELETE'])
+def delete_csv_file(file_id):
+    """Delete CSV file from database and storage."""
+    try:
+        from utils.database import get_supabase_client
+        supabase = get_supabase_client()
+        
+        # Validate file_id is UUID
+        try:
+            uuid.UUID(file_id)
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'error': 'Invalid file ID format'}), 400
+        
+        # Get file info first to know storage path and type
+        file_response = supabase.table('files').select('*').eq('id', file_id).single().execute()
+        if not file_response.data:
+            return jsonify({
+                'success': False,
+                'error': 'File not found'
+            }), 404
+        
+        file_info = file_response.data
+        storage_path = file_info.get('storage_path', '')
+        file_type = file_info.get('type', 'input')
+        
+        # Delete from storage if storage_path exists
+        if storage_path:
+            try:
+                bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+                storage_response = supabase.storage.from_(bucket_name).remove([storage_path])
+                logger.info(f"Deleted file from storage: {bucket_name}/{storage_path}")
+            except Exception as storage_error:
+                logger.warning(f"Could not delete file from storage: {str(storage_error)}")
+                # Continue with database deletion even if storage deletion fails
+        
+        # Delete from database
+        db_response = supabase.table('files').delete().eq('id', file_id).execute()
+        
+        if db_response.data:
+            return jsonify({
+                'success': True,
+                'message': 'CSV file deleted successfully'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to delete file from database'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error deleting CSV file {file_id}: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
