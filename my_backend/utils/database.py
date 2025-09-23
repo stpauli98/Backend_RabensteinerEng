@@ -1,19 +1,78 @@
+
 import os
 import json
 import logging
+import re
+import time
 import uuid
-import base64
 from datetime import datetime
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
+# Configuration constants
+class DatabaseConfig:
+    """Configuration constants for database operations"""
+    DEFAULT_RETRY_ATTEMPTS = 3
+    DEFAULT_INITIAL_DELAY = 1.0
+    DEFAULT_TIMEOUT_CONNECT = 30.0
+    DEFAULT_TIMEOUT_READ = 60.0
+    DEFAULT_TIMEOUT_WRITE = 30.0
+    DEFAULT_TIMEOUT_POOL = 30.0
+
+    DEFAULT_SKALIERUNG = "nein"
+    DEFAULT_MITTELWERTBILDUNG = "nein"
+    DEFAULT_ZEITZONE = "UTC"
+    DEFAULT_FILE_TYPE = "input"
+    DEFAULT_LAND = "Deutschland"
+
+    # Regex patterns
+    UUID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+    SESSION_ID_PATTERN = r'^session_\d+_[a-zA-Z0-9]+$'
+
+# Input validation functions
+def validate_session_id(session_id: str) -> bool:
+    """Validate session ID format"""
+    if not session_id or not isinstance(session_id, str):
+        return False
+    
+    # Check if it's a valid UUID
+    try:
+        uuid.UUID(session_id)
+        return True
+    except ValueError:
+        pass
+    
+    # Check if it's in session_XXXXX_XXXXX format
+    return bool(re.match(DatabaseConfig.SESSION_ID_PATTERN, session_id))
+
+def validate_file_info(file_info: dict) -> bool:
+    """Validate file info dictionary structure"""
+    if not isinstance(file_info, dict):
+        return False
+    
+    required_fields = ['fileName']
+    return all(field in file_info for field in required_fields)
+
+def validate_time_info(time_info: dict) -> bool:
+    """Validate time info dictionary structure"""
+    if not isinstance(time_info, dict):
+        return False
+    
+    # Check that boolean fields are actually boolean if present
+    boolean_fields = ['jahr', 'monat', 'woche', 'feiertag', 'tag']
+    for field in boolean_fields:
+        if field in time_info and not isinstance(time_info[field], bool):
+            return False
+    
+    return True
+
 # Configure httpx timeout globally to avoid DNS timeout issues in Docker
 import httpx
 httpx._config.DEFAULT_TIMEOUT_CONFIG = httpx.Timeout(
-    connect=30.0,
-    read=60.0,
-    write=30.0,
-    pool=30.0
+    connect=DatabaseConfig.DEFAULT_TIMEOUT_CONNECT,
+    read=DatabaseConfig.DEFAULT_TIMEOUT_READ,
+    write=DatabaseConfig.DEFAULT_TIMEOUT_WRITE,
+    pool=DatabaseConfig.DEFAULT_TIMEOUT_POOL
 )
 
 # Configure logging
@@ -31,6 +90,27 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Initialize Supabase client
+# Custom exceptions for better error handling
+class DatabaseError(Exception):
+    """Base exception for database operations"""
+    pass
+
+class SessionNotFoundError(DatabaseError):
+    """Raised when session cannot be found or created"""
+    pass
+
+class ValidationError(DatabaseError):
+    """Raised when input validation fails"""
+    pass
+
+class StorageError(DatabaseError):
+    """Raised when file storage operations fail"""
+    pass
+
+class ConfigurationError(DatabaseError):
+    """Raised when configuration is invalid"""
+    pass
+
 def get_supabase_client() -> Client:
     """
     Get the Supabase client instance.
@@ -62,8 +142,6 @@ def retry_database_operation(operation_func, max_retries=3, initial_delay=1.0):
     Returns:
         Result of operation_func or None if all retries failed
     """
-    import time
-    
     for attempt in range(max_retries + 1):
         try:
             return operation_func()
@@ -94,38 +172,43 @@ def create_or_get_session_uuid(session_id: str) -> str:
 
     Returns:
         str: The UUID of the session.
+        
+    Raises:
+        ValidationError: If session_id is invalid
+        SessionNotFoundError: If session cannot be created
     """
-    if not session_id:
-        logger.error("session_id cannot be empty")
-        return None
+    # Input validation
+    if not validate_session_id(session_id):
+        raise ValidationError(f"Invalid session_id format: {session_id}")
     
     # Check if session_id is already a UUID
-    import re
-    uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
-    if uuid_pattern.match(session_id):
+    if DatabaseConfig.UUID_PATTERN.match(session_id):
         logger.info(f"Session ID {session_id} is already a UUID, returning as-is")
         return session_id
 
     supabase = get_supabase_client()
     if not supabase:
-        return None
+        raise ConfigurationError("Supabase client not available")
 
     # 1. Check if a mapping already exists (with retry logic)
     def check_existing_mapping():
-        response = supabase.table('session_mappings').select('uuid_session_id').eq('string_session_id', session_id).single().execute()
-        if response.data:
-            uuid_session_id = response.data['uuid_session_id']
+        response = supabase.table('session_mappings').select('uuid_session_id').eq('string_session_id', session_id).execute()
+        if response.data and len(response.data) > 0:
+            uuid_session_id = response.data[0]['uuid_session_id']
             logger.info(f"Found existing mapping for {session_id}: {uuid_session_id}")
             return uuid_session_id
         return None
     
     # Try to find existing mapping with retry
-    existing_uuid = retry_database_operation(check_existing_mapping, max_retries=2, initial_delay=0.5)
+    existing_uuid = retry_database_operation(
+        check_existing_mapping, 
+        max_retries=DatabaseConfig.DEFAULT_RETRY_ATTEMPTS, 
+        initial_delay=DatabaseConfig.DEFAULT_INITIAL_DELAY
+    )
     if existing_uuid:
         return existing_uuid
     
     logger.info(f"No existing mapping found for {session_id}, will create a new one.")
-
 
     # 2. If no mapping exists, create a new session and a new mapping (with retry logic)
     def create_new_session_mapping():
@@ -133,10 +216,10 @@ def create_or_get_session_uuid(session_id: str) -> str:
         session_response = supabase.table('sessions').insert({}).execute()
         
         if getattr(session_response, 'error', None):
-            raise Exception(f"Error creating new session: {session_response.error}")
+            raise DatabaseError(f"Error creating new session: {session_response.error}")
         
         if not session_response.data:
-            raise Exception("Insert operation into 'sessions' did not return data.")
+            raise DatabaseError("Insert operation into 'sessions' did not return data.")
 
         new_uuid_session_id = session_response.data[0]['id']
 
@@ -147,18 +230,21 @@ def create_or_get_session_uuid(session_id: str) -> str:
         }).execute()
 
         if getattr(mapping_response, 'error', None):
-            raise Exception(f"Error creating session mapping: {mapping_response.error}")
+            raise DatabaseError(f"Error creating session mapping: {mapping_response.error}")
 
         logger.info(f"Created new session and mapping for {session_id}: {new_uuid_session_id}")
         return new_uuid_session_id
     
     # Try to create new session with retry
-    new_uuid = retry_database_operation(create_new_session_mapping, max_retries=2, initial_delay=1.0)
+    new_uuid = retry_database_operation(
+        create_new_session_mapping, 
+        max_retries=DatabaseConfig.DEFAULT_RETRY_ATTEMPTS, 
+        initial_delay=DatabaseConfig.DEFAULT_INITIAL_DELAY
+    )
     if new_uuid:
         return new_uuid
     
-    logger.error(f"Failed to create session and mapping for {session_id} after retries")
-    return None
+    raise SessionNotFoundError(f"Failed to create session and mapping for {session_id} after retries")
 
 def get_string_id_from_uuid(uuid_session_id: str) -> str:
     """
@@ -178,9 +264,9 @@ def get_string_id_from_uuid(uuid_session_id: str) -> str:
         return None
 
     try:
-        response = supabase.table('session_mappings').select('string_session_id').eq('uuid_session_id', uuid_session_id).single().execute()
-        if response.data:
-            return response.data['string_session_id']
+        response = supabase.table('session_mappings').select('string_session_id').eq('uuid_session_id', uuid_session_id).execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]['string_session_id']
         return None
     except Exception as e:
         logger.error(f"Could not retrieve string_session_id for UUID {uuid_session_id}: {e}")
@@ -196,101 +282,88 @@ def save_time_info(session_id: str, time_info: dict) -> bool:
         
     Returns:
         bool: True if successful, False otherwise
+        
+    Raises:
+        ValidationError: If input parameters are invalid
+        ConfigurationError: If Supabase client is not available
+        DatabaseError: If database operations fail
     """
+    # Input validation
+    if not validate_session_id(session_id):
+        raise ValidationError(f"Invalid session_id format: {session_id}")
+    
+    if not validate_time_info(time_info):
+        raise ValidationError(f"Invalid time_info structure: {time_info}")
+    
+    supabase = get_supabase_client()
+    if not supabase:
+        raise ConfigurationError("Supabase client not available")
+    
+    # Convert session_id to UUID format if it's not already
+    logger.info(f"save_time_info called with session_id: {session_id}")
+    database_session_id = _get_session_uuid(session_id)
+    if not database_session_id:
+        raise SessionNotFoundError(f"Failed to convert session_id {session_id} to UUID")
+    
+    logger.info(f"Processing time_info for session {database_session_id}")
+    logger.info(f"time_info keys: {list(time_info.keys())}")
+        
+    # Prepare data for insertion - simplified structure
+    data = {
+        "session_id": database_session_id,
+        # Boolean flags for active categories
+        "jahr": time_info.get("jahr", False),
+        "woche": time_info.get("woche", False),
+        "monat": time_info.get("monat", False),
+        "feiertag": time_info.get("feiertag", False),
+        "tag": time_info.get("tag", False),
+        
+        # Global timezone setting
+        "zeitzone": time_info.get("zeitzone", DatabaseConfig.DEFAULT_ZEITZONE),
+        
+        # JSONB structure for category-specific data
+        "category_data": time_info.get("category_data", {})
+    }
+    
+    # Ensure proper UTF-8 encoding for category_data
+    if isinstance(data['category_data'], dict):
+        # Convert any Unicode strings to proper UTF-8
+        category_data_str = json.dumps(data['category_data'], ensure_ascii=False)
+        data['category_data'] = json.loads(category_data_str)
+    
+    # Log data being sent to database
+    logger.info(f"Sending time_info data to database for session {database_session_id}:")
+    logger.info(f"Boolean flags: jahr={data['jahr']}, monat={data['monat']}, woche={data['woche']}, tag={data['tag']}, feiertag={data['feiertag']}")
+    logger.info(f"Zeitzone: {data['zeitzone']}")
+    logger.info(f"Category data keys: {list(data['category_data'].keys())}")
+    
     try:
-        supabase = get_supabase_client()
-        if not supabase:
-            return False
-        
-        # Convert session_id to UUID format if it's not already
-        logger.info(f"save_time_info called with session_id: {session_id}")
-        try:
-            # Check if it's already a valid UUID
-            uuid.UUID(session_id)
-            database_session_id = session_id
-            logger.info(f"Session_id {session_id} is already a valid UUID")
-        except (ValueError, TypeError):
-            # If not UUID, try to get or create UUID session
-            logger.info(f"Converting string session_id '{session_id}' to UUID format")
-            database_session_id = create_or_get_session_uuid(session_id)
-            if not database_session_id:
-                logger.error(f"Failed to convert session_id {session_id} to UUID")
-                return False
-            logger.info(f"Successfully converted '{session_id}' to UUID: '{database_session_id}'")
-        
-        logger.info(f"Processing time_info for session {database_session_id}")
-        logger.info(f"time_info keys: {list(time_info.keys())}")
-            
-        # Prepare data for insertion - simplified structure
-        data = {
-            "session_id": database_session_id,
-            # Boolean flags for active categories
-            "jahr": time_info.get("jahr", False),
-            "woche": time_info.get("woche", False),
-            "monat": time_info.get("monat", False),
-            "feiertag": time_info.get("feiertag", False),
-            "tag": time_info.get("tag", False),
-            
-            # Global timezone setting
-            "zeitzone": time_info.get("zeitzone", "UTC"),
-            
-            # JSONB structure for category-specific data
-            "category_data": time_info.get("category_data", {})
-        }
-        
-        # Ensure proper UTF-8 encoding for category_data
-        if isinstance(data['category_data'], dict):
-            # Convert any Unicode strings to proper UTF-8
-            import json
-            category_data_str = json.dumps(data['category_data'], ensure_ascii=False)
-            data['category_data'] = json.loads(category_data_str)
-        
-        # Log data being sent to database
-        logger.info(f"Sending time_info data to database for session {database_session_id}:")
-        logger.info(f"Boolean flags: jahr={data['jahr']}, monat={data['monat']}, woche={data['woche']}, tag={data['tag']}, feiertag={data['feiertag']}")
-        logger.info(f"Zeitzone: {data['zeitzone']}")
-        logger.info(f"Category data keys: {list(data['category_data'].keys())}")
-        
-        # Prvo proverimo da li već postoji zapis za ovu sesiju
+        # Check for existing record
         logger.info(f"Checking for existing time_info record for session {database_session_id}")
-        try:
-            existing = supabase.table("time_info").select("*").eq("session_id", database_session_id).execute()
-            logger.info(f"Existing record check successful: found {len(existing.data) if existing.data else 0} records")
-        except Exception as e:
-            logger.error(f"Error checking existing record: {str(e)}")
-            return False
+        existing = supabase.table("time_info").select("*").eq("session_id", database_session_id).execute()
+        logger.info(f"Existing record check successful: found {len(existing.data) if existing.data else 0} records")
         
         if existing.data and len(existing.data) > 0:
-            # Ako postoji, ažuriramo postojeći zapis
+            # Update existing record
             logger.info(f"Found existing time_info record for session {database_session_id}, updating...")
-            try:
-                response = supabase.table("time_info").update(data).eq("session_id", database_session_id).execute()
-                logger.info(f"Update response: {response}")
-                logger.info(f"Updated existing time_info for session {database_session_id}")
-            except Exception as e:
-                logger.error(f"Error updating time_info: {str(e)}")
-                return False
+            response = supabase.table("time_info").update(data).eq("session_id", database_session_id).execute()
+            logger.info(f"Updated existing time_info for session {database_session_id}")
         else:
-            # Ako ne postoji, dodajemo novi zapis
+            # Insert new record
             logger.info(f"No existing time_info record found for session {database_session_id}, inserting new record...")
-            try:
-                response = supabase.table("time_info").insert(data).execute()
-                logger.info(f"Insert response: {response}")
-                logger.info(f"Inserted new time_info for session {database_session_id}")
-            except Exception as e:
-                logger.error(f"Error inserting time_info: {str(e)}")
-                return False
+            response = supabase.table("time_info").insert(data).execute()
+            logger.info(f"Inserted new time_info for session {database_session_id}")
         
         if hasattr(response, 'error') and response.error:
-            logger.error(f"Error saving time_info: {response.error}")
-            return False
+            raise DatabaseError(f"Error saving time_info: {response.error}")
             
         logger.info(f"Successfully saved time_info for session {database_session_id}")
         return True
         
     except Exception as e:
-        logger.error(f"Error saving time_info: {str(e)}")
-        return False
+        if isinstance(e, DatabaseError):
+            raise
+        raise DatabaseError(f"Error saving time_info: {str(e)}")
 
 def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
     """
@@ -325,16 +398,21 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
         # Prepare data for insertion
         # Handle both 'offset' and 'offsett' from frontend (frontend sends 'offsett')
         offset_value = zeitschritte.get("offsett", zeitschritte.get("offset", ""))
+
+        # Helper function to convert empty strings to None for better database handling
+        def clean_value(value):
+            return None if value == "" or value is None else str(value)
+
         data = {
             "session_id": database_session_id,
-            "eingabe": zeitschritte.get("eingabe", ""),
-            "ausgabe": zeitschritte.get("ausgabe", ""),
-            "zeitschrittweite": zeitschritte.get("zeitschrittweite", ""),
-            "offset": offset_value  # Database column is 'offset' with single 't'
+            "eingabe": clean_value(zeitschritte.get("eingabe", "")),
+            "ausgabe": clean_value(zeitschritte.get("ausgabe", "")),
+            "zeitschrittweite": clean_value(zeitschritte.get("zeitschrittweite", "")),
+            "offset": clean_value(offset_value)  # Database column is 'offset' with single 't'
         }
         logger.info(f"Preparing zeitschritte data with offset value: '{offset_value}'")
         
-        # Prvo proverimo da li već postoji zapis za ovu sesiju
+        # First check if a record already exists for this session
         logger.info(f"Checking for existing zeitschritte record for session {database_session_id}")
         try:
             existing = supabase.table("zeitschritte").select("*").eq("session_id", database_session_id).execute()
@@ -344,7 +422,7 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
             return False
         
         if existing.data and len(existing.data) > 0:
-            # Ako postoji, ažuriramo postojeći zapis
+            # If exists, update the existing record
             logger.info(f"Found existing zeitschritte record, updating...")
             try:
                 response = supabase.table("zeitschritte").update(data).eq("session_id", database_session_id).execute()
@@ -354,7 +432,7 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
                 logger.error(f"Error updating zeitschritte: {str(e)}")
                 return False
         else:
-            # Ako ne postoji, dodajemo novi zapis
+            # If doesn't exist, add a new record
             logger.info(f"No existing zeitschritte record found, inserting new...")
             try:
                 response = supabase.table("zeitschritte").insert(data).execute()
@@ -406,18 +484,16 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
                 return False, None
             logger.info(f"Using UUID session_id for file info: {database_session_id}")
             
-        # Proveri da li je ID u UUID formatu, ako nije generiši novi UUID
+        # Check if ID is in UUID format, if not generate new UUID
         file_id = file_info.get("id")
         try:
-            # Pokušaj konverziju u UUID format
-            uuid_obj = uuid.UUID(file_id)
-            valid_uuid = str(uuid_obj)
+            # Try to convert to UUID format
+            valid_uuid = str(uuid.UUID(file_id))
         except (ValueError, TypeError, AttributeError):
-            # Ako konverzija ne uspe, generiši novi UUID
+            # If conversion fails, generate new UUID
             valid_uuid = str(uuid.uuid4())
             logger.info(f"Generated new UUID {valid_uuid} for file {file_info.get('fileName')}")
             
-        # Prepare data for insertion/update - strogo prema shemi tabele files
         # Prepare data according to files table schema
         
         # Generate storage path if not provided in file_info
@@ -458,7 +534,7 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             "type": file_info.get("type", "")
         }
         
-        # Posebno rukovanje timestamp poljima
+        # Special handling for timestamp fields
         utc_min = file_info.get("utcMin")
         utc_max = file_info.get("utcMax")
         if utc_min:
@@ -489,20 +565,20 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
         logger.info(f"Attempting to save file data with ID {valid_uuid} to files table")
         logger.info(f"Data being sent: {json.dumps(data, default=str)}")
         
-        # Posebno logiranje za zeitschrittweite vrijednosti
+        # Special logging for zeitschrittweite values
         logger.info(f"zeitschrittweite_mittelwert value: {data['zeitschrittweite_mittelwert']}")
         logger.info(f"zeitschrittweite_min value: {data['zeitschrittweite_min']}")
         logger.info(f"Original values from frontend - zeitschrittweiteAvgValue: {file_info.get('zeitschrittweiteAvgValue', '')}, zeitschrittweiteMinValue: {file_info.get('zeitschrittweiteMinValue', '')}")
         
         
-        # Provjeri da li postoji kolona 'zeithorizont' u podacima
+        # Check if 'zeithorizont' column exists in data
         if 'zeithorizont' in data:
             logger.warning(f"Found 'zeithorizont' key in data which might cause issues")
         
-        # Ispiši sve ključeve u podacima
+        # Print all keys in data
         logger.info(f"All keys in data: {list(data.keys())}")
         
-        # Provjeri da li postoji kolona 'zeithorizont_start' i 'zeithorizont_end'
+        # Check if both 'zeithorizont_start' and 'zeithorizont_end' columns exist
         if 'zeithorizont_start' in data and 'zeithorizont_end' in data:
             logger.info(f"Found both 'zeithorizont_start' and 'zeithorizont_end' keys in data")
         
@@ -552,7 +628,7 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
         file_size = os.path.getsize(file_path)
         logger.info(f"File size: {file_size} bytes")
         
-        # Definisanje putanje u Storage-u
+        # Define storage path
         storage_path = f"{session_id}/{file_name}"
         
         try:
@@ -617,12 +693,13 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
         logger.error(f"Error saving CSV file content: {str(e)}")
         return False
 
+def _transform_time_info_to_jsonb(time_info: dict) -> dict:
     """
     Transform old time information format to the new JSONB structure format.
-    
+
     Args:
         time_info: Dictionary containing time information in the old format
-        
+
     Returns:
         dict: Time information in the new format with category_data JSONB structure
     """
@@ -721,6 +798,328 @@ def save_csv_file_content(file_id: str, session_id: str, file_name: str, file_pa
     
     return new_time_info
 
+def _get_session_uuid(session_id: str) -> str:
+    """
+    Convert session_id to UUID format if needed.
+    
+    Args:
+        session_id: Original session ID (string or UUID format)
+        
+    Returns:
+        str: UUID format session ID or None if conversion fails
+    """
+    try:
+        uuid.UUID(session_id)
+        logger.info(f"Session_id {session_id} is already a valid UUID")
+        return session_id
+    except (ValueError, TypeError):
+        logger.info(f"Converting string session_id '{session_id}' to UUID format")
+        database_session_id = create_or_get_session_uuid(session_id)
+        if not database_session_id:
+            logger.error(f"Failed to get UUID for session {session_id}")
+            return None
+        logger.info(f"Successfully converted '{session_id}' to UUID: '{database_session_id}'")
+        return database_session_id
+
+def _load_session_metadata(session_id: str) -> dict:
+    """
+    Load session metadata from filesystem.
+    
+    Args:
+        session_id: Session ID for directory structure
+        
+    Returns:
+        dict: Session metadata or None if loading fails
+    """
+    # Base directory for file uploads
+    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    upload_base_dir = os.path.join(base_path, 'api', 'routes', 'uploads', 'file_uploads')
+    session_dir = os.path.join(upload_base_dir, session_id)
+    
+    # Check if session directory exists
+    if not os.path.exists(session_dir):
+        logger.error(f"Session directory not found: {session_dir}")
+        return None
+        
+    # Path to session metadata file
+    metadata_path = os.path.join(session_dir, 'session_metadata.json')
+    
+    # Check if session metadata file exists
+    if not os.path.exists(metadata_path):
+        logger.error(f"Session metadata file not found: {metadata_path}")
+        return None
+        
+    # Load session metadata
+    try:
+        with open(metadata_path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Error loading session metadata: {str(e)}")
+        return None
+
+def _save_metadata_to_database(database_session_id: str, metadata: dict) -> bool:
+    """
+    Save time info and zeitschritte metadata to database.
+    
+    Args:
+        database_session_id: UUID format session ID
+        metadata: Session metadata dictionary
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    success = True
+    
+    # Save time info
+    if 'timeInfo' in metadata:
+        logger.info(f"Original timeInfo structure: {json.dumps(metadata['timeInfo'], indent=2)}")
+        if not save_time_info(database_session_id, metadata['timeInfo']):
+            logger.error(f"Failed to save time_info for session {database_session_id}")
+            success = False
+        
+    # Save zeitschritte
+    if 'zeitschritte' in metadata:
+        if not save_zeitschritte(database_session_id, metadata['zeitschritte']):
+            logger.error(f"Failed to save zeitschritte for session {database_session_id}")
+            success = False
+    
+    return success
+
+def _prepare_file_batch_data(database_session_id: str, files_list: list) -> list:
+    """
+    Prepare batch data for file insertion.
+    
+    Args:
+        database_session_id: UUID format session ID
+        files_list: List of file info dictionaries
+        
+    Returns:
+        list: List of prepared file data for batch insertion
+    """
+    batch_data = []
+    
+    for file_info in files_list:
+        # Validate file info
+        if not validate_file_info(file_info):
+            logger.warning(f"Skipping invalid file info: {file_info}")
+            continue
+            
+        # Generate valid UUID for file
+        file_id = file_info.get("id")
+        try:
+            valid_uuid = str(uuid.UUID(file_id))
+        except (ValueError, TypeError, AttributeError):
+            valid_uuid = str(uuid.uuid4())
+            logger.info(f"Generated new UUID {valid_uuid} for file {file_info.get('fileName')}")
+        
+        # Generate storage path
+        storage_path = file_info.get("storagePath", "")
+        if not storage_path:
+            file_name = file_info.get("fileName", "")
+            if file_name:
+                storage_path = f"{database_session_id}/{file_name}"
+        
+        # Prepare data according to files table schema
+        data = {
+            "id": valid_uuid,
+            "session_id": database_session_id,
+            "file_name": file_info.get("fileName", ""),
+            "bezeichnung": file_info.get("bezeichnung", ""),
+            "min": str(file_info.get("min", "")),
+            "max": str(file_info.get("max", "")),
+            "offset": str(file_info.get("offset", "")),
+            "datenpunkte": str(file_info.get("datenpunkte", "")),
+            "numerische_datenpunkte": str(file_info.get("numerischeDatenpunkte", "")),
+            "numerischer_anteil": str(file_info.get("numerischerAnteil", "")),
+            "datenform": file_info.get("datenform", ""),
+            "datenanpassung": file_info.get("datenanpassung", ""),
+            "zeitschrittweite": str(file_info.get("zeitschrittweite", "")),
+            "zeitschrittweite_mittelwert": str(file_info.get("zeitschrittweiteAvgValue", file_info.get("zeitschrittweiteMittelwert", ""))),
+            "zeitschrittweite_min": str(file_info.get("zeitschrittweiteMinValue", file_info.get("zeitschrittweiteMin", ""))),
+            "skalierung": file_info.get("skalierung", DatabaseConfig.DEFAULT_SKALIERUNG),
+            "skalierung_max": str(file_info.get("skalierungMax", "")),
+            "skalierung_min": str(file_info.get("skalierungMin", "")),
+            "zeithorizont_start": file_info.get("zeithorizontStart", ""),
+            "zeithorizont_end": file_info.get("zeithorizontEnd", ""),
+            "zeitschrittweite_transferierten_daten": str(file_info.get("zeitschrittweiteTransferiertenDaten", "")),
+            "offset_transferierten_daten": str(file_info.get("offsetTransferiertenDaten", "")),
+            "mittelwertbildung_uber_den_zeithorizont": file_info.get("mittelwertbildungÜberDenZeithorizont", DatabaseConfig.DEFAULT_MITTELWERTBILDUNG),
+            "storage_path": storage_path,
+            "type": file_info.get("type", DatabaseConfig.DEFAULT_FILE_TYPE)
+        }
+        
+        # Handle timestamp fields
+        for field_name, value in [("utcMin", file_info.get("utcMin")), ("utcMax", file_info.get("utcMax"))]:
+            if value:
+                try:
+                    dt_obj = datetime.fromisoformat(value)
+                    # Convert field_name to correct database column name
+                    db_field_name = "utc_min" if field_name == "utcMin" else "utc_max"
+                    data[db_field_name] = dt_obj.isoformat(sep=' ', timespec='seconds')
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid {field_name} format: {value}, error: {str(e)}")
+        
+        batch_data.append(data)
+    
+    return batch_data
+
+def _batch_insert_files(supabase, batch_data: list) -> list:
+    """
+    Perform batch insertion of file data.
+    
+    Args:
+        supabase: Supabase client
+        batch_data: List of file data to insert
+        
+    Returns:
+        list: List of successfully inserted file UUIDs
+    """
+    if not batch_data:
+        return []
+    
+    try:
+        logger.info(f"Performing batch insert of {len(batch_data)} files")
+        response = supabase.table("files").insert(batch_data).execute()
+        
+        if hasattr(response, 'error') and response.error:
+            raise DatabaseError(f"Batch file insert failed: {response.error}")
+            
+        # Extract UUIDs of successfully inserted files
+        inserted_uuids = [item['id'] for item in response.data if 'id' in item]
+        logger.info(f"Successfully inserted {len(inserted_uuids)} files in batch")
+        return inserted_uuids
+        
+    except Exception as e:
+        raise DatabaseError(f"Batch file insert failed: {str(e)}")
+
+def _save_files_to_database(database_session_id: str, session_id: str, metadata: dict) -> bool:
+    """
+    Save file info and content to database and storage using batch operations.
+    
+    Args:
+        database_session_id: UUID format session ID
+        session_id: Original session ID for directory structure
+        metadata: Session metadata dictionary
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if 'files' not in metadata or not isinstance(metadata['files'], list):
+        return True
+    
+    # Get Supabase client
+    supabase = get_supabase_client()
+    if not supabase:
+        raise ConfigurationError("Supabase client not available")
+    
+    # Base directory for file uploads
+    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    upload_base_dir = os.path.join(base_path, 'api', 'routes', 'uploads', 'file_uploads')
+    session_dir = os.path.join(upload_base_dir, session_id)
+    
+    try:
+        # Step 1: Prepare batch data for file metadata insertion
+        batch_data = _prepare_file_batch_data(database_session_id, metadata['files'])
+        if not batch_data:
+            logger.warning("No valid file data to insert")
+            return True
+        
+        # Step 2: Perform batch insertion of file metadata
+        inserted_uuids = _batch_insert_files(supabase, batch_data)
+        if not inserted_uuids:
+            logger.error("Batch file insertion failed - no files were inserted")
+            return False
+        
+        # Step 3: Upload file content to storage (this still needs to be individual)
+        # Create mapping from file names to UUIDs for content upload
+        uuid_map = {}
+        for data, uuid_val in zip(batch_data, inserted_uuids):
+            file_name = data.get('file_name', '')
+            if file_name:
+                uuid_map[file_name] = {
+                    'uuid': uuid_val,
+                    'type': data.get('type', DatabaseConfig.DEFAULT_FILE_TYPE)
+                }
+        
+        # Upload file content individually (storage operations can't be batched)
+        upload_success = True
+        for file_info in metadata['files']:
+            file_name = file_info.get('fileName', '')
+            if file_name not in uuid_map:
+                logger.warning(f"File {file_name} not found in UUID mapping, skipping upload")
+                continue
+                
+            file_uuid = uuid_map[file_name]['uuid']
+            file_type = uuid_map[file_name]['type']
+            file_path = os.path.join(session_dir, file_name)
+            
+            if os.path.exists(file_path):
+                logger.info(f"Uploading file {file_name} to Supabase Storage...")
+                try:
+                    if not save_csv_file_content(file_uuid, database_session_id, file_name, file_path, file_type):
+                        logger.error(f"❌ Failed to upload {file_name} to storage")
+                        upload_success = False
+                    else:
+                        logger.info(f"✅ Successfully uploaded {file_name} to storage")
+                except Exception as e:
+                    logger.error(f"❌ Error uploading {file_name}: {str(e)}")
+                    upload_success = False
+            else:
+                logger.warning(f"CSV file not found locally: {file_path}")
+                upload_success = False
+        
+        if not upload_success:
+            logger.warning("Some file uploads failed, but metadata was saved successfully")
+        
+        logger.info(f"Batch file operation completed: {len(inserted_uuids)} files metadata saved")
+        return True
+        
+    except Exception as e:
+        if isinstance(e, (DatabaseError, ConfigurationError)):
+            raise
+        raise DatabaseError(f"Error in batch file save operation: {str(e)}")
+
+def _finalize_session(database_session_id: str, n_dat: int = None, file_count: int = None) -> bool:
+    """
+    Update sessions table with finalization data.
+    
+    Args:
+        database_session_id: UUID format session ID
+        n_dat: Total number of data samples (optional)
+        file_count: Number of files in the session (optional)
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if n_dat is None and file_count is None:
+        return True
+    
+    session_update_data = {
+        "finalized": True,
+        "updated_at": datetime.now().isoformat()
+    }
+    if n_dat is not None:
+        session_update_data["n_dat"] = n_dat
+    if file_count is not None:
+        session_update_data["file_count"] = file_count
+
+    try:
+        supabase = get_supabase_client()
+        if not supabase:
+            logger.error("Supabase client not available for session finalization")
+            return False
+            
+        session_response = supabase.table("sessions").update(session_update_data).eq("id", database_session_id).execute()
+        if hasattr(session_response, 'error') and session_response.error:
+            logger.error(f"Error updating sessions table: {session_response.error}")
+            return False
+        else:
+            logger.info(f"Successfully updated sessions table with n_dat={n_dat}, file_count={file_count}")
+            return True
+    except Exception as e:
+        logger.error(f"Error updating sessions table: {str(e)}")
+        return False
+
 def save_session_to_supabase(session_id: str, n_dat: int = None, file_count: int = None) -> bool:
     """
     Save all session data to Supabase.
@@ -734,103 +1133,29 @@ def save_session_to_supabase(session_id: str, n_dat: int = None, file_count: int
         bool: True if successful, False otherwise
     """
     try:
-        # Get or create the UUID for this session
         logger.info(f"save_session_to_supabase called with session_id: {session_id}")
-        try:
-            uuid.UUID(session_id)
-            database_session_id = session_id
-            logger.info(f"Session_id {session_id} is already a valid UUID")
-        except (ValueError, TypeError):
-            logger.info(f"Converting string session_id '{session_id}' to UUID format in save_session_to_supabase")
-            database_session_id = create_or_get_session_uuid(session_id)
-            if not database_session_id:
-                logger.error(f"Failed to get UUID for session {session_id}")
-                return False
-            logger.info(f"Successfully converted '{session_id}' to UUID: '{database_session_id}' in save_session_to_supabase")
-        # Base directory for file uploads - use the api/routes directory where files are actually saved
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Go up to my_backend
-        upload_base_dir = os.path.join(base_path, 'api', 'routes', 'uploads', 'file_uploads')
-        session_dir = os.path.join(upload_base_dir, session_id)
         
-        # Check if session directory exists
-        if not os.path.exists(session_dir):
-            logger.error(f"Session directory not found: {session_dir}")
+        # Step 1: Get or convert session UUID
+        database_session_id = _get_session_uuid(session_id)
+        if not database_session_id:
             return False
-            
-        # Path to session metadata file
-        metadata_path = os.path.join(session_dir, 'session_metadata.json')
         
-        # Check if session metadata file exists
-        if not os.path.exists(metadata_path):
-            logger.error(f"Session metadata file not found: {metadata_path}")
+        # Step 2: Load session metadata from filesystem
+        metadata = _load_session_metadata(session_id)
+        if not metadata:
             return False
-            
-        # Load session metadata
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-            
-        # Save time info
-        if 'timeInfo' in metadata:
-            # Log the original structure for debugging
-            logger.info(f"Original timeInfo structure: {json.dumps(metadata['timeInfo'], indent=2)}")
-            
-            # Save time info directly using the UUID session - pass the UUID, not the original string
-            success = save_time_info(database_session_id, metadata['timeInfo'])
-            if not success:
-                logger.error(f"Failed to save time_info for session {database_session_id}")
-            
-        # Save zeitschritte
-        if 'zeitschritte' in metadata:
-            success = save_zeitschritte(database_session_id, metadata['zeitschritte'])
-            if not success:
-                logger.error(f"Failed to save zeitschritte for session {database_session_id}")
-            
-        # Save file info and content
-        if 'files' in metadata and isinstance(metadata['files'], list):
-            for file_info in metadata['files']:
-                # Save file info using the UUID session
-                success, valid_uuid = save_file_info(database_session_id, file_info)
-                
-                # Save file content only if file info was saved successfully
-                if success and valid_uuid:
-                    file_name = file_info.get('fileName', '')
-                    file_type = file_info.get('type', 'input')  # Default to 'input' if not specified
-                    file_path = os.path.join(session_dir, file_name)
-                    
-                    if os.path.exists(file_path):
-                        logger.info(f"Uploading file {file_name} to Supabase Storage...")
-                        # Koristi valid_uuid umesto originalnog file_id
-                        upload_success = save_csv_file_content(valid_uuid, database_session_id, file_name, file_path, file_type)
-                        if upload_success:
-                            logger.info(f"✅ Successfully uploaded {file_name} to storage")
-                        else:
-                            logger.error(f"❌ Failed to upload {file_name} to storage")
-                    else:
-                        logger.warning(f"CSV file not found locally: {file_path}")
-                else:
-                    logger.warning(f"Failed to save file info for {file_info.get('fileName', 'unknown')}, skipping content upload")
         
-        # Update sessions table with finalization data
-        if n_dat is not None or file_count is not None:
-            session_update_data = {
-                "finalized": True,
-                "updated_at": datetime.now().isoformat()
-            }
-            if n_dat is not None:
-                session_update_data["n_dat"] = n_dat
-            if file_count is not None:
-                session_update_data["file_count"] = file_count
-
-            try:
-                supabase = get_supabase_client()
-                if supabase:
-                    session_response = supabase.table("sessions").update(session_update_data).eq("id", database_session_id).execute()
-                    if hasattr(session_response, 'error') and session_response.error:
-                        logger.error(f"Error updating sessions table: {session_response.error}")
-                    else:
-                        logger.info(f"Successfully updated sessions table with n_dat={n_dat}, file_count={file_count}")
-            except Exception as e:
-                logger.error(f"Error updating sessions table: {str(e)}")
+        # Step 3: Save metadata (time info and zeitschritte) to database
+        if not _save_metadata_to_database(database_session_id, metadata):
+            logger.warning("Some metadata failed to save, continuing with files...")
+        
+        # Step 4: Save files to database and storage
+        if not _save_files_to_database(database_session_id, session_id, metadata):
+            logger.warning("Some files failed to save, continuing with finalization...")
+        
+        # Step 5: Finalize session in database
+        if not _finalize_session(database_session_id, n_dat, file_count):
+            logger.warning("Session finalization failed, but core data was saved")
 
         logger.info(f"Successfully saved session {session_id} to Supabase")
         return True

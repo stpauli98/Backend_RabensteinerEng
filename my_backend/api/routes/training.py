@@ -12,6 +12,7 @@ from werkzeug.utils import secure_filename
 import tempfile
 import glob
 import shutil
+import re
 from utils.database import save_session_to_supabase, get_string_id_from_uuid, create_or_get_session_uuid, get_supabase_client
 
 # Configure logging
@@ -24,6 +25,41 @@ logger.setLevel(logging.DEBUG)
 
 # Create blueprint
 bp = Blueprint('training', __name__)
+
+# Validation helper functions
+def validate_session_id(session_id):
+    """Validate session ID format - should be either UUID or session_XXXXXX_XXXXXX format"""
+    if not session_id or not isinstance(session_id, str):
+        return False
+
+    # Check if it's a valid UUID
+    try:
+        uuid.UUID(session_id)
+        return True
+    except ValueError:
+        pass
+
+    # Check if it's in session_XXXXX_XXXXX format
+    pattern = r'^session_\d+_[a-zA-Z0-9]+$'
+    return bool(re.match(pattern, session_id))
+
+def create_error_response(message, status_code=400):
+    """Create standardized error response"""
+    return jsonify({
+        'success': False,
+        'error': message,
+        'data': None
+    }), status_code
+
+def create_success_response(data=None, message=None):
+    """Create standardized success response"""
+    response = {
+        'success': True,
+        'data': data
+    }
+    if message:
+        response['message'] = message
+    return jsonify(response)
 
 def extract_file_metadata_fields(file_metadata):
     """
@@ -682,65 +718,164 @@ def finalize_session():
 
 @bp.route('/list-sessions', methods=['GET'])
 def list_sessions():
-    """List all available training sessions from local storage."""
+    """List all available training sessions from Supabase database."""
     try:
-        # Define base directory for file uploads
-        base_dir = UPLOAD_BASE_DIR
-        
-        # Check if directory exists
-        if not os.path.exists(base_dir):
-            return jsonify({'success': True, 'sessions': []})
-        
-        # Get all session directories
-        session_dirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-        
+        from utils.database import get_supabase_client
+
+        # Get Supabase client
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({
+                'success': False,
+                'error': 'Database connection not available'
+            }), 500
+
+        # Query sessions with related data
+        # Get sessions with file counts and metadata
+        sessions_query = """
+        SELECT
+            sm.string_session_id as session_id,
+            s.created_at,
+            s.updated_at,
+            s.finalized,
+            s.file_count,
+            s.n_dat,
+            (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id) as actual_file_count,
+            (SELECT COUNT(*) FROM zeitschritte z WHERE z.session_id = s.id) as zeitschritte_count,
+            (SELECT COUNT(*) FROM time_info ti WHERE ti.session_id = s.id) as time_info_count,
+            (SELECT json_agg(
+                json_build_object(
+                    'type', f.type,
+                    'file_name', f.file_name,
+                    'bezeichnung', f.bezeichnung
+                )
+            ) FROM files f WHERE f.session_id = s.id) as files_info
+        FROM session_mappings sm
+        JOIN sessions s ON sm.uuid_session_id = s.id
+        ORDER BY s.created_at DESC
+        LIMIT %s
+        """
+
+        # Execute query with limit
+        limit = MAX_SESSIONS_TO_RETURN if 'MAX_SESSIONS_TO_RETURN' in globals() else 50
+
+        try:
+            # Use raw SQL query for complex JOIN
+            response = supabase.rpc('execute_sql', {
+                'sql_query': sessions_query,
+                'params': [limit]
+            }).execute()
+
+            if response.data:
+                sessions_data = response.data
+            else:
+                # Fallback to simpler query if RPC doesn't work
+                sessions_response = supabase.table('session_mappings').select(
+                    'string_session_id, sessions(id, created_at, updated_at, finalized, file_count, n_dat)'
+                ).execute()
+
+                sessions_data = []
+                for session_mapping in sessions_response.data:
+                    if session_mapping.get('sessions'):
+                        session = session_mapping['sessions']
+                        session_id = session_mapping['string_session_id']
+
+                        # Get file count from files table
+                        files_response = supabase.table('files').select('id, type, file_name, bezeichnung').eq('session_id', session['id']).execute()
+                        file_count = len(files_response.data) if files_response.data else 0
+
+                        # Get zeitschritte count
+                        zeit_response = supabase.table('zeitschritte').select('id', count='exact').eq('session_id', session['id']).execute()
+                        zeitschritte_count = zeit_response.count or 0
+
+                        # Get time_info count
+                        time_response = supabase.table('time_info').select('id', count='exact').eq('session_id', session['id']).execute()
+                        time_info_count = time_response.count or 0
+
+                        sessions_data.append({
+                            'session_id': session_id,
+                            'created_at': session['created_at'],
+                            'updated_at': session['updated_at'],
+                            'finalized': session.get('finalized', False),
+                            'file_count': session.get('file_count', 0),
+                            'n_dat': session.get('n_dat', 0),
+                            'actual_file_count': file_count,
+                            'zeitschritte_count': zeitschritte_count,
+                            'time_info_count': time_info_count,
+                            'files_info': files_response.data if files_response.data else []
+                        })
+
+        except Exception as query_error:
+            logger.warning(f"Complex query failed, using simple approach: {str(query_error)}")
+
+            # Simple fallback query
+            sessions_response = supabase.table('session_mappings').select(
+                'string_session_id, uuid_session_id, created_at'
+            ).order('created_at', desc=True).limit(limit).execute()
+
+            sessions_data = []
+            for session_mapping in sessions_response.data:
+                session_uuid = session_mapping['uuid_session_id']
+                session_id = session_mapping['string_session_id']
+
+                # Get session details
+                session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
+                session_details = session_response.data[0] if session_response.data else {}
+
+                # Get actual counts from database
+                files_response = supabase.table('files').select('id, type, file_name, bezeichnung').eq('session_id', session_uuid).execute()
+                file_count = len(files_response.data) if files_response.data else 0
+
+                zeit_response = supabase.table('zeitschritte').select('id', count='exact').eq('session_id', session_uuid).execute()
+                zeitschritte_count = zeit_response.count or 0
+
+                time_response = supabase.table('time_info').select('id', count='exact').eq('session_id', session_uuid).execute()
+                time_info_count = time_response.count or 0
+
+                sessions_data.append({
+                    'session_id': session_id,
+                    'created_at': session_mapping.get('created_at') or session_details.get('created_at'),
+                    'updated_at': session_details.get('updated_at'),
+                    'finalized': session_details.get('finalized', False),
+                    'file_count': session_details.get('file_count', 0),
+                    'n_dat': session_details.get('n_dat', 0),
+                    'actual_file_count': file_count,
+                    'zeitschritte_count': zeitschritte_count,
+                    'time_info_count': time_info_count,
+                    'files_info': files_response.data if files_response.data else []
+                })
+
+        # Format sessions for frontend
         sessions = []
-        for session_id in session_dirs:
-            session_dir = os.path.join(base_dir, session_id)
-            metadata_path = os.path.join(session_dir, 'session_metadata.json')
-            
-            # Get session metadata if available
-            metadata = {}
-            if os.path.exists(metadata_path):
-                try:
-                    with open(metadata_path, 'r') as f:
-                        metadata = json.load(f)
-                except json.JSONDecodeError:
-                    metadata = {}
-            
-            # Get file count
-            files = [f for f in os.listdir(session_dir) if os.path.isfile(os.path.join(session_dir, f)) and not f.endswith('.json')]
-            
-            # Get creation time from directory stats
-            created_at = datetime.fromtimestamp(os.path.getctime(session_dir)).isoformat()
-            updated_at = datetime.fromtimestamp(os.path.getmtime(session_dir)).isoformat()
-            
+        for session_data in sessions_data:
             session_info = {
-                'sessionId': session_id,
-                'createdAt': created_at,
-                'lastUpdated': updated_at,
-                'fileCount': len(files),
-                'finalized': metadata.get('finalized', False),
-                'timeInfo': metadata.get('timeInfo', {}),
-                'zeitschritte': metadata.get('zeitschritte', {})
+                'sessionId': session_data['session_id'],
+                'createdAt': session_data['created_at'],
+                'lastUpdated': session_data['updated_at'] or session_data['created_at'],
+                'fileCount': session_data.get('actual_file_count', session_data.get('file_count', 0)),
+                'finalized': session_data.get('finalized', False),
+                'nDat': session_data.get('n_dat', 0),
+                'zeitschritteCount': session_data.get('zeitschritte_count', 0),
+                'timeInfoCount': session_data.get('time_info_count', 0),
+                'filesInfo': session_data.get('files_info', [])
             }
-            
             sessions.append(session_info)
-        
-        # Sort sessions by creation time (newest first)
-        sessions.sort(key=lambda x: x['createdAt'], reverse=True)
-        
-        # Limit the number of sessions to return
-        sessions = sessions[:MAX_SESSIONS_TO_RETURN]
-        
+
+        logger.info(f"Retrieved {len(sessions)} sessions from database")
+
         return jsonify({
             'success': True,
-            'sessions': sessions
+            'sessions': sessions,
+            'total_count': len(sessions)
         })
-        
+
     except Exception as e:
-        logger.error(f"Error listing sessions: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error listing sessions from database: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to retrieve sessions from database'
+        }), 500
 
 @bp.route('/session/<session_id>', methods=['GET'])
 def get_session(session_id):
@@ -827,12 +962,12 @@ def get_session_from_database(session_id):
             return jsonify({'success': False, 'error': 'Database connection not available'}), 500
 
         # Get session data from database
-        session_response = supabase.table('sessions').select('*').eq('id', database_session_id).single().execute()
-        
-        if not session_response.data:
+        session_response = supabase.table('sessions').select('*').eq('id', database_session_id).execute()
+
+        if not session_response.data or len(session_response.data) == 0:
             return jsonify({'success': False, 'error': 'Session not found in database'}), 404
-        
-        session_data = session_response.data
+
+        session_data = session_response.data[0]
         
         # Get files data
         files_response = supabase.table('files').select('*').eq('session_id', database_session_id).execute()
@@ -1421,59 +1556,137 @@ def save_zeitschritte_endpoint():
 
 @bp.route('/session/<session_id>/delete', methods=['POST'])
 def delete_session(session_id):
-    """Delete a specific session and all its files from local storage."""
+    """Delete a specific session and all its files from local storage and Supabase database."""
     try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        
         # Check if the provided ID is a UUID, and if so, get the string ID
         try:
             import uuid
             uuid.UUID(session_id)
             string_session_id = get_string_id_from_uuid(session_id)
+            uuid_session_id = session_id
             if not string_session_id:
                 return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
         except (ValueError, TypeError):
             string_session_id = session_id
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                return jsonify({'success': False, 'error': 'Could not get session UUID'}), 404
 
-        # Definiraj putanju do lokalnog direktorija za upload
+        logger.info(f"Deleting session {string_session_id} (UUID: {uuid_session_id})")
+        
+        # 1. Delete from Supabase database first
+        supabase = get_supabase_client()
+        database_errors = []
+        
+        if supabase:
+            try:
+                # Delete from files table (this will also trigger CSV file storage deletion)
+                files_response = supabase.table('files').select('storage_path, type').eq('session_id', uuid_session_id).execute()
+                
+                # Delete CSV files from Supabase Storage
+                for file_data in files_response.data:
+                    storage_path = file_data.get('storage_path')
+                    file_type = file_data.get('type', 'input')
+                    
+                    if storage_path:
+                        try:
+                            bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+                            supabase.storage.from_(bucket_name).remove([storage_path])
+                            logger.info(f"Deleted file from storage: {bucket_name}/{storage_path}")
+                        except Exception as storage_error:
+                            logger.warning(f"Could not delete file from storage {storage_path}: {str(storage_error)}")
+                            database_errors.append(f"Storage deletion failed: {storage_path}")
+                
+                # Delete from database tables (order matters due to foreign keys)
+                tables_to_delete = [
+                    'training_results',      # Results and visualizations
+                    'training_visualizations',
+                    'evaluation_tables',
+                    'files',                 # File metadata
+                    'zeitschritte',          # Time step data
+                    'time_info',             # Time configuration
+                    'session_mappings',      # Session mapping (last)
+                    'sessions'               # Session record (last)
+                ]
+                
+                for table in tables_to_delete:
+                    try:
+                        if table in ['session_mappings']:
+                            # For session_mappings, use string_session_id
+                            response = supabase.table(table).delete().eq('string_session_id', string_session_id).execute()
+                        elif table in ['sessions']:
+                            # For sessions, use uuid directly
+                            response = supabase.table(table).delete().eq('id', uuid_session_id).execute()
+                        else:
+                            # For all other tables, use session_id
+                            response = supabase.table(table).delete().eq('session_id', uuid_session_id).execute()
+                        
+                        deleted_count = len(response.data) if response.data else 0
+                        if deleted_count > 0:
+                            logger.info(f"Deleted {deleted_count} records from {table}")
+                            
+                    except Exception as table_error:
+                        logger.error(f"Error deleting from {table}: {str(table_error)}")
+                        database_errors.append(f"Table {table}: {str(table_error)}")
+                        
+            except Exception as db_error:
+                logger.error(f"Database deletion error: {str(db_error)}")
+                database_errors.append(f"Database error: {str(db_error)}")
+        else:
+            database_errors.append("Supabase client not available")
+
+        # 2. Delete local files
         upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+        local_errors = []
         
-        # Provjeri postoji li direktorij
-        if not os.path.exists(upload_dir):
-            logger.warning(f"Upload directory does not exist: {upload_dir}")
-            return jsonify({
-                'success': False,
-                'error': 'Session not found'
-            }), 404
-        
-        # Obriši sve datoteke u direktoriju
-        for root, dirs, files in os.walk(upload_dir, topdown=False):
-            for file in files:
-                file_path = os.path.join(root, file)
-                try:
-                    os.remove(file_path)
-                    # logger.info(f"Deleted file: {file_path}")
-                except Exception as e:
-                    logger.error(f"Error deleting file {file_path}: {str(e)}")
+        if os.path.exists(upload_dir):
+            # Delete all files in directory
+            for root, dirs, files in os.walk(upload_dir, topdown=False):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"Deleted local file: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Error deleting file {file_path}: {str(e)}")
+                        local_errors.append(f"File {file_path}: {str(e)}")
+                
+                # Delete subdirectories
+                for dir in dirs:
+                    dir_path = os.path.join(root, dir)
+                    try:
+                        os.rmdir(dir_path)
+                        logger.info(f"Deleted local directory: {dir_path}")
+                    except Exception as e:
+                        logger.error(f"Error deleting directory {dir_path}: {str(e)}")
+                        local_errors.append(f"Directory {dir_path}: {str(e)}")
             
-            # Obriši poddirektorije
-            for dir in dirs:
-                dir_path = os.path.join(root, dir)
-                try:
-                    os.rmdir(dir_path)
-                    # logger.info(f"Deleted directory: {dir_path}")
-                except Exception as e:
-                    logger.error(f"Error deleting directory {dir_path}: {str(e)}")
+            # Delete main directory
+            try:
+                os.rmdir(upload_dir)
+                logger.info(f"Deleted session directory: {upload_dir}")
+            except Exception as e:
+                logger.error(f"Error deleting session directory {upload_dir}: {str(e)}")
+                local_errors.append(f"Session directory: {str(e)}")
+        else:
+            logger.info(f"Local upload directory does not exist: {upload_dir}")
         
-        # Na kraju obriši glavni direktorij
-        try:
-            os.rmdir(upload_dir)
-            # logger.info(f"Deleted session directory: {upload_dir}")
-        except Exception as e:
-            logger.error(f"Error deleting session directory {upload_dir}: {str(e)}")
+        # Prepare response
+        all_errors = database_errors + local_errors
         
-        return jsonify({
-            'success': True,
-            'message': f"Session {string_session_id} deleted successfully"
-        })
+        if not all_errors:
+            return jsonify({
+                'success': True,
+                'message': f"Session {string_session_id} completely deleted from database and local storage"
+            })
+        else:
+            return jsonify({
+                'success': True,  # Partial success
+                'message': f"Session {string_session_id} deleted with some warnings",
+                'warnings': all_errors
+            })
         
     except Exception as e:
         logger.error(f"Error deleting session {session_id}: {str(e)}")
@@ -1599,9 +1812,16 @@ def run_analysis(session_id):
 def get_zeitschritte(session_id):
     """Get zeitschritte data for a session."""
     try:
+        # Validate session_id format
+        if not validate_session_id(session_id):
+            return create_error_response('Invalid session ID format', 400)
+
         from utils.database import get_supabase_client, create_or_get_session_uuid
         supabase = get_supabase_client()
-        
+
+        if not supabase:
+            return create_error_response('Database connection not available', 500)
+
         # Convert session_id to UUID format if needed
         try:
             uuid.UUID(session_id)
@@ -1609,35 +1829,25 @@ def get_zeitschritte(session_id):
         except (ValueError, TypeError):
             database_session_id = create_or_get_session_uuid(session_id)
             if not database_session_id:
-                return jsonify({'success': False, 'error': 'Invalid session ID'}), 400
+                return create_error_response('Session not found', 404)
         
         # Get zeitschritte from database
-        response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).single().execute()
+        response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).execute()
         
-        if response.data:
+        if response.data and len(response.data) > 0:
             # Transform database data back to frontend format (offsett -> offset)
-            data = dict(response.data)
+            data = dict(response.data[0])  # Take the first record
             if 'offsett' in data:
                 data['offset'] = data['offsett']
                 del data['offsett']
-            
-            return jsonify({
-                'success': True,
-                'data': data
-            })
+
+            return create_success_response(data)
         else:
-            return jsonify({
-                'success': False,
-                'data': None,
-                'message': 'No zeitschritte found for this session'
-            }), 404
+            return create_error_response('No zeitschritte found for this session', 404)
             
     except Exception as e:
         logger.error(f"Error getting zeitschritte for {session_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return create_error_response(f'Internal server error: {str(e)}', 500)
 
 @bp.route('/get-time-info/<session_id>', methods=['GET'])
 def get_time_info(session_id):
@@ -1656,12 +1866,12 @@ def get_time_info(session_id):
                 return jsonify({'success': False, 'error': 'Invalid session ID'}), 400
         
         # Get time_info from database
-        response = supabase.table('time_info').select('*').eq('session_id', database_session_id).single().execute()
-        
-        if response.data:
+        response = supabase.table('time_info').select('*').eq('session_id', database_session_id).execute()
+
+        if response.data and len(response.data) > 0:
             return jsonify({
                 'success': True,
-                'data': response.data
+                'data': response.data[0]
             })
         else:
             return jsonify({
@@ -1871,14 +2081,14 @@ def delete_csv_file(file_id):
             return jsonify({'success': False, 'error': 'Invalid file ID format'}), 400
         
         # Get file info first to know storage path and type
-        file_response = supabase.table('files').select('*').eq('id', file_id).single().execute()
-        if not file_response.data:
+        file_response = supabase.table('files').select('*').eq('id', file_id).execute()
+        if not file_response.data or len(file_response.data) == 0:
             return jsonify({
                 'success': False,
                 'error': 'File not found'
             }), 404
-        
-        file_info = file_response.data
+
+        file_info = file_response.data[0]
         storage_path = file_info.get('storage_path', '')
         file_type = file_info.get('type', 'input')
         
@@ -2667,4 +2877,222 @@ def save_evaluation_tables(session_id):
             'success': False,
             'error': str(e),
             'session_id': session_id
+        }), 500
+
+@bp.route('/delete-all-sessions', methods=['POST'])
+def delete_all_sessions():
+    """
+    Delete ALL sessions and associated data from Supabase database and local storage.
+    ⚠️ WARNING: This will permanently delete all data! Use with extreme caution.
+    """
+    try:
+        from utils.database import get_supabase_client
+        import os
+        import shutil
+        
+        logger.warning("🚨 DELETE ALL SESSIONS operation initiated!")
+        
+        # Get request data for confirmation (handle both JSON and form data)
+        data = {}
+        try:
+            # Try JSON first
+            if request.is_json:
+                data = request.get_json() or {}
+            elif request.content_type and 'application/json' in request.content_type:
+                data = request.get_json(force=True) or {}
+            elif hasattr(request, 'json') and request.json:
+                data = request.json
+            else:
+                # Try form data as fallback
+                data = request.form.to_dict()
+                # Convert string values to proper types
+                if 'confirm_delete_all' in data:
+                    data['confirm_delete_all'] = data['confirm_delete_all'].lower() in ['true', '1', 'yes']
+        except Exception as parse_error:
+            logger.warning(f"Could not parse request data: {str(parse_error)}")
+            # Last resort - check raw data
+            try:
+                import json
+                raw_data = request.get_data(as_text=True)
+                if raw_data:
+                    data = json.loads(raw_data)
+            except:
+                data = {}
+        
+        confirmation = data.get('confirm_delete_all', False)
+        logger.info(f"Parsed confirmation: {confirmation} from data: {data}")
+        
+        # Require explicit confirmation
+        if not confirmation:
+            return jsonify({
+                'success': False,
+                'error': 'Confirmation required',
+                'message': 'To delete all sessions, send {"confirm_delete_all": true} in request body'
+            }), 400
+        
+        # Get Supabase client
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({
+                'success': False,
+                'error': 'Database connection not available'
+            }), 500
+            
+        # Count current data before deletion
+        initial_counts = {}
+        database_errors = []
+        
+        try:
+            # Get initial counts
+            tables_to_check = [
+                'training_results',
+                'training_visualizations', 
+                'files',
+                'zeitschritte',
+                'time_info',
+                'session_mappings',
+                'sessions'
+            ]
+            
+            for table in tables_to_check:
+                try:
+                    count_response = supabase.table(table).select('id', count='exact').execute()
+                    initial_counts[table] = count_response.count
+                    logger.info(f"Found {count_response.count} records in {table}")
+                except Exception as e:
+                    logger.warning(f"Could not count records in {table}: {str(e)}")
+                    initial_counts[table] = 'unknown'
+            
+        except Exception as e:
+            logger.error(f"Error getting initial counts: {str(e)}")
+        
+        # 1. Delete all CSV files from Supabase Storage
+        storage_deleted = {'csv-files': 0, 'aus-csv-files': 0}
+        
+        try:
+            # Get all files to delete from storage
+            files_response = supabase.table('files').select('storage_path, type').execute()
+            
+            for file_data in files_response.data:
+                storage_path = file_data.get('storage_path')
+                file_type = file_data.get('type', 'input')
+                
+                if storage_path:
+                    try:
+                        bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+                        supabase.storage.from_(bucket_name).remove([storage_path])
+                        storage_deleted[bucket_name] += 1
+                        logger.info(f"Deleted from storage: {bucket_name}/{storage_path}")
+                    except Exception as storage_error:
+                        logger.warning(f"Could not delete from storage {storage_path}: {str(storage_error)}")
+                        database_errors.append(f"Storage: {storage_path} - {str(storage_error)}")
+                        
+        except Exception as e:
+            logger.error(f"Error deleting from storage: {str(e)}")
+            database_errors.append(f"Storage deletion error: {str(e)}")
+        
+        # 2. Delete from database tables (order matters due to foreign keys)
+        tables_to_delete = [
+            'training_results',      # Results and visualizations first
+            'training_visualizations',
+            'evaluation_tables',     # May not exist
+            'files',                 # File metadata
+            'zeitschritte',          # Time step data
+            'time_info',             # Time configuration
+            'session_mappings',      # Session mapping
+            'sessions'               # Session records last
+        ]
+        
+        deleted_counts = {}
+        
+        for table in tables_to_delete:
+            try:
+                # Delete all records from table
+                response = supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+                deleted_count = len(response.data) if response.data else 0
+                deleted_counts[table] = deleted_count
+                
+                if deleted_count > 0:
+                    logger.info(f"✅ Deleted {deleted_count} records from {table}")
+                else:
+                    logger.info(f"ℹ️  No records to delete from {table}")
+                    
+            except Exception as table_error:
+                logger.error(f"Error deleting from {table}: {str(table_error)}")
+                database_errors.append(f"Table {table}: {str(table_error)}")
+                deleted_counts[table] = 'error'
+        
+        # 3. Delete all local session directories
+        local_deleted = {'directories': 0, 'files': 0}
+        local_errors = []
+        
+        try:
+            upload_base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'api', 'routes', 'uploads', 'file_uploads')
+            
+            if os.path.exists(upload_base):
+                # Get all session directories
+                for item in os.listdir(upload_base):
+                    item_path = os.path.join(upload_base, item)
+                    
+                    # Only delete directories that look like session directories
+                    if os.path.isdir(item_path) and item.startswith('session_'):
+                        try:
+                            # Count files before deletion
+                            file_count = sum([len(files) for r, d, files in os.walk(item_path)])
+                            local_deleted['files'] += file_count
+                            
+                            # Delete directory and all contents
+                            shutil.rmtree(item_path)
+                            local_deleted['directories'] += 1
+                            logger.info(f"🗂️  Deleted local directory: {item_path} ({file_count} files)")
+                            
+                        except Exception as dir_error:
+                            logger.error(f"Error deleting directory {item_path}: {str(dir_error)}")
+                            local_errors.append(f"Directory {item}: {str(dir_error)}")
+            else:
+                logger.info("📁 Local upload directory does not exist")
+                
+        except Exception as e:
+            logger.error(f"Error during local cleanup: {str(e)}")
+            local_errors.append(f"Local cleanup error: {str(e)}")
+        
+        # Prepare response
+        all_errors = database_errors + local_errors
+        
+        # Calculate totals
+        total_database_records = sum([count for count in deleted_counts.values() if isinstance(count, int)])
+        total_storage_files = sum(storage_deleted.values())
+        
+        response_data = {
+            'success': True,
+            'message': 'All sessions deletion completed',
+            'summary': {
+                'database_records_deleted': total_database_records,
+                'storage_files_deleted': total_storage_files, 
+                'local_directories_deleted': local_deleted['directories'],
+                'local_files_deleted': local_deleted['files']
+            },
+            'details': {
+                'initial_counts': initial_counts,
+                'deleted_counts': deleted_counts,
+                'storage_deleted': storage_deleted,
+                'local_deleted': local_deleted
+            }
+        }
+        
+        if all_errors:
+            response_data['warnings'] = all_errors
+            response_data['message'] += ' (with some warnings)'
+            logger.warning(f"Completed with {len(all_errors)} warnings")
+        else:
+            logger.info("✅ All sessions deleted successfully without errors")
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"Critical error during delete all sessions: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Critical error occurred during deletion operation'
         }), 500
