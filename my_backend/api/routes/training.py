@@ -2452,13 +2452,15 @@ def train_models(session_id):
                                 except (ValueError, TypeError):
                                     pass
                                 
-                                # Special handling for ML models - serialize to base64
+                                # Special handling for ML models and scalers - serialize to base64
                                 try:
-                                    # Check if it's a Keras/TensorFlow model
-                                    if hasattr(obj, 'predict') and hasattr(obj, 'fit'):
+                                    # Check if it's a sklearn scaler or transformer
+                                    if (hasattr(obj, 'fit') and hasattr(obj, 'transform')) or \
+                                       (hasattr(obj, 'predict') and hasattr(obj, 'fit')) or \
+                                       (hasattr(obj, '__class__') and 'sklearn' in str(obj.__class__.__module__)):
                                         import pickle
                                         import base64
-                                        # Serialize model to bytes
+                                        # Serialize model/scaler to bytes
                                         model_bytes = pickle.dumps(obj)
                                         # Encode to base64 for JSON storage
                                         model_b64 = base64.b64encode(model_bytes).decode('utf-8')
@@ -2468,7 +2470,7 @@ def train_models(session_id):
                                             '_model_data': model_b64
                                         }
                                 except Exception as e:
-                                    logger.warning(f"Could not serialize model: {e}")
+                                    logger.warning(f"Could not serialize model/scaler: {e}")
                                     pass
                                 
                                 # Try to convert unknown objects to string as last resort
@@ -3095,4 +3097,408 @@ def delete_all_sessions():
             'success': False,
             'error': str(e),
             'message': 'Critical error occurred during deletion operation'
+        }), 500
+
+
+# ============================================================================
+# SCALER MANAGEMENT API ENDPOINTS
+# ============================================================================
+
+@bp.route('/scalers/<session_id>', methods=['GET'])
+def get_scalers(session_id):
+    """
+    Retrieve saved scalers from database for a specific session.
+    Returns input and output scalers that can be used for data normalization.
+    """
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        import pickle
+        import base64
+
+        # Get the UUID session ID
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({
+                'success': False,
+                'error': f'Session {session_id} not found'
+            }), 404
+
+        # Get scalers from database
+        supabase = get_supabase_client()
+        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
+
+        if not response.data:
+            return jsonify({
+                'success': False,
+                'error': f'No training results found for session {session_id}'
+            }), 404
+
+        training_results = response.data[0]['results']
+        scalers = training_results.get('scalers', {})
+
+        if not scalers:
+            return jsonify({
+                'success': False,
+                'error': f'No scalers found for session {session_id}'
+            }), 404
+
+        # Return scalers in serialized format (JSON-safe)
+        input_scalers = scalers.get('input', {})
+        output_scalers = scalers.get('output', {})
+
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'scalers': {
+                'input': input_scalers,
+                'output': output_scalers,
+                'metadata': {
+                    'input_features': len(input_scalers),
+                    'output_features': len(output_scalers),
+                    'input_features_scaled': sum(1 for s in input_scalers.values() if s is not None),
+                    'output_features_scaled': sum(1 for s in output_scalers.values() if s is not None)
+                }
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error retrieving scalers for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to retrieve scalers from database'
+        }), 500
+
+
+@bp.route('/scalers/<session_id>/download', methods=['GET'])
+def download_scalers_as_save_files(session_id):
+    """Download scalers as .save files identical to original training_original.py format."""
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        import pickle, base64, os, zipfile, tempfile
+        from datetime import datetime
+        from flask import send_file
+
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({'success': False, 'error': f'Session {session_id} not found'}), 404
+
+        supabase = get_supabase_client()
+        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
+
+        if not response.data:
+            return jsonify({'success': False, 'error': f'No training results found for session {session_id}'}), 404
+
+        scalers = response.data[0]['results'].get('scalers', {})
+        if not scalers:
+            return jsonify({'success': False, 'error': f'No scalers found for session {session_id}'}), 404
+
+        # Deserialize scalers back to original format
+        def deserialize_scalers_dict(scaler_dict):
+            result = {}
+            for key, scaler_data in scaler_dict.items():
+                if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+                    try:
+                        scaler = pickle.loads(base64.b64decode(scaler_data['_model_data']))
+                        result[int(key)] = scaler  # Convert key to int for original format
+                    except Exception as e:
+                        logger.error(f"Error deserializing scaler {key}: {str(e)}")
+                        result[int(key)] = None
+                else:
+                    result[int(key)] = None
+            return result
+
+        input_scalers = deserialize_scalers_dict(scalers.get('input', {}))
+        output_scalers = deserialize_scalers_dict(scalers.get('output', {}))
+
+        # Create temporary directory for files
+        temp_dir = tempfile.mkdtemp()
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        # Create .save files identical to original format
+        i_scale_file = os.path.join(temp_dir, f'i_scale_{timestamp}.save')
+        o_scale_file = os.path.join(temp_dir, f'o_scale_{timestamp}.save')
+
+        # Save input scalers
+        with open(i_scale_file, 'wb') as f:
+            pickle.dump(input_scalers, f)
+
+        # Save output scalers
+        with open(o_scale_file, 'wb') as f:
+            pickle.dump(output_scalers, f)
+
+        # Create ZIP file with both .save files
+        zip_file = os.path.join(temp_dir, f'scalers_{session_id}_{timestamp}.zip')
+        with zipfile.ZipFile(zip_file, 'w') as zipf:
+            zipf.write(i_scale_file, f'i_scale_{timestamp}.save')
+            zipf.write(o_scale_file, f'o_scale_{timestamp}.save')
+
+        logger.info(f"Created scaler files for session {session_id}: {zip_file}")
+
+        # Send ZIP file as download
+        return send_file(
+            zip_file,
+            as_attachment=True,
+            download_name=f'scalers_{session_id}_{timestamp}.zip',
+            mimetype='application/zip'
+        )
+
+    except Exception as e:
+        logger.error(f"Error creating scaler download for session {session_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/scale-data/<session_id>', methods=['POST'])
+def scale_input_data(session_id):
+    """
+    Scale input data using saved scalers (Skalierung Eingabedaten speichern).
+    Takes raw input data and returns scaled data ready for model prediction.
+    """
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        import numpy as np
+        import pandas as pd
+        import pickle
+        import base64
+
+        # Get request data
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+        input_data = data.get('input_data')
+        if input_data is None:
+            return jsonify({'success': False, 'error': 'input_data field is required'}), 400
+
+        # Convert input_data to numpy array
+        try:
+            if isinstance(input_data, list):
+                input_array = np.array(input_data)
+            elif isinstance(input_data, dict):
+                # Assume it's a pandas DataFrame-like structure
+                input_array = np.array(list(input_data.values())).T
+            else:
+                input_array = np.array(input_data)
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Failed to convert input_data to array: {str(e)}'
+            }), 400
+
+        # Get the UUID session ID
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({
+                'success': False,
+                'error': f'Session {session_id} not found'
+            }), 404
+
+        # Get scalers from database
+        supabase = get_supabase_client()
+        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
+
+        if not response.data:
+            return jsonify({
+                'success': False,
+                'error': f'No training results found for session {session_id}'
+            }), 404
+
+        training_results = response.data[0]['results']
+        scalers = training_results.get('scalers', {})
+        input_scalers = scalers.get('input', {})
+
+        if not input_scalers:
+            return jsonify({
+                'success': False,
+                'error': f'No input scalers found for session {session_id}'
+            }), 404
+
+        # Helper function to deserialize scalers
+        def deserialize_scaler(scaler_data):
+            """Convert serialized scaler back to usable object"""
+            if scaler_data is None:
+                return None
+            elif isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+                # Deserialize pickled scaler
+                try:
+                    model_b64 = scaler_data['_model_data']
+                    model_bytes = base64.b64decode(model_b64)
+                    scaler = pickle.loads(model_bytes)
+                    return scaler
+                except Exception as e:
+                    logger.error(f"Error deserializing scaler: {str(e)}")
+                    return None
+            else:
+                return scaler_data
+
+        # Scale the input data
+        scaled_data = input_array.copy()
+        scaling_info = {}
+
+        for i in range(input_array.shape[1]):
+            if str(i) in input_scalers:
+                scaler = deserialize_scaler(input_scalers[str(i)])
+                if scaler is not None:
+                    try:
+                        # Scale the column
+                        original_data = input_array[:, i].reshape(-1, 1)
+                        scaled_column = scaler.transform(original_data)
+                        scaled_data[:, i] = scaled_column.flatten()
+
+                        scaling_info[f'feature_{i}'] = {
+                            'scaled': True,
+                            'original_range': [float(np.min(original_data)), float(np.max(original_data))],
+                            'scaled_range': [float(np.min(scaled_column)), float(np.max(scaled_column))],
+                            'feature_range': scaler.feature_range
+                        }
+                    except Exception as e:
+                        logger.error(f"Error scaling feature {i}: {str(e)}")
+                        scaling_info[f'feature_{i}'] = {'scaled': False, 'error': str(e)}
+                else:
+                    scaling_info[f'feature_{i}'] = {'scaled': False, 'reason': 'no_scaler'}
+            else:
+                scaling_info[f'feature_{i}'] = {'scaled': False, 'reason': 'scaler_not_found'}
+
+        # Optionally save scaled data
+        save_scaled = data.get('save_scaled', False)
+        saved_file_path = None
+
+        if save_scaled:
+            try:
+                import os
+                from datetime import datetime
+
+                # Create scaled data directory if it doesn't exist
+                scaled_dir = f"temp_uploads/scaled_data_{session_id}"
+                os.makedirs(scaled_dir, exist_ok=True)
+
+                # Save as CSV
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                file_name = f"scaled_input_data_{timestamp}.csv"
+                file_path = os.path.join(scaled_dir, file_name)
+
+                # Create DataFrame and save
+                scaled_df = pd.DataFrame(scaled_data, columns=[f'feature_{i}' for i in range(scaled_data.shape[1])])
+                scaled_df.to_csv(file_path, index=False)
+                saved_file_path = file_path
+
+                logger.info(f"Scaled data saved to: {file_path}")
+
+            except Exception as e:
+                logger.error(f"Error saving scaled data: {str(e)}")
+
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'scaled_data': scaled_data.tolist(),
+            'scaling_info': scaling_info,
+            'metadata': {
+                'original_shape': input_array.shape,
+                'scaled_shape': scaled_data.shape,
+                'features_scaled': sum(1 for info in scaling_info.values() if info.get('scaled', False)),
+                'total_features': len(scaling_info),
+                'saved_file_path': saved_file_path
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error scaling data for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to scale input data'
+        }), 500
+
+
+@bp.route('/scalers/<session_id>/info', methods=['GET'])
+def get_scalers_info(session_id):
+    """
+    Get detailed information about saved scalers without deserializing them.
+    Useful for checking scaler availability and metadata.
+    """
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+
+        # Get the UUID session ID
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({
+                'success': False,
+                'error': f'Session {session_id} not found'
+            }), 404
+
+        # Get scalers from database
+        supabase = get_supabase_client()
+        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
+
+        if not response.data:
+            return jsonify({
+                'success': False,
+                'error': f'No training results found for session {session_id}'
+            }), 404
+
+        training_results = response.data[0]['results']
+        scalers = training_results.get('scalers', {})
+
+        # Analyze scaler structure
+        input_scalers = scalers.get('input', {})
+        output_scalers = scalers.get('output', {})
+
+        def analyze_scalers(scaler_dict, scaler_type):
+            """Analyze scaler structure without deserializing"""
+            info = {
+                'total_features': len(scaler_dict),
+                'features_with_scalers': 0,
+                'features_without_scalers': 0,
+                'serialized_scalers': 0,
+                'null_scalers': 0,
+                'features': {}
+            }
+
+            for key, scaler_data in scaler_dict.items():
+                feature_info = {'key': key}
+
+                if scaler_data is None:
+                    feature_info['status'] = 'null'
+                    info['null_scalers'] += 1
+                    info['features_without_scalers'] += 1
+                elif isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+                    feature_info['status'] = 'serialized'
+                    feature_info['model_type'] = scaler_data.get('_model_type')
+                    feature_info['model_class'] = scaler_data.get('_model_class')
+                    info['serialized_scalers'] += 1
+                    info['features_with_scalers'] += 1
+                else:
+                    feature_info['status'] = 'direct'
+                    feature_info['type'] = str(type(scaler_data))
+                    info['features_with_scalers'] += 1
+
+                info['features'][key] = feature_info
+
+            return info
+
+        input_info = analyze_scalers(input_scalers, 'input')
+        output_info = analyze_scalers(output_scalers, 'output')
+
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'scalers_available': bool(scalers),
+            'input_scalers': input_info,
+            'output_scalers': output_info,
+            'metadata': training_results.get('metadata', {}),
+            'summary': {
+                'total_input_features': input_info['total_features'],
+                'total_output_features': output_info['total_features'],
+                'input_features_scaled': input_info['features_with_scalers'],
+                'output_features_scaled': output_info['features_with_scalers']
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting scaler info for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to retrieve scaler information'
         }), 500
