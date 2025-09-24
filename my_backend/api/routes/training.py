@@ -13,6 +13,9 @@ import tempfile
 import glob
 import shutil
 import re
+import time
+from pathlib import Path
+from typing import Optional
 from utils.database import save_session_to_supabase, get_string_id_from_uuid, create_or_get_session_uuid, get_supabase_client
 
 # Configure logging
@@ -196,106 +199,223 @@ def verify_file_hash(file_data: bytes, expected_hash: str) -> bool:
 
 def assemble_file_locally(upload_id: str, filename: str) -> str:
     """
-    Assemble a complete file from its chunks stored locally.
-    
+    Securely assemble a complete file from its chunks.
+
     Args:
         upload_id: Unique identifier for the upload session
         filename: Name of the file to assemble
-        
+
     Returns:
         str: Path to the assembled file
     """
+    # 🛡️ Security: Sanitize filename
+    safe_filename = secure_filename(filename)
+    if not safe_filename or safe_filename != filename:
+        raise ValueError(f"Invalid filename: {filename}")
+
+    # 🛡️ Security: Validate upload_id format
+    if not upload_id.replace('_', '').replace('-', '').isalnum():
+        raise ValueError(f"Invalid upload_id format: {upload_id}")
+
+    upload_dir = os.path.join(UPLOAD_BASE_DIR, upload_id)
+
+    # 🛡️ Security: Ensure upload_dir is within base directory
+    upload_dir = os.path.abspath(upload_dir)
+    base_dir = os.path.abspath(UPLOAD_BASE_DIR)
+    if not upload_dir.startswith(base_dir):
+        raise ValueError("Path traversal attempt detected")
+
+    if not os.path.exists(upload_dir):
+        raise FileNotFoundError(f"Upload directory not found: {upload_dir}")
+
+    # Load and validate metadata
+    metadata_path = os.path.join(upload_dir, 'metadata.json')
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+
     try:
-        # Definiraj direktorij gdje su spremljeni chunkovi
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, upload_id)
-        
-        # Provjeri postoji li direktorij
-        if not os.path.exists(upload_dir):
-            raise FileNotFoundError(f"Upload directory not found: {upload_dir}")
-        
-        # Učitaj metapodatke o chunkovima
-        metadata_path = os.path.join(upload_dir, 'metadata.json')
-        if not os.path.exists(metadata_path):
-            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
-            
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             chunks_metadata = json.load(f)
-        
-        # Filtriraj samo chunkove za traženu datoteku
-        file_chunks = [c for c in chunks_metadata if c['fileName'] == filename]
-        
-        if not file_chunks:
-            raise FileNotFoundError(f"No chunks found for file {filename}")
-            
-        # Sortiraj chunkove po indeksu
-        file_chunks.sort(key=lambda x: x['chunkIndex'])
-        
-        # Provjeri jesu li svi chunkovi prisutni
-        expected_chunks = file_chunks[0]['totalChunks']
-        if len(file_chunks) != expected_chunks:
-            raise ValueError(f"Missing chunks for {filename}. Expected {expected_chunks}, found {len(file_chunks)}")
-        
-        # Kreiraj putanju za sastavljenu datoteku
-        assembled_file_path = os.path.join(upload_dir, filename)
-        
-        # Sastavi datoteku
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"Invalid metadata file: {e}")
+
+    # Filter and validate chunks
+    file_chunks = [c for c in chunks_metadata if c.get('fileName') == filename]
+    if not file_chunks:
+        raise FileNotFoundError(f"No chunks found for file {filename}")
+
+    # Sort and validate chunk sequence
+    file_chunks.sort(key=lambda x: x.get('chunkIndex', 0))
+    expected_chunks = file_chunks[0].get('totalChunks', 0)
+
+    if len(file_chunks) != expected_chunks:
+        raise ValueError(
+            f"Missing chunks for {filename}. "
+            f"Expected {expected_chunks}, found {len(file_chunks)}"
+        )
+
+    # Validate chunk indices are sequential
+    for i, chunk in enumerate(file_chunks):
+        if chunk.get('chunkIndex') != i:
+            raise ValueError(f"Non-sequential chunk index: expected {i}, got {chunk.get('chunkIndex')}")
+
+    # 🛡️ Security: Ensure assembled file is in upload directory
+    assembled_file_path = os.path.join(upload_dir, safe_filename)
+    assembled_file_path = os.path.abspath(assembled_file_path)
+
+    if not assembled_file_path.startswith(upload_dir):
+        raise ValueError("Invalid file path detected")
+
+    # ⚡ Performance: Stream assembly with buffer
+    BUFFER_SIZE = 64 * 1024  # 64KB buffer
+
+    try:
         with open(assembled_file_path, 'wb') as output_file:
             for chunk_info in file_chunks:
-                chunk_path = chunk_info['filePath']
-                if not os.path.exists(chunk_path):
+                chunk_path = chunk_info.get('filePath')
+                if not chunk_path or not os.path.exists(chunk_path):
                     raise FileNotFoundError(f"Chunk file not found: {chunk_path}")
-                    
+
+                # 🛡️ Security: Validate chunk path
+                chunk_path = os.path.abspath(chunk_path)
+                if not chunk_path.startswith(base_dir):
+                    raise ValueError("Invalid chunk path detected")
+
+                # ⚡ Performance: Stream copy with buffer
                 with open(chunk_path, 'rb') as chunk_file:
-                    output_file.write(chunk_file.read())
-        
-        # Logiraj uspješno sastavljanje datoteke
+                    while True:
+                        chunk_data = chunk_file.read(BUFFER_SIZE)
+                        if not chunk_data:
+                            break
+                        output_file.write(chunk_data)
+
         file_size = os.path.getsize(assembled_file_path)
-        # logger.info(f"Successfully assembled file {filename} from {len(file_chunks)} chunks, total size: {file_size} bytes")
-        
+        logger.info(
+            f"Successfully assembled {safe_filename} from {len(file_chunks)} chunks, "
+            f"total size: {file_size:,} bytes"
+        )
+
         return assembled_file_path
+
     except Exception as e:
+        # Cleanup partial file on error
+        if os.path.exists(assembled_file_path):
+            try:
+                os.remove(assembled_file_path)
+            except OSError:
+                pass
         logger.error(f"Error assembling file locally: {str(e)}")
         raise
 
 def save_session_metadata_locally(session_id: str, metadata: dict) -> bool:
-    """Save session metadata to local storage."""
+    """
+    Securely save session metadata to local storage.
+
+    Args:
+        session_id: Session identifier (will be validated)
+        metadata: Metadata dictionary to save
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
     try:
-        # Kreiraj putanju do lokalnog direktorija za upload
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-        
-        # Kreiraj direktorij ako ne postoji
-        os.makedirs(upload_dir, exist_ok=True)
-        
-        # Spremi metapodatke u JSON datoteku
+        # 🛡️ Security: Validate session_id
+        if not session_id or not isinstance(session_id, str):
+            raise ValueError("Invalid session_id")
+
+        # Remove any path traversal attempts
+        clean_session_id = session_id.replace('..', '').replace('/', '').replace('\\', '')
+        if clean_session_id != session_id:
+            raise ValueError("Invalid characters in session_id")
+
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, clean_session_id)
+
+        # 🛡️ Security: Ensure directory is within base
+        upload_dir = os.path.abspath(upload_dir)
+        base_dir = os.path.abspath(UPLOAD_BASE_DIR)
+        if not upload_dir.startswith(base_dir):
+            raise ValueError("Path traversal attempt detected")
+
+        # Create directory with proper permissions
+        os.makedirs(upload_dir, mode=0o755, exist_ok=True)
+
+        # Save metadata with atomic write
         session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
-        with open(session_metadata_path, 'w') as f:
-            json.dump(metadata, f, indent=2)
-        
-        # logger.info(f"Session metadata saved locally to: {session_metadata_path}")
-        return True
+        temp_path = session_metadata_path + '.tmp'
+
+        try:
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+            # Atomic move
+            os.rename(temp_path, session_metadata_path)
+
+            logger.info(f"Session metadata saved: {session_metadata_path}")
+            return True
+
+        except Exception as e:
+            # Cleanup temp file on error
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise e
+
     except Exception as e:
-        logger.error(f"Error saving session metadata locally: {str(e)}")
+        logger.error(f"Error saving session metadata: {e}")
         return False
 
-def get_session_metadata_locally(session_id: str) -> dict:
-    """Get session metadata from local storage."""
+def get_session_metadata_locally(session_id: str) -> Optional[dict]:
+    """
+    Securely retrieve session metadata from local storage.
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        dict: Metadata if found, None if not found
+    """
     try:
-        # Kreiraj putanju do lokalnog direktorija za upload
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-        
-        # Provjeri postoji li direktorij
-        if not os.path.exists(upload_dir):
-            logger.warning(f"Upload directory does not exist: {upload_dir}")
+        # 🛡️ Security: Validate session_id
+        if not session_id or not isinstance(session_id, str):
+            logger.warning("Invalid session_id provided")
             return {}
-        
-        # Učitaj metapodatke o sesiji
+
+        clean_session_id = session_id.replace('..', '').replace('/', '').replace('\\', '')
+        if clean_session_id != session_id:
+            logger.warning("Invalid characters in session_id")
+            return {}
+
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, clean_session_id)
+
+        # 🛡️ Security: Ensure directory is within base
+        upload_dir = os.path.abspath(upload_dir)
+        base_dir = os.path.abspath(UPLOAD_BASE_DIR)
+        if not upload_dir.startswith(base_dir):
+            logger.warning("Path traversal attempt detected")
+            return {}
+
+        if not os.path.exists(upload_dir):
+            logger.debug(f"Upload directory does not exist: {upload_dir}")
+            return {}
+
         session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
-        if os.path.exists(session_metadata_path):
-            with open(session_metadata_path, 'r') as f:
-                return json.load(f)
+        if not os.path.exists(session_metadata_path):
+            logger.debug(f"Session metadata file not found: {session_metadata_path}")
+            return {}
+
+        with open(session_metadata_path, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
+
+        logger.debug(f"Session metadata loaded for: {session_id}")
+        return metadata
+
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.error(f"Error parsing session metadata for {session_id}: {e}")
         return {}
     except Exception as e:
-        logger.error(f"Error retrieving session metadata locally: {str(e)}")
+        logger.error(f"Error retrieving session metadata for {session_id}: {e}")
         return {}
 
 def print_session_files(session_id, files_data):
@@ -3407,6 +3527,66 @@ def scale_input_data(session_id):
             'success': False,
             'error': str(e),
             'message': 'Failed to scale input data'
+        }), 500
+
+
+def cleanup_incomplete_uploads(upload_base_dir: str, max_age_hours: int = 24) -> int:
+    """
+    Clean up incomplete or old upload sessions.
+
+    Args:
+        upload_base_dir: Base directory for uploads
+        max_age_hours: Maximum age for incomplete uploads
+
+    Returns:
+        int: Number of cleaned up sessions
+    """
+    cleaned_count = 0
+    current_time = time.time()
+    max_age_seconds = max_age_hours * 3600
+
+    try:
+        for session_dir in Path(upload_base_dir).iterdir():
+            if not session_dir.is_dir():
+                continue
+
+            # Check if session is old
+            dir_age = current_time - session_dir.stat().st_mtime
+            if dir_age > max_age_seconds:
+                # Check if session is incomplete (no finalized marker)
+                finalized_marker = session_dir / '.finalized'
+                if not finalized_marker.exists():
+                    try:
+                        shutil.rmtree(session_dir)
+                        cleaned_count += 1
+                        logger.info(f"Cleaned up old session: {session_dir.name}")
+                    except Exception as e:
+                        logger.error(f"Error cleaning up {session_dir}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+
+    return cleaned_count
+
+
+# Add cleanup route for manual cleanup
+@bp.route('/cleanup-uploads', methods=['POST'])
+def cleanup_uploads():
+    """Manual cleanup of old upload sessions."""
+    try:
+        max_age_hours = request.json.get('max_age_hours', 24) if request.json else 24
+        cleaned_count = cleanup_incomplete_uploads(UPLOAD_BASE_DIR, max_age_hours)
+
+        return jsonify({
+            'success': True,
+            'cleaned_sessions': cleaned_count,
+            'message': f'Cleaned up {cleaned_count} old sessions'
+        })
+    except Exception as e:
+        logger.error(f"Error during manual cleanup: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 
