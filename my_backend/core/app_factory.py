@@ -45,20 +45,29 @@ def create_app():
     from api.routes import register_blueprints
     register_blueprints(app)
     
-    # Error handlers
+    # Error handlers - preserve specific error messages from routes
     @app.errorhandler(400)
     def bad_request(error):
         logger.error(f"Bad request (400): {error}")
+        # Check if this is already a JSON response with specific error message
+        if hasattr(error, 'response') and error.response:
+            return error.response
         return jsonify({'error': 'Bad Request', 'message': str(error)}), 400
-    
+
     @app.errorhandler(413)
     def payload_too_large(error):
         logger.error(f"Payload too large (413): {error}")
+        # Check if this is already a JSON response with specific error message
+        if hasattr(error, 'response') and error.response:
+            return error.response
         return jsonify({'error': 'Payload Too Large', 'message': 'Request entity is too large'}), 413
-    
+
     @app.errorhandler(500)
     def internal_error(error):
         logger.error(f"Internal server error (500): {error}")
+        # Check if this is already a JSON response with specific error message
+        if hasattr(error, 'response') and error.response:
+            return error.response
         return jsonify({'error': 'Internal Server Error', 'message': str(error)}), 500
     
     # Health check endpoint
