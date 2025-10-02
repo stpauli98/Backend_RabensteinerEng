@@ -9,14 +9,18 @@ import logging
 import traceback
 import time
 from io import StringIO
-from flask import request, jsonify, send_file, Blueprint
+from flask import request, jsonify, send_file, Blueprint, current_app
 from flask_socketio import emit
 import json
 from services.adjustments.cleanup import cleanup_old_files
-from core.extensions import socketio
 
 # Create Blueprint
 bp = Blueprint('adjustmentsOfData_bp', __name__)
+
+# Get socketio instance from app extensions
+def get_socketio():
+    """Get socketio instance from current app"""
+    return current_app.extensions.get('socketio')
 
 # Configure temp upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
@@ -136,17 +140,15 @@ def upload_chunk():
         if len(received_chunks) == total_chunks:
             # Emit progress update for file combination
             try:
-                # socketio imported from core.extensions
-                if True:  # socketio always available
-                    socketio.emit('processing_progress', {
-                        'uploadId': upload_id,
-                        'progress': 25,
-                        'message': f'Combining {total_chunks} chunks for {filename}',
-                        'step': 'file_combination',
-                        'phase': 'file_upload'
-                    }, room=upload_id)
-            except Exception as e:
-                logger.error(f"Failed to emit progress: {e}")
+                emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'progress': 25,
+                    'message': f'Combining {total_chunks} chunks for {filename}',
+                    'step': 'file_combination',
+                    'phase': 'file_upload'
+                }, room=upload_id)
+            except Exception:
+                pass  # Don't fail if socket emit fails
             
             # Combine all chunks into final file with original filename
             final_path = os.path.join(upload_dir, filename)
@@ -163,17 +165,15 @@ def upload_chunk():
             
             # Emit progress update for file analysis
             try:
-                # socketio imported from core.extensions
-                if True:  # socketio always available
-                    socketio.emit('processing_progress', {
-                        'uploadId': upload_id,
-                        'progress': 28,
-                        'message': f'Analyzing file {filename}',
-                        'step': 'file_analysis',
-                        'phase': 'file_upload'
-                    }, room=upload_id)
-            except Exception as e:
-                logger.error(f"Failed to emit progress: {e}")
+                emit('processing_progress', {
+                    'uploadId': upload_id,
+                    'progress': 28,
+                    'message': f'Analyzing file {filename}',
+                    'step': 'file_analysis',
+                    'phase': 'file_upload'
+                }, room=upload_id)
+            except Exception:
+                pass
             
             # Process the complete file
             try:
@@ -182,17 +182,15 @@ def upload_chunk():
                 
                 # Emit completion progress
                 try:
-                    # socketio imported from core.extensions
-                    if True:  # socketio always available
-                        socketio.emit('processing_progress', {
-                            'uploadId': upload_id,
-                            'progress': 30,
-                            'message': f'File {filename} upload and analysis complete',
-                            'step': 'file_complete',
-                            'phase': 'file_upload'
-                        }, room=upload_id)
-                except Exception as e:
-                    logger.error(f"Failed to emit progress: {e}")
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 30,
+                        'message': f'File {filename} upload and analysis complete',
+                        'step': 'file_complete',
+                        'phase': 'file_upload'
+                    }, room=upload_id)
+                except Exception:
+                    pass
                 
                 response_data = {
                     'status': 'complete',
@@ -430,17 +428,15 @@ def adjust_data():
         
         # Emit progress update for data processing
         try:
-            # socketio imported from core.extensions
-            if True:  # socketio always available
-                socketio.emit('processing_progress', {
-                    'uploadId': upload_id,
-                    'progress': 50,
-                    'message': f'Processing parameters for {len(filenames)} files',
-                    'step': 'parameter_processing',
-                    'phase': 'data_processing'
-                }, room=upload_id)
-        except Exception as e:
-            logger.error(f"Failed to emit progress: {e}")
+            emit('processing_progress', {
+                'uploadId': upload_id,
+                'progress': 50,
+                'message': f'Processing parameters for {len(filenames)} files',
+                'step': 'parameter_processing',
+                'phase': 'data_processing'
+            }, room=upload_id)
+        except Exception:
+            pass
         
         return jsonify({
             "message": "Parameters updated successfully",
@@ -530,8 +526,8 @@ def complete_adjustment():
         
         # Emit progress update for data processing start
         try:
-            # socketio imported from core.extensions
-            if True:  # socketio always available
+            socketio = get_socketio()
+            if socketio:
                 socketio.emit('processing_progress', {
                     'uploadId': upload_id,
                     'progress': 60,
@@ -540,7 +536,7 @@ def complete_adjustment():
                     'phase': 'data_processing'
                 }, room=upload_id)
         except Exception as e:
-            logger.error(f"[SOCKET.IO ERROR] Failed to emit progress: {e}")
+            logger.error(f"Failed to emit progress: {e}")
         
         # Clean up methods by stripping whitespace
         if methods:
@@ -553,8 +549,8 @@ def complete_adjustment():
         for file_index, filename in enumerate(filenames):
             # Emit progress for current file processing
             try:
-                # socketio imported from core.extensions
-                if True:  # socketio always available
+                socketio = get_socketio()
+                if socketio:
                     file_progress = 60 + (file_index / len(filenames)) * 25  # 60-85% range
                     socketio.emit('processing_progress', {
                         'uploadId': upload_id,
@@ -626,18 +622,16 @@ def complete_adjustment():
             # Ako nema potrebe za obradom, direktno vrati podatke bez obrade
             if not needs_processing:
                 try:
-                    # socketio imported from core.extensions
-                    if True:  # socketio always available
-                        socketio.emit('processing_progress', {
-                            'uploadId': upload_id,
-                            'progress': 65 + (file_index / len(filenames)) * 20,
-                            'message': f'No processing needed for {filename}',
-                            'step': 'data_conversion',
-                            'phase': 'data_processing',
-                            'detail': f'Time step and offset match requirements - converting data directly'
-                        }, room=upload_id)
-                except Exception as e:
-                    logger.error(f"Failed to emit progress: {e}")
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 65 + (file_index / len(filenames)) * 20,
+                        'message': f'No processing needed for {filename}',
+                        'step': 'data_conversion',
+                        'phase': 'data_processing',
+                        'detail': f'Time step and offset match requirements - converting data directly'
+                    }, room=upload_id)
+                except Exception:
+                    pass
                     
                 logger.info(f"Skipping processing for {filename} as parameters match (timestep: {file_time_step}, offset: {file_offset})")
                 result_data, info_record = convert_data_without_processing(
@@ -648,19 +642,17 @@ def complete_adjustment():
                 )
             else:
                 try:
-                    # socketio imported from core.extensions
-                    if True:  # socketio always available
-                        method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
-                        socketio.emit('processing_progress', {
-                            'uploadId': upload_id,
-                            'progress': 65 + (file_index / len(filenames)) * 20,
-                            'message': f'Processing {filename} with {method_name} method',
-                            'step': 'data_adjustment',
-                            'phase': 'data_processing',
-                            'detail': f'Adjusting time step from {file_time_step}min to {time_step}min, offset from {file_offset}min to {offset}min'
-                        }, room=upload_id)
-                except Exception as e:
-                    logger.error(f"Failed to emit progress: {e}")
+                    method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 65 + (file_index / len(filenames)) * 20,
+                        'message': f'Processing {filename} with {method_name} method',
+                        'step': 'data_adjustment',
+                        'phase': 'data_processing',
+                        'detail': f'Adjusting time step from {file_time_step}min to {time_step}min, offset from {file_offset}min to {offset}min'
+                    }, room=upload_id)
+                except Exception:
+                    pass
                 
                 # Process the data - koristimo originalne parametre ako ne treba obradu
                 process_time_step = time_step if needs_processing else file_time_step
@@ -681,34 +673,30 @@ def complete_adjustment():
                 all_results.extend(result_data)
                 # Emit completion progress for this file
                 try:
-                    # socketio imported from core.extensions
-                    if True:  # socketio always available
-                        socketio.emit('processing_progress', {
-                            'uploadId': upload_id,
-                            'progress': 70 + ((file_index + 1) / len(filenames)) * 15,
-                            'message': f'Completed processing {filename}',
-                            'step': 'file_complete',
-                            'phase': 'data_processing',
-                            'detail': f'Generated {len(result_data)} data points for {filename}'
-                        }, room=upload_id)
-                except Exception as e:
-                    logger.error(f"Failed to emit progress: {e}")
+                    emit('processing_progress', {
+                        'uploadId': upload_id,
+                        'progress': 70 + ((file_index + 1) / len(filenames)) * 15,
+                        'message': f'Completed processing {filename}',
+                        'step': 'file_complete',
+                        'phase': 'data_processing',
+                        'detail': f'Generated {len(result_data)} data points for {filename}'
+                    }, room=upload_id)
+                except Exception:
+                    pass
             if info_record is not None:
                 all_info_records.append(info_record)
                 
         # Emit final completion progress
         try:
-            # socketio imported from core.extensions
-            if True:  # socketio always available
-                socketio.emit('processing_progress', {
-                    'uploadId': upload_id,
-                    'progress': 100,
-                    'message': f'Data processing completed for all {len(filenames)} files',
-                    'step': 'completion',
-                    'phase': 'finalization'
-                }, room=upload_id)
-        except Exception as e:
-            logger.error(f"Failed to emit progress: {e}")
+            emit('processing_progress', {
+                'uploadId': upload_id,
+                'progress': 100,
+                'message': f'Data processing completed for all {len(filenames)} files',
+                'step': 'completion',
+                'phase': 'finalization'
+            }, room=upload_id)
+        except Exception:
+            pass
             
         # Return processed results
         return jsonify({

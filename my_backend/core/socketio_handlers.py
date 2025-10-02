@@ -149,6 +149,20 @@ def register_socketio_handlers(socketio):
         except Exception as e:
             logger.error(f"Error in join handler: {str(e)}")
 
+
+    @socketio.on('leave')
+    def handle_leave(data):
+        """Client leaves a room based on uploadId"""
+        try:
+            if 'uploadId' in data:
+                upload_id = data['uploadId']
+                leave_room(upload_id)
+                logger.info(f"Client left Socket.IO room: {upload_id}")
+                
+                # Send confirmation
+                emit('left_room', {'uploadId': upload_id})
+        except Exception as e:
+            logger.error(f"Error in leave handler: {str(e)}")
     @socketio.on('request_dataset_status')
     def handle_request_dataset_status(data):
         """
