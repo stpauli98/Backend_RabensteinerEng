@@ -1,7 +1,7 @@
 # Backend Architecture
 
 ## Overview
-This Flask backend has been restructured following clean architecture principles with proper separation of concerns.
+This Flask backend has been restructuredd following clean architecture principles with proper separation of concerns.
 
 ## Directory Structure
 
