@@ -1,0 +1,18 @@
+# Locust Load Testing Requirements
+# =================================
+# Install with: pip install -r requirements-locust.txt
+
+# Core load testing framework
+locust>=2.15.0
+
+# Socket.IO client for real-time progress tracking
+python-socketio>=5.10.0
+
+# HTTP client (dependency for Locust, specified for version control)
+requests>=2.31.0
+
+# WebSocket support for Socket.IO
+websocket-client>=1.6.0
+
+# Additional utilities
+# python-dotenv>=1.0.0  # Uncomment if using .env files for configuration
