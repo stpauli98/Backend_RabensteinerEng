@@ -604,7 +604,7 @@ def adjust_data():
         return jsonify({"error": str(e)}), 400
 
 # Route to complete adjustment
-@bp.route('/adjustdata/complete', methods=['POST'])
+@bp.route('/adjustdata/complete', methods=['POST', 'OPTIONS'])
 def complete_adjustment():
     """
     Ovaj endpoint se poziva kada su svi chunkovi poslani.
@@ -620,6 +620,14 @@ def complete_adjustment():
     Nakon toga, backend kombinira sve primljene chunkove,
     obrađuje ih i vraća konačni rezultat.
     """
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'POST,OPTIONS')
+        return response, 200
+    
     try:
         global adjustment_chunks
         
