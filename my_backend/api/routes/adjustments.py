@@ -91,9 +91,12 @@ def emit_progress(upload_id, progress, message, step, phase, detail=None):
         logger.error(f"Failed to emit progress for {upload_id}: {e}")
 
 
-def check_files_need_methods(filenames, time_step, offset, methods):
+def check_files_need_methods(filenames, time_step, offset, methods, file_info_cache_local=None):
     """
     Fast batch check if files need processing methods
+
+    Args:
+        file_info_cache_local: Upload-specific cache (Cloud Run compatible)
 
     Uses info_df_cache for O(1) lookup instead of pandas filtering O(n)
 
@@ -111,7 +114,12 @@ def check_files_need_methods(filenames, time_step, offset, methods):
 
     for filename in filenames:
         # Use cache for O(1) lookup instead of pandas filtering
-        file_info = info_df_cache.get(filename)
+        # FIXED: Use upload-specific cache if provided (Cloud Run compatible)
+        file_info = None
+        if file_info_cache_local:
+            file_info = file_info_cache_local.get(filename)
+        if not file_info:
+            file_info = info_df_cache.get(filename)
         if not file_info:
             logger.warning(f"File {filename} not found in cache")
             continue
@@ -443,15 +451,22 @@ def analyse_data(file_path, upload_id=None):
                 info_df = pd.concat([info_df, new_info_df], ignore_index=True)
 
             # Populate info_df_cache for O(1) lookup
+            # FIXED: Store in upload_id-specific storage instead of global cache (Cloud Run compatible)
+            if 'file_info_cache' not in adjustment_chunks[upload_id]:
+                adjustment_chunks[upload_id]['file_info_cache'] = {}
+
             for file_info_item in all_file_info:
                 filename_key = file_info_item['Name der Datei']
-                info_df_cache[filename_key] = {
+                file_info_data = {
                     'timestep': file_info_item['Zeitschrittweite [min]'],
                     'offset': file_info_item['Offset [min]'],
                     'start_time': file_info_item['Startzeit (UTC)'],
                     'end_time': file_info_item['Endzeit (UTC)'],
                     'measurement_col': file_info_item['Name der Messreihe']
                 }
+                # Store in both places for backward compatibility
+                info_df_cache[filename_key] = file_info_data
+                adjustment_chunks[upload_id]['file_info_cache'][filename_key] = file_info_data
 
         # Return the upload_id
         return {
@@ -545,11 +560,14 @@ def adjust_data():
 
         # Fast detection: Check if any files need methods (using cache for O(1) lookup)
         # This provides immediate feedback to user instead of waiting for complete_adjustment()
+        # FIXED: Pass upload-specific cache (Cloud Run compatible)
+        file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
         files_needing_methods = check_files_need_methods(
             filenames,
             time_step_size,
             offset,
-            methods
+            methods,
+            file_info_cache_local
         )
 
         if files_needing_methods:
@@ -711,7 +729,10 @@ def complete_adjustment():
             df['UTC'] = pd.to_datetime(df['UTC'])
 
             # Get time step and offset from cache (O(1) instead of pandas filtering O(n))
-            file_info = info_df_cache.get(filename)
+            # FIXED: Use upload-specific cache instead of global (Cloud Run compatible)
+            file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
+            file_info = file_info_cache_local.get(filename) or info_df_cache.get(filename)
+
             if not file_info:
                 logger.error(f"File {filename} not found in cache, skipping")
                 continue
