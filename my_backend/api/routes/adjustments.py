@@ -7,6 +7,7 @@ import time
 import csv
 import logging
 import traceback
+import gc  # For explicit garbage collection
 from io import StringIO
 from flask import request, jsonify, send_file, Blueprint
 from flask_socketio import emit
@@ -39,6 +40,7 @@ UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
 # Constants
 UPLOAD_EXPIRY_TIME = 60 * 60  # 60 minuta (1 sat) u sekundama
+DATAFRAME_CHUNK_SIZE = 1000  # Max rows per SocketIO emit for large datasets
 
 
 # Progress stage constants
@@ -89,6 +91,90 @@ def emit_progress(upload_id, progress, message, step, phase, detail=None):
         socketio.emit('processing_progress', data, room=upload_id)
     except Exception as e:
         logger.error(f"Failed to emit progress for {upload_id}: {e}")
+
+
+def emit_file_result(upload_id, filename, result_data, info_record, file_index, total_files):
+    """
+    Emit file processing result via SocketIO with chunking for large datasets
+
+    Args:
+        upload_id (str): Upload ID for the room
+        filename (str): Name of the processed file
+        result_data (list): List of data records
+        info_record (dict): File information record
+        file_index (int): Index of current file
+        total_files (int): Total number of files being processed
+    """
+    try:
+        # If result_data is small (<CHUNK_SIZE rows), send in one emit
+        if len(result_data) <= DATAFRAME_CHUNK_SIZE:
+            socketio.emit('file_result', {
+                'uploadId': upload_id,
+                'filename': filename,
+                'info_record': info_record,
+                'dataframe_chunk': result_data,
+                'fileIndex': file_index,
+                'totalFiles': total_files,
+                'chunked': False
+            }, room=upload_id)
+            logger.info(f"Emitted single file_result for {filename} ({len(result_data)} rows)")
+        else:
+            # Large dataset - send in chunks
+            total_chunks = (len(result_data) + DATAFRAME_CHUNK_SIZE - 1) // DATAFRAME_CHUNK_SIZE
+
+            # First emit with info_record
+            socketio.emit('file_result', {
+                'uploadId': upload_id,
+                'filename': filename,
+                'info_record': info_record,
+                'dataframe_chunk': [],  # Empty, will be sent via chunks
+                'fileIndex': file_index,
+                'totalFiles': total_files,
+                'chunked': True,
+                'totalChunks': total_chunks
+            }, room=upload_id)
+
+            # Emit dataframe in chunks
+            for chunk_idx in range(total_chunks):
+                start_idx = chunk_idx * DATAFRAME_CHUNK_SIZE
+                end_idx = min((chunk_idx + 1) * DATAFRAME_CHUNK_SIZE, len(result_data))
+                chunk = result_data[start_idx:end_idx]
+
+                socketio.emit('dataframe_chunk', {
+                    'uploadId': upload_id,
+                    'filename': filename,
+                    'chunk': chunk,
+                    'chunkIndex': chunk_idx,
+                    'totalChunks': total_chunks,
+                    'fileIndex': file_index
+                }, room=upload_id)
+
+                logger.info(f"Emitted chunk {chunk_idx + 1}/{total_chunks} for {filename} ({len(chunk)} rows)")
+
+    except Exception as e:
+        logger.error(f"Failed to emit file_result for {filename}: {e}")
+        # Emit error event
+        emit_file_error(upload_id, filename, str(e))
+
+
+def emit_file_error(upload_id, filename, error_message):
+    """
+    Emit file processing error via SocketIO
+
+    Args:
+        upload_id (str): Upload ID for the room
+        filename (str): Name of the file that failed
+        error_message (str): Error message
+    """
+    try:
+        socketio.emit('file_error', {
+            'uploadId': upload_id,
+            'filename': filename,
+            'error': error_message
+        }, room=upload_id)
+        logger.error(f"Emitted file_error for {filename}: {error_message}")
+    except Exception as e:
+        logger.error(f"Failed to emit file_error for {filename}: {e}")
 
 
 def check_files_need_methods(filenames, time_step, offset, methods, file_info_cache_local=None):
@@ -604,7 +690,7 @@ def adjust_data():
         return jsonify({"error": str(e)}), 400
 
 # Route to complete adjustment
-@bp.route('/adjustdata/complete', methods=['POST', 'OPTIONS'])
+@bp.route('/adjustdata/complete', methods=['POST'])
 def complete_adjustment():
     """
     Ovaj endpoint se poziva kada su svi chunkovi poslani.
@@ -670,11 +756,10 @@ def complete_adjustment():
         end_time = params.get('endTime')
         time_step = params.get('timeStepSize')
         offset = params.get('offset')
-        
-        # Initialize result lists
-        all_results = []
-        all_info_records = []
-        
+
+        # STREAMING: No need to accumulate results - they're emitted immediately
+        # Results will be sent to frontend via SocketIO events
+
         # Get intrplMax values for each file
         intrpl_max_values = params.get('intrplMaxValues', {})
         
@@ -708,148 +793,181 @@ def complete_adjustment():
         progress_interval = 1.0  # Minimum 1 second between emits
 
         for file_index, filename in enumerate(filenames):
-            # Emit progress for current file processing (throttled)
-            current_time = time.time()
-            should_emit = (current_time - last_progress_time > progress_interval) or \
-                         (file_index % max(1, len(filenames) // 10) == 0) or \
-                         (file_index == len(filenames) - 1)  # Always emit last
+            try:
+                # Emit progress for current file processing (throttled)
+                current_time = time.time()
+                should_emit = (current_time - last_progress_time > progress_interval) or \
+                             (file_index % max(1, len(filenames) // 10) == 0) or \
+                             (file_index == len(filenames) - 1)  # Always emit last
 
-            if should_emit:
-                file_progress = ProgressStages.calculate_file_progress(file_index, len(filenames), 60, 85)
-                emit_progress(
-                    upload_id,
-                    file_progress,
-                    f'Analyzing file {file_index + 1}/{len(filenames)}: {filename}',
-                    'file_analysis',
-                    'data_processing',
-                    detail='Checking time step configuration and processing requirements'
-                )
-                last_progress_time = current_time
-            
-            # Get DataFrame for this file
-            df = dataframes[filename]
-            
-            # Ensure we have the required columns
-            if 'UTC' not in df.columns:
-                logger.error(f"No UTC column found in file {filename}")
+                if should_emit:
+                    file_progress = ProgressStages.calculate_file_progress(file_index, len(filenames), 60, 85)
+                    emit_progress(
+                        upload_id,
+                        file_progress,
+                        f'Analyzing file {file_index + 1}/{len(filenames)}: {filename}',
+                        'file_analysis',
+                        'data_processing',
+                        detail='Checking time step configuration and processing requirements'
+                    )
+                    last_progress_time = current_time
+
+                # Get DataFrame for this file
+                df = dataframes[filename]
+
+                # Ensure we have the required columns
+                if 'UTC' not in df.columns:
+                    error_msg = f"No UTC column found in file {filename}"
+                    logger.error(error_msg)
+                    emit_file_error(upload_id, filename, error_msg)
+                    continue
+
+                df['UTC'] = pd.to_datetime(df['UTC'])
+
+                # Get time step and offset from cache (O(1) instead of pandas filtering O(n))
+                # FIXED: Use upload-specific cache instead of global (Cloud Run compatible)
+                file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
+                file_info = file_info_cache_local.get(filename) or info_df_cache.get(filename)
+
+                if not file_info:
+                    error_msg = f"File {filename} not found in cache"
+                    logger.error(error_msg)
+                    emit_file_error(upload_id, filename, error_msg)
+                    continue
+
+                file_time_step = file_info['timestep']
+                file_offset = file_info['offset']
+
+                # Check if this file needs processingComplete adjustment
+                # Convert requested_offset to minutes from midnight if needed
+                if requested_offset >= file_time_step:
+                    requested_offset = requested_offset % file_time_step
+
+                # Check if parameters match
+                needs_processing = file_time_step != time_step or file_offset != offset
+
+                # Detaljno logovanje za dijagnostiku
+                logger.info(f"File: {filename}, needs_processing: {needs_processing}, file_time_step: {file_time_step}, requested_time_step: {time_step}, file_offset: {file_offset}, requested_offset: {offset}")
+
+                # Ako file treba obradu, provjerimo ima li metodu
+                if needs_processing:
+                    method_info = methods.get(filename, {})
+                    method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
+                    has_valid_method = method and method in VALID_METHODS
+
+                    logger.info(f"File: {filename}, method: {method}, has_valid_method: {has_valid_method}")
+
+                    if not has_valid_method:
+                        # Ako nemamo validnu metodu, tražimo je od korisnika
+                        return jsonify({
+                            "success": True,
+                            "methodsRequired": True,
+                            "hasValidMethod": False,
+                            "message": f"Die Datei {filename} benötigt eine Verarbeitungsmethode (Zeitschrittweite: {file_time_step}->{time_step}, Offset: {file_offset}->{offset}).",
+                            "data": {
+                                "info_df": [{
+                                    "filename": filename,
+                                    "current_timestep": file_time_step,
+                                    "requested_timestep": time_step,
+                                    "current_offset": file_offset,
+                                    "requested_offset": offset,
+                                    "valid_methods": list(VALID_METHODS)
+                                }],
+                                "dataframe": []
+                            }
+                        }), 200
+
+                # Get intrplMax for this file if available
+                intrpl_max = intrpl_max_values.get(filename)
+
+                # Ako nema potrebe za obradom, direktno vrati podatke bez obrade
+                if not needs_processing:
+                    conversion_progress = 65 + (file_index / len(filenames)) * 20
+                    emit_progress(
+                        upload_id,
+                        conversion_progress,
+                        f'No processing needed for {filename}',
+                        'data_conversion',
+                        'data_processing',
+                        detail='Time step and offset match requirements - converting data directly'
+                    )
+
+                    logger.info(f"Skipping processing for {filename} as parameters match (timestep: {file_time_step}, offset: {file_offset})")
+                    result_data, info_record = convert_data_without_processing(
+                        dataframes[filename],
+                        filename,
+                        file_time_step,
+                        file_offset
+                    )
+                else:
+                    method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
+                    adjustment_progress = 65 + (file_index / len(filenames)) * 20
+                    emit_progress(
+                        upload_id,
+                        adjustment_progress,
+                        f'Processing {filename} with {method_name} method',
+                        'data_adjustment',
+                        'data_processing',
+                        detail=f'Adjusting time step from {file_time_step}min to {time_step}min, offset from {file_offset}min to {offset}min'
+                    )
+
+                    # Process the data - koristimo originalne parametre ako ne treba obradu
+                    process_time_step = time_step if needs_processing else file_time_step
+                    process_offset = offset if needs_processing else file_offset
+
+                    result_data, info_record = process_data_detailed(
+                        dataframes[filename],
+                        filename,
+                        start_time,
+                        end_time,
+                        process_time_step,
+                        process_offset,
+                        methods,
+                        intrpl_max
+                    )
+
+                # STREAMING: Emit results immediately instead of accumulating
+                if result_data is not None and info_record is not None:
+                    # Emit file result via SocketIO (handles chunking automatically)
+                    emit_file_result(
+                        upload_id,
+                        filename,
+                        result_data,
+                        info_record,
+                        file_index,
+                        len(filenames)
+                    )
+
+                    # Emit completion progress for this file
+                    file_complete_progress = 70 + ((file_index + 1) / len(filenames)) * 15
+                    emit_progress(
+                        upload_id,
+                        file_complete_progress,
+                        f'Completed processing {filename}',
+                        'file_complete',
+                        'data_processing',
+                        detail=f'Generated {len(result_data)} data points for {filename}'
+                    )
+
+                    # MEMORY CLEANUP: Free memory immediately after emitting
+                    del result_data
+                    del info_record
+                    # Also cleanup DataFrame from memory
+                    if filename in adjustment_chunks[upload_id]['dataframes']:
+                        del adjustment_chunks[upload_id]['dataframes'][filename]
+                    # Force garbage collection to free memory
+                    gc.collect()
+
+                    logger.info(f"Memory cleaned up for {filename}")
+
+            except Exception as file_error:
+                # Per-file error handling - emit error but continue with other files
+                error_msg = f"Error processing {filename}: {str(file_error)}"
+                logger.error(f"{error_msg}\n{traceback.format_exc()}")
+                emit_file_error(upload_id, filename, error_msg)
+                # Continue with next file instead of failing entire request
                 continue
-                
-            df['UTC'] = pd.to_datetime(df['UTC'])
 
-            # Get time step and offset from cache (O(1) instead of pandas filtering O(n))
-            # FIXED: Use upload-specific cache instead of global (Cloud Run compatible)
-            file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
-            file_info = file_info_cache_local.get(filename) or info_df_cache.get(filename)
-
-            if not file_info:
-                logger.error(f"File {filename} not found in cache, skipping")
-                continue
-
-            file_time_step = file_info['timestep']
-            file_offset = file_info['offset']
-            # Check if this file needs processingComplete adjustment
-            # Convert requested_offset to minutes from midnight if needed
-            if requested_offset >= file_time_step:
-                requested_offset = requested_offset % file_time_step
-                
-            # Check if parameters match
-            needs_processing = file_time_step != time_step or file_offset != offset
-            
-            # Detaljno logovanje za dijagnostiku
-            logger.info(f"File: {filename}, needs_processing: {needs_processing}, file_time_step: {file_time_step}, requested_time_step: {time_step}, file_offset: {file_offset}, requested_offset: {offset}")
-            
-            # Ako file treba obradu, provjerimo ima li metodu
-            if needs_processing:
-                method_info = methods.get(filename, {})
-                method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
-                has_valid_method = method and method in VALID_METHODS
-                
-                logger.info(f"File: {filename}, method: {method}, has_valid_method: {has_valid_method}")
-                
-                if not has_valid_method:
-                    # Ako nemamo validnu metodu, tražimo je od korisnika
-                    return jsonify({
-                        "success": True,
-                        "methodsRequired": True,
-                        "hasValidMethod": False,
-                        "message": f"Die Datei {filename} benötigt eine Verarbeitungsmethode (Zeitschrittweite: {file_time_step}->{time_step}, Offset: {file_offset}->{offset}).",
-                        "data": {
-                            "info_df": [{
-                                "filename": filename,
-                                "current_timestep": file_time_step,
-                                "requested_timestep": time_step,
-                                "current_offset": file_offset,
-                                "requested_offset": offset,
-                                "valid_methods": list(VALID_METHODS)
-                            }],
-                            "dataframe": []
-                        }
-                    }), 200
-            
-            # Get intrplMax for this file if available
-            intrpl_max = intrpl_max_values.get(filename)
-            
-            # Ako nema potrebe za obradom, direktno vrati podatke bez obrade
-            if not needs_processing:
-                conversion_progress = 65 + (file_index / len(filenames)) * 20
-                emit_progress(
-                    upload_id,
-                    conversion_progress,
-                    f'No processing needed for {filename}',
-                    'data_conversion',
-                    'data_processing',
-                    detail='Time step and offset match requirements - converting data directly'
-                )
-                    
-                logger.info(f"Skipping processing for {filename} as parameters match (timestep: {file_time_step}, offset: {file_offset})")
-                result_data, info_record = convert_data_without_processing(
-                    dataframes[filename],
-                    filename,
-                    file_time_step,
-                    file_offset
-                )
-            else:
-                method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
-                adjustment_progress = 65 + (file_index / len(filenames)) * 20
-                emit_progress(
-                    upload_id,
-                    adjustment_progress,
-                    f'Processing {filename} with {method_name} method',
-                    'data_adjustment',
-                    'data_processing',
-                    detail=f'Adjusting time step from {file_time_step}min to {time_step}min, offset from {file_offset}min to {offset}min'
-                )
-                
-                # Process the data - koristimo originalne parametre ako ne treba obradu
-                process_time_step = time_step if needs_processing else file_time_step
-                process_offset = offset if needs_processing else file_offset
-                
-                result_data, info_record = process_data_detailed(
-                    dataframes[filename],
-                    filename,
-                    start_time,
-                    end_time,
-                    process_time_step,
-                    process_offset,
-                    methods,
-                    intrpl_max
-                )
-            
-            if result_data is not None:
-                all_results.extend(result_data)
-                # Emit completion progress for this file
-                file_complete_progress = 70 + ((file_index + 1) / len(filenames)) * 15
-                emit_progress(
-                    upload_id,
-                    file_complete_progress,
-                    f'Completed processing {filename}',
-                    'file_complete',
-                    'data_processing',
-                    detail=f'Generated {len(result_data)} data points for {filename}'
-                )
-            if info_record is not None:
-                all_info_records.append(info_record)
-                
         # Emit final completion progress
         emit_progress(
             upload_id,
@@ -858,14 +976,13 @@ def complete_adjustment():
             'completion',
             'finalization'
         )
-            
-        # Return processed results
+
+        # STREAMING RESPONSE: Return minimal JSON (results sent via SocketIO)
         return jsonify({
             "success": True,
-            "data": {
-                "info_df": all_info_records,
-                "dataframe": all_results
-            }
+            "streaming": True,  # Signal to frontend to use SocketIO results
+            "totalFiles": len(filenames),
+            "message": "Results sent via SocketIO streaming"
         }), 200
 
     except Exception as e:
