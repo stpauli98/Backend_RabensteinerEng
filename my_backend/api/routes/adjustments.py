@@ -40,7 +40,7 @@ UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
 # Constants
 UPLOAD_EXPIRY_TIME = 60 * 60  # 60 minuta (1 sat) u sekundama
-DATAFRAME_CHUNK_SIZE = 1000  # Max rows per SocketIO emit for large datasets
+DATAFRAME_CHUNK_SIZE = 10000  # Max rows per SocketIO emit for large datasets
 
 
 # Progress stage constants
@@ -134,7 +134,8 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
                 'totalChunks': total_chunks
             }, room=upload_id)
 
-            # Emit dataframe in chunks
+            # Emit dataframe in chunks with aggressive delay to prevent message queue overflow
+            # Socket.IO is NOT designed for bulk data transfer - this is a workaround
             for chunk_idx in range(total_chunks):
                 start_idx = chunk_idx * DATAFRAME_CHUNK_SIZE
                 end_idx = min((chunk_idx + 1) * DATAFRAME_CHUNK_SIZE, len(result_data))
@@ -149,7 +150,21 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
                     'fileIndex': file_index
                 }, room=upload_id)
 
+                # CRITICAL: Delay after EVERY chunk to ensure Socket.IO can flush buffer
+                # Without this, Socket.IO drops messages due to buffer overflow
+                time.sleep(0.1)  # 100ms delay after each chunk
+
                 logger.info(f"Emitted chunk {chunk_idx + 1}/{total_chunks} for {filename} ({len(chunk)} rows)")
+
+            # CRITICAL: Emit completion signal after all chunks are sent
+            # Frontend waits for this to know all chunks have arrived
+            socketio.emit('dataframe_complete', {
+                'uploadId': upload_id,
+                'filename': filename,
+                'totalChunks': total_chunks,
+                'totalRows': len(result_data)
+            }, room=upload_id)
+            logger.info(f"✅ Dataframe streaming complete for {filename} ({total_chunks} chunks, {len(result_data)} rows)")
 
     except Exception as e:
         logger.error(f"Failed to emit file_result for {filename}: {e}")
@@ -215,7 +230,7 @@ def check_files_need_methods(filenames, time_step, offset, methods, file_info_ca
 
         # Normalize offset if needed
         requested_offset = offset
-        if requested_offset >= file_time_step:
+        if file_time_step > 0 and requested_offset >= file_time_step:
             requested_offset = requested_offset % file_time_step
 
         # Check if processing is needed
@@ -473,8 +488,8 @@ def analyse_data(file_path, upload_id=None):
             time_diffs_sec = np.diff(time_values.astype(np.int64))
 
             # Use median instead of mode (faster and more robust for regular intervals)
-            # Convert to minutes
-            time_step = int(np.median(time_diffs_sec) / 60)
+            # Convert to minutes (use round to avoid truncation of values like 0.5)
+            time_step = round(np.median(time_diffs_sec) / 60)
         except Exception as e:
             logger.error(f"Error calculating time step: {str(e)}")
             traceback.print_exc()
@@ -792,6 +807,89 @@ def complete_adjustment():
         last_progress_time = time.time()
         progress_interval = 1.0  # Minimum 1 second between emits
 
+        # PHASE 1: Check ALL files first to see which need methods
+        # Don't process anything until all files have valid methods
+        files_needing_methods = []
+        logger.info(f"Phase 1: Checking {len(filenames)} files for method requirements")
+
+        for filename in filenames:
+            try:
+                # Get DataFrame for this file
+                df = dataframes[filename]
+
+                # Ensure we have the required columns
+                if 'UTC' not in df.columns:
+                    error_msg = f"No UTC column found in file {filename}"
+                    logger.error(error_msg)
+                    emit_file_error(upload_id, filename, error_msg)
+                    continue
+
+                df['UTC'] = pd.to_datetime(df['UTC'])
+
+                # Get time step and offset from cache
+                file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
+                file_info = file_info_cache_local.get(filename) or info_df_cache.get(filename)
+
+                if not file_info:
+                    error_msg = f"File {filename} not found in cache"
+                    logger.error(error_msg)
+                    emit_file_error(upload_id, filename, error_msg)
+                    continue
+
+                file_time_step = file_info['timestep']
+                file_offset = file_info['offset']
+
+                # Convert requested_offset to minutes from midnight if needed
+                requested_offset_adjusted = offset
+                if file_time_step > 0 and requested_offset_adjusted >= file_time_step:
+                    requested_offset_adjusted = requested_offset_adjusted % file_time_step
+
+                # Check if parameters match
+                needs_processing = file_time_step != time_step or file_offset != requested_offset_adjusted
+
+                logger.info(f"Phase 1 - File: {filename}, needs_processing: {needs_processing}")
+
+                # If file needs processing, check if it has a valid method
+                if needs_processing:
+                    method_info = methods.get(filename, {})
+                    method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
+                    has_valid_method = method and method in VALID_METHODS
+
+                    logger.info(f"Phase 1 - File: {filename}, method: {method}, has_valid_method: {has_valid_method}")
+
+                    if not has_valid_method:
+                        # Collect this file for method request
+                        files_needing_methods.append({
+                            "filename": filename,
+                            "current_timestep": file_time_step,
+                            "requested_timestep": time_step,
+                            "current_offset": file_offset,
+                            "requested_offset": requested_offset_adjusted,
+                            "valid_methods": list(VALID_METHODS)
+                        })
+
+            except Exception as e:
+                logger.error(f"Phase 1 error checking {filename}: {str(e)}")
+                continue
+
+        # If ANY files need methods, return ALL of them to frontend
+        # Don't process ANYTHING until all files have methods
+        if files_needing_methods:
+            logger.info(f"Requesting methods for {len(files_needing_methods)} files: {[f['filename'] for f in files_needing_methods]}")
+            return jsonify({
+                "success": True,
+                "methodsRequired": True,
+                "hasValidMethod": False,
+                "message": f"{len(files_needing_methods)} Datei(en) benötigen Verarbeitungsmethoden.",
+                "data": {
+                    "info_df": files_needing_methods,  # ALL FILES that need methods!
+                    "dataframe": []
+                }
+            }), 200
+
+        # PHASE 2: All files have methods - now process them sequentially
+        logger.info(f"Phase 2: All files have methods - proceeding with processing")
+
         for file_index, filename in enumerate(filenames):
             try:
                 # Emit progress for current file processing (throttled)
@@ -840,42 +938,14 @@ def complete_adjustment():
 
                 # Check if this file needs processingComplete adjustment
                 # Convert requested_offset to minutes from midnight if needed
-                if requested_offset >= file_time_step:
+                if file_time_step > 0 and requested_offset >= file_time_step:
                     requested_offset = requested_offset % file_time_step
 
                 # Check if parameters match
                 needs_processing = file_time_step != time_step or file_offset != offset
 
-                # Detaljno logovanje za dijagnostiku
-                logger.info(f"File: {filename}, needs_processing: {needs_processing}, file_time_step: {file_time_step}, requested_time_step: {time_step}, file_offset: {file_offset}, requested_offset: {offset}")
-
-                # Ako file treba obradu, provjerimo ima li metodu
-                if needs_processing:
-                    method_info = methods.get(filename, {})
-                    method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
-                    has_valid_method = method and method in VALID_METHODS
-
-                    logger.info(f"File: {filename}, method: {method}, has_valid_method: {has_valid_method}")
-
-                    if not has_valid_method:
-                        # Ako nemamo validnu metodu, tražimo je od korisnika
-                        return jsonify({
-                            "success": True,
-                            "methodsRequired": True,
-                            "hasValidMethod": False,
-                            "message": f"Die Datei {filename} benötigt eine Verarbeitungsmethode (Zeitschrittweite: {file_time_step}->{time_step}, Offset: {file_offset}->{offset}).",
-                            "data": {
-                                "info_df": [{
-                                    "filename": filename,
-                                    "current_timestep": file_time_step,
-                                    "requested_timestep": time_step,
-                                    "current_offset": file_offset,
-                                    "requested_offset": offset,
-                                    "valid_methods": list(VALID_METHODS)
-                                }],
-                                "dataframe": []
-                            }
-                        }), 200
+                # Phase 2: All files already validated in Phase 1
+                logger.info(f"Phase 2 - Processing file: {filename}, needs_processing: {needs_processing}, file_time_step: {file_time_step}, requested_time_step: {time_step}")
 
                 # Get intrplMax for this file if available
                 intrpl_max = intrpl_max_values.get(filename)
