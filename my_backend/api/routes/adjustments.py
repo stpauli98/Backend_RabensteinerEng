@@ -375,7 +375,9 @@ def upload_chunk():
                 outfile.write(combined_content)
 
             # FIX P8: Clear chunk buffer and timestamp to free memory
-            del chunk_buffer[upload_id]
+            # Check if exists before deleting (multiple files may share same upload_id)
+            if upload_id in chunk_buffer:
+                del chunk_buffer[upload_id]
             if upload_id in chunk_buffer_timestamps:
                 del chunk_buffer_timestamps[upload_id]
             
