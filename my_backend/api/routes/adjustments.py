@@ -25,7 +25,9 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Global dictionaries to store data
 adjustment_chunks = {}  # Store chunks during adjustment
 temp_files = {}  # Store temporary files for download
+# FIX P8: Track chunk buffer creation time for cleanup
 chunk_buffer = {}  # In-memory chunk storage: {upload_id: {chunk_index: content}}
+chunk_buffer_timestamps = {}  # {upload_id: timestamp}
 # Global variables to store data
 stored_data = {}
 # Global cache for fast file info lookup (O(1) instead of pandas filtering O(n))
@@ -41,6 +43,7 @@ UTC_fmt = "%Y-%m-%d %H:%M:%S"
 # Constants
 UPLOAD_EXPIRY_TIME = 60 * 60  # 60 minuta (1 sat) u sekundama
 DATAFRAME_CHUNK_SIZE = 10000  # Max rows per SocketIO emit for large datasets
+CHUNK_BUFFER_TIMEOUT = 30 * 60  # FIX P8: 30 minutes timeout for chunk buffer cleanup
 
 
 # Progress stage constants
@@ -337,9 +340,10 @@ def upload_chunk():
         if not file_content:
             return jsonify({'error': 'Empty file content'}), 400
 
-        # Store chunk in memory instead of disk for faster performance
+        # FIX P8: Store chunk in memory and track timestamp for cleanup
         if upload_id not in chunk_buffer:
             chunk_buffer[upload_id] = {}
+            chunk_buffer_timestamps[upload_id] = time.time()
 
         chunk_buffer[upload_id][chunk_index] = file_content
 
@@ -370,8 +374,10 @@ def upload_chunk():
             with open(final_path, 'w', encoding='utf-8') as outfile:
                 outfile.write(combined_content)
 
-            # Clear chunk buffer to free memory
+            # FIX P8: Clear chunk buffer and timestamp to free memory
             del chunk_buffer[upload_id]
+            if upload_id in chunk_buffer_timestamps:
+                del chunk_buffer_timestamps[upload_id]
             
             # Emit progress update for file analysis
             emit_progress(
@@ -386,14 +392,20 @@ def upload_chunk():
             try:
                 # Analyze the complete file
                 result = analyse_data(final_path, upload_id)
-                
-                # Emit completion progress
+
+                # Extract row count for user-friendly message
+                row_count = 0
+                if result and 'info_df' in result and len(result['info_df']) > 0:
+                    row_count = result['info_df'][0].get('Anzahl der Datenpunkte', 0)
+
+                # Emit completion progress with file size info
                 emit_progress(
                     upload_id,
                     ProgressStages.FILE_COMPLETE,
                     f'File {filename} upload and analysis complete',
                     'file_complete',
-                    'file_upload'
+                    'file_upload',
+                    detail=f'Analyzed {row_count:,} rows' if row_count > 0 else None
                 )
                 
                 response_data = {
@@ -415,8 +427,33 @@ def upload_chunk():
         
     except Exception as e:
         traceback.print_exc()
+        # FIX P8: Cleanup chunk buffer on error
+        if upload_id in chunk_buffer:
+            del chunk_buffer[upload_id]
+        if upload_id in chunk_buffer_timestamps:
+            del chunk_buffer_timestamps[upload_id]
         return jsonify({"error": str(e)}), 400
-        
+
+
+# FIX P8: Cleanup function for expired chunk buffers
+def cleanup_expired_chunk_buffers():
+    """Remove chunk buffers older than CHUNK_BUFFER_TIMEOUT"""
+    current_time = time.time()
+    expired_uploads = []
+
+    for upload_id, timestamp in chunk_buffer_timestamps.items():
+        if current_time - timestamp > CHUNK_BUFFER_TIMEOUT:
+            expired_uploads.append(upload_id)
+
+    for upload_id in expired_uploads:
+        if upload_id in chunk_buffer:
+            del chunk_buffer[upload_id]
+            logger.info(f"Cleaned up expired chunk buffer for upload_id: {upload_id}")
+        if upload_id in chunk_buffer_timestamps:
+            del chunk_buffer_timestamps[upload_id]
+
+    return len(expired_uploads)
+
 
 # First Step Analyse
 def analyse_data(file_path, upload_id=None):
@@ -900,10 +937,12 @@ def complete_adjustment():
 
                 if should_emit:
                     file_progress = ProgressStages.calculate_file_progress(file_index, len(filenames), 60, 85)
+                    # Calculate percentage for multi-file progress
+                    file_percentage = int((file_index + 1) / len(filenames) * 100)
                     emit_progress(
                         upload_id,
                         file_progress,
-                        f'Analyzing file {file_index + 1}/{len(filenames)}: {filename}',
+                        f'Processing file {file_index + 1} of {len(filenames)} ({file_percentage}%): {filename}',
                         'file_analysis',
                         'data_processing',
                         detail='Checking time step configuration and processing requirements'
@@ -978,7 +1017,7 @@ def complete_adjustment():
                         f'Processing {filename} with {method_name} method',
                         'data_adjustment',
                         'data_processing',
-                        detail=f'Adjusting time step from {file_time_step}min to {time_step}min, offset from {file_offset}min to {offset}min'
+                        detail=f'Time step: {file_time_step}min → {time_step}min, offset: {file_offset}min → {offset}min'
                     )
 
                     # Process the data - koristimo originalne parametre ako ne treba obradu
@@ -1008,15 +1047,31 @@ def complete_adjustment():
                         len(filenames)
                     )
 
-                    # Emit completion progress for this file
+                    # Emit completion progress for this file with data quality info
                     file_complete_progress = 70 + ((file_index + 1) / len(filenames)) * 15
+
+                    # Calculate data quality percentage from info_record
+                    quality_percentage = 0
+                    if info_record and 'Anteil an numerischen Datenpunkten' in info_record:
+                        quality_percentage = info_record['Anteil an numerischen Datenpunkten']
+
+                    # Create comprehensive completion message
+                    completion_msg = f'Completed processing {filename}'
+                    if needs_processing:
+                        completion_msg += f' (adjusted {file_time_step}min→{time_step}min)'
+
+                    # Create quality summary detail message
+                    quality_detail = f'Generated {len(result_data):,} data points'
+                    if quality_percentage > 0:
+                        quality_detail += f' • {quality_percentage:.1f}% valid data'
+
                     emit_progress(
                         upload_id,
                         file_complete_progress,
-                        f'Completed processing {filename}',
+                        completion_msg,
                         'file_complete',
                         'data_processing',
-                        detail=f'Generated {len(result_data)} data points for {filename}'
+                        detail=quality_detail
                     )
 
                     # MEMORY CLEANUP: Free memory immediately after emitting
@@ -1042,7 +1097,7 @@ def complete_adjustment():
         emit_progress(
             upload_id,
             ProgressStages.COMPLETION,
-            f'Data processing completed for all {len(filenames)} files',
+            f'Data processing completed',
             'completion',
             'finalization'
         )
