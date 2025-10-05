@@ -7,7 +7,6 @@ import time
 import csv
 import logging
 import traceback
-import gc  # For explicit garbage collection
 from io import StringIO
 from flask import request, jsonify, send_file, Blueprint
 from flask_socketio import emit
@@ -22,16 +21,16 @@ bp = Blueprint('adjustmentsOfData_bp', __name__)
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Global dictionaries to store data
+# Global dictionaries to store data with timestamps for cleanup
 adjustment_chunks = {}  # Store chunks during adjustment
-temp_files = {}  # Store temporary files for download
-# FIX P8: Track chunk buffer creation time for cleanup
+adjustment_chunks_timestamps = {}  # {upload_id: timestamp}
+temp_files = {}  # Store temporary files for download: {file_id: {path, timestamp}}
 chunk_buffer = {}  # In-memory chunk storage: {upload_id: {chunk_index: content}}
 chunk_buffer_timestamps = {}  # {upload_id: timestamp}
-# Global variables to store data
-stored_data = {}
-# Global cache for fast file info lookup (O(1) instead of pandas filtering O(n))
-info_df_cache = {}  # {filename: {timestep, offset, start_time, end_time}}
+stored_data = {}  # Temporary data storage
+stored_data_timestamps = {}  # {filename: timestamp}
+info_df_cache = {}  # Fast file info lookup: {filename: {timestep, offset, start_time, end_time}}
+info_df_cache_timestamps = {}  # {filename: timestamp}
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +43,12 @@ UTC_fmt = "%Y-%m-%d %H:%M:%S"
 UPLOAD_EXPIRY_TIME = 60 * 60  # 60 minuta (1 sat) u sekundama
 DATAFRAME_CHUNK_SIZE = 10000  # Max rows per SocketIO emit for large datasets
 CHUNK_BUFFER_TIMEOUT = 30 * 60  # FIX P8: 30 minutes timeout for chunk buffer cleanup
+ADJUSTMENT_CHUNKS_TIMEOUT = 60 * 60  # 1 hour timeout for adjustment chunks cleanup
+TEMP_FILES_TIMEOUT = 60 * 60  # 1 hour timeout for temp files cleanup
+STORED_DATA_TIMEOUT = 60 * 60  # 1 hour timeout for stored data cleanup
+INFO_CACHE_TIMEOUT = 2 * 60 * 60  # 2 hours timeout for info cache cleanup
+SOCKETIO_CHUNK_DELAY = 0.1  # 100ms delay between Socket.IO chunks to prevent overflow
+PROGRESS_UPDATE_INTERVAL = 1.0  # Minimum 1 second between progress updates
 
 
 # Progress stage constants
@@ -155,7 +160,7 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
 
                 # CRITICAL: Delay after EVERY chunk to ensure Socket.IO can flush buffer
                 # Without this, Socket.IO drops messages due to buffer overflow
-                time.sleep(0.1)  # 100ms delay after each chunk
+                time.sleep(SOCKETIO_CHUNK_DELAY)
 
                 logger.info(f"Emitted chunk {chunk_idx + 1}/{total_chunks} for {filename} ({len(chunk)} rows)")
 
@@ -322,10 +327,16 @@ def upload_chunk():
         chunk_index = int(request.form.get('chunkIndex'))
         total_chunks = int(request.form.get('totalChunks'))
         filename = request.form.get('filename')
-        
+
         # Validacija parametara
         if not all([upload_id, isinstance(chunk_index, int), isinstance(total_chunks, int)]):
             return jsonify({"error": "Missing or invalid required parameters"}), 400
+
+        # SECURITY: Sanitize filename to prevent path traversal attacks
+        try:
+            filename = sanitize_filename(filename)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
             
         # Get the file from request
         if 'files[]' not in request.files:
@@ -346,6 +357,10 @@ def upload_chunk():
             chunk_buffer_timestamps[upload_id] = time.time()
 
         chunk_buffer[upload_id][chunk_index] = file_content
+
+        # Periodically cleanup expired data
+        if chunk_index == 0:  # Only on first chunk to avoid overhead
+            cleanup_all_expired_data()
 
         # Check if all chunks have been received
         received_chunks_count = len(chunk_buffer[upload_id])
@@ -437,7 +452,7 @@ def upload_chunk():
         return jsonify({"error": str(e)}), 400
 
 
-# FIX P8: Cleanup function for expired chunk buffers
+# Cleanup functions for expired data
 def cleanup_expired_chunk_buffers():
     """Remove chunk buffers older than CHUNK_BUFFER_TIMEOUT"""
     current_time = time.time()
@@ -455,6 +470,162 @@ def cleanup_expired_chunk_buffers():
             del chunk_buffer_timestamps[upload_id]
 
     return len(expired_uploads)
+
+
+def cleanup_expired_adjustment_chunks():
+    """Remove adjustment chunks older than ADJUSTMENT_CHUNKS_TIMEOUT"""
+    current_time = time.time()
+    expired_uploads = []
+
+    for upload_id, timestamp in adjustment_chunks_timestamps.items():
+        if current_time - timestamp > ADJUSTMENT_CHUNKS_TIMEOUT:
+            expired_uploads.append(upload_id)
+
+    for upload_id in expired_uploads:
+        if upload_id in adjustment_chunks:
+            del adjustment_chunks[upload_id]
+            logger.info(f"Cleaned up expired adjustment chunks for upload_id: {upload_id}")
+        if upload_id in adjustment_chunks_timestamps:
+            del adjustment_chunks_timestamps[upload_id]
+
+    return len(expired_uploads)
+
+
+def cleanup_expired_temp_files():
+    """Remove temp files older than TEMP_FILES_TIMEOUT"""
+    current_time = time.time()
+    expired_files = []
+
+    for file_id, file_info in temp_files.items():
+        if current_time - file_info['timestamp'] > TEMP_FILES_TIMEOUT:
+            expired_files.append(file_id)
+
+    for file_id in expired_files:
+        file_info = temp_files[file_id]
+        file_path = file_info['path']
+
+        # Delete physical file
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Deleted expired temp file: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete temp file {file_path}: {e}")
+
+        # Remove from dict
+        del temp_files[file_id]
+
+    return len(expired_files)
+
+
+def cleanup_expired_stored_data():
+    """Remove stored data older than STORED_DATA_TIMEOUT"""
+    current_time = time.time()
+    expired_files = []
+
+    for filename, timestamp in stored_data_timestamps.items():
+        if current_time - timestamp > STORED_DATA_TIMEOUT:
+            expired_files.append(filename)
+
+    for filename in expired_files:
+        if filename in stored_data:
+            del stored_data[filename]
+            logger.info(f"Cleaned up expired stored data for: {filename}")
+        if filename in stored_data_timestamps:
+            del stored_data_timestamps[filename]
+
+    return len(expired_files)
+
+
+def cleanup_expired_info_cache():
+    """Remove info cache entries older than INFO_CACHE_TIMEOUT"""
+    current_time = time.time()
+    expired_files = []
+
+    for filename, timestamp in info_df_cache_timestamps.items():
+        if current_time - timestamp > INFO_CACHE_TIMEOUT:
+            expired_files.append(filename)
+
+    for filename in expired_files:
+        if filename in info_df_cache:
+            del info_df_cache[filename]
+            logger.info(f"Cleaned up expired info cache for: {filename}")
+        if filename in info_df_cache_timestamps:
+            del info_df_cache_timestamps[filename]
+
+    return len(expired_files)
+
+
+def cleanup_all_expired_data():
+    """Run all cleanup functions and return total cleaned items"""
+    total = 0
+    total += cleanup_expired_chunk_buffers()
+    total += cleanup_expired_adjustment_chunks()
+    total += cleanup_expired_temp_files()
+    total += cleanup_expired_stored_data()
+    total += cleanup_expired_info_cache()
+
+    if total > 0:
+        logger.info(f"Total cleanup: removed {total} expired items")
+
+    return total
+
+
+def sanitize_filename(filename):
+    """
+    Sanitize filename to prevent path traversal attacks
+
+    Args:
+        filename (str): User-provided filename
+
+    Returns:
+        str: Sanitized filename safe for filesystem operations
+
+    Raises:
+        ValueError: If filename is invalid or contains path traversal attempts
+    """
+    if not filename:
+        raise ValueError("Filename cannot be empty")
+
+    # Get basename to prevent directory traversal
+    safe_filename = os.path.basename(filename)
+
+    # Check for path traversal attempts
+    if '..' in safe_filename or safe_filename != filename:
+        raise ValueError(f"Invalid filename: path traversal detected")
+
+    # Check for absolute paths
+    if os.path.isabs(safe_filename):
+        raise ValueError(f"Invalid filename: absolute paths not allowed")
+
+    # Additional validation: only allow alphanumeric, dash, underscore, dot, space, parentheses
+    import re
+    if not re.match(r'^[a-zA-Z0-9_\-\.\s\(\)]+$', safe_filename):
+        raise ValueError(f"Invalid filename: contains forbidden characters")
+
+    return safe_filename
+
+
+def get_file_info_from_cache(filename, upload_id=None):
+    """
+    Helper function to retrieve file info from cache with fallback
+
+    Args:
+        filename (str): Filename to lookup
+        upload_id (str, optional): Upload ID for upload-specific cache
+
+    Returns:
+        dict or None: File info dict or None if not found
+    """
+    # Try upload-specific cache first if upload_id provided
+    if upload_id and upload_id in adjustment_chunks:
+        file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
+        file_info = file_info_cache_local.get(filename)
+        if file_info:
+            return file_info
+
+    # Fallback to global cache
+    return info_df_cache.get(filename)
 
 
 # First Step Analyse
@@ -510,11 +681,13 @@ def analyse_data(file_path, upload_id=None):
         # Store the DataFrame for later use
         filename = os.path.basename(file_path)
         stored_data[filename] = df
+        stored_data_timestamps[filename] = time.time()
         
         # Store DataFrame in adjustment_chunks if upload_id provided
         if upload_id:
             if upload_id not in adjustment_chunks:
                 adjustment_chunks[upload_id] = {'chunks': {}, 'params': {}, 'dataframes': {}}
+                adjustment_chunks_timestamps[upload_id] = time.time()
             adjustment_chunks[upload_id]['dataframes'][filename] = df
                     
         # Calculate time step using vectorized numpy operations for performance
@@ -606,6 +779,7 @@ def analyse_data(file_path, upload_id=None):
                 }
                 # Store in both places for backward compatibility
                 info_df_cache[filename_key] = file_info_data
+                info_df_cache_timestamps[filename_key] = time.time()
                 adjustment_chunks[upload_id]['file_info_cache'][filename_key] = file_info_data
 
         # Return the upload_id
@@ -844,7 +1018,7 @@ def complete_adjustment():
         # Process each file separately
         # OPTIMIZATION: Throttle progress updates to reduce I/O overhead
         last_progress_time = time.time()
-        progress_interval = 1.0  # Minimum 1 second between emits
+        progress_interval = PROGRESS_UPDATE_INTERVAL
 
         # PHASE 1: Check ALL files first to see which need methods
         # Don't process anything until all files have valid methods
@@ -866,8 +1040,7 @@ def complete_adjustment():
                 df['UTC'] = pd.to_datetime(df['UTC'])
 
                 # Get time step and offset from cache
-                file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
-                file_info = file_info_cache_local.get(filename) or info_df_cache.get(filename)
+                file_info = get_file_info_from_cache(filename, upload_id)
 
                 if not file_info:
                     error_msg = f"File {filename} not found in cache"
@@ -964,9 +1137,7 @@ def complete_adjustment():
                 df['UTC'] = pd.to_datetime(df['UTC'])
 
                 # Get time step and offset from cache (O(1) instead of pandas filtering O(n))
-                # FIXED: Use upload-specific cache instead of global (Cloud Run compatible)
-                file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
-                file_info = file_info_cache_local.get(filename) or info_df_cache.get(filename)
+                file_info = get_file_info_from_cache(filename, upload_id)
 
                 if not file_info:
                     error_msg = f"File {filename} not found in cache"
@@ -1082,8 +1253,7 @@ def complete_adjustment():
                     # Also cleanup DataFrame from memory
                     if filename in adjustment_chunks[upload_id]['dataframes']:
                         del adjustment_chunks[upload_id]['dataframes'][filename]
-                    # Force garbage collection to free memory
-                    gc.collect()
+                    # Note: Removed manual gc.collect() - Python handles GC automatically
 
                     logger.info(f"Memory cleaned up for {filename}")
 
@@ -1551,8 +1721,19 @@ def download_file(file_id):
     try:
         if file_id not in temp_files:
             return jsonify({"error": "File not found"}), 404
+
         file_info = temp_files[file_id]
         file_path = file_info['path']
+
+        # SECURITY: Validate file_path is within expected directory
+        upload_folder_abs = os.path.abspath(UPLOAD_FOLDER)
+        file_path_abs = os.path.abspath(file_path)
+
+        # Check file is within allowed directory
+        if not file_path_abs.startswith(upload_folder_abs):
+            logger.error(f"Security: Attempted to access file outside upload folder: {file_path}")
+            return jsonify({"error": "Invalid file path"}), 403
+
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
 
