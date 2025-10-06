@@ -1693,17 +1693,22 @@ def prepare_save():
             except json.JSONDecodeError:
                 return jsonify({"error": "Invalid data format"}), 400
 
-        # Kreiraj privremeni fajl i zapiši CSV podatke
-        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
-        writer = csv.writer(temp_file, delimiter=';')
-        for row in save_data:
-            writer.writerow(row)
-        temp_file.close()
+        # Generiši jedinstveni ID na osnovu trenutnog vremena (sa mikrosekundama za jedinstvenost)
+        file_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
 
-        # Generiši jedinstveni ID na osnovu trenutnog vremena
-        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Kreiraj fajl direktno u UPLOAD_FOLDER (ne u sistemskom /tmp/)
+        # Ovo omogućava da security validacija u download_file() prođe
+        temp_path = os.path.join(UPLOAD_FOLDER, f"download_{file_id}.csv")
+
+        # Zapiši CSV podatke
+        with open(temp_path, 'w', newline='', encoding='utf-8') as temp_file:
+            writer = csv.writer(temp_file, delimiter=';')
+            for row in save_data:
+                writer.writerow(row)
+
+        # Sačuvaj info o fajlu za download
         temp_files[file_id] = {
-            'path': temp_file.name,
+            'path': temp_path,
             'timestamp': time.time()
         }
 
@@ -1738,12 +1743,24 @@ def download_file(file_id):
             return jsonify({"error": "File not found"}), 404
 
         download_name = f"data_{file_id}.csv"
-        return send_file(
+
+        # Send file to client
+        response = send_file(
             file_path,
             as_attachment=True,
             download_name=download_name,
             mimetype='text/csv'
         )
+
+        # Cleanup immediately after successful download (don't wait for periodic cleanup)
+        try:
+            os.remove(file_path)
+            del temp_files[file_id]
+            logger.info(f"✅ Cleaned up file after download: {file_id}")
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to cleanup file {file_id} after download: {cleanup_error}")
+
+        return response
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}")
         return jsonify({"error": str(e)}), 500
