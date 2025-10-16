@@ -855,6 +855,7 @@ def list_sessions():
         sessions_query = """
         SELECT
             sm.string_session_id as session_id,
+            s.session_name,
             s.created_at,
             s.updated_at,
             s.finalized,
@@ -891,7 +892,7 @@ def list_sessions():
             else:
                 # Fallback to simpler query if RPC doesn't work
                 sessions_response = supabase.table('session_mappings').select(
-                    'string_session_id, sessions(id, created_at, updated_at, finalized, file_count, n_dat)'
+                    'string_session_id, sessions(id, session_name, created_at, updated_at, finalized, file_count, n_dat)'
                 ).execute()
 
                 sessions_data = []
@@ -914,6 +915,7 @@ def list_sessions():
 
                         sessions_data.append({
                             'session_id': session_id,
+                            'session_name': session.get('session_name'),
                             'created_at': session['created_at'],
                             'updated_at': session['updated_at'],
                             'finalized': session.get('finalized', False),
@@ -954,6 +956,7 @@ def list_sessions():
 
                 sessions_data.append({
                     'session_id': session_id,
+                    'session_name': session_details.get('session_name'),
                     'created_at': session_mapping.get('created_at') or session_details.get('created_at'),
                     'updated_at': session_details.get('updated_at'),
                     'finalized': session_details.get('finalized', False),
@@ -970,6 +973,7 @@ def list_sessions():
         for session_data in sessions_data:
             session_info = {
                 'sessionId': session_data['session_id'],
+                'sessionName': session_data.get('session_name'),
                 'createdAt': session_data['created_at'],
                 'lastUpdated': session_data['updated_at'] or session_data['created_at'],
                 'fileCount': session_data.get('actual_file_count', session_data.get('file_count', 0)),
@@ -1170,14 +1174,68 @@ def session_status(session_id):
             # It's a string ID, use it directly
             string_session_id = session_id
 
-        # Provjeri postoji li direktorij sesije
+        # Provjeri postoji li sesija u bazi podataka
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        try:
+            supabase = get_supabase_client()
+            logger.info(f"Checking session status for: {string_session_id}")
+            if supabase:
+                # Provjeri postoji li sesija u bazi
+                session_uuid = create_or_get_session_uuid(string_session_id)
+                logger.info(f"Session UUID: {session_uuid}")
+                if session_uuid:
+                    # Sesija postoji u bazi
+                    session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
+                    logger.info(f"Session response data: {session_response.data}")
+                    if session_response.data and len(session_response.data) > 0:
+                        session_data = session_response.data[0]
+                        # Sesija postoji u bazi, provjeri lokalne fajlove
+                        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+                        if not os.path.exists(upload_dir):
+                            # Sesija u bazi postoji ali lokalni fajlovi ne postoje
+                            # Dozvoli korisniku da ponovo uploada fajlove
+                            return jsonify({
+                                'status': 'pending',
+                                'progress': 0,
+                                'message': 'Session exists but no files uploaded yet',
+                                'finalized': session_data.get('finalized', False)
+                            })
+                    else:
+                        # Sesija ne postoji u bazi
+                        return jsonify({
+                            'status': 'error',
+                            'progress': 0,
+                            'message': 'Session not found in database'
+                        }), 404
+                else:
+                    # Ne može se pronaći UUID mapping
+                    return jsonify({
+                        'status': 'error',
+                        'progress': 0,
+                        'message': 'Session mapping not found'
+                    }), 404
+            else:
+                # Nema Supabase klijenta, provjeri samo lokalno
+                upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+                if not os.path.exists(upload_dir):
+                    return jsonify({
+                        'status': 'error',
+                        'progress': 0,
+                        'message': 'Session not found'
+                    }), 404
+        except Exception as db_error:
+            logger.warning(f"Database check failed: {str(db_error)}, falling back to local check")
+            # Fallback na lokalnu provjeru
+            upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+            if not os.path.exists(upload_dir):
+                return jsonify({
+                    'status': 'error',
+                    'progress': 0,
+                    'message': 'Session not found'
+                }), 404
+
+        # Direktorij postoji, nastavi sa provjerom
         upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
-        if not os.path.exists(upload_dir):
-            return jsonify({
-                'status': 'error',
-                'progress': 0,
-                'message': 'Session not found'
-            }), 404
             
         # Učitaj metapodatke o sesiji
         session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
@@ -3682,3 +3740,77 @@ def get_scalers_info(session_id):
             'error': str(e),
             'message': 'Failed to retrieve scaler information'
         }), 500
+
+@bp.route('/session-name-change', methods=['POST'])
+def change_session_name():
+    """
+    Update session name in the database.
+
+    Request body:
+    {
+        "sessionId": "...",
+        "sessionName": "novo ime"
+    }
+    """
+    try:
+        from utils.database import update_session_name, ValidationError, ConfigurationError, SessionNotFoundError, DatabaseError
+
+        # Get request data
+        data = request.get_json()
+        if not data:
+            return create_error_response('No data provided', 400)
+
+        session_id = data.get('sessionId')
+        session_name = data.get('sessionName')
+
+        # Validate inputs
+        if not session_id:
+            return create_error_response('sessionId is required', 400)
+
+        if not session_name:
+            return create_error_response('sessionName is required', 400)
+
+        if not isinstance(session_name, str):
+            return create_error_response('sessionName must be a string', 400)
+
+        # Trim and validate session name
+        session_name = session_name.strip()
+        if len(session_name) == 0:
+            return create_error_response('sessionName cannot be empty', 400)
+
+        if len(session_name) > 255:
+            return create_error_response('sessionName too long (max 255 characters)', 400)
+
+        logger.info(f"Updating session name for {session_id} to: {session_name}")
+
+        # Update session name in database
+        try:
+            success = update_session_name(session_id, session_name)
+
+            if success:
+                return create_success_response(
+                    data={
+                        'sessionId': session_id,
+                        'sessionName': session_name
+                    },
+                    message='Session name updated successfully'
+                )
+            else:
+                return create_error_response('Failed to update session name', 500)
+
+        except ValidationError as e:
+            logger.warning(f"Validation error: {str(e)}")
+            return create_error_response(str(e), 400)
+        except SessionNotFoundError as e:
+            logger.warning(f"Session not found: {str(e)}")
+            return create_error_response(str(e), 404)
+        except ConfigurationError as e:
+            logger.error(f"Configuration error: {str(e)}")
+            return create_error_response('Database connection not available', 500)
+        except DatabaseError as e:
+            logger.error(f"Database error: {str(e)}")
+            return create_error_response(f'Database error: {str(e)}', 500)
+
+    except Exception as e:
+        logger.error(f"Error changing session name: {str(e)}")
+        return create_error_response(f'Internal server error: {str(e)}', 500)

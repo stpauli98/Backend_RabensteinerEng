@@ -1120,6 +1120,73 @@ def _finalize_session(database_session_id: str, n_dat: int = None, file_count: i
         logger.error(f"Error updating sessions table: {str(e)}")
         return False
 
+def update_session_name(session_id: str, session_name: str) -> bool:
+    """
+    Update session name in the sessions table.
+
+    Args:
+        session_id: ID of the session (can be string or UUID)
+        session_name: New name for the session
+
+    Returns:
+        bool: True if successful, False otherwise
+
+    Raises:
+        ValidationError: If input parameters are invalid
+        ConfigurationError: If Supabase client is not available
+        SessionNotFoundError: If session cannot be found
+        DatabaseError: If database operations fail
+    """
+    # Input validation
+    if not validate_session_id(session_id):
+        raise ValidationError(f"Invalid session_id format: {session_id}")
+
+    if not session_name or not isinstance(session_name, str):
+        raise ValidationError(f"Invalid session_name: {session_name}")
+
+    # Trim and validate length
+    session_name = session_name.strip()
+    if len(session_name) == 0:
+        raise ValidationError("Session name cannot be empty")
+
+    if len(session_name) > 255:
+        raise ValidationError("Session name too long (max 255 characters)")
+
+    supabase = get_supabase_client()
+    if not supabase:
+        raise ConfigurationError("Supabase client not available")
+
+    # Convert session_id to UUID format if needed
+    database_session_id = _get_session_uuid(session_id)
+    if not database_session_id:
+        raise SessionNotFoundError(f"Failed to convert session_id {session_id} to UUID")
+
+    logger.info(f"Updating session name for {database_session_id} to: {session_name}")
+
+    try:
+        # Check if session exists
+        existing = supabase.table("sessions").select("id").eq("id", database_session_id).execute()
+
+        if not existing.data or len(existing.data) == 0:
+            raise SessionNotFoundError(f"Session {database_session_id} not found")
+
+        # Update session name
+        response = supabase.table("sessions").update({
+            "session_name": session_name,
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", database_session_id).execute()
+
+        if hasattr(response, 'error') and response.error:
+            raise DatabaseError(f"Error updating session name: {response.error}")
+
+        logger.info(f"Successfully updated session name for {database_session_id}")
+        return True
+
+    except Exception as e:
+        if isinstance(e, (DatabaseError, SessionNotFoundError)):
+            raise
+        raise DatabaseError(f"Error updating session name: {str(e)}")
+
 def save_session_to_supabase(session_id: str, n_dat: int = None, file_count: int = None) -> bool:
     """
     Save all session data to Supabase.
@@ -1134,32 +1201,32 @@ def save_session_to_supabase(session_id: str, n_dat: int = None, file_count: int
     """
     try:
         logger.info(f"save_session_to_supabase called with session_id: {session_id}")
-        
+
         # Step 1: Get or convert session UUID
         database_session_id = _get_session_uuid(session_id)
         if not database_session_id:
             return False
-        
+
         # Step 2: Load session metadata from filesystem
         metadata = _load_session_metadata(session_id)
         if not metadata:
             return False
-        
+
         # Step 3: Save metadata (time info and zeitschritte) to database
         if not _save_metadata_to_database(database_session_id, metadata):
             logger.warning("Some metadata failed to save, continuing with files...")
-        
+
         # Step 4: Save files to database and storage
         if not _save_files_to_database(database_session_id, session_id, metadata):
             logger.warning("Some files failed to save, continuing with finalization...")
-        
+
         # Step 5: Finalize session in database
         if not _finalize_session(database_session_id, n_dat, file_count):
             logger.warning("Session finalization failed, but core data was saved")
 
         logger.info(f"Successfully saved session {session_id} to Supabase")
         return True
-        
+
     except Exception as e:
         logger.error(f"Error saving session to Supabase: {str(e)}")
         return False
