@@ -2188,7 +2188,10 @@ def generate_plot():
         df_plot_out = data.get('df_plot_out', {})
         df_plot_fcst = data.get('df_plot_fcst', {})
 
-        logger.info(f"Generate plot for session {session_id}")
+        # Optional: specific model_id to use for plot generation
+        model_id = data.get('model_id')  # If not provided, uses most recent model
+
+        logger.info(f"Generate plot for session {session_id}" + (f" with model_id {model_id}" if model_id else " (using most recent model)"))
         logger.info(f"Plot settings: num_sbpl={num_sbpl}, x_sbpl={x_sbpl}, y_sbpl_fmt={y_sbpl_fmt}, y_sbpl_set={y_sbpl_set}")
         logger.info(f"Input variables selected: {[k for k, v in df_plot_in.items() if v]}")
         logger.info(f"Output variables selected: {[k for k, v in df_plot_out.items() if v]}")
@@ -2212,12 +2215,17 @@ def generate_plot():
             supabase = get_supabase_client()
 
             # Fetch training results from database
-            response = supabase.table('training_results')\
-                .select('results')\
-                .eq('session_id', uuid_session_id)\
-                .order('created_at', desc=True)\
-                .limit(1)\
-                .execute()
+            # If model_id is provided, fetch that specific model, otherwise get most recent
+            query = supabase.table('training_results').select('results').eq('session_id', uuid_session_id)
+
+            if model_id:
+                # Fetch specific model by ID
+                query = query.eq('id', model_id)
+            else:
+                # Fetch most recent model
+                query = query.order('created_at', desc=True).limit(1)
+
+            response = query.execute()
 
             if not response.data or len(response.data) == 0:
                 return jsonify({
@@ -2282,9 +2290,50 @@ def generate_plot():
             else:
 
                 # Generate predictions using trained model if available
-                # Note: Currently models are stored as string representations, not actual objects
                 if trained_model and hasattr(trained_model, 'predict'):
-                    tst_fcst = trained_model.predict(tst_x)
+                    # Get model type to handle SVR models differently
+                    model_type = results.get('model_type', 'Unknown')
+
+                    # SVR models need special handling (2D input instead of 3D)
+                    if model_type in ['SVR_dir', 'SVR_MIMO', 'LIN']:
+                        logger.info(f"Using SVR/LIN prediction logic for model type: {model_type}")
+                        # For SVR models, we need to predict on 2D data
+                        n_samples = tst_x.shape[0]
+                        n_outputs = tst_y.shape[-1] if len(tst_y.shape) > 2 else 1
+
+                        # Initialize predictions array
+                        tst_fcst = []
+
+                        # Predict for each sample
+                        for i in range(n_samples):
+                            # Squeeze to 2D (timesteps, features)
+                            inp = np.squeeze(tst_x[i:i+1], axis=0)
+
+                            # trained_model is a list of models for SVR_dir/SVR_MIMO
+                            if isinstance(trained_model, list):
+                                pred = []
+                                for model_i in trained_model:
+                                    pred.append(model_i.predict(inp))
+                                out = np.array(pred).T  # Transpose to (timesteps, outputs)
+                            else:
+                                # For LIN or single model
+                                out = trained_model.predict(inp)
+
+                            # Expand dims back to 3D
+                            out = np.expand_dims(out, axis=0)
+                            tst_fcst.append(out[0])
+
+                        tst_fcst = np.array(tst_fcst)
+                    else:
+                        # For Dense, CNN, LSTM, AR LSTM - direct prediction
+                        logger.info(f"Using standard prediction logic for model type: {model_type}")
+                        tst_fcst = trained_model.predict(tst_x)
+
+                        # CNN models need to squeeze the last dimension
+                        if model_type == 'CNN':
+                            logger.info(f"Squeezing last dimension for CNN model, shape before: {tst_fcst.shape}")
+                            tst_fcst = np.squeeze(tst_fcst, axis=-1)
+                            logger.info(f"Shape after squeeze: {tst_fcst.shape}")
                 else:
                     # Model is not available as object, cannot generate predictions
                     logger.error(f"Model is not available as an object for session {session_id} (stored as: {type(trained_model).__name__})")
