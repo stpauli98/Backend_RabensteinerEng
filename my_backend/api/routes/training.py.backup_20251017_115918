@@ -1294,6 +1294,24 @@ def session_status(session_id):
             'message': f'Error: {str(e)}'
         }), 500
 
+@bp.route('/get-file-metadata/<session_id>', methods=['GET'])
+def get_file_metadata(session_id):
+    """Get file metadata for a specific session."""
+    try:
+        # Extract file metadata
+        metadata = extract_file_metadata(session_id)
+        
+        if metadata is None:
+            return jsonify({'success': False, 'error': 'File metadata not found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'metadata': metadata
+        })
+    except Exception as e:
+        logger.error(f"Error getting file metadata for session {session_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @bp.route('/init-session', methods=['POST'])
 def init_session():
     """Initialize a new upload session."""
@@ -1354,6 +1372,101 @@ def init_session():
         })
     except Exception as e:
         logger.error(f"Error initializing session: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/get-all-files-metadata/<session_id>', methods=['GET'])
+def get_all_files_metadata(session_id):
+    """Get metadata for all files in a session."""
+    try:
+        # Check if the provided ID is a UUID, and if so, get the string ID
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            string_session_id = get_string_id_from_uuid(session_id)
+            if not string_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
+        except (ValueError, TypeError):
+            string_session_id = session_id
+
+        # Provjeri postoji li direktorij sesije
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+        if not os.path.exists(upload_dir):
+            return jsonify({'success': False, 'error': 'Session not found'}), 404
+            
+        # Prvo pokušaj učitati session_metadata.json jer sadrži metapodatke za sve datoteke
+        session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
+        if os.path.exists(session_metadata_path):
+            with open(session_metadata_path, 'r') as f:
+                session_metadata = json.load(f)
+                
+            # Dohvati metapodatke o datotekama iz session_metadata
+            files_list = session_metadata.get('files', [])
+            
+            # Ako postoje metapodaci o datotekama u session_metadata, koristi njih
+            if files_list:
+                result = []
+                for file_metadata in files_list:
+                    if file_metadata:
+                        # Provjeri postoji li datoteka
+                        file_name = file_metadata.get('fileName', '')
+                        file_path = os.path.join(upload_dir, file_name) if file_name else None
+                        
+                        if file_path and os.path.exists(file_path):
+                            # Formatiraj metapodatke za frontend koristeći pomoćnu funkciju
+                            result.append(extract_file_metadata_fields(file_metadata))
+                
+                return jsonify({
+                    'success': True,
+                    'files': result
+                })
+        
+        # Ako nema session_metadata.json ili nema metapodataka o datotekama, pokušaj s metadata.json
+        metadata_path = os.path.join(upload_dir, 'metadata.json')
+        if not os.path.exists(metadata_path):
+            # Ako nema ni metadata.json, pokušaj pronaći datoteke u direktoriju
+            files_metadata = {}
+            for file_name in os.listdir(upload_dir):
+                if os.path.isfile(os.path.join(upload_dir, file_name)) and not file_name.endswith(('.json', '_0', '_1', '_2', '_3', '_4', '_5', '_6', '_7', '_8', '_9')):
+                    files_metadata[file_name] = {
+                        'id': str(uuid.uuid4()),
+                        'fileName': file_name,
+                        'bezeichnung': os.path.splitext(file_name)[0]
+                    }
+            
+            # Pretvori u listu za lakši prikaz u tablici
+            result = list(files_metadata.values())
+            
+            return jsonify({
+                'success': True,
+                'files': result
+            })
+            
+        # Učitaj metadata.json datoteku
+        with open(metadata_path, 'r') as f:
+            chunks_metadata = json.load(f)
+            
+        # Pronađi sve jedinstvene datoteke i njihove metapodatke
+        files_metadata = {}
+        for chunk in chunks_metadata:
+            file_name = chunk.get('fileName')
+            
+            # Uzmi samo prvi chunk svake datoteke jer on sadrži metapodatke
+            if file_name and chunk.get('chunkIndex') == 0 and file_name not in files_metadata:
+                params = chunk.get('params', {})
+                file_metadata = params.get('fileMetadata', {})
+                
+                if file_metadata:
+                    files_metadata[file_name] = extract_file_metadata_fields(file_metadata)
+        
+        # Pretvori u listu za lakši prikaz u tablici
+        result = list(files_metadata.values())
+        
+        return jsonify({
+            'success': True,
+            'files': result
+        })
+    except Exception as e:
+        logger.error(f"Error getting all files metadata for session {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @bp.route('/save-time-info', methods=['POST'])
@@ -1433,6 +1546,99 @@ def create_database_session():
         logger.error(f"Error creating database session: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@bp.route('/debug-env', methods=['GET'])
+def debug_env():
+    """Debug endpoint to check environment variables and Supabase connection."""
+    try:
+        import os
+        import httpx
+        import supabase
+        from utils.database import get_supabase_client
+        from supabase import create_client
+        
+        # Check versions
+        httpx_version = httpx.__version__
+        supabase_version = supabase.__version__
+        
+        # Check environment variables
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        
+        # Try to create Supabase client directly
+        direct_client = None
+        direct_error = None
+        try:
+            direct_client = create_client(supabase_url, supabase_key)
+        except Exception as e:
+            direct_error = str(e)
+        
+        # Try to create via our function
+        supabase = get_supabase_client()
+        
+        return jsonify({
+            'success': True,
+            'httpx_version': httpx_version,
+            'supabase_version': supabase_version,
+            'supabase_url_present': bool(supabase_url),
+            'supabase_url_length': len(supabase_url) if supabase_url else 0,
+            'supabase_key_present': bool(supabase_key),
+            'supabase_key_length': len(supabase_key) if supabase_key else 0,
+            'supabase_client_created': bool(supabase),
+            'direct_client_created': bool(direct_client),
+            'direct_error': direct_error,
+            'message': 'Environment debug complete'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Debug failed'
+        }), 500
+
+@bp.route('/test-data-loading/<session_id>', methods=['GET'])
+def test_data_loading(session_id):
+    """Test endpoint to check if data exists for a session ID."""
+    try:
+        # Get UUID for session
+        from utils.database import create_or_get_session_uuid, get_supabase_client
+        session_uuid = create_or_get_session_uuid(session_id)
+        
+        if not session_uuid:
+            return jsonify({'success': False, 'error': 'Could not get session UUID'}), 400
+            
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Check for time_info
+        time_info = supabase.table('time_info').select('*').eq('session_id', session_uuid).execute()
+        
+        # Check for zeitschritte
+        zeitschritte = supabase.table('zeitschritte').select('*').eq('session_id', session_uuid).execute()
+        
+        # Check for files
+        files = supabase.table('files').select('*').eq('session_id', session_uuid).execute()
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'session_uuid': session_uuid,
+            'data_exists': {
+                'time_info': len(time_info.data) > 0,
+                'zeitschritte': len(zeitschritte.data) > 0,
+                'files': len(files.data) > 0
+            },
+            'data': {
+                'time_info': time_info.data[0] if time_info.data else None,
+                'zeitschritte': zeitschritte.data[0] if zeitschritte.data else None,
+                'files_count': len(files.data)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error testing data loading: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @bp.route('/get-session-uuid/<session_id>', methods=['GET'])
 def get_session_uuid(session_id):
@@ -1663,6 +1869,122 @@ def delete_session(session_id):
     except Exception as e:
         logger.error(f"Error deleting session {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/file/download/<session_id>/<file_type>/<file_name>', methods=['GET'])
+def download_file(session_id, file_type, file_name):
+    """
+    Downloads a file from Supabase Storage.
+    """
+    try:
+        from utils.database import get_supabase_client, get_string_id_from_uuid
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Supabase client not available'}), 500
+
+        # Ensure session_id is UUID for Supabase calls
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = get_string_id_from_uuid(session_id)
+            if not uuid_session_id:
+                return jsonify({'success': False, 'error': 'Session mapping not found'}), 404
+
+        bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+        storage_path = f"{uuid_session_id}/{file_name}"
+
+        # logger.info(f"Attempting to download file {file_name} from bucket {bucket_name} at path {storage_path}")
+
+        try:
+            response = supabase.storage.from_(bucket_name).download(storage_path)
+            file_content = response
+        except Exception as e:
+            logger.error(f"Error downloading file from Supabase Storage: {e}")
+            return jsonify({'success': False, 'error': f'File download failed: {str(e)}'}), 500
+
+        # Return the file content
+        return current_app.response_class(
+            file_content,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename="{file_name}"'}
+        )
+
+    except Exception as e:
+        logger.error(f"Error in download_file endpoint: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route('/run-analysis/<session_id>', methods=['POST'])
+def run_analysis(session_id):
+    """
+    Triggers the execution of training pipeline using modern approach.
+    Now uses TrainingPipeline directly instead of subprocess.
+    """
+    import threading
+    from services.training.middleman_runner import ModernMiddlemanRunner
+    from flask import current_app
+
+    if not session_id:
+        return jsonify({'success': False, 'error': 'Missing session ID'}), 400
+
+    try:
+        # Get SocketIO instance from app extensions
+        socketio_instance = current_app.extensions.get('socketio')
+        
+        # Create modern middleman runner with SocketIO support
+        runner = ModernMiddlemanRunner()
+        if socketio_instance:
+            runner.set_socketio(socketio_instance)  # Pass SocketIO for real-time updates
+        
+        # Run training in background thread to avoid blocking the request
+        def run_training_async():
+            try:
+                # logger.info(f"Starting async training for session {session_id}")
+                result = runner.run_training_script(session_id)
+                
+                if result['success']:
+                    # logger.info(f"Training completed successfully for session {session_id}")
+                    # Emit completion event via SocketIO
+                    if socketio_instance:
+                        socketio_instance.emit('training_completed', {
+                            'session_id': session_id,
+                            'status': 'completed',
+                            'message': 'Training completed successfully'
+                        }, room=session_id)
+                else:
+                    logger.error(f"Training failed for session {session_id}: {result.get('error', 'Unknown error')}")
+                    # Emit error event via SocketIO
+                    if socketio_instance:
+                        socketio_instance.emit('training_error', {
+                            'session_id': session_id,
+                            'status': 'failed',
+                            'error': result.get('error', 'Unknown error')
+                        }, room=session_id)
+                    
+            except Exception as e:
+                logger.error(f"Async training failed for session {session_id}: {str(e)}")
+                if socketio_instance:
+                    socketio_instance.emit('training_error', {
+                        'session_id': session_id,
+                        'status': 'failed',
+                        'error': str(e)
+                    }, room=session_id)
+        
+        # Start training in background thread
+        training_thread = threading.Thread(target=run_training_async)
+        training_thread.daemon = True
+        training_thread.start()
+        
+        # logger.info(f"Modern training pipeline for session {session_id} triggered successfully.")
+        return jsonify({
+            'success': True, 
+            'message': f'Modern training pipeline for session {session_id} started.',
+            'note': 'Using real extracted functions instead of subprocess'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to trigger modern training for session {session_id}: {e}")
+        return jsonify({'success': False, 'error': f'Failed to start modern training: {str(e)}'}), 500
 
 @bp.route('/get-zeitschritte/<session_id>', methods=['GET'])
 def get_zeitschritte(session_id):
@@ -1994,9 +2316,9 @@ def get_training_results(session_id):
         
         # logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
         
-        # Get training results from database (limit to 1 most recent result)
-        response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
-
+        # Get training results from database
+        response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').execute()
+        
         if response.data and len(response.data) > 0:
             return jsonify({
                 'success': True,
@@ -2019,508 +2341,6 @@ def get_training_results(session_id):
             'success': False,
             'error': str(e)
         }), 500
-
-
-@bp.route('/get-training-results/<session_id>', methods=['GET'])
-def get_training_results_details(session_id):
-    """
-    Get detailed training results for a session (used by frontend)
-    This is an alias for /results/<session_id> to maintain compatibility
-    """
-    return get_training_results(session_id)
-
-
-@bp.route('/plot-variables/<session_id>', methods=['GET'])
-def get_plot_variables(session_id):
-    """
-    Get available input and output variables for plotting
-    """
-    try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
-
-        # Get training results
-        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
-
-        input_variables = []
-        output_variables = []
-
-        if response.data and len(response.data) > 0:
-            results = response.data[0].get('results', {})
-
-            # Try different places where variable names might be stored
-            input_variables = (
-                results.get('input_features') or
-                results.get('input_columns') or
-                results.get('data_info', {}).get('input_columns', [])
-            )
-            output_variables = (
-                results.get('output_features') or
-                results.get('output_columns') or
-                results.get('data_info', {}).get('output_columns', [])
-            )
-
-        # If no variables found, try to get from files
-        if not input_variables and not output_variables:
-            file_response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
-
-            if file_response.data:
-                for file_data in file_response.data:
-                    file_type = file_data.get('file_type', '')
-                    columns = file_data.get('columns', [])
-
-                    if file_type == 'input' and not input_variables:
-                        input_variables = [col for col in columns if col.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
-                    elif file_type == 'output' and not output_variables:
-                        output_variables = [col for col in columns if col.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
-
-        # Default fallback
-        if not input_variables:
-            input_variables = ['Temperature', 'Load']
-        if not output_variables:
-            output_variables = ['Predicted_Load']
-
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'input_variables': input_variables if isinstance(input_variables, list) else [],
-            'output_variables': output_variables if isinstance(output_variables, list) else []
-        })
-
-    except Exception as e:
-        logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'input_variables': ['Temperature', 'Load'],
-            'output_variables': ['Predicted_Load']
-        })
-
-
-@bp.route('/visualizations/<session_id>', methods=['GET'])
-def get_training_visualizations(session_id):
-    """
-    Get training visualizations (violin plots) for a session
-    """
-    try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
-
-        # Get visualizations from database
-        response = supabase.table('training_visualizations').select('*').eq('session_id', uuid_session_id).execute()
-
-        if not response.data or len(response.data) == 0:
-            return jsonify({
-                'session_id': session_id,
-                'plots': {},
-                'message': 'No visualizations found for this session'
-            }), 404
-
-        # Organize plots by plot_name
-        plots = {}
-        metadata = {}
-        created_at = None
-
-        for viz in response.data:
-            plot_name = viz.get('plot_name', 'unknown')
-            plots[plot_name] = viz.get('image_data', '')
-
-            if not metadata:
-                metadata = viz.get('plot_metadata', {})
-                created_at = viz.get('created_at')
-
-        return jsonify({
-            'session_id': session_id,
-            'plots': plots,
-            'metadata': metadata,
-            'created_at': created_at,
-            'message': 'Visualizations retrieved successfully'
-        })
-
-    except Exception as e:
-        logger.error(f"Error retrieving visualizations for {session_id}: {str(e)}")
-        return jsonify({
-            'error': 'Failed to retrieve training visualizations',
-            'message': str(e)
-        }), 500
-
-
-@bp.route('/generate-plot', methods=['POST'])
-def generate_plot():
-    """
-    Generate plot based on user selections matching original training_original.py
-
-    Expected request body:
-    {
-        'session_id': str,
-        'plot_settings': {
-            'num_sbpl': int,
-            'x_sbpl': str ('UTC' or 'ts'),
-            'y_sbpl_fmt': str ('original' or 'skaliert'),
-            'y_sbpl_set': str ('gemeinsame Achse' or 'separate Achsen')
-        },
-        'df_plot_in': dict,  # {feature_name: bool, ...}
-        'df_plot_out': dict,  # {feature_name: bool, ...}
-        'df_plot_fcst': dict  # {feature_name: bool, ...}
-    }
-    """
-    try:
-        data = request.json
-        session_id = data.get('session_id')
-
-        if not session_id:
-            return jsonify({
-                'success': False,
-                'error': 'Session ID is required'
-            }), 400
-
-        # Get plot settings
-        plot_settings = data.get('plot_settings', {})
-        num_sbpl = plot_settings.get('num_sbpl', 17)
-        x_sbpl = plot_settings.get('x_sbpl', 'UTC')
-        y_sbpl_fmt = plot_settings.get('y_sbpl_fmt', 'original')
-        y_sbpl_set = plot_settings.get('y_sbpl_set', 'separate Achsen')
-
-        # Get plot selections
-        df_plot_in = data.get('df_plot_in', {})
-        df_plot_out = data.get('df_plot_out', {})
-        df_plot_fcst = data.get('df_plot_fcst', {})
-
-        logger.info(f"Generate plot for session {session_id}")
-        logger.info(f"Plot settings: num_sbpl={num_sbpl}, x_sbpl={x_sbpl}, y_sbpl_fmt={y_sbpl_fmt}, y_sbpl_set={y_sbpl_set}")
-        logger.info(f"Input variables selected: {[k for k, v in df_plot_in.items() if v]}")
-        logger.info(f"Output variables selected: {[k for k, v in df_plot_out.items() if v]}")
-        logger.info(f"Forecast variables selected: {[k for k, v in df_plot_fcst.items() if v]}")
-
-        # Load model data from database
-        try:
-            from utils.database import create_or_get_session_uuid, get_supabase_client
-            import numpy as np
-            import pandas as pd
-
-            # Get UUID for session
-            uuid_session_id = create_or_get_session_uuid(session_id)
-            if not uuid_session_id:
-                return jsonify({
-                    'success': False,
-                    'error': 'Session not found'
-                }), 404
-
-            # Get Supabase client
-            supabase = get_supabase_client()
-
-            # Fetch training results from database
-            response = supabase.table('training_results')\
-                .select('results')\
-                .eq('session_id', uuid_session_id)\
-                .order('created_at', desc=True)\
-                .limit(1)\
-                .execute()
-
-            if not response.data or len(response.data) == 0:
-                return jsonify({
-                    'success': False,
-                    'error': 'Model not trained yet. Please train the model first.'
-                }), 400
-
-            # Extract model data from results
-            results = response.data[0]['results']
-
-            # Get model data from results and deserialize if needed
-            model_data = results.get('trained_model')
-
-            # Deserialize model if it's in serialized format
-            trained_model = None
-            if model_data:
-                # Handle list format (model_data is a list with one dict element)
-                if isinstance(model_data, list) and len(model_data) > 0:
-                    model_data = model_data[0]
-
-                if isinstance(model_data, dict) and model_data.get('_model_type') == 'serialized_model':
-                    try:
-                        import pickle
-                        import base64
-                        # Decode base64 and deserialize model
-                        model_bytes = base64.b64decode(model_data['_model_data'])
-                        trained_model = pickle.loads(model_bytes)
-                        logger.info(f"Successfully deserialized model of type {model_data.get('_model_class')}")
-                    except Exception as e:
-                        logger.error(f"Failed to deserialize model: {e}")
-                        trained_model = None
-                else:
-                    # Legacy format - model stored as string or other format
-                    trained_model = model_data
-
-            test_data = results.get('test_data', {})
-            metadata = results.get('metadata', {})
-            scalers = results.get('scalers', {})
-
-            # Check if we have test data - support both naming conventions
-            has_test_data = False
-            if test_data:
-                # Check for both possible naming conventions
-                if 'X' in test_data and 'y' in test_data:
-                    # New format: X, y
-                    tst_x = np.array(test_data.get('X'))
-                    tst_y = np.array(test_data.get('y'))
-                    has_test_data = True
-                elif 'X_test' in test_data and 'y_test' in test_data:
-                    # Old format: X_test, y_test
-                    tst_x = np.array(test_data.get('X_test'))
-                    tst_y = np.array(test_data.get('y_test'))
-                    has_test_data = True
-
-            if not has_test_data:
-                logger.error(f"No test data found in database for session {session_id}")
-                return jsonify({
-                    'success': False,
-                    'error': 'No training data available for this session',
-                    'message': 'Please train a model first before generating plots'
-                }), 400
-            else:
-
-                # Generate predictions using trained model if available
-                # Note: Currently models are stored as string representations, not actual objects
-                if trained_model and hasattr(trained_model, 'predict'):
-                    tst_fcst = trained_model.predict(tst_x)
-                else:
-                    # Model is not available as object, cannot generate predictions
-                    logger.error(f"Model is not available as an object for session {session_id} (stored as: {type(trained_model).__name__})")
-                    return jsonify({
-                        'success': False,
-                        'error': 'Model not available for predictions',
-                        'message': 'The trained model cannot be used for predictions. Please retrain the model.'
-                    }), 400
-
-            # Import matplotlib for plotting
-            import matplotlib
-            matplotlib.use('Agg')  # Use non-interactive backend
-            import matplotlib.pyplot as plt
-            import seaborn as sns
-            from datetime import datetime
-            import io
-            import base64
-
-            # Create figure based on settings
-            num_sbpl = min(num_sbpl, len(tst_x))  # Limit to available test samples
-            num_sbpl_x = int(np.ceil(np.sqrt(num_sbpl)))
-            num_sbpl_y = int(np.ceil(num_sbpl / num_sbpl_x))
-
-            fig, axs = plt.subplots(num_sbpl_y, num_sbpl_x,
-                                   figsize=(20, 13),
-                                   layout='constrained')
-
-            # Flatten axs array for easier indexing
-            if num_sbpl == 1:
-                axs = [axs]
-            else:
-                axs = axs.flatten()
-
-            # Color palette - make sure we have enough colors
-            # Count total number of variables to plot
-            total_vars = len([k for k, v in df_plot_in.items() if v]) + \
-                        len([k for k, v in df_plot_out.items() if v]) + \
-                        len([k for k, v in df_plot_fcst.items() if v])
-            palette = sns.color_palette("tab20", max(20, total_vars))
-
-            # Plot each subplot
-            for i_sbpl in range(num_sbpl):
-                ax = axs[i_sbpl] if num_sbpl > 1 else axs[0]
-
-                # Create x-axis values
-                if x_sbpl == 'UTC':
-                    # Create UTC timestamps
-                    x_values = pd.date_range(start='2024-01-01',
-                                            periods=tst_x.shape[1],
-                                            freq='1h')
-                else:
-                    # Use timestep indices
-                    x_values = np.arange(tst_x.shape[1])
-
-                # Plot selected input variables
-                color_idx = 0
-                for var_name, selected in df_plot_in.items():
-                    if selected and color_idx < tst_x.shape[-1]:
-                        if y_sbpl_fmt == 'original':
-                            y_values = tst_x[i_sbpl, :, color_idx]
-                        else:
-                            y_values = tst_x[i_sbpl, :, color_idx]  # Already scaled
-
-                        ax.plot(x_values, y_values,
-                               label=f'IN: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='o', markersize=2,
-                               linewidth=1)
-                        color_idx += 1
-
-                # Plot selected output variables (ground truth)
-                for i_out, (var_name, selected) in enumerate(df_plot_out.items()):
-                    if selected and i_out < tst_y.shape[-1]:
-                        if y_sbpl_fmt == 'original':
-                            y_values = tst_y[i_sbpl, :, i_out]
-                        else:
-                            y_values = tst_y[i_sbpl, :, i_out]  # Already scaled
-
-                        ax.plot(x_values[:len(y_values)], y_values,
-                               label=f'OUT: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='s', markersize=2,
-                               linewidth=1)
-                        color_idx += 1
-
-                # Plot selected forecast variables (predictions)
-                for i_fcst, (var_name, selected) in enumerate(df_plot_fcst.items()):
-                    if selected and i_fcst < tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1:
-                        if len(tst_fcst.shape) == 3:
-                            y_values = tst_fcst[i_sbpl, :, i_fcst]
-                        elif len(tst_fcst.shape) == 2:
-                            y_values = tst_fcst[i_sbpl, :]
-                        else:
-                            y_values = tst_fcst
-
-                        ax.plot(x_values[:len(y_values)], y_values,
-                               label=f'FCST: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='^', markersize=2,
-                               linewidth=1, linestyle='--')
-                        color_idx += 1
-
-                # Configure subplot
-                ax.set_title(f'Sample {i_sbpl + 1}', fontsize=10)
-                ax.legend(loc='upper left', fontsize=8)
-                ax.grid(True, alpha=0.3)
-
-                if x_sbpl == 'UTC':
-                    ax.set_xlabel('Time (UTC)', fontsize=9)
-                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
-                else:
-                    ax.set_xlabel('Timestep', fontsize=9)
-
-                ax.set_ylabel('Value', fontsize=9)
-
-                # Handle y-axis configuration
-                if y_sbpl_set == 'separate Achsen':
-                    # Each line gets its own y-axis scale
-                    pass  # Already handled by matplotlib auto-scaling
-
-            # Remove empty subplots
-            for i in range(num_sbpl, len(axs)):
-                fig.delaxes(axs[i])
-
-            # Save plot to base64 string
-            buffer = io.BytesIO()
-            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-            buffer.seek(0)
-            plot_data = base64.b64encode(buffer.getvalue()).decode()
-            plt.close()
-
-            logger.info(f"Plot generated successfully for session {session_id}")
-
-            return jsonify({
-                'success': True,
-                'session_id': session_id,
-                'plot_data': f'data:image/png;base64,{plot_data}',
-                'message': 'Plot generated successfully'
-            })
-
-        except Exception as e:
-            logger.error(f"Error generating plot: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return jsonify({
-                'success': False,
-                'error': f'Failed to generate plot: {str(e)}'
-            }), 500
-
-    except Exception as e:
-        logger.error(f"Error in generate_plot endpoint: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': 'Failed to process plot request',
-            'message': str(e)
-        }), 500
-
-
-@bp.route('/status/<session_id>', methods=['GET'])
-@bp.route('/session-status/<session_id>', methods=['GET'])  # Alias for frontend compatibility
-def get_training_status(session_id: str):
-    """
-    Get training status for a session
-
-    Args:
-        session_id: Session identifier
-
-    Returns:
-        JSON response with training status
-    """
-    try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
-
-        # Check training_results table first
-        results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
-
-        # Check training_logs table for detailed progress
-        logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
-
-        if results_response.data and len(results_response.data) > 0:
-            # Training is completed
-            result_data = results_response.data[0]
-            status = {
-                'session_id': session_id,
-                'status': result_data.get('status', 'completed'),
-                'progress': 100,
-                'current_step': 'Training completed',
-                'total_steps': 7,
-                'completed_steps': 7,
-                'started_at': result_data.get('created_at'),
-                'completed_at': result_data.get('completed_at'),
-                'message': 'Training completed successfully'
-            }
-        elif logs_response.data and len(logs_response.data) > 0:
-            # Training is in progress
-            log_data = logs_response.data[0]
-            progress_data = log_data.get('progress', {})
-            status = {
-                'session_id': session_id,
-                'status': 'in_progress',
-                'progress': progress_data.get('overall', 0) if isinstance(progress_data, dict) else 0,
-                'current_step': progress_data.get('current_step', 'Processing') if isinstance(progress_data, dict) else 'Processing',
-                'total_steps': progress_data.get('total_steps', 7) if isinstance(progress_data, dict) else 7,
-                'completed_steps': progress_data.get('completed_steps', 0) if isinstance(progress_data, dict) else 0,
-                'started_at': log_data.get('created_at'),
-                'completed_at': None,
-                'message': 'Training in progress'
-            }
-        else:
-            # No training found
-            status = {
-                'session_id': session_id,
-                'status': 'not_found',
-                'progress': 0,
-                'current_step': 'Not started',
-                'total_steps': 7,
-                'completed_steps': 0,
-                'started_at': None,
-                'completed_at': None,
-                'message': 'No training found for this session'
-            }
-
-        return jsonify(status)
-
-    except Exception as e:
-        logger.error(f"Error getting training status for {session_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': 'Failed to get training status',
-            'message': str(e),
-            'session_id': session_id,
-            'status': 'error'
-        }), 500
-
 
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
 def generate_datasets(session_id):
@@ -2698,36 +2518,29 @@ def train_models(session_id):
         # Extract model parameters
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
-
+        
         # logger.info(f"Training models for session {session_id}")
         # logger.info(f"Model parameters: {model_parameters}")
-
+        
         import threading
         from services.training.middleman_runner import ModernMiddlemanRunner
         from flask import current_app
-
+        
         # Get SocketIO instance
         socketio_instance = current_app.extensions.get('socketio')
-
+        
         # Create runner
         runner = ModernMiddlemanRunner()
         if socketio_instance:
             runner.set_socketio(socketio_instance)
-
-        # Normalize activation function to lowercase for backend compatibility
-        # Frontend sends: ReLU, Tanh, Sigmoid, etc.
-        # Backend expects: relu, tanh, sigmoid, etc.
-        actf = model_parameters.get('ACTF')
-        if actf:
-            actf = actf.lower()
-
+        
         # Prepare full model configuration
         model_config = {
             'MODE': model_parameters.get('MODE', 'Linear'),
             'LAY': model_parameters.get('LAY'),
             'N': model_parameters.get('N'),
             'EP': model_parameters.get('EP'),
-            'ACTF': actf,
+            'ACTF': model_parameters.get('ACTF'),
             'K': model_parameters.get('K'),
             'KERNEL': model_parameters.get('KERNEL'),
             'C': model_parameters.get('C'),
@@ -2966,6 +2779,69 @@ def train_models(session_id):
         logger.error(f"Error in train_models: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@bp.route('/debug-files-table/<session_id>', methods=['GET'])
+def debug_files_table(session_id):
+    """Debug endpoint to inspect files table data for a session."""
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        
+        # Convert session_id to UUID if needed
+        try:
+            import uuid
+            uuid.UUID(session_id)
+            uuid_session_id = session_id
+        except (ValueError, TypeError):
+            uuid_session_id = create_or_get_session_uuid(session_id)
+            if not uuid_session_id:
+                return jsonify({'success': False, 'error': 'Could not get session UUID'}), 400
+        
+        supabase = get_supabase_client()
+        if not supabase:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+            
+        # Get all files for this session
+        response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
+        
+        # logger.info(f"Debug: Files table query for session {session_id} (UUID: {uuid_session_id})")
+        # logger.info(f"Debug: Found {len(response.data)} files")
+        
+        # Also check csv_file_refs table
+        refs_response = supabase.table('csv_file_refs').select('*').eq('session_id', uuid_session_id).execute()
+        # logger.info(f"Debug: Found {len(refs_response.data)} CSV file references")
+        
+        result = {
+            'success': True,
+            'session_id': session_id,
+            'uuid_session_id': uuid_session_id,
+            'files_count': len(response.data),
+            'files': response.data,
+            'csv_refs_count': len(refs_response.data),
+            'csv_refs': refs_response.data
+        }
+        
+        # Check for empty storage_path values
+        empty_storage_paths = []
+        for file_data in response.data:
+            if not file_data.get('storage_path'):
+                empty_storage_paths.append({
+                    'file_id': file_data.get('id'),
+                    'file_name': file_data.get('file_name'),
+                    'storage_path': file_data.get('storage_path')
+                })
+        
+        if empty_storage_paths:
+            result['empty_storage_paths'] = empty_storage_paths
+            result['empty_storage_paths_count'] = len(empty_storage_paths)
+            logger.warning(f"Found {len(empty_storage_paths)} files with empty storage_path")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error debugging files table for {session_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/evaluation-tables/<session_id>', methods=['GET'])
 def get_evaluation_tables(session_id):
     """
     Get evaluation metrics formatted as tables for display.
@@ -3118,6 +2994,70 @@ def get_evaluation_tables(session_id):
             'session_id': session_id
         }), 500
 
+
+@bp.route('/save-evaluation-tables/<session_id>', methods=['POST'])
+def save_evaluation_tables(session_id):
+    """
+    Save evaluation tables (df_eval and df_eval_ts) to database
+    """
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+        
+        # Get request data
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        df_eval = data.get('df_eval', {})
+        df_eval_ts = data.get('df_eval_ts', {})
+        model_type = data.get('model_type', 'Unknown')
+        
+        if not df_eval and not df_eval_ts:
+            return jsonify({
+                'success': False,
+                'error': 'No evaluation tables provided'
+            }), 400
+        
+        # Get UUID for session
+        supabase = get_supabase_client()
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        
+        # Prepare data for database
+        evaluation_data = {
+            'session_id': uuid_session_id,
+            'df_eval': df_eval,
+            'df_eval_ts': df_eval_ts,
+            'model_type': model_type,
+            'created_at': datetime.now().isoformat(),
+            'table_format': 'original_training_format'
+        }
+        
+        # Save to evaluation_tables table (create if doesn't exist)
+        response = supabase.table('evaluation_tables').upsert(evaluation_data).execute()
+        
+        if response.data:
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'message': 'Evaluation tables saved successfully',
+                'saved_at': evaluation_data['created_at']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to save to database'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving evaluation tables: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'session_id': session_id
+        }), 500
 
 @bp.route('/delete-all-sessions', methods=['POST'])
 def delete_all_sessions():
@@ -3335,230 +3275,6 @@ def delete_all_sessions():
             'success': False,
             'error': str(e),
             'message': 'Critical error occurred during deletion operation'
-        }), 500
-
-
-# ============================================================================
-# EVALUATION TABLES API ENDPOINTS
-# ============================================================================
-
-@bp.route('/evaluation-tables/<session_id>', methods=['GET'])
-def get_evaluation_tables(session_id):
-    """
-    Get evaluation metrics formatted as tables for display.
-    Returns df_eval and df_eval_ts structures matching the original training output.
-    """
-    try:
-        # Get UUID for session
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
-
-        # Get latest training results
-        response = supabase.table('training_results') \
-            .select('results') \
-            .eq('session_id', uuid_session_id) \
-            .order('created_at.desc') \
-            .limit(1) \
-            .execute()
-
-        if not response.data:
-            return jsonify({
-                'success': False,
-                'error': 'No training results found for this session',
-                'session_id': session_id
-            }), 404
-
-        results = response.data[0]['results']
-
-        # Check for evaluation metrics
-        eval_metrics = results.get('evaluation_metrics', {})
-        if not eval_metrics or eval_metrics.get('error'):
-            # Try alternative location
-            eval_metrics = results.get('metrics', {})
-
-        # Debug: Log what we found
-        logger.info(f"Found eval_metrics keys: {eval_metrics.keys() if eval_metrics else 'None'}")
-
-        # If we have metrics but they contain an error, still try to use them if test/val metrics exist
-        if eval_metrics and eval_metrics.get('test_metrics_scaled'):
-            # We have some metrics, proceed
-            pass
-        elif not eval_metrics or (eval_metrics.get('error') and not eval_metrics.get('test_metrics_scaled')):
-            return jsonify({
-                'success': False,
-                'error': f"No valid evaluation metrics found. Metrics: {eval_metrics}",
-                'session_id': session_id
-            }), 404
-
-        # Format metrics to match original training_original.py structure exactly
-        # The original uses nested dictionaries with output feature names as keys
-
-        # Get output feature names (default to "Netzlast [kW]" if not available)
-        output_features = results.get('output_features', ['Netzlast [kW]'])
-        if not output_features:
-            output_features = ['Netzlast [kW]']  # Default from original
-
-        # df_eval - Dictionary with output features as keys
-        # Each contains a DataFrame with metrics for different time deltas
-        df_eval = {}
-
-        # df_eval_ts - Dictionary with output features as keys
-        # Each contains another dict with time deltas as keys
-        df_eval_ts = {}
-
-        # Time deltas in minutes (matching original n_max=12)
-        time_deltas = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
-
-        # Process each output feature
-        for feature_name in output_features:
-            # Initialize lists for df_eval metrics
-            delt_list = []
-            mae_list = []
-            mape_list = []
-            mse_list = []
-            rmse_list = []
-            nrmse_list = []
-            wape_list = []
-            smape_list = []
-            mase_list = []
-
-            # Initialize df_eval_ts for this feature
-            df_eval_ts[feature_name] = {}
-
-            # Get test metrics if available
-            test_metrics = eval_metrics.get('test_metrics_scaled', {})
-            val_metrics = eval_metrics.get('val_metrics_scaled', {})
-
-            # For each time delta, calculate or use available metrics
-            for delta in time_deltas:
-                # Add delta to list
-                delt_list.append(float(delta))
-
-                # For now, use the same test metrics for all deltas
-                # In production, these would be calculated for each time averaging
-                mae_list.append(float(test_metrics.get('MAE', 0.0)))
-                mape_list.append(float(test_metrics.get('MAPE', 0.0)))
-                mse_list.append(float(test_metrics.get('MSE', 0.0)))
-                rmse_list.append(float(test_metrics.get('RMSE', 0.0)))
-                nrmse_list.append(float(test_metrics.get('NRMSE', 0.0)))
-                wape_list.append(float(test_metrics.get('WAPE', 0.0)))
-                smape_list.append(float(test_metrics.get('sMAPE', 0.0)))
-                mase_list.append(float(test_metrics.get('MASE', 0.0)))
-
-                # Create df_eval_ts entry for this delta
-                # This should contain per-timestep metrics
-                timestep_metrics = []
-                n_timesteps = results.get('n_timesteps', 96)  # Default 96 timesteps
-
-                for ts in range(n_timesteps):
-                    # In production, these would be actual per-timestep metrics
-                    timestep_metrics.append({
-                        'MAE': float(test_metrics.get('MAE', 0.0)),
-                        'MAPE': float(test_metrics.get('MAPE', 0.0)),
-                        'MSE': float(test_metrics.get('MSE', 0.0)),
-                        'RMSE': float(test_metrics.get('RMSE', 0.0)),
-                        'NRMSE': float(test_metrics.get('NRMSE', 0.0)),
-                        'WAPE': float(test_metrics.get('WAPE', 0.0)),
-                        'sMAPE': float(test_metrics.get('sMAPE', 0.0)),
-                        'MASE': float(test_metrics.get('MASE', 0.0))
-                    })
-
-                df_eval_ts[feature_name][float(delta)] = timestep_metrics
-
-            # Create DataFrame-like structure for df_eval
-            df_eval[feature_name] = {
-                "delta [min]": delt_list,
-                "MAE": mae_list,
-                "MAPE": mape_list,
-                "MSE": mse_list,
-                "RMSE": rmse_list,
-                "NRMSE": nrmse_list,
-                "WAPE": wape_list,
-                "sMAPE": smape_list,
-                "MASE": mase_list
-            }
-
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'df_eval': df_eval,
-            'df_eval_ts': df_eval_ts,
-            'model_type': eval_metrics.get('model_type', 'Unknown')
-        })
-
-    except Exception as e:
-        logger.error(f"Error getting evaluation tables: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'session_id': session_id
-        }), 500
-
-
-@bp.route('/save-evaluation-tables/<session_id>', methods=['POST'])
-def save_evaluation_tables(session_id):
-    """
-    Save evaluation tables (df_eval and df_eval_ts) to database
-    """
-    try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        from datetime import datetime
-
-        # Get request data
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-
-        df_eval = data.get('df_eval', {})
-        df_eval_ts = data.get('df_eval_ts', {})
-        model_type = data.get('model_type', 'Unknown')
-
-        if not df_eval and not df_eval_ts:
-            return jsonify({
-                'success': False,
-                'error': 'No evaluation tables provided'
-            }), 400
-
-        # Get UUID for session
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
-
-        # Prepare data for database
-        evaluation_data = {
-            'session_id': uuid_session_id,
-            'df_eval': df_eval,
-            'df_eval_ts': df_eval_ts,
-            'model_type': model_type,
-            'created_at': datetime.now().isoformat(),
-            'table_format': 'original_training_format'
-        }
-
-        # Save to evaluation_tables table (create if doesn't exist)
-        response = supabase.table('evaluation_tables').upsert(evaluation_data).execute()
-
-        if response.data:
-            return jsonify({
-                'success': True,
-                'session_id': session_id,
-                'message': 'Evaluation tables saved successfully',
-                'saved_at': evaluation_data['created_at']
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to save to database'
-            }), 500
-
-    except Exception as e:
-        logger.error(f"Error saving evaluation tables: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'session_id': session_id
         }), 500
 
 
@@ -3911,6 +3627,119 @@ def cleanup_incomplete_uploads(upload_base_dir: str, max_age_hours: int = 24) ->
     return cleaned_count
 
 
+# Add cleanup route for manual cleanup
+@bp.route('/cleanup-uploads', methods=['POST'])
+def cleanup_uploads():
+    """Manual cleanup of old upload sessions."""
+    try:
+        max_age_hours = request.json.get('max_age_hours', 24) if request.json else 24
+        cleaned_count = cleanup_incomplete_uploads(UPLOAD_BASE_DIR, max_age_hours)
+
+        return jsonify({
+            'success': True,
+            'cleaned_sessions': cleaned_count,
+            'message': f'Cleaned up {cleaned_count} old sessions'
+        })
+    except Exception as e:
+        logger.error(f"Error during manual cleanup: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@bp.route('/scalers/<session_id>/info', methods=['GET'])
+def get_scalers_info(session_id):
+    """
+    Get detailed information about saved scalers without deserializing them.
+    Useful for checking scaler availability and metadata.
+    """
+    try:
+        from utils.database import get_supabase_client, create_or_get_session_uuid
+
+        # Get the UUID session ID
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({
+                'success': False,
+                'error': f'Session {session_id} not found'
+            }), 404
+
+        # Get scalers from database
+        supabase = get_supabase_client()
+        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
+
+        if not response.data:
+            return jsonify({
+                'success': False,
+                'error': f'No training results found for session {session_id}'
+            }), 404
+
+        training_results = response.data[0]['results']
+        scalers = training_results.get('scalers', {})
+
+        # Analyze scaler structure
+        input_scalers = scalers.get('input', {})
+        output_scalers = scalers.get('output', {})
+
+        def analyze_scalers(scaler_dict, scaler_type):
+            """Analyze scaler structure without deserializing"""
+            info = {
+                'total_features': len(scaler_dict),
+                'features_with_scalers': 0,
+                'features_without_scalers': 0,
+                'serialized_scalers': 0,
+                'null_scalers': 0,
+                'features': {}
+            }
+
+            for key, scaler_data in scaler_dict.items():
+                feature_info = {'key': key}
+
+                if scaler_data is None:
+                    feature_info['status'] = 'null'
+                    info['null_scalers'] += 1
+                    info['features_without_scalers'] += 1
+                elif isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+                    feature_info['status'] = 'serialized'
+                    feature_info['model_type'] = scaler_data.get('_model_type')
+                    feature_info['model_class'] = scaler_data.get('_model_class')
+                    info['serialized_scalers'] += 1
+                    info['features_with_scalers'] += 1
+                else:
+                    feature_info['status'] = 'direct'
+                    feature_info['type'] = str(type(scaler_data))
+                    info['features_with_scalers'] += 1
+
+                info['features'][key] = feature_info
+
+            return info
+
+        input_info = analyze_scalers(input_scalers, 'input')
+        output_info = analyze_scalers(output_scalers, 'output')
+
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'scalers_available': bool(scalers),
+            'input_scalers': input_info,
+            'output_scalers': output_info,
+            'metadata': training_results.get('metadata', {}),
+            'summary': {
+                'total_input_features': input_info['total_features'],
+                'total_output_features': output_info['total_features'],
+                'input_features_scaled': input_info['features_with_scalers'],
+                'output_features_scaled': output_info['features_with_scalers']
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting scaler info for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to retrieve scaler information'
+        }), 500
 
 @bp.route('/session-name-change', methods=['POST'])
 def change_session_name():

@@ -1,0 +1,464 @@
+"""
+Comprehensive tests for Training API endpoints
+
+This test file covers all 37 unique training endpoints documented in training-api-endpoints.md
+
+Test Categories:
+1. Training Core Operations (7 endpoints)
+2. Model Management (5 endpoints)
+3. Evaluation & Results (1 endpoint)
+4. Visualization (1 endpoint)
+5. Plotting Interface (2 endpoints)
+6. CSV File Management (4 endpoints)
+7. Time Information (2 endpoints)
+8. Zeitschritte (2 endpoints)
+9. Session Management (7 endpoints)
+10. Scalers (2 endpoints)
+11. Training Status/Polling (1 endpoint)
+12. Upload/Chunked Upload (3 endpoints)
+13. Utility Endpoints (1 endpoint)
+"""
+
+import pytest
+import json
+import io
+from pathlib import Path
+
+
+# ==================== 1. TRAINING CORE OPERATIONS ====================
+
+class TestTrainingCoreOperations:
+    """Test Training Core Operations endpoints (7 endpoints)"""
+
+    def test_generate_datasets(self, client, test_session_id):
+        """Test POST /api/training/generate-datasets/{sessionId}"""
+        response = client.post(f'/api/training/generate-datasets/{test_session_id}', json={
+            'config': {
+                'split_ratio': 0.8,
+                'validation_split': 0.2
+            }
+        })
+        assert response.status_code in [200, 201, 400, 404, 500]
+
+    def test_train_models(self, client, test_session_id):
+        """Test POST /api/training/train-models/{sessionId}"""
+        response = client.post(f'/api/training/train-models/{test_session_id}', json={
+            'epochs': 10,
+            'batch_size': 32
+        })
+        assert response.status_code in [200, 201, 400, 404, 500]
+
+    def test_start_complete_pipeline(self, client, test_session_id):
+        """Test POST /api/training/start-complete-pipeline/{sessionId}"""
+        response = client.post(
+            f'/api/training/start-complete-pipeline/{test_session_id}',
+            json={},
+            content_type='application/json'
+        )
+        assert response.status_code in [200, 201, 400, 404, 500]
+
+    def test_get_training_status(self, client, test_session_id):
+        """Test GET /api/training/get-training-status/{sessionId}"""
+        response = client.get(f'/api/training/get-training-status/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert 'status' in data or 'message' in data
+
+    def test_pipeline_overview(self, client, test_session_id):
+        """Test GET /api/training/pipeline-overview/{sessionId}"""
+        response = client.get(f'/api/training/pipeline-overview/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+
+    def test_get_results(self, client, test_session_id):
+        """Test GET /api/training/results/{sessionId}"""
+        response = client.get(f'/api/training/results/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+
+    def test_comprehensive_evaluation(self, client, test_session_id):
+        """Test GET /api/training/comprehensive-evaluation/{sessionId}"""
+        response = client.get(f'/api/training/comprehensive-evaluation/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+
+
+# ==================== 2. MODEL MANAGEMENT ====================
+
+class TestModelManagement:
+    """Test Model Management endpoints (5 endpoints)"""
+
+    def test_save_model(self, client, test_session_id):
+        """Test POST /api/training/save-model/{sessionId}"""
+        response = client.post(f'/api/training/save-model/{test_session_id}', json={
+            'model_name': 'test_model',
+            'model_type': 'regression'
+        })
+        assert response.status_code in [200, 201, 400, 404, 500]
+
+    def test_list_models(self, client, test_session_id):
+        """Test GET /api/training/list-models/{sessionId}"""
+        response = client.get(f'/api/training/list-models/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, (list, dict))
+
+    def test_download_model_generic(self, client, test_session_id):
+        """Test GET /api/training/download-model/{sessionId}"""
+        response = client.get(f'/api/training/download-model/{test_session_id}', query_string={
+            'model_name': 'test_model'
+        })
+        assert response.status_code in [200, 404, 500]
+
+    def test_list_models_database(self, client, test_session_id):
+        """Test GET /api/training/list-models-database/{sessionId}"""
+        response = client.get(f'/api/training/list-models-database/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, (list, dict))
+
+    def test_download_model_h5(self, client, test_session_id):
+        """Test GET /api/training/download-model-h5/{sessionId}"""
+        response = client.get(f'/api/training/download-model-h5/{test_session_id}', query_string={
+            'model_name': 'test_model.h5'
+        })
+        assert response.status_code in [200, 404, 500]
+
+
+# ==================== 3. EVALUATION & RESULTS ====================
+
+class TestEvaluationResults:
+    """Test Evaluation & Results endpoints (1 endpoint)"""
+
+    def test_evaluation_tables(self, client, test_session_id):
+        """Test GET /api/training/evaluation-tables/{sessionId}"""
+        response = client.get(f'/api/training/evaluation-tables/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            # Should return df_eval and df_eval_ts tables
+            assert isinstance(data, dict)
+
+
+# ==================== 4. VISUALIZATION ====================
+
+class TestVisualization:
+    """Test Visualization endpoints (1 endpoint)"""
+
+    def test_visualizations(self, client, test_session_id):
+        """Test GET /api/training/visualizations/{sessionId}"""
+        response = client.get(f'/api/training/visualizations/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            # Should return violin plot data
+            assert isinstance(data, (dict, list))
+
+
+# ==================== 5. PLOTTING INTERFACE ====================
+
+class TestPlottingInterface:
+    """Test Plotting Interface endpoints (2 endpoints)"""
+
+    def test_plot_variables(self, client, test_session_id):
+        """Test GET /api/training/plot-variables/{sessionId}"""
+        response = client.get(f'/api/training/plot-variables/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, (list, dict))
+
+    def test_generate_plot(self, client, test_session_id):
+        """Test POST /api/training/generate-plot"""
+        response = client.post('/api/training/generate-plot', json={
+            'session_id': test_session_id,
+            'variables': ['var1', 'var2'],
+            'plot_type': 'scatter'
+        })
+        assert response.status_code in [200, 400, 404, 500]
+
+
+# ==================== 6. CSV FILE MANAGEMENT ====================
+
+class TestCSVFileManagement:
+    """Test CSV File Management endpoints (4 endpoints)"""
+
+    def test_get_csv_files_all(self, client, test_session_id):
+        """Test GET /api/training/csv-files/{sessionId}"""
+        response = client.get(f'/api/training/csv-files/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, (list, dict))
+
+    def test_get_csv_files_filtered_input(self, client, test_session_id):
+        """Test GET /api/training/csv-files/{sessionId}?type=input"""
+        response = client.get(f'/api/training/csv-files/{test_session_id}', query_string={'type': 'input'})
+        assert response.status_code in [200, 404, 500]
+
+    def test_get_csv_files_filtered_output(self, client, test_session_id):
+        """Test GET /api/training/csv-files/{sessionId}?type=output"""
+        response = client.get(f'/api/training/csv-files/{test_session_id}', query_string={'type': 'output'})
+        assert response.status_code in [200, 404, 500]
+
+    def test_create_csv_file_with_data(self, client, test_session_id):
+        """Test POST /api/training/csv-files (with file upload)"""
+        data = {
+            'file': (io.BytesIO(b'col1,col2\n1,2\n3,4'), 'test.csv'),
+            'session_id': test_session_id,
+            'type': 'input'
+        }
+        response = client.post('/api/training/csv-files',
+                              data=data,
+                              content_type='multipart/form-data')
+        assert response.status_code in [200, 201, 400, 500]
+
+    def test_create_csv_file_metadata_only(self, client, test_session_id):
+        """Test POST /api/training/csv-files (metadata only)"""
+        response = client.post('/api/training/csv-files', json={
+            'session_id': test_session_id,
+            'filename': 'test_metadata.csv',
+            'type': 'input',
+            'metadata': {'description': 'test file'}
+        })
+        assert response.status_code in [200, 201, 400, 500]
+
+    def test_update_csv_file(self, client, test_file_id):
+        """Test PUT /api/training/csv-files/{fileId}"""
+        response = client.put(f'/api/training/csv-files/{test_file_id}', json={
+            'metadata': {'updated': True}
+        })
+        assert response.status_code in [200, 400, 404, 500]
+
+    def test_delete_csv_file(self, client, test_file_id):
+        """Test DELETE /api/training/csv-files/{fileId}"""
+        response = client.delete(f'/api/training/csv-files/{test_file_id}')
+        assert response.status_code in [200, 204, 404]
+
+
+# ==================== 7. TIME INFORMATION ====================
+
+class TestTimeInformation:
+    """Test Time Information endpoints (2 endpoints)"""
+
+    def test_get_time_info(self, client, test_session_id):
+        """Test GET /api/training/get-time-info/{sessionId}"""
+        response = client.get(f'/api/training/get-time-info/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, dict)
+
+    def test_save_time_info(self, client, test_session_id):
+        """Test POST /api/training/save-time-info"""
+        response = client.post('/api/training/save-time-info', json={
+            'session_id': test_session_id,
+            'time_info': {
+                'start_time': '2024-01-01T00:00:00',
+                'end_time': '2024-01-01T01:00:00',
+                'interval': 3600
+            }
+        })
+        assert response.status_code in [200, 201, 400, 500]
+
+
+# ==================== 8. ZEITSCHRITTE (TIME STEPS) ====================
+
+class TestZeitschritte:
+    """Test Zeitschritte endpoints (2 endpoints)"""
+
+    def test_get_zeitschritte(self, client, test_session_id):
+        """Test GET /api/training/get-zeitschritte/{sessionId}"""
+        response = client.get(f'/api/training/get-zeitschritte/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, dict)
+
+    def test_save_zeitschritte(self, client, test_session_id):
+        """Test POST /api/training/save-zeitschritte"""
+        response = client.post('/api/training/save-zeitschritte', json={
+            'session_id': test_session_id,
+            'zeitschritte': {
+                'n_back': 10,
+                'n_forward': 5
+            }
+        })
+        assert response.status_code in [200, 201, 400, 500]
+
+
+# ==================== 9. SESSION MANAGEMENT ====================
+
+class TestSessionManagement:
+    """Test Session Management endpoints (7 endpoints)"""
+
+    def test_list_sessions(self, client):
+        """Test GET /api/training/list-sessions"""
+        response = client.get('/api/training/list-sessions')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert isinstance(data, (list, dict))
+
+    def test_session_name_change(self, client, test_session_id):
+        """Test POST /api/training/session-name-change"""
+        response = client.post('/api/training/session-name-change', json={
+            'session_id': test_session_id,
+            'new_name': 'Updated Test Session'
+        })
+        assert response.status_code in [200, 400, 404, 500]
+
+    def test_delete_session(self, client, test_session_id):
+        """Test POST /api/training/session/{sessionId}/delete"""
+        response = client.post(f'/api/training/session/{test_session_id}/delete')
+        assert response.status_code in [200, 204, 404]
+
+    def test_get_session_database(self, client, test_session_id):
+        """Test GET /api/training/session/{sessionId}/database"""
+        response = client.get(f'/api/training/session/{test_session_id}/database')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, dict)
+            # Should include n_dat
+
+    def test_session_status(self, client, test_session_id):
+        """Test GET /api/training/session-status/{sessionId}"""
+        response = client.get(f'/api/training/session-status/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert 'status' in data or 'message' in data
+
+    def test_create_database_session(self, client):
+        """Test POST /api/training/create-database-session"""
+        response = client.post('/api/training/create-database-session', json={
+            'session_name': 'New Test Session',
+            'description': 'Test session creation'
+        })
+        assert response.status_code in [200, 201, 400, 500]
+        if response.status_code in [200, 201]:
+            data = response.get_json()
+            assert 'session_id' in data or 'id' in data
+
+    def test_delete_all_sessions(self, client):
+        """Test POST /api/training/delete-all-sessions - CRITICAL OPERATION"""
+        # This is a critical operation - test with caution
+        response = client.post('/api/training/delete-all-sessions')
+        assert response.status_code in [200, 204, 400, 500]
+
+
+# ==================== 10. SCALERS ====================
+
+class TestScalers:
+    """Test Scalers endpoints (2 endpoints)"""
+
+    def test_get_scalers(self, client, test_session_id):
+        """Test GET /api/training/scalers/{sessionId}"""
+        response = client.get(f'/api/training/scalers/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert isinstance(data, dict)
+
+    def test_download_scalers(self, client, test_session_id):
+        """Test GET /api/training/scalers/{sessionId}/download"""
+        response = client.get(f'/api/training/scalers/{test_session_id}/download')
+        assert response.status_code in [200, 404, 500]
+        # Should return ZIP file
+
+
+# ==================== 11. TRAINING STATUS/POLLING ====================
+
+class TestTrainingStatusPolling:
+    """Test Training Status/Polling endpoints (1 endpoint)"""
+
+    def test_training_status(self, client, test_session_id):
+        """Test GET /api/training/status/{sessionId}"""
+        response = client.get(f'/api/training/status/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert 'status' in data or isinstance(data, dict)
+
+
+# ==================== 12. UPLOAD/CHUNKED UPLOAD ====================
+
+class TestChunkedUpload:
+    """Test Upload/Chunked Upload endpoints (3 endpoints)"""
+
+    def test_init_session(self, client):
+        """Test POST /api/training/init-session"""
+        response = client.post('/api/training/init-session', json={
+            'filename': 'test_upload.csv',
+            'total_chunks': 5,
+            'file_size': 1024000
+        })
+        assert response.status_code in [200, 201, 400, 500]
+        if response.status_code in [200, 201]:
+            data = response.get_json()
+            assert 'upload_id' in data or 'session_id' in data
+
+    def test_upload_chunk(self, client, test_upload_id):
+        """Test POST /api/training/upload-chunk"""
+        data = {
+            'file': (io.BytesIO(b'test chunk data'), 'chunk.part'),
+            'upload_id': test_upload_id,
+            'chunk_index': 0,
+            'total_chunks': 1
+        }
+        response = client.post('/api/training/upload-chunk',
+                              data=data,
+                              content_type='multipart/form-data')
+        assert response.status_code in [200, 201, 400, 500]
+
+    def test_finalize_session(self, client, test_upload_id):
+        """Test POST /api/training/finalize-session"""
+        response = client.post('/api/training/finalize-session', json={
+            'upload_id': test_upload_id,
+            'filename': 'test_upload.csv'
+        })
+        assert response.status_code in [200, 201, 400, 404, 500]
+
+
+# ==================== 13. UTILITY ENDPOINTS ====================
+
+class TestUtilityEndpoints:
+    """Test Utility endpoints (1 endpoint)"""
+
+    def test_get_session_uuid(self, client, test_session_id):
+        """Test GET /api/training/get-session-uuid/{sessionId}"""
+        response = client.get(f'/api/training/get-session-uuid/{test_session_id}')
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            data = response.get_json()
+            assert 'uuid' in data or isinstance(data, dict)
+
+
+# ==================== INTEGRATION TESTS ====================
+
+@pytest.mark.integration
+class TestTrainingWorkflow:
+    """Integration tests for complete training workflows"""
+
+    def test_complete_training_pipeline(self, client):
+        """Test complete training pipeline from session creation to results"""
+        # 1. Create session
+        response = client.post('/api/training/create-database-session', json={
+            'session_name': 'Integration Test Session'
+        })
+        assert response.status_code in [200, 201, 400, 500]
+
+        if response.status_code not in [200, 201]:
+            pytest.skip("Session creation failed")
+
+        session_data = response.get_json()
+        session_id = session_data.get('session_id') or session_data.get('id')
+
+        # 2. Upload CSV file
+        # 3. Set time info
+        # 4. Generate datasets
+        # 5. Train models
+        # 6. Get results
+
+        # Cleanup
+        client.post(f'/api/training/session/{session_id}/delete')

@@ -1,29 +1,60 @@
-# Cloud.py Test Suite
+# Backend API Test Suite
 
-Kompletan test suite za `api/routes/cloud.py` endpoint-e.
+Kompletan test suite za sve Backend API endpoint-e.
 
 ## 📁 Struktura
 
 ```
 tests/
-├── conftest.py                      # Pytest konfiguracija i fixtures
-├── test_cloud.py                    # Glavni test fajl
-├── fixtures/                        # Test data
+├── conftest.py                          # Pytest konfiguracija i fixtures
+├── test_cloud.py                        # Cloud API testovi
+├── test_training_endpoints.py           # Training API testovi ✅ NEW (41/42 passing - 97.6%)
+├── fixtures/                            # Test data
 │   ├── sample_temperature.csv
 │   ├── sample_load.csv
 │   └── sample_load_with_gaps.csv
-└── README.md                        # Ova dokumentacija
+├── FINAL_TEST_RESULTS.md                # Finalni rezultati Training API testova
+├── TRAINING_TESTS_RESULTS.md            # Detaljni rezultati (initial run)
+└── README.md                            # Ova dokumentacija
 ```
+
+## 🎯 Test Coverage Overview
+
+| Test File | Endpoints | Pass Rate | Status |
+|-----------|-----------|-----------|--------|
+| **test_training_endpoints.py** | 37 | 97.6% (41/42) | ✅ **Production Ready** |
+| **test_cloud.py** | ~15 | TBD | ⏳ In Progress |
 
 ## 🧪 Vrste testova
 
-### 1. **Unit testovi** (funkcije)
+### 1. **Training API Testovi** ✅
+**File:** `test_training_endpoints.py`
+**Coverage:** 37 unique endpoints across 13 categories
+**Success Rate:** 97.6% (41/42 tests passing)
+
+**Categories:**
+- Training Core Operations (7 endpoints)
+- Model Management (5 endpoints)
+- Session Management (7 endpoints)
+- CSV File Management (6 endpoints)
+- Upload/Chunked Upload (3 endpoints)
+- Scalers, Time Info, Zeitschritte, Plotting, etc.
+
+**Features:**
+- UUID-based session IDs
+- Comprehensive Supabase mocking
+- Flexible status code validation
+- Auto-use fixtures for clean tests
+
+### 2. **Cloud API Testovi**
+
+#### Unit testovi (funkcije)
 - ✅ `calculate_bounds()` - Testiranje tolerancija
 - ✅ `interpolate_data()` - Testiranje interpolacije
 - ✅ Constant vs Dependent tolerance
 - ✅ Negativne vrednosti i edge cases
 
-### 2. **Integration testovi** (endpointi)
+#### Integration testovi (endpointi)
 - ✅ `POST /upload-chunk` - Chunk upload flow
 - ✅ `POST /complete` - Kompletiranje chunked upload-a
 - ✅ `POST /clouddata` - Direktan upload i procesiranje

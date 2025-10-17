@@ -273,5 +273,119 @@ def validate_interpolation_response(response_data):
     last = response_data[-1]
     assert last['type'] == 'complete'
     assert last['success'] is True
-    
+
     return True
+
+
+# ==================== TRAINING ENDPOINT FIXTURES ====================
+
+@pytest.fixture
+def client():
+    """Create Flask test client"""
+    from app import app
+    app.config['TESTING'] = True
+    with app.test_client() as client:
+        yield client
+
+
+@pytest.fixture
+def test_session_id():
+    """Provide a test session ID for endpoint testing (UUID format)"""
+    import uuid
+    return str(uuid.uuid4())
+
+
+@pytest.fixture
+def test_file_id():
+    """Provide a test file ID for CSV file operations (UUID format)"""
+    import uuid
+    return str(uuid.uuid4())
+
+
+@pytest.fixture
+def test_upload_id():
+    """Provide a test upload ID for chunked upload operations"""
+    import uuid
+    return str(uuid.uuid4())
+
+
+@pytest.fixture(autouse=True)
+def mock_supabase_client(monkeypatch):
+    """Mock Supabase client for testing without actual database calls
+
+    This fixture is autouse=True, so it runs for all tests automatically
+    """
+    from unittest.mock import MagicMock, Mock
+    import uuid
+
+    # Create mock client
+    mock_client = MagicMock()
+
+    # Mock table operations
+    def mock_table(table_name):
+        mock_tbl = MagicMock()
+
+        # Mock select operations
+        mock_select = MagicMock()
+        mock_select.eq.return_value = mock_select
+        mock_select.execute.return_value = MagicMock(data=[])
+        mock_tbl.select.return_value = mock_select
+
+        # Mock insert operations
+        mock_insert = MagicMock()
+        mock_insert.execute.return_value = MagicMock(
+            data=[{'id': str(uuid.uuid4()), 'session_id': str(uuid.uuid4())}]
+        )
+        mock_tbl.insert.return_value = mock_insert
+
+        # Mock update operations
+        mock_update = MagicMock()
+        mock_update.eq.return_value = mock_update
+        mock_update.execute.return_value = MagicMock(data=[])
+        mock_tbl.update.return_value = mock_update
+
+        # Mock delete operations
+        mock_delete = MagicMock()
+        mock_delete.eq.return_value = mock_delete
+        mock_delete.execute.return_value = MagicMock(data=[])
+        mock_tbl.delete.return_value = mock_delete
+
+        # Mock upsert operations
+        mock_upsert = MagicMock()
+        mock_upsert.execute.return_value = MagicMock(
+            data=[{'id': str(uuid.uuid4())}]
+        )
+        mock_tbl.upsert.return_value = mock_upsert
+
+        return mock_tbl
+
+    mock_client.table = mock_table
+
+    # Mock storage operations
+    mock_storage = MagicMock()
+    mock_bucket = MagicMock()
+    mock_bucket.upload.return_value = {'path': 'test/path'}
+    mock_bucket.download.return_value = b'test data'
+    mock_bucket.remove.return_value = {'message': 'success'}
+    mock_storage.from_.return_value = mock_bucket
+    mock_client.storage = mock_storage
+
+    # Patch get_supabase_client function
+    def mock_get_supabase():
+        return mock_client
+
+    # Try multiple import paths
+    try:
+        import utils.database
+        monkeypatch.setattr(utils.database, 'get_supabase_client', mock_get_supabase)
+    except (ImportError, AttributeError):
+        pass
+
+    try:
+        from services import supabase_client
+        monkeypatch.setattr(supabase_client, 'supabase', mock_client)
+        monkeypatch.setattr(supabase_client, 'get_supabase_client', mock_get_supabase)
+    except (ImportError, AttributeError):
+        pass
+
+    return mock_client
