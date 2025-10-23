@@ -17,6 +17,12 @@ import time
 from pathlib import Path
 from typing import Optional
 from utils.database import save_session_to_supabase, get_string_id_from_uuid, create_or_get_session_uuid, get_supabase_client
+from middleware.auth import require_auth
+from middleware.subscription import require_subscription, check_processing_limit, check_training_limit
+from utils.usage_tracking import increment_processing_count, increment_training_count
+# Refactoring Phase 0: Import from new utils modules
+from utils.validation import validate_session_id, create_error_response, create_success_response
+from utils.metadata_utils import extract_file_metadata_fields, extract_file_metadata
 
 # Configure logging
 logging.basicConfig(
@@ -30,73 +36,75 @@ logger.setLevel(logging.DEBUG)
 bp = Blueprint('training', __name__)
 
 # Validation helper functions
-def validate_session_id(session_id):
-    """Validate session ID format - should be either UUID or session_XXXXXX_XXXXXX format"""
-    if not session_id or not isinstance(session_id, str):
-        return False
+# REFACTORING PHASE 0: Moved to utils/validation.py
+# def validate_session_id(session_id):
+#     """Validate session ID format - should be either UUID or session_XXXXXX_XXXXXX format"""
+#     if not session_id or not isinstance(session_id, str):
+#         return False
+#
+#     # Check if it's a valid UUID
+#     try:
+#         uuid.UUID(session_id)
+#         return True
+#     except ValueError:
+#         pass
+#
+#     # Check if it's in session_XXXXX_XXXXX format
+#     pattern = r'^session_\d+_[a-zA-Z0-9]+$'
+#     return bool(re.match(pattern, session_id))
+#
+# def create_error_response(message, status_code=400):
+#     """Create standardized error response"""
+#     return jsonify({
+#         'success': False,
+#         'error': message,
+#         'data': None
+#     }), status_code
+#
+# def create_success_response(data=None, message=None):
+#     """Create standardized success response"""
+#     response = {
+#         'success': True,
+#         'data': data
+#     }
+#     if message:
+#         response['message'] = message
+#     return jsonify(response)
 
-    # Check if it's a valid UUID
-    try:
-        uuid.UUID(session_id)
-        return True
-    except ValueError:
-        pass
-
-    # Check if it's in session_XXXXX_XXXXX format
-    pattern = r'^session_\d+_[a-zA-Z0-9]+$'
-    return bool(re.match(pattern, session_id))
-
-def create_error_response(message, status_code=400):
-    """Create standardized error response"""
-    return jsonify({
-        'success': False,
-        'error': message,
-        'data': None
-    }), status_code
-
-def create_success_response(data=None, message=None):
-    """Create standardized success response"""
-    response = {
-        'success': True,
-        'data': data
-    }
-    if message:
-        response['message'] = message
-    return jsonify(response)
-
-def extract_file_metadata_fields(file_metadata):
-    """
-    Helper function to extract standardized file metadata fields from a file metadata dictionary.
-    
-    Args:
-        file_metadata: Dictionary containing file metadata
-        
-    Returns:
-        dict: Dictionary containing standardized file metadata fields
-    """
-    return {
-        'id': file_metadata.get('id', ''),
-        'fileName': file_metadata.get('fileName', ''),
-        'bezeichnung': file_metadata.get('bezeichnung', ''),
-        'utcMin': file_metadata.get('utcMin', ''),
-        'utcMax': file_metadata.get('utcMax', ''),
-        'zeitschrittweite': file_metadata.get('zeitschrittweite', ''),
-        'min': file_metadata.get('min', ''),
-        'max': file_metadata.get('max', ''),
-        'offset': file_metadata.get('offset', ''),
-        'datenpunkte': file_metadata.get('datenpunkte', ''),
-        'numerischeDatenpunkte': file_metadata.get('numerischeDatenpunkte', ''),
-        'numerischerAnteil': file_metadata.get('numerischerAnteil', ''),
-        'datenform': file_metadata.get('datenform', ''),
-        'zeithorizont': file_metadata.get('zeithorizont', ''),
-        'datenanpassung': file_metadata.get('datenanpassung', ''),
-        'zeitschrittweiteMittelwert': file_metadata.get('zeitschrittweiteMittelwert', ''),
-        'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
-        'skalierung': file_metadata.get('skalierung', ''),
-        'skalierungMax': file_metadata.get('skalierungMax', ''),
-        'skalierungMin': file_metadata.get('skalierungMin', ''),
-        'type': file_metadata.get('type', '') # Dodajemo 'type' polje
-    }
+# REFACTORING PHASE 0: Moved to utils/metadata_utils.py
+# def extract_file_metadata_fields(file_metadata):
+#     """
+#     Helper function to extract standardized file metadata fields from a file metadata dictionary.
+#
+#     Args:
+#         file_metadata: Dictionary containing file metadata
+#
+#     Returns:
+#         dict: Dictionary containing standardized file metadata fields
+#     """
+#     return {
+#         'id': file_metadata.get('id', ''),
+#         'fileName': file_metadata.get('fileName', ''),
+#         'bezeichnung': file_metadata.get('bezeichnung', ''),
+#         'utcMin': file_metadata.get('utcMin', ''),
+#         'utcMax': file_metadata.get('utcMax', ''),
+#         'zeitschrittweite': file_metadata.get('zeitschrittweite', ''),
+#         'min': file_metadata.get('min', ''),
+#         'max': file_metadata.get('max', ''),
+#         'offset': file_metadata.get('offset', ''),
+#         'datenpunkte': file_metadata.get('datenpunkte', ''),
+#         'numerischeDatenpunkte': file_metadata.get('numerischeDatenpunkte', ''),
+#         'numerischerAnteil': file_metadata.get('numerischerAnteil', ''),
+#         'datenform': file_metadata.get('datenform', ''),
+#         'zeithorizont': file_metadata.get('zeithorizont', ''),
+#         'datenanpassung': file_metadata.get('datenanpassung', ''),
+#         'zeitschrittweiteMittelwert': file_metadata.get('zeitschrittweiteMittelwert', ''),
+#         'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
+#         'skalierung': file_metadata.get('skalierung', ''),
+#         'skalierungMax': file_metadata.get('skalierungMax', ''),
+#         'skalierungMin': file_metadata.get('skalierungMin', ''),
+#         'type': file_metadata.get('type', '') # Dodajemo 'type' polje
+#     }
 
 def calculate_n_dat_from_session(session_id):
     """
@@ -147,40 +155,41 @@ def calculate_n_dat_from_session(session_id):
         logger.error(f"Error calculating n_dat for session {session_id}: {str(e)}")
         return 0
 
-def extract_file_metadata(session_id):
-    """
-    Extracts file metadata from session metadata.
-    
-    Args:
-        session_id: ID of the session to extract metadata from
-        
-    Returns:
-        dict: Dictionary containing file metadata fields or None if not found
-    """
-    try:
-        # Get path to session directory
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-        metadata_path = os.path.join(upload_dir, 'metadata.json')
-        
-        if not os.path.exists(metadata_path):
-            logger.error(f"Metadata file not found for session {session_id}")
-            return None
-            
-        # Load metadata
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-            
-        # Find the first chunk which should contain fileMetadata
-        for chunk in metadata:
-            if 'params' in chunk and 'fileMetadata' in chunk['params']:
-                file_metadata = chunk['params']['fileMetadata']
-                return extract_file_metadata_fields(file_metadata)
-                
-        logger.error(f"No file metadata found for session {session_id}")
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting file metadata: {str(e)}")
-        return None
+# REFACTORING PHASE 0: Moved to utils/metadata_utils.py (now requires upload_base_dir parameter)
+# def extract_file_metadata(session_id):
+#     """
+#     Extracts file metadata from session metadata.
+#
+#     Args:
+#         session_id: ID of the session to extract metadata from
+#
+#     Returns:
+#         dict: Dictionary containing file metadata fields or None if not found
+#     """
+#     try:
+#         # Get path to session directory
+#         upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+#         metadata_path = os.path.join(upload_dir, 'metadata.json')
+#
+#         if not os.path.exists(metadata_path):
+#             logger.error(f"Metadata file not found for session {session_id}")
+#             return None
+#
+#         # Load metadata
+#         with open(metadata_path, 'r') as f:
+#             metadata = json.load(f)
+#
+#         # Find the first chunk which should contain fileMetadata
+#         for chunk in metadata:
+#             if 'params' in chunk and 'fileMetadata' in chunk['params']:
+#                 file_metadata = chunk['params']['fileMetadata']
+#                 return extract_file_metadata_fields(file_metadata)
+#
+#         logger.error(f"No file metadata found for session {session_id}")
+#         return None
+#     except Exception as e:
+#         logger.error(f"Error extracting file metadata: {str(e)}")
+#         return None
 
 # Constants for session management
 MAX_SESSIONS_TO_RETURN = 50  # Maximum number of sessions to return in list
@@ -477,6 +486,9 @@ def print_session_files(session_id, files_data):
         logger.error(f"Error processing session files: {str(e)}")
 
 @bp.route('/upload-chunk', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def upload_chunk():
     """Handle chunk upload from frontend - saving locally."""
     try:
@@ -671,11 +683,16 @@ def upload_chunk():
             try:
                 # Sastavi datoteku iz chunkova
                 assembled_file_path = assemble_file_locally(upload_id, metadata['fileName'])
-                
+
+                # Track CSV upload as processing job
+                from flask import g
+                increment_processing_count(g.user_id)
+                logger.info(f"Tracked CSV upload for user {g.user_id}")
+
                 # Prikaži samo osnovne informacije o datoteci
                 file_size = os.path.getsize(assembled_file_path)
                 # logger.info(f"Successfully assembled file: {metadata['fileName']} at {assembled_file_path}, size: {file_size/1024:.2f} KB")
-                
+
                 # Učitaj datoteku kao DataFrame ako je CSV i prikaži osnovne informacije
                 try:
                     df = pd.read_csv(assembled_file_path)
@@ -1561,7 +1578,7 @@ def delete_session(session_id):
                 for file_data in files_response.data:
                     storage_path = file_data.get('storage_path')
                     file_type = file_data.get('type', 'input')
-                    
+
                     if storage_path:
                         try:
                             bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
@@ -1570,7 +1587,31 @@ def delete_session(session_id):
                         except Exception as storage_error:
                             logger.warning(f"Could not delete file from storage {storage_path}: {str(storage_error)}")
                             database_errors.append(f"Storage deletion failed: {storage_path}")
-                
+
+                # Delete training results from Storage bucket (NEW)
+                try:
+                    from utils.training_storage import delete_training_results
+
+                    # Get all training results file paths for this session
+                    results_response = supabase.table('training_results')\
+                        .select('results_file_path')\
+                        .eq('session_id', uuid_session_id)\
+                        .execute()
+
+                    for result_data in results_response.data:
+                        file_path = result_data.get('results_file_path')
+                        if file_path:
+                            try:
+                                delete_training_results(file_path)
+                                logger.info(f"✅ Deleted training results from storage: {file_path}")
+                            except Exception as del_error:
+                                logger.warning(f"Could not delete training results {file_path}: {str(del_error)}")
+                                database_errors.append(f"Training results deletion failed: {file_path}")
+
+                except Exception as training_del_error:
+                    logger.error(f"Error deleting training results from storage: {training_del_error}")
+                    database_errors.append(f"Training results deletion error: {str(training_del_error)}")
+
                 # Delete from database tables (order matters due to foreign keys)
                 tables_to_delete = [
                     'training_results',      # Results and visualizations
@@ -1791,6 +1832,9 @@ def get_csv_files(session_id):
         }), 500
 
 @bp.route('/csv-files', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def create_csv_file():
     """Create a new CSV file entry."""
     try:
@@ -1846,7 +1890,12 @@ def create_csv_file():
                     os.unlink(temp_path)
                 except:
                     pass
-        
+
+        # Track CSV file creation as processing job
+        from flask import g
+        increment_processing_count(g.user_id)
+        logger.info(f"Tracked CSV file creation for user {g.user_id}")
+
         return jsonify({
             'success': True,
             'data': {
@@ -1984,37 +2033,80 @@ def get_training_results(session_id):
     """
     Get training results for a session.
     Checks both UUID and string session IDs.
+    NEW: Downloads full results from Storage bucket if available.
     """
     try:
         from utils.database import get_supabase_client, create_or_get_session_uuid
+        from utils.training_storage import download_training_results
         supabase = get_supabase_client()
-        
+
         # Get or create UUID for session ID
         uuid_session_id = create_or_get_session_uuid(session_id)
-        
-        # logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
-        
-        # Get training results from database (limit to 1 most recent result)
-        response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
+
+        logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
+
+        # Get metadata from database (FAST - no full results)
+        # Exclude deprecated 'results' field to save bandwidth
+        response = supabase.table('training_results')\
+            .select('id, session_id, status, created_at, updated_at, '
+                   'results_file_path, file_size_bytes, compressed, results_metadata')\
+            .eq('session_id', uuid_session_id)\
+            .order('created_at.desc')\
+            .limit(1)\
+            .execute()
 
         if response.data and len(response.data) > 0:
+            record = response.data[0]
+
+            # Download full results from Storage if file path exists
+            if record.get('results_file_path'):
+                try:
+                    logger.info(f"📥 Downloading full results from storage: {record['results_file_path']}")
+                    full_results = download_training_results(
+                        file_path=record['results_file_path'],
+                        decompress=record.get('compressed', False)
+                    )
+                    record['results'] = full_results
+                    logger.info(f"✅ Full results loaded from storage successfully")
+                except Exception as download_error:
+                    logger.error(f"Failed to download results from storage: {download_error}")
+                    # Fallback: Return metadata only
+                    record['results'] = record.get('results_metadata', {})
+                    logger.warning("Returning metadata only (full results unavailable)")
+            else:
+                # Old record with results in JSONB column (backward compatibility)
+                logger.info("No storage file path - checking for legacy JSONB results")
+                legacy_response = supabase.table('training_results')\
+                    .select('results')\
+                    .eq('id', record['id'])\
+                    .single()\
+                    .execute()
+                if legacy_response.data and legacy_response.data.get('results'):
+                    record['results'] = legacy_response.data['results']
+                    logger.info("Loaded results from legacy JSONB column")
+                else:
+                    record['results'] = record.get('results_metadata', {})
+                    logger.warning("No results available in storage or JSONB")
+
             return jsonify({
                 'success': True,
-                'results': response.data,
-                'count': len(response.data)
+                'results': [record],
+                'count': 1
             })
         else:
             # No results found - this is normal if training hasn't been run yet
-            # logger.info(f"No training results found for session {session_id}")
+            logger.info(f"No training results found for session {session_id}")
             return jsonify({
                 'success': True,
                 'message': 'No training results yet - training may not have been started',
                 'results': [],
                 'count': 0
             }), 200
-            
+
     except Exception as e:
         logger.error(f"Error getting training results for {session_id}: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
             'error': str(e)
@@ -2036,18 +2128,16 @@ def get_plot_variables(session_id):
     Get available input and output variables for plotting
     """
     try:
+        from utils.training_storage import fetch_training_results_with_storage
         from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
 
-        # Get training results
-        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
+        # Get training results from Storage or legacy JSONB
+        results = fetch_training_results_with_storage(session_id)
 
         input_variables = []
         output_variables = []
 
-        if response.data and len(response.data) > 0:
-            results = response.data[0].get('results', {})
+        if results:
 
             # Try different places where variable names might be stored
             input_variables = (
@@ -2063,6 +2153,8 @@ def get_plot_variables(session_id):
 
         # If no variables found, try to get from files
         if not input_variables and not output_variables:
+            supabase = get_supabase_client()
+            uuid_session_id = create_or_get_session_uuid(session_id)
             file_response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
 
             if file_response.data:
@@ -2199,42 +2291,21 @@ def generate_plot():
 
         # Load model data from database
         try:
-            from utils.database import create_or_get_session_uuid, get_supabase_client
+            from utils.training_storage import fetch_training_results_with_storage
             import numpy as np
             import pandas as pd
 
-            # Get UUID for session
-            uuid_session_id = create_or_get_session_uuid(session_id)
-            if not uuid_session_id:
-                return jsonify({
-                    'success': False,
-                    'error': 'Session not found'
-                }), 404
+            # Fetch training results from Storage or legacy JSONB
+            results = fetch_training_results_with_storage(session_id, model_id=model_id)
 
-            # Get Supabase client
-            supabase = get_supabase_client()
-
-            # Fetch training results from database
-            # If model_id is provided, fetch that specific model, otherwise get most recent
-            query = supabase.table('training_results').select('results').eq('session_id', uuid_session_id)
-
-            if model_id:
-                # Fetch specific model by ID
-                query = query.eq('id', model_id)
-            else:
-                # Fetch most recent model
-                query = query.order('created_at', desc=True).limit(1)
-
-            response = query.execute()
-
-            if not response.data or len(response.data) == 0:
+            if not results:
                 return jsonify({
                     'success': False,
                     'error': 'Model not trained yet. Please train the model first.'
                 }), 400
 
             # Extract model data from results
-            results = response.data[0]['results']
+            # (results is already the dictionary)
 
             # Get model data from results and deserialize if needed
             model_data = results.get('trained_model')
@@ -2572,6 +2643,10 @@ def get_training_status(session_id: str):
 
 
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
+@require_auth
+# TODO: Temporarily disabled for testing - re-enable after setting up test user subscription
+# @require_subscription
+# @check_processing_limit
 def generate_datasets(session_id):
     """
     Generate datasets and violin plots WITHOUT training models.
@@ -2715,7 +2790,12 @@ def generate_datasets(session_id):
                     except Exception as viz_error:
                         logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
                         # Continue even if one visualization fails to save
-            
+
+            # Track dataset generation as processing job
+            from flask import g
+            increment_processing_count(g.user_id)
+            logger.info(f"Tracked dataset generation for user {g.user_id}")
+
             return jsonify({
                 'success': True,
                 'message': 'Datasets generated successfully',
@@ -2734,6 +2814,10 @@ def generate_datasets(session_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @bp.route('/train-models/<session_id>', methods=['POST'])
+@require_auth
+# TODO: Temporarily disabled for testing - re-enable after Phase 2 complete
+# @require_subscription
+# @check_training_limit
 def train_models(session_id):
     """
     Train models with user-specified parameters.
@@ -2787,8 +2871,10 @@ def train_models(session_id):
         # Run training in background thread
         def run_training_async():
             try:
-                # logger.info(f"Starting async training for session {session_id}")
+                logger.info(f"🚀 TRAINING THREAD STARTED for session {session_id}")
+                logger.info(f"Model config: {model_config}")
                 result = runner.run_training_script(session_id, model_config)
+                logger.info(f"✅ runner.run_training_script completed with success={result.get('success')}")
                 
                 if result['success']:
                     # logger.info(f"Training completed successfully for session {session_id}")
@@ -2796,12 +2882,15 @@ def train_models(session_id):
                     # Save training results to database
                     try:
                         from utils.database import get_supabase_client, create_or_get_session_uuid
+                        from utils.supabase_client import get_supabase_admin_client
                         import json
                         import numpy as np
                         import pandas as pd
                         from datetime import datetime
-                        
-                        supabase = get_supabase_client()
+
+                        # Use admin client for training results INSERT to avoid timeout
+                        # Admin client uses service_role key which has statement_timeout = '0' (unlimited)
+                        supabase = get_supabase_admin_client()
                         uuid_session_id = create_or_get_session_uuid(session_id)
                         
                         # Check if we got a valid UUID
@@ -2923,16 +3012,56 @@ def train_models(session_id):
                             'output_features': training_results.get('metadata', {}).get('output_features', [])
                         })
                         
-                        # Prepare results data for database
-                        # The training_results table expects: session_id, results, created_at, status
-                        training_data = {
-                            'session_id': uuid_session_id,
-                            'results': cleaned_results,
-                            'status': 'completed'
-                        }
-                        
-                        supabase.table('training_results').insert(training_data).execute()
-                        logger.info(f"Training results saved for session {uuid_session_id}")
+                        # Prepare results data for Storage upload
+                        # NEW APPROACH: Upload to Storage bucket instead of JSONB column
+                        # This solves timeout issues with large training results (>100MB)
+
+                        try:
+                            from utils.training_storage import upload_training_results
+
+                            # Upload results to Storage (NO TIMEOUT - can handle up to 5GB)
+                            logger.info(f"📤 Uploading training results to storage for session {uuid_session_id}...")
+                            storage_result = upload_training_results(
+                                session_id=uuid_session_id,
+                                results=cleaned_results,
+                                compress=True  # Compress for 70-90% size reduction
+                            )
+                            logger.info(f"✅ Storage upload complete: {storage_result['file_size'] / 1024 / 1024:.2f}MB")
+
+                            # Save metadata to database (FAST - only ~1KB, no timeout)
+                            training_data = {
+                                'session_id': uuid_session_id,
+                                'status': 'completed',
+                                'results_file_path': storage_result['file_path'],
+                                'file_size_bytes': storage_result['file_size'],
+                                'compressed': storage_result['compressed'],
+                                'results_metadata': storage_result['metadata'],
+                                'results': None  # Deprecated field - leave NULL for new results
+                            }
+
+                            supabase.table('training_results').insert(training_data).execute()
+                            logger.info(f"✅ Training metadata saved to database for session {uuid_session_id}")
+
+                        except Exception as storage_error:
+                            logger.error(f"❌ Failed to save training results: {storage_error}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+
+                            # Fallback: Try to save at least the metadata without full results
+                            try:
+                                logger.warning("Attempting fallback: saving metadata only...")
+                                fallback_data = {
+                                    'session_id': uuid_session_id,
+                                    'status': 'failed_storage',
+                                    'results_metadata': storage_result.get('metadata', {}) if 'storage_result' in locals() else {},
+                                    'results': None
+                                }
+                                supabase.table('training_results').insert(fallback_data).execute()
+                                logger.warning("Fallback save successful - metadata only")
+                            except Exception as fallback_error:
+                                logger.error(f"Fallback save also failed: {fallback_error}")
+
+                            raise storage_error  # Re-raise original error
                         
                         # Save violin plots if available
                         if result.get('violin_plots'):
@@ -3000,11 +3129,16 @@ def train_models(session_id):
                         'error': str(e)
                     }, room=session_id)
         
+        # Track training run usage
+        from flask import g
+        increment_training_count(g.user_id)
+        logger.info(f"Tracked training run for user {g.user_id}")
+
         # Start training in background
         training_thread = threading.Thread(target=run_training_async)
         training_thread.daemon = True
         training_thread.start()
-        
+
         return jsonify({
             'success': True,
             'message': f'Model training started for session {session_id}',
@@ -3014,159 +3148,6 @@ def train_models(session_id):
     except Exception as e:
         logger.error(f"Error in train_models: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
-
-def get_evaluation_tables(session_id):
-    """
-    Get evaluation metrics formatted as tables for display.
-    Returns df_eval and df_eval_ts structures matching the original training output.
-    """
-    try:
-        # Get UUID for session
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
-        
-        # Get latest training results
-        response = supabase.table('training_results') \
-            .select('results') \
-            .eq('session_id', uuid_session_id) \
-            .order('created_at.desc') \
-            .limit(1) \
-            .execute()
-        
-        if not response.data:
-            return jsonify({
-                'success': False,
-                'error': 'No training results found for this session',
-                'session_id': session_id
-            }), 404
-        
-        results = response.data[0]['results']
-        
-        # Check for evaluation metrics
-        eval_metrics = results.get('evaluation_metrics', {})
-        if not eval_metrics or eval_metrics.get('error'):
-            # Try alternative location
-            eval_metrics = results.get('metrics', {})
-        
-        # Debug: Log what we found
-        logger.info(f"Found eval_metrics keys: {eval_metrics.keys() if eval_metrics else 'None'}")
-        
-        # If we have metrics but they contain an error, still try to use them if test/val metrics exist
-        if eval_metrics and eval_metrics.get('test_metrics_scaled'):
-            # We have some metrics, proceed
-            pass
-        elif not eval_metrics or (eval_metrics.get('error') and not eval_metrics.get('test_metrics_scaled')):
-            return jsonify({
-                'success': False,
-                'error': f"No valid evaluation metrics found. Metrics: {eval_metrics}",
-                'session_id': session_id
-            }), 404
-        
-        # Format metrics to match original training_original.py structure exactly
-        # The original uses nested dictionaries with output feature names as keys
-        
-        # Get output feature names (default to "Netzlast [kW]" if not available)
-        output_features = results.get('output_features', ['Netzlast [kW]'])
-        if not output_features:
-            output_features = ['Netzlast [kW]']  # Default from original
-        
-        # df_eval - Dictionary with output features as keys
-        # Each contains a DataFrame with metrics for different time deltas
-        df_eval = {}
-        
-        # df_eval_ts - Dictionary with output features as keys
-        # Each contains another dict with time deltas as keys
-        df_eval_ts = {}
-        
-        # Time deltas in minutes (matching original n_max=12)
-        time_deltas = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
-        
-        # Process each output feature
-        for feature_name in output_features:
-            # Initialize lists for df_eval metrics
-            delt_list = []
-            mae_list = []
-            mape_list = []
-            mse_list = []
-            rmse_list = []
-            nrmse_list = []
-            wape_list = []
-            smape_list = []
-            mase_list = []
-            
-            # Initialize df_eval_ts for this feature
-            df_eval_ts[feature_name] = {}
-            
-            # Get test metrics if available
-            test_metrics = eval_metrics.get('test_metrics_scaled', {})
-            val_metrics = eval_metrics.get('val_metrics_scaled', {})
-            
-            # For each time delta, calculate or use available metrics
-            for delta in time_deltas:
-                # Add delta to list
-                delt_list.append(float(delta))
-                
-                # For now, use the same test metrics for all deltas
-                # In production, these would be calculated for each time averaging
-                mae_list.append(float(test_metrics.get('MAE', 0.0)))
-                mape_list.append(float(test_metrics.get('MAPE', 0.0)))
-                mse_list.append(float(test_metrics.get('MSE', 0.0)))
-                rmse_list.append(float(test_metrics.get('RMSE', 0.0)))
-                nrmse_list.append(float(test_metrics.get('NRMSE', 0.0)))
-                wape_list.append(float(test_metrics.get('WAPE', 0.0)))
-                smape_list.append(float(test_metrics.get('sMAPE', 0.0)))
-                mase_list.append(float(test_metrics.get('MASE', 0.0)))
-                
-                # Create df_eval_ts entry for this delta
-                # This should contain per-timestep metrics
-                timestep_metrics = []
-                n_timesteps = results.get('n_timesteps', 96)  # Default 96 timesteps
-                
-                for ts in range(n_timesteps):
-                    # In production, these would be actual per-timestep metrics
-                    timestep_metrics.append({
-                        'MAE': float(test_metrics.get('MAE', 0.0)),
-                        'MAPE': float(test_metrics.get('MAPE', 0.0)),
-                        'MSE': float(test_metrics.get('MSE', 0.0)),
-                        'RMSE': float(test_metrics.get('RMSE', 0.0)),
-                        'NRMSE': float(test_metrics.get('NRMSE', 0.0)),
-                        'WAPE': float(test_metrics.get('WAPE', 0.0)),
-                        'sMAPE': float(test_metrics.get('sMAPE', 0.0)),
-                        'MASE': float(test_metrics.get('MASE', 0.0))
-                    })
-                
-                df_eval_ts[feature_name][float(delta)] = timestep_metrics
-            
-            # Create DataFrame-like structure for df_eval
-            df_eval[feature_name] = {
-                "delta [min]": delt_list,
-                "MAE": mae_list,
-                "MAPE": mape_list,
-                "MSE": mse_list,
-                "RMSE": rmse_list,
-                "NRMSE": nrmse_list,
-                "WAPE": wape_list,
-                "sMAPE": smape_list,
-                "MASE": mase_list
-            }
-        
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'df_eval': df_eval,
-            'df_eval_ts': df_eval_ts,
-            'model_type': eval_metrics.get('model_type', 'Unknown')
-        })
-        
-    except Exception as e:
-        logger.error(f"Error getting evaluation tables: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'session_id': session_id
-        }), 500
-
 
 @bp.route('/delete-all-sessions', methods=['POST'])
 def delete_all_sessions():
@@ -3400,12 +3381,13 @@ def get_evaluation_tables(session_id):
     try:
         # Get UUID for session
         from utils.database import get_supabase_client, create_or_get_session_uuid
+        from utils.training_storage import download_training_results
         supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id)
 
-        # Get latest training results
+        # Get latest training results metadata
         response = supabase.table('training_results') \
-            .select('results') \
+            .select('id, results_file_path, compressed, results') \
             .eq('session_id', uuid_session_id) \
             .order('created_at.desc') \
             .limit(1) \
@@ -3418,7 +3400,19 @@ def get_evaluation_tables(session_id):
                 'session_id': session_id
             }), 404
 
-        results = response.data[0]['results']
+        record = response.data[0]
+
+        # Download full results from Storage if available
+        if record.get('results_file_path'):
+            logger.info(f"📥 Downloading evaluation data from storage: {record['results_file_path']}")
+            results = download_training_results(
+                file_path=record['results_file_path'],
+                decompress=record.get('compressed', False)
+            )
+        else:
+            # Fallback to legacy JSONB column
+            logger.info(f"Using legacy results column for evaluation data")
+            results = record.get('results')
 
         # Check for evaluation metrics
         eval_metrics = results.get('evaluation_metrics', {})
@@ -3622,29 +3616,19 @@ def get_scalers(session_id):
     Returns input and output scalers that can be used for data normalization.
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from utils.training_storage import fetch_training_results_with_storage
         import pickle
         import base64
 
-        # Get the UUID session ID
-        uuid_session_id = create_or_get_session_uuid(session_id)
-        if not uuid_session_id:
-            return jsonify({
-                'success': False,
-                'error': f'Session {session_id} not found'
-            }), 404
+        # Get training results from Storage or legacy JSONB
+        training_results = fetch_training_results_with_storage(session_id)
 
-        # Get scalers from database
-        supabase = get_supabase_client()
-        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
-
-        if not response.data:
+        if not training_results:
             return jsonify({
                 'success': False,
                 'error': f'No training results found for session {session_id}'
             }), 404
 
-        training_results = response.data[0]['results']
         scalers = training_results.get('scalers', {})
 
         if not scalers:
@@ -3685,22 +3669,18 @@ def get_scalers(session_id):
 def download_scalers_as_save_files(session_id):
     """Download scalers as .save files identical to original training_original.py format."""
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from utils.training_storage import fetch_training_results_with_storage
         import pickle, base64, os, zipfile, tempfile
         from datetime import datetime
         from flask import send_file
 
-        uuid_session_id = create_or_get_session_uuid(session_id)
-        if not uuid_session_id:
-            return jsonify({'success': False, 'error': f'Session {session_id} not found'}), 404
+        # Get training results from Storage or legacy JSONB
+        training_results = fetch_training_results_with_storage(session_id)
 
-        supabase = get_supabase_client()
-        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
-
-        if not response.data:
+        if not training_results:
             return jsonify({'success': False, 'error': f'No training results found for session {session_id}'}), 404
 
-        scalers = response.data[0]['results'].get('scalers', {})
+        scalers = training_results.get('scalers', {})
         if not scalers:
             return jsonify({'success': False, 'error': f'No scalers found for session {session_id}'}), 404
 
@@ -3796,25 +3776,16 @@ def scale_input_data(session_id):
                 'error': f'Failed to convert input_data to array: {str(e)}'
             }), 400
 
-        # Get the UUID session ID
-        uuid_session_id = create_or_get_session_uuid(session_id)
-        if not uuid_session_id:
-            return jsonify({
-                'success': False,
-                'error': f'Session {session_id} not found'
-            }), 404
+        # Get training results from Storage or legacy JSONB
+        from utils.training_storage import fetch_training_results_with_storage
 
-        # Get scalers from database
-        supabase = get_supabase_client()
-        response = supabase.table('training_results').select('results').eq('session_id', uuid_session_id).execute()
+        training_results = fetch_training_results_with_storage(session_id)
 
-        if not response.data:
+        if not training_results:
             return jsonify({
                 'success': False,
                 'error': f'No training results found for session {session_id}'
             }), 404
-
-        training_results = response.data[0]['results']
         scalers = training_results.get('scalers', {})
         input_scalers = scalers.get('input', {})
 
@@ -3959,6 +3930,343 @@ def cleanup_incomplete_uploads(upload_base_dir: str, max_age_hours: int = 24) ->
 
     return cleaned_count
 
+
+
+@bp.route('/save-model/<session_id>', methods=['POST'])
+def save_model(session_id):
+    """
+    Save trained models to Supabase Storage and return download information.
+    Extracts serialized models from training results, deserializes them,
+    saves as .h5 (Keras) or .pkl (sklearn) files, and uploads to persistent storage.
+    
+    Args:
+        session_id: Training session ID
+        
+    Returns:
+        JSON response with model information and upload status
+    """
+    try:
+        import os
+        import tempfile
+        import base64
+        import pickle
+        from tensorflow import keras
+        from utils.database import create_or_get_session_uuid
+        from utils.training_storage import fetch_training_results_with_storage
+        from utils.model_storage import upload_trained_model
+        
+        logger.info(f"📦 Saving models to storage - session: {session_id}")
+        
+        # Get UUID for session
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({
+                'success': False,
+                'error': f'Session {session_id} not found'
+            }), 404
+        
+        # Fetch training results from Storage or legacy JSONB
+        training_results = fetch_training_results_with_storage(session_id)
+        
+        if not training_results:
+            return jsonify({
+                'success': False,
+                'error': 'No training results found',
+                'message': 'Train a model first before attempting to save.'
+            }), 404
+        
+        # Extract serialized models from training results (same logic as /list-models)
+        def extract_models_info(obj, path=""):
+            """Recursively extract serialized models from training results"""
+            found_models = []
+            if isinstance(obj, dict):
+                if '_model_type' in obj and obj.get('_model_type') == 'serialized_model':
+                    model_class = obj.get('_model_class', 'Unknown')
+                    model_data = obj.get('_model_data', '')
+                    
+                    found_models.append({
+                        'model_class': model_class,
+                        'model_data': model_data,
+                        'path': path,
+                        'data_size': len(model_data)
+                    })
+                
+                for key, value in obj.items():
+                    found_models.extend(extract_models_info(value, f"{path}.{key}" if path else key))
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    found_models.extend(extract_models_info(item, f"{path}[{i}]" if path else f"[{i}]"))
+            
+            return found_models
+        
+        serialized_models = extract_models_info(training_results)
+        
+        if not serialized_models:
+            return jsonify({
+                'success': False,
+                'error': 'No trained models found in results',
+                'message': 'Training results exist but no models were saved.'
+            }), 404
+        
+        logger.info(f"Found {len(serialized_models)} serialized model(s) in training results")
+        
+        # Deserialize and upload models to Storage
+        uploaded_models = []
+        failed_models = []
+        
+        for idx, model_info in enumerate(serialized_models):
+            model_class = model_info['model_class']
+            model_data = model_info['model_data']
+            path = model_info['path']
+            
+            try:
+                logger.info(f"📥 Deserializing model {idx + 1}/{len(serialized_models)}: {model_class}")
+                
+                # Decode base64 and unpickle
+                model_bytes = base64.b64decode(model_data)
+                model_obj = pickle.loads(model_bytes)
+                
+                logger.info(f"✅ Model deserialized successfully: {model_class}")
+                
+                # Determine file extension based on model type
+                is_keras_model = hasattr(model_obj, 'save') and hasattr(model_obj, 'predict')
+                file_extension = '.h5' if is_keras_model else '.pkl'
+                
+                # Create temporary file
+                with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False, mode='wb') as temp_file:
+                    temp_file_path = temp_file.name
+                
+                try:
+                    # Save model to file
+                    if is_keras_model:
+                        # Keras/TensorFlow model - save as .h5
+                        model_obj.save(temp_file_path)
+                        logger.info(f"💾 Saved Keras model to {temp_file_path}")
+                    else:
+                        # Scikit-learn scaler/model - save as .pkl
+                        with open(temp_file_path, 'wb') as f:
+                            pickle.dump(model_obj, f)
+                        logger.info(f"💾 Saved sklearn model to {temp_file_path}")
+                    
+                    # Upload to Storage
+                    logger.info(f"📤 Uploading {model_class} model to storage...")
+                    
+                    # Extract dataset name from path if available
+                    dataset_name = path.split('.')[0] if '.' in path else 'default'
+                    
+                    storage_result = upload_trained_model(
+                        session_id=str(uuid_session_id),
+                        model_file_path=temp_file_path,
+                        model_type=model_class,
+                        dataset_name=dataset_name
+                    )
+                    
+                    uploaded_models.append({
+                        'dataset_name': dataset_name,
+                        'model_type': model_class.upper(),
+                        'filename': storage_result['original_filename'],
+                        'storage_path': storage_result['file_path'],
+                        'size_mb': round(storage_result['file_size'] / (1024 * 1024), 2),
+                        'path_in_results': path,
+                        'file_format': 'h5' if is_keras_model else 'pkl'
+                    })
+                    
+                    logger.info(f"✅ Uploaded {model_class} model: {storage_result['file_path']}")
+                    
+                finally:
+                    # Clean up temporary file
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
+                        logger.debug(f"🗑️ Cleaned up temporary file: {temp_file_path}")
+                    
+            except Exception as model_error:
+                logger.error(f"❌ Failed to process {model_class}: {model_error}")
+                import traceback
+                logger.error(traceback.format_exc())
+                failed_models.append({
+                    'model_class': model_class,
+                    'path': path,
+                    'error': str(model_error)
+                })
+        
+        if not uploaded_models and failed_models:
+            return jsonify({
+                'success': False,
+                'error': 'All model uploads failed',
+                'failed_models': failed_models
+            }), 500
+        
+        logger.info(f"✅ Saved {len(uploaded_models)} models to storage for session {session_id}")
+        
+        response = {
+            'success': True,
+            'message': f'Successfully saved {len(uploaded_models)} model(s) to storage',
+            'models': uploaded_models,
+            'total_uploaded': len(uploaded_models),
+            'session_id': session_id
+        }
+        
+        if failed_models:
+            response['failed_models'] = failed_models
+            response['total_failed'] = len(failed_models)
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"❌ Error saving models: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to save models to storage'
+        }), 500
+
+
+@bp.route('/list-models-database/<session_id>', methods=['GET'])
+def list_models_database(session_id):
+    """
+    List all trained models stored in Supabase Storage for a session.
+    
+    Args:
+        session_id: Training session ID
+        
+    Returns:
+        JSON response with list of models in Storage
+    """
+    try:
+        from utils.database import create_or_get_session_uuid
+        from utils.model_storage import list_session_models
+        
+        logger.info(f"📋 Listing models from Storage - session: {session_id}")
+        
+        # Get UUID for session
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({
+                'success': False,
+                'error': f'Session {session_id} not found'
+            }), 404
+        
+        # List models from Storage
+        models = list_session_models(str(uuid_session_id))
+        
+        logger.info(f"✅ Found {len(models)} model(s) in Storage for session {session_id}")
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'models': models,
+                'count': len(models)
+            },
+            'session_id': session_id
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error listing models from Storage: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to list models from Storage'
+        }), 500
+
+
+@bp.route('/download-model-h5/<session_id>', methods=['GET'])
+def download_model_h5(session_id):
+    """
+    Download a trained model file from Supabase Storage.
+
+    Query Parameters:
+        filename (optional): Specific model filename to download
+
+    If no filename specified, downloads the first .h5 model found.
+
+    Args:
+        session_id: Training session ID
+
+    Returns:
+        Binary model file as attachment
+    """
+    try:
+        from flask import request, send_file
+        import io
+        from utils.database import create_or_get_session_uuid
+        from utils.model_storage import list_session_models, download_trained_model
+
+        # Get filename from query parameter
+        filename = request.args.get('filename')
+
+        logger.info(f"📥 Download request - session: {session_id}, filename: {filename or 'first .h5 model'}")
+
+        # Get UUID for session
+        uuid_session_id = create_or_get_session_uuid(session_id)
+        if not uuid_session_id:
+            return jsonify({
+                'success': False,
+                'error': f'Session {session_id} not found'
+            }), 404
+
+        # List available models
+        models = list_session_models(str(uuid_session_id))
+
+        if not models:
+            return jsonify({
+                'success': False,
+                'error': 'No models found for this session'
+            }), 404
+
+        # Find the model to download
+        target_model = None
+        if filename:
+            # Find specific model by filename
+            target_model = next((m for m in models if m['filename'] == filename), None)
+            if not target_model:
+                return jsonify({
+                    'success': False,
+                    'error': f'Model {filename} not found'
+                }), 404
+        else:
+            # Default: download first .h5 model
+            h5_models = [m for m in models if m['format'] == 'h5']
+            if not h5_models:
+                return jsonify({
+                    'success': False,
+                    'error': 'No .h5 models found for this session'
+                }), 404
+            target_model = h5_models[0]
+
+        logger.info(f"📥 Downloading model: {target_model['filename']}")
+
+        # Download model from Storage
+        file_data = download_trained_model(
+            session_id=str(uuid_session_id),
+            file_path=target_model['storage_path']
+        )
+
+        # Create file-like object from bytes
+        file_obj = io.BytesIO(file_data)
+
+        logger.info(f"✅ Model downloaded successfully: {target_model['filename']}")
+
+        # Send file as attachment
+        return send_file(
+            file_obj,
+            as_attachment=True,
+            download_name=target_model['filename'],
+            mimetype='application/octet-stream'
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error downloading model: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to download model from Storage'
+        }), 500
 
 
 @bp.route('/session-name-change', methods=['POST'])

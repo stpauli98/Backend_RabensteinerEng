@@ -142,14 +142,24 @@ def run_exact_training_pipeline(
         - scalers: Input and output scalers
         - metadata: Additional training metadata
     """
-    
-    
+
+    import logging
+    logger = logging.getLogger(__name__)
+
     # Step 1: Create training arrays using main time loop (lines 1068-1760)
-    (i_array_3D, o_array_3D, 
-     i_combined_array, o_combined_array, 
-     utc_ref_log) = create_training_arrays(
-        i_dat, o_dat, i_dat_inf, o_dat_inf, utc_strt, utc_end
-    )
+    logger.info(f"   Pipeline Step 1: Creating training arrays from {utc_strt} to {utc_end}")
+    try:
+        (i_array_3D, o_array_3D,
+         i_combined_array, o_combined_array,
+         utc_ref_log) = create_training_arrays(
+            i_dat, o_dat, i_dat_inf, o_dat_inf, utc_strt, utc_end
+        )
+        logger.info(f"   Pipeline Step 1 complete: Created arrays with shape {i_array_3D.shape if hasattr(i_array_3D, 'shape') else 'unknown'}")
+    except Exception as e:
+        logger.error(f"   ❌ Pipeline Step 1 FAILED: {str(e)}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
+        raise
     
     # Get number of datasets (line 1757)
     n_dat = i_array_3D.shape[0]

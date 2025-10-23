@@ -43,16 +43,17 @@ class ModernMiddlemanRunner:
     def run_training_script(self, session_id: str, model_params: Optional[Dict] = None) -> Dict:
         """
         Main training execution using verified pipeline_exact.py
-        
+
         Args:
             session_id: Session identifier
             model_params: Optional model configuration from frontend
-            
+
         Returns:
             Dict containing training results and status
         """
         try:
-            
+            logger.info(f"📍 Step 1: Starting run_training_script for session {session_id}")
+
             # First try to get files from filesystem (for testing)
             import glob
             temp_dir = "temp_training_data"
@@ -78,10 +79,12 @@ class ModernMiddlemanRunner:
                 # Get file paths
                 input_files, output_files = data_loader.prepare_file_paths(session_id)
             
+            logger.info(f"📍 Step 2: Loading CSV data from {len(input_files)} input files and {len(output_files)} output files")
+
             # Load CSV data
             i_dat = {}
             o_dat = {}
-            
+
             # Load input files
             for file_path in input_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
@@ -129,10 +132,52 @@ class ModernMiddlemanRunner:
             ])
             
             # Process all input files at once through load() (EXACT as training_original.py)
-            i_dat, i_dat_inf = load(i_dat, i_dat_inf)
-            
+            logger.info(f"📍 Step 3: Processing input files through load() function")
+
+            # Log input file info for debugging
+            for file_name, df in i_dat.items():
+                logger.info(f"   Input file '{file_name}': {len(df)} rows, {len(df.columns)} columns")
+
+            try:
+                import time
+                start_time = time.time()
+                i_dat, i_dat_inf = load(i_dat, i_dat_inf)
+                elapsed = time.time() - start_time
+                logger.info(f"📍 Step 3 complete: Input files processed successfully in {elapsed:.2f}s")
+            except Exception as e:
+                error_msg = f"Failed to process input files: {str(e)}"
+                logger.error(f"❌ Step 3 FAILED: {error_msg}")
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'details': str(e),
+                    'stage': 'load_input_files'
+                }
+
             # Process all output files at once through load()
-            o_dat, o_dat_inf = load(o_dat, o_dat_inf)
+            logger.info(f"📍 Step 4: Processing output files through load() function")
+
+            # Log output file info for debugging
+            for file_name, df in o_dat.items():
+                logger.info(f"   Output file '{file_name}': {len(df)} rows, {len(df.columns)} columns")
+
+            try:
+                import time
+                start_time = time.time()
+                o_dat, o_dat_inf = load(o_dat, o_dat_inf)
+                elapsed = time.time() - start_time
+                logger.info(f"📍 Step 4 complete: Output files processed successfully in {elapsed:.2f}s")
+            except Exception as e:
+                error_msg = f"Failed to process output files: {str(e)}"
+                logger.error(f"❌ Step 4 FAILED: {error_msg}")
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'details': str(e),
+                    'stage': 'load_output_files'
+                }
             
             # Set required column values for all input files (as in training_original.py)
             for key in i_dat_inf.index:
@@ -157,8 +202,10 @@ class ModernMiddlemanRunner:
                 o_dat_inf.loc[key, "scal_min"] = 0  # Min scaling value
             
             # Apply transformations
+            logger.info(f"📍 Step 5: Applying transformations")
             i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
             o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
+            logger.info(f"📍 Step 5 complete: Transformations applied")
             
             # Get time boundaries from data (EXACT as training_original.py lines 1056-1059)
             # Use data min/max instead of fixed time period
@@ -215,16 +262,31 @@ class ModernMiddlemanRunner:
                         mdl_config.EPSILON = model_params['EPSILON']
             
             # Run the verified pipeline
-            results = run_exact_training_pipeline(
-                i_dat=i_dat,
-                o_dat=o_dat,
-                i_dat_inf=i_dat_inf,
-                o_dat_inf=o_dat_inf,
-                utc_strt=utc_strt,
-                utc_end=utc_end,
-                random_dat=model_params.get('random_dat', False) if model_params else False,
-                mdl_config=mdl_config
-            )
+            logger.info(f"📍 Step 6: Running training pipeline with utc_strt={utc_strt}, utc_end={utc_end}")
+            logger.info(f"   Model config: MODE={mdl_config.MODE if mdl_config else 'default'}, LAY={mdl_config.LAY if mdl_config else 'default'}, N={mdl_config.N if mdl_config else 'default'}")
+
+            try:
+                results = run_exact_training_pipeline(
+                    i_dat=i_dat,
+                    o_dat=o_dat,
+                    i_dat_inf=i_dat_inf,
+                    o_dat_inf=o_dat_inf,
+                    utc_strt=utc_strt,
+                    utc_end=utc_end,
+                    random_dat=model_params.get('random_dat', False) if model_params else False,
+                    mdl_config=mdl_config
+                )
+                logger.info(f"📍 Step 6 complete: Training pipeline finished successfully")
+            except Exception as e:
+                error_msg = f"Training pipeline failed: {str(e)}"
+                logger.error(f"❌ Step 6 FAILED: {error_msg}")
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'details': str(e),
+                    'stage': 'training_pipeline'
+                }
             
             
             # Generate visualizations

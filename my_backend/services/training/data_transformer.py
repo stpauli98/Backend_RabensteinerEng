@@ -60,17 +60,26 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     # Main time loop (lines 1080-1748)
     iteration_count = 0
     total_iterations = int((utc_end - utc_ref).total_seconds() / 60 / mts.DELT)
-    
+
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"      Starting main time loop: {total_iterations} iterations expected")
+
+    import time
+    loop_start_time = time.time()
+
     while True:
-        
+
         # End time reached -> break loop (lines 1083-1084)
         if utc_ref > utc_end:
             break
-        
+
         # Log progress every 100 iterations
         iteration_count += 1
         if iteration_count % 100 == 0:
-            pass  # Progress tracking
+            elapsed = time.time() - loop_start_time
+            progress = (iteration_count / total_iterations * 100) if total_iterations > 0 else 0
+            logger.info(f"      Progress: {iteration_count}/{total_iterations} ({progress:.1f}%) - {elapsed:.1f}s elapsed")
         
         # Progress logging (lines 1086-1087)
         prog_1 = (utc_ref - utc_strt) / (utc_end - utc_strt) * 100

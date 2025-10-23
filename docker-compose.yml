@@ -7,6 +7,8 @@ services:
       - "8080:8080"  # Mapira port 8080 iz kontejnera na port 8080 na vašem računaru
     volumes:
       - ./my_backend:/app  # Montira vaš lokalni kod u kontejner za lakši razvoj
+    env_file:
+      - ./my_backend/.env  # Load environment variables from .env file
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=development
