@@ -831,9 +831,8 @@ def _load_session_metadata(session_id: str) -> dict:
     Returns:
         dict: Session metadata or None if loading fails
     """
-    # Base directory for file uploads
-    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    upload_base_dir = os.path.join(base_path, 'api', 'routes', 'uploads', 'file_uploads')
+    # Base directory for file uploads (relative to /app working directory)
+    upload_base_dir = 'uploads/file_uploads'
     session_dir = os.path.join(upload_base_dir, session_id)
     
     # Check if session directory exists
@@ -1012,9 +1011,8 @@ def _save_files_to_database(database_session_id: str, session_id: str, metadata:
     if not supabase:
         raise ConfigurationError("Supabase client not available")
     
-    # Base directory for file uploads
-    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    upload_base_dir = os.path.join(base_path, 'api', 'routes', 'uploads', 'file_uploads')
+    # Base directory for file uploads (relative to /app working directory)
+    upload_base_dir = 'uploads/file_uploads'
     session_dir = os.path.join(upload_base_dir, session_id)
     
     try:

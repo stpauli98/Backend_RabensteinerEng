@@ -43,6 +43,14 @@ from services.training.session_manager import (
     get_session_uuid, get_upload_status
 )
 
+# Refactoring Phase 5: Import upload management service functions
+from services.training.upload_manager import (
+    process_chunk_upload, verify_file_hash, assemble_file_locally,
+    save_session_metadata_locally, get_session_metadata_locally,
+    update_session_metadata, verify_session_files,
+    create_csv_file_record, update_csv_file_record, delete_csv_file_record
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -213,8 +221,8 @@ def calculate_n_dat_from_session(session_id):
 # Constants for session management
 MAX_SESSIONS_TO_RETURN = 50  # Maximum number of sessions to return in list
 
-# Base directory for file uploads (relative to my_backend)
-UPLOAD_BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'file_uploads')
+# Base directory for file uploads (relative to /app working directory)
+UPLOAD_BASE_DIR = 'uploads/file_uploads'
 
 def verify_file_hash(file_data: bytes, expected_hash: str) -> bool:
     """Verify the hash of file data matches the expected hash."""
@@ -509,228 +517,65 @@ def print_session_files(session_id, files_data):
 @require_subscription
 @check_processing_limit
 def upload_chunk():
-    """Handle chunk upload from frontend - saving locally."""
+    """
+    Handle chunk upload from frontend - saving locally.
+    
+    Refactored: Business logic moved to upload_manager.process_chunk_upload()
+    """
     try:
-        # Provjeri ima li chunk u zahtjevu
+        # Validate chunk file in request
         if 'chunk' not in request.files:
             return jsonify({'success': False, 'error': 'No chunk in request'}), 400
-            
+        
         chunk_file = request.files['chunk']
         if not chunk_file.filename:
             return jsonify({'success': False, 'error': 'No chunk file selected'}), 400
-            
-        # Dohvati metapodatke
+        
+        # Validate metadata
         if 'metadata' not in request.form:
             return jsonify({'success': False, 'error': 'No metadata provided'}), 400
-            
-        metadata = json.loads(request.form['metadata'])
-        # logger.info(f"Received chunk {metadata['chunkIndex']} of {metadata['totalChunks']} for {metadata['fileName']}")
         
-        # Pročitaj podatke chunka
+        metadata = json.loads(request.form['metadata'])
+        
+        # Read chunk data
         chunk_data = chunk_file.read()
         
-        # Koristi session ID kao ID uploada
-        upload_id = metadata['sessionId']
+        # Extract additional data if present
+        additional_data = {}
         
-        # Kreiraj direktorij za spremanje chunkova ako ne postoji
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, upload_id)
-        os.makedirs(upload_dir, exist_ok=True)
-        
-        # Spremi chunk lokalno
-        chunk_filename = f"{metadata['fileName']}_{metadata['chunkIndex']}"
-        chunk_path = os.path.join(upload_dir, chunk_filename)
-        
-        with open(chunk_path, 'wb') as f:
-            f.write(chunk_data)
-        
-        # Spremi metapodatke o chunku
-        metadata_path = os.path.join(upload_dir, 'metadata.json')
-        
-        # Dohvati postojeće metapodatke ako postoje
-        chunk_metadata = []
-        if os.path.exists(metadata_path):
-            try:
-                with open(metadata_path, 'r') as f:
-                    chunk_metadata = json.load(f)
-            except json.JSONDecodeError:
-                chunk_metadata = []
-        
-        # Ekstrahiraj sve parametre iz frontenda
-        frontend_params = {}
-        
-        # Dodaj sve metapodatke
-        for key, value in metadata.items():
-            if key not in ['sessionId', 'chunkIndex', 'totalChunks', 'fileName', 'fileType']:
-                frontend_params[key] = value
-        
-        # Obradi dodatne podatke iz zahtjeva
+        # Process additional data from form
         if 'additionalData' in request.form:
             additional_data = json.loads(request.form['additionalData'])
-            
-            # Dodaj metapodatke o datoteci
-            if 'fileMetadata' in additional_data:
-                frontend_params['fileMetadata'] = additional_data['fileMetadata']
-            
-            # Dodaj informacije o sesiji
-            if 'sessionInfo' in additional_data:
-                frontend_params['sessionInfo'] = additional_data['sessionInfo']
-            
-            # Dodaj informacije o vremenu i zeitschritte
-            if 'timeInfo' in additional_data:
-                frontend_params['timeInfo'] = additional_data['timeInfo']
-            if 'zeitschritte' in additional_data:
-                frontend_params['zeitschritte'] = additional_data['zeitschritte']
         
-        # Dodaj sve ostale parametre iz forme
+        # Add all other form parameters
         for key, value in request.form.items():
             if key not in ['metadata', 'additionalData']:
                 try:
-                    # Pokušaj parsirati kao JSON
-                    frontend_params[key] = json.loads(value)
+                    additional_data[key] = json.loads(value)
                 except (json.JSONDecodeError, TypeError):
-                    # Ako nije JSON, spremi kao tekst
-                    frontend_params[key] = value
+                    additional_data[key] = value
         
-        # Dodaj query parametre ako postoje
+        # Add query parameters
         for key, value in request.args.items():
-            frontend_params[key] = value
+            additional_data[key] = value
         
-        # Logiraj parametre koji se spremaju
-        if frontend_params:
-            # logger.info(f"Saving chunk with parameters: {', '.join(frontend_params.keys())}")
-            
-            # Detaljni ispis samo u debug modu
-            if logger.isEnabledFor(logging.DEBUG):
-                # Osnovni podaci iz metadata
-                # logger.debug(f"Session ID: {upload_id}")
-                # logger.debug(f"File name: {metadata.get('fileName', 'N/A')}")
-                
-                # Podaci iz fileMetadata ako postoje
-                file_metadata = frontend_params.get('fileMetadata', {})
-                if file_metadata:
-                    # logger.debug(f"File metadata: {json.dumps(file_metadata, indent=2)}")
-                    pass
+        # Process chunk upload through service layer
+        result = process_chunk_upload(chunk_data, metadata, additional_data)
         
-        # Kreiraj metapodatke o chunku
-        chunk_info = {
-            'chunkIndex': metadata['chunkIndex'],
-            'totalChunks': metadata['totalChunks'],
-            'fileName': metadata['fileName'],
-            'filePath': chunk_path,
-            'fileType': metadata.get('fileType', 'unknown'),
-            'createdAt': datetime.now().isoformat(),
-            'params': frontend_params
-        }
-        
-        # Dodaj ili ažuriraj metapodatke o chunku
-        existing_chunk = next((c for c in chunk_metadata if c['chunkIndex'] == metadata['chunkIndex']), None)
-        if existing_chunk:
-            # Ažuriraj postojeći chunk
-            existing_chunk.update(chunk_info)
-        else:
-            # Dodaj novi chunk
-            chunk_metadata.append(chunk_info)
-        
-        # Spremi ažurirane metapodatke
-        with open(metadata_path, 'w') as f:
-            json.dump(chunk_metadata, f, indent=2)
-        
-        # Spremi session metadata lokalno ako je ovo prvi chunk
-        if metadata['chunkIndex'] == 0 and 'additionalData' in request.form:
-            additional_data = json.loads(request.form['additionalData'])
-            
-            # Dohvati metapodatke o datoteci
-            file_metadata = additional_data.get('fileMetadata', {})
-            file_type = file_metadata.get('type', 'unknown')
-            file_name = metadata['fileName']
-            
-            # Dohvati informacije o sesiji
-            session_info = additional_data.get('sessionInfo', {})
-            
-            # Dohvati informacije o vremenu i zeitschritte
-            time_info = additional_data.get('timeInfo', {})
-            zeitschritte = additional_data.get('zeitschritte', {})
-            
-            # Učitaj postojeće metapodatke o sesiji ako postoje
-            session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
-            session_metadata = {}
-            if os.path.exists(session_metadata_path):
-                try:
-                    with open(session_metadata_path, 'r') as f:
-                        session_metadata = json.load(f)
-                except json.JSONDecodeError:
-                    session_metadata = {}
-            
-            # Dodaj ili ažuriraj osnovne informacije o sesiji
-            if 'timeInfo' not in session_metadata:
-                session_metadata['timeInfo'] = time_info
-            if 'zeitschritte' not in session_metadata:
-                session_metadata['zeitschritte'] = zeitschritte
-            if 'sessionInfo' not in session_metadata:
-                session_metadata['sessionInfo'] = session_info
-            
-            # Dodaj ili ažuriraj metapodatke o datoteci
-            if 'files' not in session_metadata:
-                session_metadata['files'] = []
-                
-            # Provjeri postoji li već ova datoteka u metapodacima
-            file_exists = False
-            for i, existing_file in enumerate(session_metadata.get('files', [])):
-                if existing_file.get('fileName') == file_name:
-                    # logger.debug(f"DEBUG: Updating existing file metadata for {file_name}: {file_metadata}")
-                    # Ažuriraj postojeće metapodatke
-                    session_metadata['files'][i] = file_metadata
-                    file_exists = True
-                    break
-                    
-            # Ako datoteka ne postoji u metapodacima, dodaj je
-            if not file_exists and file_metadata:
-                # logger.debug(f"DEBUG: Adding new file metadata for {file_name}: {file_metadata}")
-                session_metadata['files'].append(file_metadata)
-            
-            # Ažuriraj vrijeme zadnje promjene
-            session_metadata['lastUpdated'] = datetime.now().isoformat()
-            
-            # Spremi metapodatke o sesiji lokalno
-            with open(session_metadata_path, 'w') as f:
-                json.dump(session_metadata, f, indent=2)
-            
-            # logger.info(f"Saved session metadata for session {upload_id} with file {file_name}")
-        
-        # Ako je ovo zadnji chunk, sastavi datoteku
-        if metadata['chunkIndex'] == metadata['totalChunks'] - 1:
-            try:
-                # Sastavi datoteku iz chunkova
-                assembled_file_path = assemble_file_locally(upload_id, metadata['fileName'])
-
-                # Track CSV upload as processing job
-                from flask import g
-                increment_processing_count(g.user_id)
-                logger.info(f"Tracked CSV upload for user {g.user_id}")
-
-                # Prikaži samo osnovne informacije o datoteci
-                file_size = os.path.getsize(assembled_file_path)
-                # logger.info(f"Successfully assembled file: {metadata['fileName']} at {assembled_file_path}, size: {file_size/1024:.2f} KB")
-
-                # Učitaj datoteku kao DataFrame ako je CSV i prikaži osnovne informacije
-                try:
-                    df = pd.read_csv(assembled_file_path)
-                    # logger.info(f"CSV file processed: {len(df)} rows, {len(df.columns)} columns")
-                except Exception:
-                    # Nije CSV ili nije moguće učitati - preskoci
-                    pass
-                    
-            except Exception as e:
-                logger.error(f"Error assembling file: {str(e)}")
-                return jsonify({
-                    'success': False, 
-                    'error': f"Error assembling file: {str(e)}"
-                }), 500
+        # Track CSV upload if file was assembled
+        if result.get('assembled'):
+            from flask import g
+            increment_processing_count(g.user_id)
+            logger.info(f"Tracked CSV upload for user {g.user_id}")
         
         return jsonify({
             'success': True,
-            'message': f"Successfully received chunk {metadata['chunkIndex']} of {metadata['totalChunks']}"
+            'message': result['message']
         })
+        
+    except ValueError as e:
+        logger.error(f"Validation error in chunk upload: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 400
         
     except Exception as e:
         logger.error(f"Error processing chunk upload: {str(e)}")

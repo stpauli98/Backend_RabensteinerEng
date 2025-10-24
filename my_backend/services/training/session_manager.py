@@ -19,6 +19,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from utils.database import get_string_id_from_uuid
 
 logger = logging.getLogger(__name__)
 
