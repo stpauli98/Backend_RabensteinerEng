@@ -477,6 +477,8 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
     """
     Update existing CSV file record in database.
 
+    Validates UUID format and allowed fields, converts numeric fields to strings.
+
     Args:
         file_id: File UUID
         file_data: Updated file metadata
@@ -485,20 +487,45 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
         dict: Updated file record
 
     Raises:
-        ValueError: If file not found
+        ValueError: If file not found or invalid file_id format
         Exception: If update fails
     """
+    import uuid as uuid_lib
     from utils.database import get_supabase_client
+
+    # Validate file_id is UUID
+    try:
+        uuid_lib.UUID(file_id)
+    except (ValueError, TypeError):
+        raise ValueError('Invalid file ID format')
 
     supabase = get_supabase_client()
 
+    # Allowed fields for update
+    allowed_fields = [
+        'file_name', 'bezeichnung', 'min', 'max', 'offset', 'datenpunkte',
+        'numerische_datenpunkte', 'numerischer_anteil', 'datenform',
+        'datenanpassung', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
+        'zeitschrittweite_min', 'skalierung', 'skalierung_max', 'skalierung_min',
+        'zeithorizont_start', 'zeithorizont_end', 'type'
+    ]
+
+    # Numeric fields that need string conversion
+    numeric_fields = [
+        'min', 'max', 'offset', 'datenpunkte', 'numerische_datenpunkte',
+        'numerischer_anteil', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
+        'zeitschrittweite_min', 'skalierung_max', 'skalierung_min'
+    ]
+
     # Prepare update data
     update_data = {}
-    allowed_fields = ['file_name', 'bezeichnung', 'type']
-
     for field in allowed_fields:
         if field in file_data:
-            update_data[field] = file_data[field]
+            # Convert numbers to strings for database storage
+            if field in numeric_fields:
+                update_data[field] = str(file_data[field])
+            else:
+                update_data[field] = file_data[field]
 
     if not update_data:
         raise ValueError('No valid fields to update')
@@ -518,7 +545,10 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
 
 def delete_csv_file_record(file_id: str) -> Dict:
     """
-    Delete CSV file record from database.
+    Delete CSV file record from database and Supabase Storage.
+
+    Deletes file from appropriate storage bucket (based on type),
+    then removes record from database.
 
     Args:
         file_id: File UUID
@@ -526,34 +556,58 @@ def delete_csv_file_record(file_id: str) -> Dict:
     Returns:
         dict: {
             'deleted_file': dict,
-            'message': str
+            'message': str,
+            'storage_deleted': bool
         }
 
     Raises:
-        ValueError: If file not found
+        ValueError: If file not found or invalid file_id format
         Exception: If deletion fails
     """
+    import uuid as uuid_lib
     from utils.database import get_supabase_client
+
+    # Validate file_id is UUID
+    try:
+        uuid_lib.UUID(file_id)
+    except (ValueError, TypeError):
+        raise ValueError('Invalid file ID format')
 
     supabase = get_supabase_client()
 
-    # Get file record first
+    # Get file record first to know storage path and type
     file_response = supabase.table('files').select('*').eq('id', file_id).execute()
 
     if not file_response.data or len(file_response.data) == 0:
         raise ValueError(f'File {file_id} not found')
 
     file_record = file_response.data[0]
+    storage_path = file_record.get('storage_path', '')
+    file_type = file_record.get('type', 'input')
+
+    storage_deleted = False
+
+    # Delete from storage if storage_path exists
+    if storage_path:
+        try:
+            bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+            storage_response = supabase.storage.from_(bucket_name).remove([storage_path])
+            logger.info(f"Deleted file from storage: {bucket_name}/{storage_path}")
+            storage_deleted = True
+        except Exception as storage_error:
+            logger.warning(f"Could not delete file from storage: {str(storage_error)}")
+            # Continue with database deletion even if storage deletion fails
 
     # Delete from database
     delete_response = supabase.table('files').delete().eq('id', file_id).execute()
 
     if not delete_response.data or len(delete_response.data) == 0:
-        raise Exception(f'Failed to delete file {file_id}')
+        raise Exception(f'Failed to delete file {file_id} from database')
 
     logger.info(f"Deleted CSV file record: {file_id} ({file_record['file_name']})")
 
     return {
         'deleted_file': file_record,
-        'message': f"File {file_record['file_name']} deleted successfully"
+        'message': f"File {file_record['file_name']} deleted successfully",
+        'storage_deleted': storage_deleted
     }

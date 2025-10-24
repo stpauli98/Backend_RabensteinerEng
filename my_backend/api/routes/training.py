@@ -1336,58 +1336,31 @@ def create_csv_file():
 
 @bp.route('/csv-files/<file_id>', methods=['PUT'])
 def update_csv_file(file_id):
-    """Update CSV file metadata."""
+    """
+    Update CSV file metadata.
+    
+    Refactored: Business logic moved to upload_manager.update_csv_file_record()
+    """
     try:
-        from utils.database import get_supabase_client
-        supabase = get_supabase_client()
-        
         data = request.get_json()
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
         
-        # Validate file_id is UUID
-        try:
-            uuid.UUID(file_id)
-        except (ValueError, TypeError):
-            return jsonify({'success': False, 'error': 'Invalid file ID format'}), 400
+        # Update file record through service layer
+        updated_file = update_csv_file_record(file_id, data)
         
-        # Prepare update data (only allow specific fields to be updated)
-        allowed_fields = [
-            'file_name', 'bezeichnung', 'min', 'max', 'offset', 'datenpunkte',
-            'numerische_datenpunkte', 'numerischer_anteil', 'datenform', 
-            'datenanpassung', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
-            'zeitschrittweite_min', 'skalierung', 'skalierung_max', 'skalierung_min',
-            'zeithorizont_start', 'zeithorizont_end', 'type'
-        ]
+        return jsonify({
+            'success': True,
+            'data': updated_file
+        })
         
-        update_data = {}
-        for field in allowed_fields:
-            if field in data:
-                # Convert numbers to strings for database storage
-                if field in ['min', 'max', 'offset', 'datenpunkte', 'numerische_datenpunkte', 
-                           'numerischer_anteil', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
-                           'zeitschrittweite_min', 'skalierung_max', 'skalierung_min']:
-                    update_data[field] = str(data[field])
-                else:
-                    update_data[field] = data[field]
+    except ValueError as e:
+        # File not found or validation error
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
         
-        if not update_data:
-            return jsonify({'success': False, 'error': 'No valid fields to update'}), 400
-        
-        # Update file in database
-        response = supabase.table('files').update(update_data).eq('id', file_id).execute()
-        
-        if response.data:
-            return jsonify({
-                'success': True,
-                'data': response.data[0]
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'File not found or update failed'
-            }), 404
-            
     except Exception as e:
         logger.error(f"Error updating CSV file {file_id}: {str(e)}")
         return jsonify({
@@ -1397,53 +1370,27 @@ def update_csv_file(file_id):
 
 @bp.route('/csv-files/<file_id>', methods=['DELETE'])
 def delete_csv_file(file_id):
-    """Delete CSV file from database and storage."""
+    """
+    Delete CSV file from database and storage.
+    
+    Refactored: Business logic moved to upload_manager.delete_csv_file_record()
+    """
     try:
-        from utils.database import get_supabase_client
-        supabase = get_supabase_client()
+        # Delete file record through service layer
+        result = delete_csv_file_record(file_id)
         
-        # Validate file_id is UUID
-        try:
-            uuid.UUID(file_id)
-        except (ValueError, TypeError):
-            return jsonify({'success': False, 'error': 'Invalid file ID format'}), 400
+        return jsonify({
+            'success': True,
+            'message': result['message']
+        })
         
-        # Get file info first to know storage path and type
-        file_response = supabase.table('files').select('*').eq('id', file_id).execute()
-        if not file_response.data or len(file_response.data) == 0:
-            return jsonify({
-                'success': False,
-                'error': 'File not found'
-            }), 404
-
-        file_info = file_response.data[0]
-        storage_path = file_info.get('storage_path', '')
-        file_type = file_info.get('type', 'input')
+    except ValueError as e:
+        # File not found or validation error
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 404
         
-        # Delete from storage if storage_path exists
-        if storage_path:
-            try:
-                bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
-                storage_response = supabase.storage.from_(bucket_name).remove([storage_path])
-                logger.info(f"Deleted file from storage: {bucket_name}/{storage_path}")
-            except Exception as storage_error:
-                logger.warning(f"Could not delete file from storage: {str(storage_error)}")
-                # Continue with database deletion even if storage deletion fails
-        
-        # Delete from database
-        db_response = supabase.table('files').delete().eq('id', file_id).execute()
-        
-        if db_response.data:
-            return jsonify({
-                'success': True,
-                'message': 'CSV file deleted successfully'
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to delete file from database'
-            }), 500
-            
     except Exception as e:
         logger.error(f"Error deleting CSV file {file_id}: {str(e)}")
         return jsonify({
