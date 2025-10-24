@@ -33,6 +33,16 @@ from services.training.scaler_manager import get_session_scalers, create_scaler_
 # Refactoring Phase 3: Import model management service functions
 from services.training.model_manager import save_models_to_storage, get_models_list, download_model_file
 
+# Refactoring Phase 4: Import session management service functions
+from services.training.session_manager import (
+    initialize_session, finalize_session, get_sessions_list,
+    get_session_info, get_session_from_database, delete_session,
+    delete_all_sessions, update_session_name, save_time_info_data,
+    save_zeitschritte_data, get_time_info_data, get_zeitschritte_data,
+    get_csv_files_for_session, get_session_status, create_database_session,
+    get_session_uuid
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -1322,151 +1332,131 @@ def session_status(session_id):
 
 @bp.route('/init-session', methods=['POST'])
 def init_session():
-    """Initialize a new upload session."""
+    """
+    Initialize a new upload session.
+
+    Refactored: Business logic moved to session_manager.initialize_session()
+    """
     try:
         data = request.json
         session_id = data.get('sessionId')
         time_info = data.get('timeInfo', {})
         zeitschritte = data.get('zeitschritte', {})
-        
-        if not session_id:
-            return jsonify({'success': False, 'error': 'Missing session ID'}), 400
-            
-        # Kreiraj direktorij za sesiju
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-        os.makedirs(upload_dir, exist_ok=True)
-        
-        # Spremi inicijalne metapodatke o sesiji
-        session_metadata = {
-            'timeInfo': time_info,
-            'zeitschritte': zeitschritte,
-            'sessionInfo': {
-                'sessionId': session_id,
-                'totalFiles': 0
-            },
-            'lastUpdated': datetime.now().isoformat()
-        }
-        
-        # Save session metadata
-        session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
-        with open(session_metadata_path, 'w') as f:
-            json.dump(session_metadata, f, indent=2)
-            
-        # Create session in Supabase and save session data
-        try:
-            from utils.database import create_or_get_session_uuid
-            session_uuid = create_or_get_session_uuid(session_id)
-            if session_uuid:
-                # logger.info(f"Created session UUID {session_uuid} for session {session_id}")
-                
-                # Save session data to Supabase
-                success = save_session_to_supabase(session_id)
-                if success:
-                    # logger.info(f"Session {session_id} data saved to Supabase successfully")
-                    pass
-                else:
-                    logger.warning(f"Failed to save session {session_id} data to Supabase")
-            else:
-                logger.warning(f"Failed to create session UUID for {session_id}")
-        except Exception as e:
-            logger.error(f"Error saving session data to Supabase: {str(e)}")
-            # Continue even if Supabase save fails - don't block the response
-            
-        # logger.info(f"Session {session_id} initialized successfully")
+
+        # Call service layer
+        result = initialize_session(session_id, time_info, zeitschritte)
+
         return jsonify({
             'success': True,
-            'sessionId': session_id,
-            'message': f"Session {session_id} initialized successfully"
+            'sessionId': result['session_id'],
+            'message': result['message']
         })
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error initializing session: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# ============================================================================
+# OLD IMPLEMENTATION - init_session (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/init-session', methods=['POST'])
+# def init_session():
+#     ... 60 lines of business logic moved to session_manager.initialize_session()
+
 @bp.route('/save-time-info', methods=['POST'])
 def save_time_info_endpoint():
-    """Save time information via API endpoint."""
+    """
+    Save time information via API endpoint.
+
+    Refactored: Business logic moved to session_manager.save_time_info_data()
+    """
     try:
-        # Log the raw request data for debugging
-        # logger.info(f"Received save-time-info request from {request.remote_addr}")
-        # logger.info(f"Request headers: {dict(request.headers)}")
-        # logger.info(f"Request content type: {request.content_type}")
-        # logger.info(f"Request content length: {request.content_length}")
-        
         # Check content type
         if not request.is_json:
             logger.error("Request is not JSON")
             return jsonify({'success': False, 'error': 'Request must be JSON'}), 400
-        
+
         # Get request data
         try:
             data = request.get_json(force=True)
         except Exception as e:
             logger.error(f"Failed to parse JSON: {str(e)}")
             return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'}), 400
-        
-        # Log the parsed data
-        # logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
-        
+
         if not data or 'sessionId' not in data or 'timeInfo' not in data:
             logger.error("Missing required fields in request")
             return jsonify({'success': False, 'error': 'Missing sessionId or timeInfo'}), 400
-            
+
         session_id = data['sessionId']
         time_info = data['timeInfo']
-        
-        # Validate session_id format
-        if not session_id or not isinstance(session_id, str):
-            logger.error(f"Invalid session_id format: {session_id}")
-            return jsonify({'success': False, 'error': 'Invalid session_id format'}), 400
-        
-        # logger.info(f"Processing time_info save for session: {session_id}")
-        # logger.info(f"Time info keys: {list(time_info.keys()) if time_info else 'None'}")
-        
-        from utils.database import save_time_info
-        success = save_time_info(session_id, time_info)
-        
-        if success:
-            # logger.info(f"Successfully saved time_info for session {session_id}")
-            return jsonify({'success': True, 'message': 'Time info saved successfully'})
-        else:
-            logger.error(f"Failed to save time_info for session {session_id}")
-            return jsonify({'success': False, 'error': 'Failed to save time info'}), 500
-            
+
+        # Call service layer
+        save_time_info_data(session_id, time_info)
+
+        return jsonify({'success': True, 'message': 'Time info saved successfully'})
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error saving time info: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# ============================================================================
+# OLD IMPLEMENTATION - save_time_info_endpoint (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/save-time-info', methods=['POST'])
+# def save_time_info_endpoint():
+#     ... 52 lines of business logic moved to session_manager.save_time_info_data()
+
+
 @bp.route('/create-database-session', methods=['POST'])
-def create_database_session():
-    """Create a new session in Supabase database and return UUID."""
+def create_database_session_endpoint():
+    """
+    Create a new session in Supabase database and return UUID.
+
+    Refactored: Business logic moved to session_manager.create_database_session()
+    """
     try:
         data = request.json
         session_id = data.get('sessionId') if data else None
-        
-        from utils.database import create_or_get_session_uuid
-        session_uuid = create_or_get_session_uuid(session_id)
-        
-        if session_uuid:
-            return jsonify({
-                'success': True, 
-                'sessionUuid': session_uuid,
-                'message': f'Database session created with UUID: {session_uuid}'
-            })
-        else:
-            return jsonify({'success': False, 'error': 'Failed to create database session'}), 500
-            
+        session_name = data.get('sessionName') if data else None
+
+        # Call service layer
+        session_uuid = create_database_session(session_id, session_name)
+
+        return jsonify({
+            'success': True,
+            'sessionUuid': session_uuid,
+            'message': f'Database session created with UUID: {session_uuid}'
+        })
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error creating database session: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ============================================================================
+# OLD IMPLEMENTATION - create_database_session (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/create-database-session', methods=['POST'])
+# def create_database_session():
+#     ... 15 lines of business logic moved to session_manager.create_database_session()
+
+
 @bp.route('/get-session-uuid/<session_id>', methods=['GET'])
-def get_session_uuid(session_id):
-    """Get the UUID session ID for a string session ID."""
+def get_session_uuid_endpoint(session_id):
+    """
+    Get the UUID session ID for a string session ID.
+
+    Refactored: Business logic moved to session_manager.get_session_uuid()
+    """
     try:
-        if not session_id:
-            return jsonify({'success': False, 'error': 'Missing session ID'}), 400
-        
         # Check if it's already a UUID
         try:
             import uuid
@@ -1478,314 +1468,159 @@ def get_session_uuid(session_id):
                 'message': 'Session ID is already in UUID format'
             })
         except (ValueError, TypeError):
-            # It's a string session ID, get or create the UUID
-            from utils.database import create_or_get_session_uuid
-            session_uuid = create_or_get_session_uuid(session_id)
-            
-            if session_uuid:
-                return jsonify({
-                    'success': True,
-                    'sessionUuid': session_uuid,
-                    'message': f'Found/created UUID for session: {session_uuid}'
-                })
-            else:
-                return jsonify({
-                    'success': False, 
-                    'error': f'Failed to get UUID for session {session_id}'
-                }), 404
-                
+            # It's a string session ID, get UUID from service
+            session_uuid = get_session_uuid(session_id)
+
+            return jsonify({
+                'success': True,
+                'sessionUuid': session_uuid,
+                'message': f'Found/created UUID for session: {session_uuid}'
+            })
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 404
     except Exception as e:
         logger.error(f"Error getting session UUID: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# ============================================================================
+# OLD IMPLEMENTATION - get_session_uuid (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/get-session-uuid/<session_id>', methods=['GET'])
+# def get_session_uuid(session_id):
+#     ... 37 lines of business logic moved to session_manager.get_session_uuid()
+
 @bp.route('/save-zeitschritte', methods=['POST'])
 def save_zeitschritte_endpoint():
-    """Save zeitschritte information via API endpoint."""
+    """
+    Save zeitschritte information via API endpoint.
+
+    Refactored: Business logic moved to session_manager.save_zeitschritte_data()
+    """
     try:
-        # Log the raw request data for debugging
-        # logger.info(f"Received save-zeitschritte request from {request.remote_addr}")
-        # logger.info(f"Request headers: {dict(request.headers)}")
-        # logger.info(f"Request content type: {request.content_type}")
-        # logger.info(f"Request content length: {request.content_length}")
-        
         # Check content type
         if not request.is_json:
             logger.error("Request is not JSON")
             return jsonify({'success': False, 'error': 'Request must be JSON'}), 400
-        
+
         # Get request data
         try:
             data = request.get_json(force=True)
         except Exception as e:
             logger.error(f"Failed to parse JSON: {str(e)}")
             return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'}), 400
-        
-        # Log the parsed data
-        # logger.info(f"Parsed request data keys: {list(data.keys()) if data else 'None'}")
-        
+
         if not data or 'sessionId' not in data or 'zeitschritte' not in data:
             logger.error("Missing required fields in request")
             return jsonify({'success': False, 'error': 'Missing sessionId or zeitschritte'}), 400
-            
+
         session_id = data['sessionId']
         zeitschritte = data['zeitschritte']
-        
-        # Validate session_id format
-        if not session_id or not isinstance(session_id, str):
-            logger.error(f"Invalid session_id format: {session_id}")
-            return jsonify({'success': False, 'error': 'Invalid session_id format'}), 400
-        
-        # logger.info(f"Processing zeitschritte save for session: {session_id}")
-        # logger.info(f"Zeitschritte keys: {list(zeitschritte.keys()) if zeitschritte else 'None'}")
-        
-        from utils.database import save_zeitschritte
-        success = save_zeitschritte(session_id, zeitschritte)
-        
-        if success:
-            # logger.info(f"Successfully saved zeitschritte for session {session_id}")
-            return jsonify({'success': True, 'message': 'Zeitschritte saved successfully'})
-        else:
-            logger.error(f"Failed to save zeitschritte for session {session_id}")
-            return jsonify({'success': False, 'error': 'Failed to save zeitschritte'}), 500
-            
+
+        # Call service layer
+        save_zeitschritte_data(session_id, zeitschritte)
+
+        return jsonify({'success': True, 'message': 'Zeitschritte saved successfully'})
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error saving zeitschritte: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# ============================================================================
+# OLD IMPLEMENTATION - save_zeitschritte_endpoint (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/save-zeitschritte', methods=['POST'])
+# def save_zeitschritte_endpoint():
+#     ... 53 lines of business logic moved to session_manager.save_zeitschritte_data()
+
 @bp.route('/session/<session_id>/delete', methods=['POST'])
-def delete_session(session_id):
-    """Delete a specific session and all its files from local storage and Supabase database."""
+def delete_session_endpoint(session_id):
+    """
+    Refactored: Business logic moved to session_manager.delete_session()
+    
+    Delete a specific session and all its files from local storage and Supabase database.
+    """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        result = delete_session(session_id)
         
-        # Check if the provided ID is a UUID, and if so, get the string ID
-        try:
-            import uuid
-            uuid.UUID(session_id)
-            string_session_id = get_string_id_from_uuid(session_id)
-            uuid_session_id = session_id
-            if not string_session_id:
-                return jsonify({'success': False, 'error': 'Session mapping not found for UUID'}), 404
-        except (ValueError, TypeError):
-            string_session_id = session_id
-            uuid_session_id = create_or_get_session_uuid(session_id)
-            if not uuid_session_id:
-                return jsonify({'success': False, 'error': 'Could not get session UUID'}), 404
-
-        logger.info(f"Deleting session {string_session_id} (UUID: {uuid_session_id})")
-        
-        # 1. Delete from Supabase database first
-        supabase = get_supabase_client()
-        database_errors = []
-        
-        if supabase:
-            try:
-                # Delete from files table (this will also trigger CSV file storage deletion)
-                files_response = supabase.table('files').select('storage_path, type').eq('session_id', uuid_session_id).execute()
-                
-                # Delete CSV files from Supabase Storage
-                for file_data in files_response.data:
-                    storage_path = file_data.get('storage_path')
-                    file_type = file_data.get('type', 'input')
-
-                    if storage_path:
-                        try:
-                            bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
-                            supabase.storage.from_(bucket_name).remove([storage_path])
-                            logger.info(f"Deleted file from storage: {bucket_name}/{storage_path}")
-                        except Exception as storage_error:
-                            logger.warning(f"Could not delete file from storage {storage_path}: {str(storage_error)}")
-                            database_errors.append(f"Storage deletion failed: {storage_path}")
-
-                # Delete training results from Storage bucket (NEW)
-                try:
-                    from utils.training_storage import delete_training_results
-
-                    # Get all training results file paths for this session
-                    results_response = supabase.table('training_results')\
-                        .select('results_file_path')\
-                        .eq('session_id', uuid_session_id)\
-                        .execute()
-
-                    for result_data in results_response.data:
-                        file_path = result_data.get('results_file_path')
-                        if file_path:
-                            try:
-                                delete_training_results(file_path)
-                                logger.info(f"✅ Deleted training results from storage: {file_path}")
-                            except Exception as del_error:
-                                logger.warning(f"Could not delete training results {file_path}: {str(del_error)}")
-                                database_errors.append(f"Training results deletion failed: {file_path}")
-
-                except Exception as training_del_error:
-                    logger.error(f"Error deleting training results from storage: {training_del_error}")
-                    database_errors.append(f"Training results deletion error: {str(training_del_error)}")
-
-                # Delete from database tables (order matters due to foreign keys)
-                tables_to_delete = [
-                    'training_results',      # Results and visualizations
-                    'training_visualizations',
-                    'evaluation_tables',
-                    'files',                 # File metadata
-                    'zeitschritte',          # Time step data
-                    'time_info',             # Time configuration
-                    'session_mappings',      # Session mapping (last)
-                    'sessions'               # Session record (last)
-                ]
-                
-                for table in tables_to_delete:
-                    try:
-                        if table in ['session_mappings']:
-                            # For session_mappings, use string_session_id
-                            response = supabase.table(table).delete().eq('string_session_id', string_session_id).execute()
-                        elif table in ['sessions']:
-                            # For sessions, use uuid directly
-                            response = supabase.table(table).delete().eq('id', uuid_session_id).execute()
-                        else:
-                            # For all other tables, use session_id
-                            response = supabase.table(table).delete().eq('session_id', uuid_session_id).execute()
-                        
-                        deleted_count = len(response.data) if response.data else 0
-                        if deleted_count > 0:
-                            logger.info(f"Deleted {deleted_count} records from {table}")
-                            
-                    except Exception as table_error:
-                        logger.error(f"Error deleting from {table}: {str(table_error)}")
-                        database_errors.append(f"Table {table}: {str(table_error)}")
-                        
-            except Exception as db_error:
-                logger.error(f"Database deletion error: {str(db_error)}")
-                database_errors.append(f"Database error: {str(db_error)}")
-        else:
-            database_errors.append("Supabase client not available")
-
-        # 2. Delete local files
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
-        local_errors = []
-        
-        if os.path.exists(upload_dir):
-            # Delete all files in directory
-            for root, dirs, files in os.walk(upload_dir, topdown=False):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    try:
-                        os.remove(file_path)
-                        logger.info(f"Deleted local file: {file_path}")
-                    except Exception as e:
-                        logger.error(f"Error deleting file {file_path}: {str(e)}")
-                        local_errors.append(f"File {file_path}: {str(e)}")
-                
-                # Delete subdirectories
-                for dir in dirs:
-                    dir_path = os.path.join(root, dir)
-                    try:
-                        os.rmdir(dir_path)
-                        logger.info(f"Deleted local directory: {dir_path}")
-                    except Exception as e:
-                        logger.error(f"Error deleting directory {dir_path}: {str(e)}")
-                        local_errors.append(f"Directory {dir_path}: {str(e)}")
-            
-            # Delete main directory
-            try:
-                os.rmdir(upload_dir)
-                logger.info(f"Deleted session directory: {upload_dir}")
-            except Exception as e:
-                logger.error(f"Error deleting session directory {upload_dir}: {str(e)}")
-                local_errors.append(f"Session directory: {str(e)}")
-        else:
-            logger.info(f"Local upload directory does not exist: {upload_dir}")
-        
-        # Prepare response
-        all_errors = database_errors + local_errors
-        
-        if not all_errors:
+        if result.get('warnings'):
             return jsonify({
                 'success': True,
-                'message': f"Session {string_session_id} completely deleted from database and local storage"
+                'message': result['message'],
+                'warnings': result['warnings']
             })
         else:
             return jsonify({
-                'success': True,  # Partial success
-                'message': f"Session {string_session_id} deleted with some warnings",
-                'warnings': all_errors
+                'success': True,
+                'message': result['message']
             })
         
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 404
     except Exception as e:
         logger.error(f"Error deleting session {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
+# @bp.route('/session/<session_id>/delete', methods=['POST'])
+# def delete_session(session_id):
+#     ... 160 lines of business logic moved to session_manager.delete_session()
+
 @bp.route('/get-zeitschritte/<session_id>', methods=['GET'])
-def get_zeitschritte(session_id):
-    """Get zeitschritte data for a session."""
+def get_zeitschritte_endpoint(session_id):
+    """
+    Refactored: Business logic moved to session_manager.get_zeitschritte_data()
+    
+    Get zeitschritte data for a session.
+    """
     try:
         # Validate session_id format
         if not validate_session_id(session_id):
             return create_error_response('Invalid session ID format', 400)
-
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-
-        if not supabase:
-            return create_error_response('Database connection not available', 500)
-
-        # Convert session_id to UUID format if needed
-        try:
-            uuid.UUID(session_id)
-            database_session_id = session_id
-        except (ValueError, TypeError):
-            database_session_id = create_or_get_session_uuid(session_id)
-            if not database_session_id:
-                return create_error_response('Session not found', 404)
         
-        # Get zeitschritte from database
-        response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).execute()
+        zeitschritte = get_zeitschritte_data(session_id)
+        return create_success_response(zeitschritte)
         
-        if response.data and len(response.data) > 0:
-            # Transform database data back to frontend format (offsett -> offset)
-            data = dict(response.data[0])  # Take the first record
-            if 'offsett' in data:
-                data['offset'] = data['offsett']
-                del data['offsett']
-
-            return create_success_response(data)
-        else:
-            return create_error_response('No zeitschritte found for this session', 404)
-            
+    except ValueError as e:
+        return create_error_response(str(e), 404)
     except Exception as e:
         logger.error(f"Error getting zeitschritte for {session_id}: {str(e)}")
         return create_error_response(f'Internal server error: {str(e)}', 500)
 
-@bp.route('/get-time-info/<session_id>', methods=['GET'])
-def get_time_info(session_id):
-    """Get time info data for a session."""
-    try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        
-        # Convert session_id to UUID format if needed
-        try:
-            uuid.UUID(session_id)
-            database_session_id = session_id
-        except (ValueError, TypeError):
-            database_session_id = create_or_get_session_uuid(session_id)
-            if not database_session_id:
-                return jsonify({'success': False, 'error': 'Invalid session ID'}), 400
-        
-        # Get time_info from database
-        response = supabase.table('time_info').select('*').eq('session_id', database_session_id).execute()
 
-        if response.data and len(response.data) > 0:
-            return jsonify({
-                'success': True,
-                'data': response.data[0]
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'data': None,
-                'message': 'No time info found for this session'
-            }), 404
-            
+# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
+# @bp.route('/get-zeitschritte/<session_id>', methods=['GET'])
+# def get_zeitschritte(session_id):
+#     ... 40 lines of business logic moved to session_manager.get_zeitschritte_data()
+
+@bp.route('/get-time-info/<session_id>', methods=['GET'])
+def get_time_info_endpoint(session_id):
+    """
+    Refactored: Business logic moved to session_manager.get_time_info_data()
+    
+    Get time info data for a session.
+    """
+    try:
+        time_info = get_time_info_data(session_id)
+        return jsonify({
+            'success': True,
+            'data': time_info
+        })
+        
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'data': None,
+            'message': str(e)
+        }), 404
     except Exception as e:
         logger.error(f"Error getting time info for {session_id}: {str(e)}")
         return jsonify({
@@ -1793,38 +1628,31 @@ def get_time_info(session_id):
             'error': str(e)
         }), 500
 
+
+# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
+# @bp.route('/get-time-info/<session_id>', methods=['GET'])
+# def get_time_info(session_id):
+#     ... 37 lines of business logic moved to session_manager.get_time_info_data()
+
 # CSV Files Management Endpoints
 
 @bp.route('/csv-files/<session_id>', methods=['GET'])
-def get_csv_files(session_id):
-    """Get all CSV files for a session."""
+def get_csv_files_endpoint(session_id):
+    """
+    Refactored: Business logic moved to session_manager.get_csv_files_for_session()
+    
+    Get all CSV files for a session.
+    """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        
-        # Convert session_id to UUID format if needed
-        try:
-            uuid.UUID(session_id)
-            database_session_id = session_id
-        except (ValueError, TypeError):
-            database_session_id = create_or_get_session_uuid(session_id)
-            if not database_session_id:
-                return jsonify({'success': False, 'error': 'Invalid session ID'}), 400
-        
         # Get file type filter from query params
         file_type = request.args.get('type', None)  # 'input' or 'output'
         
-        # Build query
-        query = supabase.table('files').select('*').eq('session_id', database_session_id)
-        if file_type:
-            query = query.eq('type', file_type)
+        files = get_csv_files_for_session(session_id, file_type)
         
-        response = query.execute()
-        
-        if response.data:
+        if files:
             return jsonify({
                 'success': True,
-                'data': response.data
+                'data': files
             })
         else:
             return jsonify({
@@ -1832,13 +1660,21 @@ def get_csv_files(session_id):
                 'data': [],
                 'message': f'No CSV files found for session {session_id}'
             })
-            
+        
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error getting CSV files for session {session_id}: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
+
+
+# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
+# @bp.route('/csv-files/<session_id>', methods=['GET'])
+# def get_csv_files(session_id):
+#     ... 44 lines of business logic moved to session_manager.get_csv_files_for_session()
 
 @bp.route('/csv-files', methods=['POST'])
 @require_auth
@@ -2863,22 +2699,17 @@ def train_models(session_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @bp.route('/delete-all-sessions', methods=['POST'])
-def delete_all_sessions():
+def delete_all_sessions_endpoint():
     """
+    Refactored: Business logic moved to session_manager.delete_all_sessions()
+    
     Delete ALL sessions and associated data from Supabase database and local storage.
     ⚠️ WARNING: This will permanently delete all data! Use with extreme caution.
     """
     try:
-        from utils.database import get_supabase_client
-        import os
-        import shutil
-        
-        logger.warning("🚨 DELETE ALL SESSIONS operation initiated!")
-        
         # Get request data for confirmation (handle both JSON and form data)
         data = {}
         try:
-            # Try JSON first
             if request.is_json:
                 data = request.get_json() or {}
             elif request.content_type and 'application/json' in request.content_type:
@@ -2886,14 +2717,11 @@ def delete_all_sessions():
             elif hasattr(request, 'json') and request.json:
                 data = request.json
             else:
-                # Try form data as fallback
                 data = request.form.to_dict()
-                # Convert string values to proper types
                 if 'confirm_delete_all' in data:
                     data['confirm_delete_all'] = data['confirm_delete_all'].lower() in ['true', '1', 'yes']
         except Exception as parse_error:
             logger.warning(f"Could not parse request data: {str(parse_error)}")
-            # Last resort - check raw data
             try:
                 import json
                 raw_data = request.get_data(as_text=True)
@@ -2901,177 +2729,31 @@ def delete_all_sessions():
                     data = json.loads(raw_data)
             except:
                 data = {}
-        
+
         confirmation = data.get('confirm_delete_all', False)
         logger.info(f"Parsed confirmation: {confirmation} from data: {data}")
-        
-        # Require explicit confirmation
-        if not confirmation:
-            return jsonify({
-                'success': False,
-                'error': 'Confirmation required',
-                'message': 'To delete all sessions, send {"confirm_delete_all": true} in request body'
-            }), 400
-        
-        # Get Supabase client
-        supabase = get_supabase_client()
-        if not supabase:
-            return jsonify({
-                'success': False,
-                'error': 'Database connection not available'
-            }), 500
-            
-        # Count current data before deletion
-        initial_counts = {}
-        database_errors = []
-        
-        try:
-            # Get initial counts
-            tables_to_check = [
-                'training_results',
-                'training_visualizations', 
-                'files',
-                'zeitschritte',
-                'time_info',
-                'session_mappings',
-                'sessions'
-            ]
-            
-            for table in tables_to_check:
-                try:
-                    count_response = supabase.table(table).select('id', count='exact').execute()
-                    initial_counts[table] = count_response.count
-                    logger.info(f"Found {count_response.count} records in {table}")
-                except Exception as e:
-                    logger.warning(f"Could not count records in {table}: {str(e)}")
-                    initial_counts[table] = 'unknown'
-            
-        except Exception as e:
-            logger.error(f"Error getting initial counts: {str(e)}")
-        
-        # 1. Delete all CSV files from Supabase Storage
-        storage_deleted = {'csv-files': 0, 'aus-csv-files': 0}
-        
-        try:
-            # Get all files to delete from storage
-            files_response = supabase.table('files').select('storage_path, type').execute()
-            
-            for file_data in files_response.data:
-                storage_path = file_data.get('storage_path')
-                file_type = file_data.get('type', 'input')
-                
-                if storage_path:
-                    try:
-                        bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
-                        supabase.storage.from_(bucket_name).remove([storage_path])
-                        storage_deleted[bucket_name] += 1
-                        logger.info(f"Deleted from storage: {bucket_name}/{storage_path}")
-                    except Exception as storage_error:
-                        logger.warning(f"Could not delete from storage {storage_path}: {str(storage_error)}")
-                        database_errors.append(f"Storage: {storage_path} - {str(storage_error)}")
-                        
-        except Exception as e:
-            logger.error(f"Error deleting from storage: {str(e)}")
-            database_errors.append(f"Storage deletion error: {str(e)}")
-        
-        # 2. Delete from database tables (order matters due to foreign keys)
-        tables_to_delete = [
-            'training_results',      # Results and visualizations first
-            'training_visualizations',
-            'evaluation_tables',     # May not exist
-            'files',                 # File metadata
-            'zeitschritte',          # Time step data
-            'time_info',             # Time configuration
-            'session_mappings',      # Session mapping
-            'sessions'               # Session records last
-        ]
-        
-        deleted_counts = {}
-        
-        for table in tables_to_delete:
-            try:
-                # Delete all records from table
-                response = supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-                deleted_count = len(response.data) if response.data else 0
-                deleted_counts[table] = deleted_count
-                
-                if deleted_count > 0:
-                    logger.info(f"✅ Deleted {deleted_count} records from {table}")
-                else:
-                    logger.info(f"ℹ️  No records to delete from {table}")
-                    
-            except Exception as table_error:
-                logger.error(f"Error deleting from {table}: {str(table_error)}")
-                database_errors.append(f"Table {table}: {str(table_error)}")
-                deleted_counts[table] = 'error'
-        
-        # 3. Delete all local session directories
-        local_deleted = {'directories': 0, 'files': 0}
-        local_errors = []
-        
-        try:
-            upload_base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'api', 'routes', 'uploads', 'file_uploads')
-            
-            if os.path.exists(upload_base):
-                # Get all session directories
-                for item in os.listdir(upload_base):
-                    item_path = os.path.join(upload_base, item)
-                    
-                    # Only delete directories that look like session directories
-                    if os.path.isdir(item_path) and item.startswith('session_'):
-                        try:
-                            # Count files before deletion
-                            file_count = sum([len(files) for r, d, files in os.walk(item_path)])
-                            local_deleted['files'] += file_count
-                            
-                            # Delete directory and all contents
-                            shutil.rmtree(item_path)
-                            local_deleted['directories'] += 1
-                            logger.info(f"🗂️  Deleted local directory: {item_path} ({file_count} files)")
-                            
-                        except Exception as dir_error:
-                            logger.error(f"Error deleting directory {item_path}: {str(dir_error)}")
-                            local_errors.append(f"Directory {item}: {str(dir_error)}")
-            else:
-                logger.info("📁 Local upload directory does not exist")
-                
-        except Exception as e:
-            logger.error(f"Error during local cleanup: {str(e)}")
-            local_errors.append(f"Local cleanup error: {str(e)}")
-        
-        # Prepare response
-        all_errors = database_errors + local_errors
-        
-        # Calculate totals
-        total_database_records = sum([count for count in deleted_counts.values() if isinstance(count, int)])
-        total_storage_files = sum(storage_deleted.values())
-        
+
+        # Call service layer
+        result = delete_all_sessions(confirm=confirmation)
+
         response_data = {
             'success': True,
-            'message': 'All sessions deletion completed',
-            'summary': {
-                'database_records_deleted': total_database_records,
-                'storage_files_deleted': total_storage_files, 
-                'local_directories_deleted': local_deleted['directories'],
-                'local_files_deleted': local_deleted['files']
-            },
-            'details': {
-                'initial_counts': initial_counts,
-                'deleted_counts': deleted_counts,
-                'storage_deleted': storage_deleted,
-                'local_deleted': local_deleted
-            }
+            'message': result['message'],
+            'summary': result['summary'],
+            'details': result['details']
         }
-        
-        if all_errors:
-            response_data['warnings'] = all_errors
-            response_data['message'] += ' (with some warnings)'
-            logger.warning(f"Completed with {len(all_errors)} warnings")
-        else:
-            logger.info("✅ All sessions deleted successfully without errors")
-        
+
+        if result.get('warnings'):
+            response_data['warnings'] = result['warnings']
+
         return jsonify(response_data)
-        
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'To delete all sessions, send {"confirm_delete_all": true} in request body'
+        }), 400
     except Exception as e:
         logger.error(f"Critical error during delete all sessions: {str(e)}")
         return jsonify({
@@ -3079,6 +2761,12 @@ def delete_all_sessions():
             'error': str(e),
             'message': 'Critical error occurred during deletion operation'
         }), 500
+
+
+# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
+# @bp.route('/delete-all-sessions', methods=['POST'])
+# def delete_all_sessions():
+#     ... 217 lines of business logic moved to session_manager.delete_all_sessions()
 
 
 # ============================================================================
@@ -3842,10 +3530,12 @@ def download_model_h5(session_id):
 
 
 @bp.route('/session-name-change', methods=['POST'])
-def change_session_name():
+def change_session_name_endpoint():
     """
+    Refactored: Business logic moved to session_manager.update_session_name()
+    
     Update session name in the database.
-
+    
     Request body:
     {
         "sessionId": "...",
@@ -3853,8 +3543,6 @@ def change_session_name():
     }
     """
     try:
-        from utils.database import update_session_name, ValidationError, ConfigurationError, SessionNotFoundError, DatabaseError
-
         # Get request data
         data = request.get_json()
         if not data:
@@ -3863,54 +3551,26 @@ def change_session_name():
         session_id = data.get('sessionId')
         session_name = data.get('sessionName')
 
-        # Validate inputs
-        if not session_id:
-            return create_error_response('sessionId is required', 400)
+        # Call service layer
+        result = update_session_name(session_id, session_name)
 
-        if not session_name:
-            return create_error_response('sessionName is required', 400)
+        return create_success_response(
+            data={
+                'sessionId': result['session_id'],
+                'sessionName': result['session_name']
+            },
+            message=result['message']
+        )
 
-        if not isinstance(session_name, str):
-            return create_error_response('sessionName must be a string', 400)
-
-        # Trim and validate session name
-        session_name = session_name.strip()
-        if len(session_name) == 0:
-            return create_error_response('sessionName cannot be empty', 400)
-
-        if len(session_name) > 255:
-            return create_error_response('sessionName too long (max 255 characters)', 400)
-
-        logger.info(f"Updating session name for {session_id} to: {session_name}")
-
-        # Update session name in database
-        try:
-            success = update_session_name(session_id, session_name)
-
-            if success:
-                return create_success_response(
-                    data={
-                        'sessionId': session_id,
-                        'sessionName': session_name
-                    },
-                    message='Session name updated successfully'
-                )
-            else:
-                return create_error_response('Failed to update session name', 500)
-
-        except ValidationError as e:
-            logger.warning(f"Validation error: {str(e)}")
-            return create_error_response(str(e), 400)
-        except SessionNotFoundError as e:
-            logger.warning(f"Session not found: {str(e)}")
-            return create_error_response(str(e), 404)
-        except ConfigurationError as e:
-            logger.error(f"Configuration error: {str(e)}")
-            return create_error_response('Database connection not available', 500)
-        except DatabaseError as e:
-            logger.error(f"Database error: {str(e)}")
-            return create_error_response(f'Database error: {str(e)}', 500)
-
+    except ValueError as e:
+        logger.warning(f"Validation error: {str(e)}")
+        return create_error_response(str(e), 400)
     except Exception as e:
         logger.error(f"Error changing session name: {str(e)}")
         return create_error_response(f'Internal server error: {str(e)}', 500)
+
+
+# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
+# @bp.route('/session-name-change', methods=['POST'])
+# def change_session_name():
+#     ... 73 lines of business logic moved to session_manager.update_session_name()

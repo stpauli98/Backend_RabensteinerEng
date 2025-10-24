@@ -18,3 +18,7 @@ temp_uploads/
 *.env
 *.env.example
 .DS_Store
+
+# Test sessions
+uploads/file_uploads/session_delete_test_*
+uploads/file_uploads/test_session_*
