@@ -145,33 +145,144 @@ def finalize_session(session_id: str, session_data: Dict) -> Dict:
     }
 
 
-def get_sessions_list(user_id: str = None) -> List[Dict]:
+def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
     """
-    List all available training sessions from Supabase database.
+    List all available training sessions with detailed metadata.
+
+    Queries sessions with file counts, zeitschritte, time_info, and file details.
+    Uses complex SQL JOINs with fallback strategies.
 
     Args:
         user_id: Optional user ID to filter sessions
+        limit: Maximum number of sessions to return (default: 50)
 
     Returns:
-        List of session dictionaries
+        List of session dictionaries with complete metadata
     """
     from utils.database import get_supabase_client
 
     supabase = get_supabase_client()
+    if not supabase:
+        raise Exception('Database connection not available')
 
-    # Query sessions table
-    query = supabase.table('sessions').select('*')
+    # Complex query with JOINs to get all session data
+    sessions_query = """
+    SELECT
+        sm.string_session_id as session_id,
+        s.session_name,
+        s.created_at,
+        s.updated_at,
+        s.finalized,
+        s.file_count,
+        s.n_dat,
+        (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id) as actual_file_count,
+        (SELECT COUNT(*) FROM zeitschritte z WHERE z.session_id = s.id) as zeitschritte_count,
+        (SELECT COUNT(*) FROM time_info ti WHERE ti.session_id = s.id) as time_info_count,
+        (SELECT json_agg(
+            json_build_object(
+                'id', f.id,
+                'type', f.type,
+                'file_name', f.file_name,
+                'bezeichnung', f.bezeichnung
+            )
+        ) FROM files f WHERE f.session_id = s.id) as files_info
+    FROM session_mappings sm
+    JOIN sessions s ON sm.uuid_session_id = s.id
+    ORDER BY s.created_at DESC
+    LIMIT %s
+    """
 
-    # Filter by user if provided
-    if user_id:
-        query = query.eq('user_id', user_id)
+    try:
+        # Try RPC for complex query
+        response = supabase.rpc('execute_sql', {
+            'sql_query': sessions_query,
+            'params': [limit]
+        }).execute()
 
-    # Order by creation date descending
-    query = query.order('created_at', desc=True)
+        if response.data:
+            return _format_sessions_response(response.data)
 
-    response = query.execute()
+    except Exception as e:
+        logger.warning(f"Complex query failed, using fallback: {str(e)}")
 
-    return response.data if response.data else []
+    # Fallback: manual JOIN with multiple queries
+    sessions_response = supabase.table('session_mappings').select(
+        'string_session_id, uuid_session_id, created_at'
+    ).order('created_at', desc=True).limit(limit).execute()
+
+    sessions_data = []
+    for session_mapping in sessions_response.data:
+        session_uuid = session_mapping['uuid_session_id']
+        session_id = session_mapping['string_session_id']
+
+        # Get session details
+        session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
+        session_details = session_response.data[0] if session_response.data else {}
+
+        # Get file details and count
+        files_response = supabase.table('files').select(
+            'id, type, file_name, bezeichnung'
+        ).eq('session_id', session_uuid).execute()
+        files_info = files_response.data if files_response.data else []
+        file_count = len(files_info)
+
+        # Get zeitschritte count
+        zeit_response = supabase.table('zeitschritte').select(
+            'id', count='exact'
+        ).eq('session_id', session_uuid).execute()
+        zeitschritte_count = zeit_response.count or 0
+
+        # Get time_info count
+        time_response = supabase.table('time_info').select(
+            'id', count='exact'
+        ).eq('session_id', session_uuid).execute()
+        time_info_count = time_response.count or 0
+
+        sessions_data.append({
+            'session_id': session_id,
+            'session_name': session_details.get('session_name'),
+            'created_at': session_mapping.get('created_at') or session_details.get('created_at'),
+            'updated_at': session_details.get('updated_at'),
+            'finalized': session_details.get('finalized', False),
+            'file_count': session_details.get('file_count', 0),
+            'n_dat': session_details.get('n_dat', 0),
+            'actual_file_count': file_count,
+            'zeitschritte_count': zeitschritte_count,
+            'time_info_count': time_info_count,
+            'files_info': files_info
+        })
+
+    return _format_sessions_response(sessions_data)
+
+
+def _format_sessions_response(sessions_data: List[Dict]) -> List[Dict]:
+    """
+    Format raw session data for frontend consumption.
+
+    Args:
+        sessions_data: Raw session data from database
+
+    Returns:
+        Formatted session list
+    """
+    sessions = []
+    for session_data in sessions_data:
+        session_info = {
+            'sessionId': session_data['session_id'],
+            'sessionName': session_data.get('session_name'),
+            'createdAt': session_data['created_at'],
+            'lastUpdated': session_data.get('updated_at') or session_data['created_at'],
+            'fileCount': session_data.get('actual_file_count', session_data.get('file_count', 0)),
+            'finalized': session_data.get('finalized', False),
+            'nDat': session_data.get('n_dat'),
+            'zeitschritteCount': session_data.get('zeitschritte_count', 0),
+            'timeInfoCount': session_data.get('time_info_count', 0),
+            'filesInfo': session_data.get('files_info') or []
+        }
+        sessions.append(session_info)
+
+    logger.info(f"Formatted {len(sessions)} sessions for response")
+    return sessions
 
 
 def get_session_info(session_id: str) -> Dict:
@@ -745,6 +856,121 @@ def get_session_status(session_id: str) -> Dict:
         'updated_at': session_data.get('updated_at'),
         'n_dat': session_data.get('n_dat'),
         'training_data': training_data
+    }
+
+
+def get_upload_status(session_id: str) -> Dict:
+    """
+    Get upload progress status for a session.
+
+    Checks:
+    - Session existence in database
+    - Local file directory existence
+    - Upload progress based on files
+
+    Args:
+        session_id: Session identifier (UUID or string ID)
+
+    Returns:
+        dict: {
+            'status': 'error'|'pending'|'processing'|'completed',
+            'progress': int (0-100),
+            'message': str
+        }
+
+    Raises:
+        ValueError: If session not found (404)
+    """
+    from utils.database import get_supabase_client, create_or_get_session_uuid
+    import uuid as uuid_lib
+
+    # Check if provided ID is UUID or string ID
+    try:
+        uuid_lib.UUID(session_id)
+        # It's a UUID, get the string ID for local file access
+        string_session_id = get_string_id_from_uuid(session_id)
+        if not string_session_id:
+            raise ValueError('Session mapping not found for UUID')
+    except (ValueError, TypeError):
+        # It's a string ID, use it directly
+        string_session_id = session_id
+
+    # Check session exists in database
+    supabase = get_supabase_client()
+    if supabase:
+        session_uuid = create_or_get_session_uuid(string_session_id)
+        if not session_uuid:
+            raise ValueError('Session mapping not found')
+
+        # Get session from database
+        session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
+        if not session_response.data or len(session_response.data) == 0:
+            raise ValueError('Session not found in database')
+
+        session_data = session_response.data[0]
+
+        # Check local files exist
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+        if not os.path.exists(upload_dir):
+            # Session exists in DB but no local files yet
+            return {
+                'status': 'pending',
+                'progress': 0,
+                'message': 'Session exists but no files uploaded yet',
+                'finalized': session_data.get('finalized', False)
+            }
+    else:
+        # No Supabase client, check local only
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+        if not os.path.exists(upload_dir):
+            raise ValueError('Session not found')
+
+    # Directory exists, check session metadata
+    upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
+    session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
+
+    if not os.path.exists(session_metadata_path):
+        return {
+            'status': 'pending',
+            'progress': 10,
+            'message': 'Session initialized but no metadata found'
+        }
+
+    with open(session_metadata_path, 'r') as f:
+        session_metadata = json.load(f)
+
+    # Check if finalized
+    if session_metadata.get('finalized', False):
+        return {
+            'status': 'completed',
+            'progress': 100,
+            'message': 'Session completed successfully'
+        }
+
+    # Check upload progress
+    metadata_path = os.path.join(upload_dir, 'metadata.json')
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            chunks_metadata = json.load(f)
+
+        # Calculate progress based on uploaded files
+        total_files = session_metadata.get('sessionInfo', {}).get('totalFiles', 0)
+        if total_files > 0:
+            # Count unique files
+            unique_files = {chunk.get('fileName') for chunk in chunks_metadata if chunk.get('fileName')}
+            progress = (len(unique_files) / total_files) * 90  # 90% for upload, 10% for finalization
+
+            return {
+                'status': 'processing',
+                'progress': int(progress),
+                'message': f'Uploading files: {len(unique_files)}/{total_files}'
+            }
+
+    # No metadata.json, session just initialized
+    return {
+        'status': 'pending',
+        'progress': 5,
+        'message': 'Session initialized, waiting for files'
     }
 
 

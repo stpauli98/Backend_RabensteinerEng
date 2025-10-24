@@ -40,7 +40,7 @@ from services.training.session_manager import (
     delete_all_sessions, update_session_name, save_time_info_data,
     save_zeitschritte_data, get_time_info_data, get_zeitschritte_data,
     get_csv_files_for_session, get_session_status, create_database_session,
-    get_session_uuid
+    get_session_uuid, get_upload_status
 )
 
 # Configure logging
@@ -827,8 +827,12 @@ def save_session_to_database(session_id, n_dat=None, file_count=None):
         return False
 
 @bp.route('/finalize-session', methods=['POST'])
-def finalize_session():
-    """Finalize a session after all files have been uploaded."""
+def finalize_session_endpoint():
+    """
+    Refactored: Business logic moved to session_manager.finalize_session()
+    
+    Finalize a session after all files have been uploaded.
+    """
     try:
         data = request.json
         if not data or 'sessionId' not in data:
@@ -836,201 +840,51 @@ def finalize_session():
             
         session_id = data['sessionId']
         
-        # 1. Update session metadata with finalization info
-        updated_metadata = update_session_metadata(session_id, data)
-        
-        # 2. Verify files and update metadata
-        final_metadata, file_count = verify_session_files(session_id, updated_metadata)
-        
-        # 3. Calculate n_dat (total number of data samples)
-        n_dat = calculate_n_dat_from_session(session_id)
-        final_metadata['n_dat'] = n_dat
-        
-        # Save updated metadata with n_dat
-        save_session_metadata_locally(session_id, final_metadata)
-        
-        # logger.info(f"Session {session_id} finalized with {file_count} files")
-
-        # 4. Save session data to Supabase
-        try:
-            success = save_session_to_database(session_id, n_dat, file_count)
-            if not success:
-                logger.warning(f"Failed to save session {session_id} to database, but continuing")
-        except Exception as e:
-            logger.error(f"Error saving session {session_id} to database: {str(e)}")
-            # Continue even if database save fails - don't block the response
+        # Call service layer
+        result = finalize_session(session_id, data)
         
         return jsonify({
             'success': True,
-            'message': f"Session {session_id} finalized successfully",
-            'sessionId': session_id,
-            'n_dat': n_dat,
-            'file_count': file_count
+            'message': result['message'],
+            'sessionId': result['session_id'],
+            'n_dat': result['n_dat'],
+            'file_count': result['file_count']
         })
         
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error finalizing session: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
+# @bp.route('/finalize-session', methods=['POST'])
+# def finalize_session():
+#     ... 45 lines of business logic moved to session_manager.finalize_session()
+
 @bp.route('/list-sessions', methods=['GET'])
 def list_sessions():
-    """List all available training sessions from Supabase database."""
+    """
+    List all available training sessions from Supabase database.
+    
+    Refactored: Business logic moved to session_manager.get_sessions_list()
+    """
     try:
-        from utils.database import get_supabase_client
-
-        # Get Supabase client
-        supabase = get_supabase_client()
-        if not supabase:
-            return jsonify({
-                'success': False,
-                'error': 'Database connection not available'
-            }), 500
-
-        # Query sessions with related data
-        # Get sessions with file counts and metadata
-        sessions_query = """
-        SELECT
-            sm.string_session_id as session_id,
-            s.session_name,
-            s.created_at,
-            s.updated_at,
-            s.finalized,
-            s.file_count,
-            s.n_dat,
-            (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id) as actual_file_count,
-            (SELECT COUNT(*) FROM zeitschritte z WHERE z.session_id = s.id) as zeitschritte_count,
-            (SELECT COUNT(*) FROM time_info ti WHERE ti.session_id = s.id) as time_info_count,
-            (SELECT json_agg(
-                json_build_object(
-                    'type', f.type,
-                    'file_name', f.file_name,
-                    'bezeichnung', f.bezeichnung
-                )
-            ) FROM files f WHERE f.session_id = s.id) as files_info
-        FROM session_mappings sm
-        JOIN sessions s ON sm.uuid_session_id = s.id
-        ORDER BY s.created_at DESC
-        LIMIT %s
-        """
-
-        # Execute query with limit
-        limit = MAX_SESSIONS_TO_RETURN if 'MAX_SESSIONS_TO_RETURN' in globals() else 50
-
-        try:
-            # Use raw SQL query for complex JOIN
-            response = supabase.rpc('execute_sql', {
-                'sql_query': sessions_query,
-                'params': [limit]
-            }).execute()
-
-            if response.data:
-                sessions_data = response.data
-            else:
-                # Fallback to simpler query if RPC doesn't work
-                sessions_response = supabase.table('session_mappings').select(
-                    'string_session_id, sessions(id, session_name, created_at, updated_at, finalized, file_count, n_dat)'
-                ).execute()
-
-                sessions_data = []
-                for session_mapping in sessions_response.data:
-                    if session_mapping.get('sessions'):
-                        session = session_mapping['sessions']
-                        session_id = session_mapping['string_session_id']
-
-                        # Get file count from files table
-                        files_response = supabase.table('files').select('id, type, file_name, bezeichnung').eq('session_id', session['id']).execute()
-                        file_count = len(files_response.data) if files_response.data else 0
-
-                        # Get zeitschritte count
-                        zeit_response = supabase.table('zeitschritte').select('id', count='exact').eq('session_id', session['id']).execute()
-                        zeitschritte_count = zeit_response.count or 0
-
-                        # Get time_info count
-                        time_response = supabase.table('time_info').select('id', count='exact').eq('session_id', session['id']).execute()
-                        time_info_count = time_response.count or 0
-
-                        sessions_data.append({
-                            'session_id': session_id,
-                            'session_name': session.get('session_name'),
-                            'created_at': session['created_at'],
-                            'updated_at': session['updated_at'],
-                            'finalized': session.get('finalized', False),
-                            'file_count': session.get('file_count', 0),
-                            'n_dat': session.get('n_dat', 0),
-                            'actual_file_count': file_count,
-                            'zeitschritte_count': zeitschritte_count,
-                            'time_info_count': time_info_count,
-                            'files_info': files_response.data if files_response.data else []
-                        })
-
-        except Exception as query_error:
-            logger.warning(f"Complex query failed, using simple approach: {str(query_error)}")
-
-            # Simple fallback query
-            sessions_response = supabase.table('session_mappings').select(
-                'string_session_id, uuid_session_id, created_at'
-            ).order('created_at', desc=True).limit(limit).execute()
-
-            sessions_data = []
-            for session_mapping in sessions_response.data:
-                session_uuid = session_mapping['uuid_session_id']
-                session_id = session_mapping['string_session_id']
-
-                # Get session details
-                session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
-                session_details = session_response.data[0] if session_response.data else {}
-
-                # Get actual counts from database
-                files_response = supabase.table('files').select('id, type, file_name, bezeichnung').eq('session_id', session_uuid).execute()
-                file_count = len(files_response.data) if files_response.data else 0
-
-                zeit_response = supabase.table('zeitschritte').select('id', count='exact').eq('session_id', session_uuid).execute()
-                zeitschritte_count = zeit_response.count or 0
-
-                time_response = supabase.table('time_info').select('id', count='exact').eq('session_id', session_uuid).execute()
-                time_info_count = time_response.count or 0
-
-                sessions_data.append({
-                    'session_id': session_id,
-                    'session_name': session_details.get('session_name'),
-                    'created_at': session_mapping.get('created_at') or session_details.get('created_at'),
-                    'updated_at': session_details.get('updated_at'),
-                    'finalized': session_details.get('finalized', False),
-                    'file_count': session_details.get('file_count', 0),
-                    'n_dat': session_details.get('n_dat', 0),
-                    'actual_file_count': file_count,
-                    'zeitschritte_count': zeitschritte_count,
-                    'time_info_count': time_info_count,
-                    'files_info': files_response.data if files_response.data else []
-                })
-
-        # Format sessions for frontend
-        sessions = []
-        for session_data in sessions_data:
-            session_info = {
-                'sessionId': session_data['session_id'],
-                'sessionName': session_data.get('session_name'),
-                'createdAt': session_data['created_at'],
-                'lastUpdated': session_data['updated_at'] or session_data['created_at'],
-                'fileCount': session_data.get('actual_file_count', session_data.get('file_count', 0)),
-                'finalized': session_data.get('finalized', False),
-                'nDat': session_data.get('n_dat', 0),
-                'zeitschritteCount': session_data.get('zeitschritte_count', 0),
-                'timeInfoCount': session_data.get('time_info_count', 0),
-                'filesInfo': session_data.get('files_info', [])
-            }
-            sessions.append(session_info)
-
-        logger.info(f"Retrieved {len(sessions)} sessions from database")
-
+        # Get limit from query params or use default
+        limit = request.args.get('limit', 50, type=int)
+        
+        # Get sessions from service layer
+        sessions = get_sessions_list(limit=limit)
+        
         return jsonify({
             'success': True,
             'sessions': sessions,
             'total_count': len(sessions)
         })
-
+        
     except Exception as e:
-        logger.error(f"Error listing sessions from database: {str(e)}")
+        logger.error(f"Error listing sessions: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e),
@@ -1038,13 +892,17 @@ def list_sessions():
         }), 500
 
 @bp.route('/session/<session_id>', methods=['GET'])
-def get_session(session_id):
-    """Get detailed information about a specific session from local storage."""
+def get_session_endpoint(session_id):
+    """
+    Refactored: Business logic moved to session_manager.get_session_info()
+    
+    Get detailed information about a specific session from local storage.
+    """
     try:
         if not session_id:
             return jsonify({'success': False, 'error': 'No session ID provided'}), 400
 
-        # Check if the provided ID is a UUID, and if so, get the string ID
+        # Handle UUID to string conversion if needed
         try:
             import uuid
             uuid.UUID(session_id)
@@ -1054,14 +912,10 @@ def get_session(session_id):
         except (ValueError, TypeError):
             string_session_id = session_id
 
-        # Dohvati metapodatke o sesiji
-        session_metadata = get_session_metadata_locally(string_session_id)
+        # Get session info from service layer
+        session_metadata = get_session_info(string_session_id)
         
-        # Koristimo lokalne podatke
-        if not session_metadata:
-            return jsonify({'success': False, 'error': 'Session not found'}), 404
-            
-        # Dohvati informacije o datotekama
+        # Get file information
         upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         files = []
         
@@ -1084,26 +938,38 @@ def get_session(session_id):
             'finalized': session_metadata.get('finalized', False),
             'n_dat': session_metadata.get('n_dat', 0),
             'file_count': len(files),
-            'createdAt': datetime.fromtimestamp(os.path.getctime(upload_dir)).isoformat(),
-            'lastUpdated': datetime.fromtimestamp(os.path.getmtime(upload_dir)).isoformat()
+            'createdAt': datetime.fromtimestamp(os.path.getctime(upload_dir)).isoformat() if os.path.exists(upload_dir) else None,
+            'lastUpdated': datetime.fromtimestamp(os.path.getmtime(upload_dir)).isoformat() if os.path.exists(upload_dir) else None
         }
         
         return jsonify({
             'success': True,
             'session': session_info
         })
+        
+    except FileNotFoundError as e:
+        return jsonify({'success': False, 'error': str(e)}), 404
     except Exception as e:
         logger.error(f"Error getting session {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
+# @bp.route('/session/<session_id>', methods=['GET'])
+# def get_session(session_id):
+#     ... 58 lines of business logic moved to session_manager.get_session_info()
+
 @bp.route('/session/<session_id>/database', methods=['GET'])
-def get_session_from_database(session_id):
-    """Get detailed information about a specific session from Supabase database."""
+def get_session_from_database_endpoint(session_id):
+    """
+    Get detailed information about a specific session from Supabase database.
+    NOTE: This endpoint aggregates data from multiple tables (sessions, files, time_info, zeitschritte)
+    """
     try:
         if not session_id:
             return jsonify({'success': False, 'error': 'No session ID provided'}), 400
 
-        # Check if the provided ID is a UUID, and if so, get the string ID
+        # UUID conversion
         try:
             import uuid
             uuid.UUID(session_id)
@@ -1121,75 +987,53 @@ def get_session_from_database(session_id):
         if not supabase:
             return jsonify({'success': False, 'error': 'Database connection not available'}), 500
 
-        # Get session data from database
+        # Get aggregated data
         session_response = supabase.table('sessions').select('*').eq('id', database_session_id).execute()
-
-        if not session_response.data or len(session_response.data) == 0:
+        if not session_response.data:
             return jsonify({'success': False, 'error': 'Session not found in database'}), 404
 
         session_data = session_response.data[0]
-        
-        # Get files data
         files_response = supabase.table('files').select('*').eq('session_id', database_session_id).execute()
-        files_data = files_response.data if files_response.data else []
-        
-        # Get time info
         time_info_response = supabase.table('time_info').select('*').eq('session_id', database_session_id).execute()
-        time_info_data = time_info_response.data[0] if time_info_response.data else {}
-        
-        # Get zeitschritte
         zeitschritte_response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).execute()
-        zeitschritte_data = zeitschritte_response.data[0] if zeitschritte_response.data else {}
 
-        # Format the response
+        # Format response
         session_info = {
             'sessionId': string_session_id,
             'databaseSessionId': database_session_id,
             'n_dat': session_data.get('n_dat', 0),
             'finalized': session_data.get('finalized', False),
             'file_count': session_data.get('file_count', 0),
-            'files': [
-                {
-                    'id': f['id'],
-                    'fileName': f['file_name'],
-                    'bezeichnung': f['bezeichnung'],
-                    'min': f['min'],
-                    'max': f['max'],
-                    'datenpunkte': f['datenpunkte'],
-                    'type': f['type']
-                } for f in files_data
-            ],
-            'timeInfo': {
-                'jahr': time_info_data.get('jahr', False),
-                'monat': time_info_data.get('monat', False),
-                'woche': time_info_data.get('woche', False),
-                'tag': time_info_data.get('tag', False),
-                'feiertag': time_info_data.get('feiertag', False),
-                'zeitzone': time_info_data.get('zeitzone', 'UTC'),
-                'category_data': time_info_data.get('category_data', {})
-            },
-            'zeitschritte': {
-                'eingabe': zeitschritte_data.get('eingabe', ''),
-                'ausgabe': zeitschritte_data.get('ausgabe', ''),
-                'zeitschrittweite': zeitschritte_data.get('zeitschrittweite', ''),
-                'offset': zeitschritte_data.get('offset', '')
-            },
+            'files': [{'id': f['id'], 'fileName': f['file_name'], 'bezeichnung': f['bezeichnung'], 
+                      'min': f['min'], 'max': f['max'], 'datenpunkte': f['datenpunkte'], 'type': f['type']} 
+                     for f in (files_response.data or [])],
+            'timeInfo': {k: (time_info_response.data[0] if time_info_response.data else {}).get(k, False if k != 'zeitzone' else 'UTC') 
+                        for k in ['jahr', 'monat', 'woche', 'tag', 'feiertag', 'zeitzone', 'category_data']},
+            'zeitschritte': {k: (zeitschritte_response.data[0] if zeitschritte_response.data else {}).get(k, '') 
+                            for k in ['eingabe', 'ausgabe', 'zeitschrittweite', 'offset']},
             'createdAt': session_data.get('created_at'),
             'updatedAt': session_data.get('updated_at')
         }
         
-        return jsonify({
-            'success': True,
-            'session': session_info
-        })
+        return jsonify({'success': True, 'session': session_info})
         
     except Exception as e:
         logger.error(f"Error getting session from database {session_id}: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
+# @bp.route('/session/<session_id>/database', methods=['GET'])
+# def get_session_from_database(session_id):
+#     ... 90 lines - complex aggregation kept in endpoint for now
+
 @bp.route('/session-status/<session_id>', methods=['GET'])
 def session_status(session_id):
-    """Get the status of a session."""
+    """
+    Get the upload status of a session.
+    
+    Refactored: Business logic moved to session_manager.get_upload_status()
+    """
     try:
         if not session_id:
             return jsonify({
@@ -1197,130 +1041,19 @@ def session_status(session_id):
                 'progress': 0,
                 'message': 'Missing session ID'
             }), 400
-            
-        # Check if the provided ID is a UUID, and if so, get the string ID
-        try:
-            import uuid
-            uuid.UUID(session_id)
-            # It's a UUID, get the original string ID for local file access
-            string_session_id = get_string_id_from_uuid(session_id)
-            if not string_session_id:
-                 return jsonify({'status': 'error', 'message': 'Session mapping not found for UUID'}), 404
-        except (ValueError, TypeError):
-            # It's a string ID, use it directly
-            string_session_id = session_id
-
-        # Provjeri postoji li sesija u bazi podataka
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        try:
-            supabase = get_supabase_client()
-            logger.info(f"Checking session status for: {string_session_id}")
-            if supabase:
-                # Provjeri postoji li sesija u bazi
-                session_uuid = create_or_get_session_uuid(string_session_id)
-                logger.info(f"Session UUID: {session_uuid}")
-                if session_uuid:
-                    # Sesija postoji u bazi
-                    session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
-                    logger.info(f"Session response data: {session_response.data}")
-                    if session_response.data and len(session_response.data) > 0:
-                        session_data = session_response.data[0]
-                        # Sesija postoji u bazi, provjeri lokalne fajlove
-                        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
-                        if not os.path.exists(upload_dir):
-                            # Sesija u bazi postoji ali lokalni fajlovi ne postoje
-                            # Dozvoli korisniku da ponovo uploada fajlove
-                            return jsonify({
-                                'status': 'pending',
-                                'progress': 0,
-                                'message': 'Session exists but no files uploaded yet',
-                                'finalized': session_data.get('finalized', False)
-                            })
-                    else:
-                        # Sesija ne postoji u bazi
-                        return jsonify({
-                            'status': 'error',
-                            'progress': 0,
-                            'message': 'Session not found in database'
-                        }), 404
-                else:
-                    # Ne može se pronaći UUID mapping
-                    return jsonify({
-                        'status': 'error',
-                        'progress': 0,
-                        'message': 'Session mapping not found'
-                    }), 404
-            else:
-                # Nema Supabase klijenta, provjeri samo lokalno
-                upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
-                if not os.path.exists(upload_dir):
-                    return jsonify({
-                        'status': 'error',
-                        'progress': 0,
-                        'message': 'Session not found'
-                    }), 404
-        except Exception as db_error:
-            logger.warning(f"Database check failed: {str(db_error)}, falling back to local check")
-            # Fallback na lokalnu provjeru
-            upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
-            if not os.path.exists(upload_dir):
-                return jsonify({
-                    'status': 'error',
-                    'progress': 0,
-                    'message': 'Session not found'
-                }), 404
-
-        # Direktorij postoji, nastavi sa provjerom
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
-            
-        # Učitaj metapodatke o sesiji
-        session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
-        if not os.path.exists(session_metadata_path):
-            return jsonify({
-                'status': 'pending',
-                'progress': 10,
-                'message': 'Session initialized but no metadata found'
-            })
-            
-        with open(session_metadata_path, 'r') as f:
-            session_metadata = json.load(f)
-            
-        # Provjeri je li sesija finalizirana
-        if session_metadata.get('finalized', False):
-            return jsonify({
-                'status': 'completed',
-                'progress': 100,
-                'message': 'Session completed successfully'
-            })
-            
-        # Ako nije finalizirana, provjeri koliko je datoteka uploadano
-        metadata_path = os.path.join(upload_dir, 'metadata.json')
-        if os.path.exists(metadata_path):
-            with open(metadata_path, 'r') as f:
-                chunks_metadata = json.load(f)
-                
-            # Izračunaj progress na temelju broja uploadanih chunkova
-            total_files = session_metadata.get('sessionInfo', {}).get('totalFiles', 0)
-            if total_files > 0:
-                # Pronađi jedinstvene datoteke
-                unique_files = set()
-                for chunk in chunks_metadata:
-                    unique_files.add(chunk.get('fileName'))
-                    
-                progress = (len(unique_files) / total_files) * 90  # 90% za upload, 10% za finalizaciju
-                
-                return jsonify({
-                    'status': 'processing',
-                    'progress': int(progress),
-                    'message': f'Uploading files: {len(unique_files)}/{total_files}'
-                })
         
-        # Ako nema metadata.json, sesija je tek inicijalizirana
+        # Get upload status from service layer
+        status_info = get_upload_status(session_id)
+        
+        return jsonify(status_info)
+        
+    except ValueError as e:
+        # Session not found
         return jsonify({
-            'status': 'pending',
-            'progress': 5,
-            'message': 'Session initialized, waiting for files'
-        })
+            'status': 'error',
+            'progress': 0,
+            'message': str(e)
+        }), 404
         
     except Exception as e:
         logger.error(f"Error getting session status for {session_id}: {str(e)}")
