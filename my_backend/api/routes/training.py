@@ -24,6 +24,9 @@ from utils.usage_tracking import increment_processing_count, increment_training_
 from utils.validation import validate_session_id, create_error_response, create_success_response
 from utils.metadata_utils import extract_file_metadata_fields, extract_file_metadata
 
+# Refactoring Phase 1: Import visualization service
+from services.training.visualization import Visualizer
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -2126,62 +2129,23 @@ def get_training_results_details(session_id):
 def get_plot_variables(session_id):
     """
     Get available input and output variables for plotting
+    Refactored: business logic moved to Visualizer.get_available_variables()
     """
     try:
-        from utils.training_storage import fetch_training_results_with_storage
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-
-        # Get training results from Storage or legacy JSONB
-        results = fetch_training_results_with_storage(session_id)
-
-        input_variables = []
-        output_variables = []
-
-        if results:
-
-            # Try different places where variable names might be stored
-            input_variables = (
-                results.get('input_features') or
-                results.get('input_columns') or
-                results.get('data_info', {}).get('input_columns', [])
-            )
-            output_variables = (
-                results.get('output_features') or
-                results.get('output_columns') or
-                results.get('data_info', {}).get('output_columns', [])
-            )
-
-        # If no variables found, try to get from files
-        if not input_variables and not output_variables:
-            supabase = get_supabase_client()
-            uuid_session_id = create_or_get_session_uuid(session_id)
-            file_response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
-
-            if file_response.data:
-                for file_data in file_response.data:
-                    file_type = file_data.get('file_type', '')
-                    columns = file_data.get('columns', [])
-
-                    if file_type == 'input' and not input_variables:
-                        input_variables = [col for col in columns if col.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
-                    elif file_type == 'output' and not output_variables:
-                        output_variables = [col for col in columns if col.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
-
-        # Default fallback
-        if not input_variables:
-            input_variables = ['Temperature', 'Load']
-        if not output_variables:
-            output_variables = ['Predicted_Load']
+        # Call service layer
+        visualizer = Visualizer()
+        variables = visualizer.get_available_variables(session_id)
 
         return jsonify({
             'success': True,
             'session_id': session_id,
-            'input_variables': input_variables if isinstance(input_variables, list) else [],
-            'output_variables': output_variables if isinstance(output_variables, list) else []
+            'input_variables': variables['input_variables'],
+            'output_variables': variables['output_variables']
         })
 
     except Exception as e:
         logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
+        # Return fallback response - match original format
         return jsonify({
             'success': True,
             'session_id': session_id,
@@ -2190,59 +2154,55 @@ def get_plot_variables(session_id):
         })
 
 
+# PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
+# @bp.route('/plot-variables/<session_id>', methods=['GET'])
+# def get_plot_variables(session_id):
+#     ... 60 lines of business logic moved to Visualizer.get_available_variables()
+
+
 @bp.route('/visualizations/<session_id>', methods=['GET'])
 def get_training_visualizations(session_id):
     """
     Get training visualizations (violin plots) for a session
+    Refactored: business logic moved to Visualizer.get_session_visualizations()
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
+        # Call service layer
+        visualizer = Visualizer()
+        viz_data = visualizer.get_session_visualizations(session_id)
 
-        # Get visualizations from database
-        response = supabase.table('training_visualizations').select('*').eq('session_id', uuid_session_id).execute()
-
-        if not response.data or len(response.data) == 0:
+        # Check if no visualizations found
+        if not viz_data.get('plots'):
             return jsonify({
                 'session_id': session_id,
                 'plots': {},
-                'message': 'No visualizations found for this session'
+                'message': viz_data.get('message', 'No visualizations found for this session')
             }), 404
-
-        # Organize plots by plot_name
-        plots = {}
-        metadata = {}
-        created_at = None
-
-        for viz in response.data:
-            plot_name = viz.get('plot_name', 'unknown')
-            plots[plot_name] = viz.get('image_data', '')
-
-            if not metadata:
-                metadata = viz.get('plot_metadata', {})
-                created_at = viz.get('created_at')
 
         return jsonify({
             'session_id': session_id,
-            'plots': plots,
-            'metadata': metadata,
-            'created_at': created_at,
-            'message': 'Visualizations retrieved successfully'
+            'plots': viz_data['plots'],
+            'metadata': viz_data['metadata'],
+            'created_at': viz_data['created_at'],
+            'message': viz_data['message']
         })
 
     except Exception as e:
         logger.error(f"Error retrieving visualizations for {session_id}: {str(e)}")
-        return jsonify({
-            'error': 'Failed to retrieve training visualizations',
-            'message': str(e)
-        }), 500
+        return create_error_response(f'Failed to retrieve training visualizations: {str(e)}', 500)
+
+
+# PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
+# @bp.route('/visualizations/<session_id>', methods=['GET'])
+# def get_training_visualizations(session_id):
+#     ... 48 lines of business logic moved to Visualizer.get_session_visualizations()
 
 
 @bp.route('/generate-plot', methods=['POST'])
 def generate_plot():
     """
-    Generate plot based on user selections matching original training_original.py
+    Generate plot based on user selections
+    Refactored: business logic moved to Visualizer.generate_custom_plot()
 
     Expected request body:
     {
@@ -2263,304 +2223,51 @@ def generate_plot():
         session_id = data.get('session_id')
 
         if not session_id:
-            return jsonify({
-                'success': False,
-                'error': 'Session ID is required'
-            }), 400
+            return create_error_response('Session ID is required', 400)
 
-        # Get plot settings
+        # Parse request data
         plot_settings = data.get('plot_settings', {})
-        num_sbpl = plot_settings.get('num_sbpl', 17)
-        x_sbpl = plot_settings.get('x_sbpl', 'UTC')
-        y_sbpl_fmt = plot_settings.get('y_sbpl_fmt', 'original')
-        y_sbpl_set = plot_settings.get('y_sbpl_set', 'separate Achsen')
-
-        # Get plot selections
         df_plot_in = data.get('df_plot_in', {})
         df_plot_out = data.get('df_plot_out', {})
         df_plot_fcst = data.get('df_plot_fcst', {})
+        model_id = data.get('model_id')  # Optional
 
-        # Optional: specific model_id to use for plot generation
-        model_id = data.get('model_id')  # If not provided, uses most recent model
+        # Call service layer
+        visualizer = Visualizer()
+        result = visualizer.generate_custom_plot(
+            session_id=session_id,
+            plot_settings=plot_settings,
+            df_plot_in=df_plot_in,
+            df_plot_out=df_plot_out,
+            df_plot_fcst=df_plot_fcst,
+            model_id=model_id
+        )
 
-        logger.info(f"Generate plot for session {session_id}" + (f" with model_id {model_id}" if model_id else " (using most recent model)"))
-        logger.info(f"Plot settings: num_sbpl={num_sbpl}, x_sbpl={x_sbpl}, y_sbpl_fmt={y_sbpl_fmt}, y_sbpl_set={y_sbpl_set}")
-        logger.info(f"Input variables selected: {[k for k, v in df_plot_in.items() if v]}")
-        logger.info(f"Output variables selected: {[k for k, v in df_plot_out.items() if v]}")
-        logger.info(f"Forecast variables selected: {[k for k, v in df_plot_fcst.items() if v]}")
+        # Return flat structure to match original format
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'plot_data': result['plot_data'],
+            'message': result['message']
+        })
 
-        # Load model data from database
-        try:
-            from utils.training_storage import fetch_training_results_with_storage
-            import numpy as np
-            import pandas as pd
-
-            # Fetch training results from Storage or legacy JSONB
-            results = fetch_training_results_with_storage(session_id, model_id=model_id)
-
-            if not results:
-                return jsonify({
-                    'success': False,
-                    'error': 'Model not trained yet. Please train the model first.'
-                }), 400
-
-            # Extract model data from results
-            # (results is already the dictionary)
-
-            # Get model data from results and deserialize if needed
-            model_data = results.get('trained_model')
-
-            # Deserialize model if it's in serialized format
-            trained_model = None
-            if model_data:
-                # Handle list format (model_data is a list with one dict element)
-                if isinstance(model_data, list) and len(model_data) > 0:
-                    model_data = model_data[0]
-
-                if isinstance(model_data, dict) and model_data.get('_model_type') == 'serialized_model':
-                    try:
-                        import pickle
-                        import base64
-                        # Decode base64 and deserialize model
-                        model_bytes = base64.b64decode(model_data['_model_data'])
-                        trained_model = pickle.loads(model_bytes)
-                        logger.info(f"Successfully deserialized model of type {model_data.get('_model_class')}")
-                    except Exception as e:
-                        logger.error(f"Failed to deserialize model: {e}")
-                        trained_model = None
-                else:
-                    # Legacy format - model stored as string or other format
-                    trained_model = model_data
-
-            test_data = results.get('test_data', {})
-            metadata = results.get('metadata', {})
-            scalers = results.get('scalers', {})
-
-            # Check if we have test data - support both naming conventions
-            has_test_data = False
-            if test_data:
-                # Check for both possible naming conventions
-                if 'X' in test_data and 'y' in test_data:
-                    # New format: X, y
-                    tst_x = np.array(test_data.get('X'))
-                    tst_y = np.array(test_data.get('y'))
-                    has_test_data = True
-                elif 'X_test' in test_data and 'y_test' in test_data:
-                    # Old format: X_test, y_test
-                    tst_x = np.array(test_data.get('X_test'))
-                    tst_y = np.array(test_data.get('y_test'))
-                    has_test_data = True
-
-            if not has_test_data:
-                logger.error(f"No test data found in database for session {session_id}")
-                return jsonify({
-                    'success': False,
-                    'error': 'No training data available for this session',
-                    'message': 'Please train a model first before generating plots'
-                }), 400
-            else:
-
-                # Generate predictions using trained model if available
-                if trained_model and hasattr(trained_model, 'predict'):
-                    # Get model type to handle SVR models differently
-                    model_type = results.get('model_type', 'Unknown')
-
-                    # SVR models need special handling (2D input instead of 3D)
-                    if model_type in ['SVR_dir', 'SVR_MIMO', 'LIN']:
-                        logger.info(f"Using SVR/LIN prediction logic for model type: {model_type}")
-                        # For SVR models, we need to predict on 2D data
-                        n_samples = tst_x.shape[0]
-                        n_outputs = tst_y.shape[-1] if len(tst_y.shape) > 2 else 1
-
-                        # Initialize predictions array
-                        tst_fcst = []
-
-                        # Predict for each sample
-                        for i in range(n_samples):
-                            # Squeeze to 2D (timesteps, features)
-                            inp = np.squeeze(tst_x[i:i+1], axis=0)
-
-                            # trained_model is a list of models for SVR_dir/SVR_MIMO
-                            if isinstance(trained_model, list):
-                                pred = []
-                                for model_i in trained_model:
-                                    pred.append(model_i.predict(inp))
-                                out = np.array(pred).T  # Transpose to (timesteps, outputs)
-                            else:
-                                # For LIN or single model
-                                out = trained_model.predict(inp)
-
-                            # Expand dims back to 3D
-                            out = np.expand_dims(out, axis=0)
-                            tst_fcst.append(out[0])
-
-                        tst_fcst = np.array(tst_fcst)
-                    else:
-                        # For Dense, CNN, LSTM, AR LSTM - direct prediction
-                        logger.info(f"Using standard prediction logic for model type: {model_type}")
-                        tst_fcst = trained_model.predict(tst_x)
-
-                        # CNN models need to squeeze the last dimension
-                        if model_type == 'CNN':
-                            logger.info(f"Squeezing last dimension for CNN model, shape before: {tst_fcst.shape}")
-                            tst_fcst = np.squeeze(tst_fcst, axis=-1)
-                            logger.info(f"Shape after squeeze: {tst_fcst.shape}")
-                else:
-                    # Model is not available as object, cannot generate predictions
-                    logger.error(f"Model is not available as an object for session {session_id} (stored as: {type(trained_model).__name__})")
-                    return jsonify({
-                        'success': False,
-                        'error': 'Model not available for predictions',
-                        'message': 'The trained model cannot be used for predictions. Please retrain the model.'
-                    }), 400
-
-            # Import matplotlib for plotting
-            import matplotlib
-            matplotlib.use('Agg')  # Use non-interactive backend
-            import matplotlib.pyplot as plt
-            import seaborn as sns
-            from datetime import datetime
-            import io
-            import base64
-
-            # Create figure based on settings
-            num_sbpl = min(num_sbpl, len(tst_x))  # Limit to available test samples
-            num_sbpl_x = int(np.ceil(np.sqrt(num_sbpl)))
-            num_sbpl_y = int(np.ceil(num_sbpl / num_sbpl_x))
-
-            fig, axs = plt.subplots(num_sbpl_y, num_sbpl_x,
-                                   figsize=(20, 13),
-                                   layout='constrained')
-
-            # Flatten axs array for easier indexing
-            if num_sbpl == 1:
-                axs = [axs]
-            else:
-                axs = axs.flatten()
-
-            # Color palette - make sure we have enough colors
-            # Count total number of variables to plot
-            total_vars = len([k for k, v in df_plot_in.items() if v]) + \
-                        len([k for k, v in df_plot_out.items() if v]) + \
-                        len([k for k, v in df_plot_fcst.items() if v])
-            palette = sns.color_palette("tab20", max(20, total_vars))
-
-            # Plot each subplot
-            for i_sbpl in range(num_sbpl):
-                ax = axs[i_sbpl] if num_sbpl > 1 else axs[0]
-
-                # Create x-axis values
-                if x_sbpl == 'UTC':
-                    # Create UTC timestamps
-                    x_values = pd.date_range(start='2024-01-01',
-                                            periods=tst_x.shape[1],
-                                            freq='1h')
-                else:
-                    # Use timestep indices
-                    x_values = np.arange(tst_x.shape[1])
-
-                # Plot selected input variables
-                color_idx = 0
-                for var_name, selected in df_plot_in.items():
-                    if selected and color_idx < tst_x.shape[-1]:
-                        if y_sbpl_fmt == 'original':
-                            y_values = tst_x[i_sbpl, :, color_idx]
-                        else:
-                            y_values = tst_x[i_sbpl, :, color_idx]  # Already scaled
-
-                        ax.plot(x_values, y_values,
-                               label=f'IN: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='o', markersize=2,
-                               linewidth=1)
-                        color_idx += 1
-
-                # Plot selected output variables (ground truth)
-                for i_out, (var_name, selected) in enumerate(df_plot_out.items()):
-                    if selected and i_out < tst_y.shape[-1]:
-                        if y_sbpl_fmt == 'original':
-                            y_values = tst_y[i_sbpl, :, i_out]
-                        else:
-                            y_values = tst_y[i_sbpl, :, i_out]  # Already scaled
-
-                        ax.plot(x_values[:len(y_values)], y_values,
-                               label=f'OUT: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='s', markersize=2,
-                               linewidth=1)
-                        color_idx += 1
-
-                # Plot selected forecast variables (predictions)
-                for i_fcst, (var_name, selected) in enumerate(df_plot_fcst.items()):
-                    if selected and i_fcst < tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1:
-                        if len(tst_fcst.shape) == 3:
-                            y_values = tst_fcst[i_sbpl, :, i_fcst]
-                        elif len(tst_fcst.shape) == 2:
-                            y_values = tst_fcst[i_sbpl, :]
-                        else:
-                            y_values = tst_fcst
-
-                        ax.plot(x_values[:len(y_values)], y_values,
-                               label=f'FCST: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='^', markersize=2,
-                               linewidth=1, linestyle='--')
-                        color_idx += 1
-
-                # Configure subplot
-                ax.set_title(f'Sample {i_sbpl + 1}', fontsize=10)
-                ax.legend(loc='upper left', fontsize=8)
-                ax.grid(True, alpha=0.3)
-
-                if x_sbpl == 'UTC':
-                    ax.set_xlabel('Time (UTC)', fontsize=9)
-                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
-                else:
-                    ax.set_xlabel('Timestep', fontsize=9)
-
-                ax.set_ylabel('Value', fontsize=9)
-
-                # Handle y-axis configuration
-                if y_sbpl_set == 'separate Achsen':
-                    # Each line gets its own y-axis scale
-                    pass  # Already handled by matplotlib auto-scaling
-
-            # Remove empty subplots
-            for i in range(num_sbpl, len(axs)):
-                fig.delaxes(axs[i])
-
-            # Save plot to base64 string
-            buffer = io.BytesIO()
-            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-            buffer.seek(0)
-            plot_data = base64.b64encode(buffer.getvalue()).decode()
-            plt.close()
-
-            logger.info(f"Plot generated successfully for session {session_id}")
-
-            return jsonify({
-                'success': True,
-                'session_id': session_id,
-                'plot_data': f'data:image/png;base64,{plot_data}',
-                'message': 'Plot generated successfully'
-            })
-
-        except Exception as e:
-            logger.error(f"Error generating plot: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return jsonify({
-                'success': False,
-                'error': f'Failed to generate plot: {str(e)}'
-            }), 500
-
-    except Exception as e:
-        logger.error(f"Error in generate_plot endpoint: {str(e)}")
+    except ValueError as e:
+        # Validation errors (model not trained, no data, etc.)
         return jsonify({
             'success': False,
-            'error': 'Failed to process plot request',
-            'message': str(e)
-        }), 500
+            'error': str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"Error in generate_plot endpoint: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return create_error_response(f'Failed to generate plot: {str(e)}', 500)
+
+
+# PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
+# @bp.route('/generate-plot', methods=['POST'])
+# def generate_plot():
+#     ... 320 lines of business logic moved to Visualizer.generate_custom_plot()
 
 
 @bp.route('/status/<session_id>', methods=['GET'])
