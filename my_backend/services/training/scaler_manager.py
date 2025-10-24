@@ -295,3 +295,253 @@ def process_and_scale_data(i_array_3D: np.ndarray, o_array_3D: np.ndarray,
         'utc_ref_log': utc_ref_log,
         'n_dat': n_dat
     }
+
+
+def get_session_scalers(session_id: str) -> Dict:
+    """
+    Retrieve saved scalers from database for a specific session.
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        dict: {
+            'input': input_scalers_dict,
+            'output': output_scalers_dict,
+            'metadata': {...}
+        }
+    """
+    from utils.training_storage import fetch_training_results_with_storage
+
+    # Get training results from Storage or legacy JSONB
+    training_results = fetch_training_results_with_storage(session_id)
+
+    if not training_results:
+        raise ValueError(f'No training results found for session {session_id}')
+
+    scalers = training_results.get('scalers', {})
+
+    if not scalers:
+        raise ValueError(f'No scalers found for session {session_id}')
+
+    # Return scalers in serialized format (JSON-safe)
+    input_scalers = scalers.get('input', {})
+    output_scalers = scalers.get('output', {})
+
+    return {
+        'input': input_scalers,
+        'output': output_scalers,
+        'metadata': {
+            'input_features': len(input_scalers),
+            'output_features': len(output_scalers),
+            'input_features_scaled': sum(1 for s in input_scalers.values() if s is not None),
+            'output_features_scaled': sum(1 for s in output_scalers.values() if s is not None)
+        }
+    }
+
+
+def create_scaler_download_package(session_id: str) -> str:
+    """
+    Create ZIP file with scaler .save files identical to original training_original.py format.
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        str: Path to created ZIP file
+    """
+    from utils.training_storage import fetch_training_results_with_storage
+    import pickle
+    import base64
+    import os
+    import zipfile
+    import tempfile
+    from datetime import datetime
+
+    # Get training results from Storage or legacy JSONB
+    training_results = fetch_training_results_with_storage(session_id)
+
+    if not training_results:
+        raise ValueError(f'No training results found for session {session_id}')
+
+    scalers = training_results.get('scalers', {})
+    if not scalers:
+        raise ValueError(f'No scalers found for session {session_id}')
+
+    # Deserialize scalers back to original format
+    def deserialize_scalers_dict(scaler_dict):
+        result = {}
+        for key, scaler_data in scaler_dict.items():
+            if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+                try:
+                    scaler = pickle.loads(base64.b64decode(scaler_data['_model_data']))
+                    result[int(key)] = scaler  # Convert key to int for original format
+                except Exception as e:
+                    logger.error(f"Error deserializing scaler {key}: {str(e)}")
+                    result[int(key)] = None
+            else:
+                result[int(key)] = None
+        return result
+
+    input_scalers = deserialize_scalers_dict(scalers.get('input', {}))
+    output_scalers = deserialize_scalers_dict(scalers.get('output', {}))
+
+    # Create temporary directory for files
+    temp_dir = tempfile.mkdtemp()
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    # Create .save files identical to original format
+    i_scale_file = os.path.join(temp_dir, f'i_scale_{timestamp}.save')
+    o_scale_file = os.path.join(temp_dir, f'o_scale_{timestamp}.save')
+
+    # Save input scalers
+    with open(i_scale_file, 'wb') as f:
+        pickle.dump(input_scalers, f)
+
+    # Save output scalers
+    with open(o_scale_file, 'wb') as f:
+        pickle.dump(output_scalers, f)
+
+    # Create ZIP file with both .save files
+    zip_file = os.path.join(temp_dir, f'scalers_{session_id}_{timestamp}.zip')
+    with zipfile.ZipFile(zip_file, 'w') as zipf:
+        zipf.write(i_scale_file, f'i_scale_{timestamp}.save')
+        zipf.write(o_scale_file, f'o_scale_{timestamp}.save')
+
+    logger.info(f"Created scaler files for session {session_id}: {zip_file}")
+
+    return zip_file
+
+
+def scale_new_data(session_id: str, input_data, save_scaled: bool = False) -> Dict:
+    """
+    Scale input data using saved scalers.
+
+    Args:
+        session_id: Session identifier
+        input_data: Input data to scale (list, dict, or array-like)
+        save_scaled: Whether to save scaled data to file
+
+    Returns:
+        dict: {
+            'scaled_data': scaled array,
+            'scaling_info': {...},
+            'metadata': {
+                'original_shape': tuple,
+                'scaled_shape': tuple,
+                'features_scaled': int,
+                'total_features': int,
+                'saved_file_path': str or None
+            }
+        }
+    """
+    from utils.training_storage import fetch_training_results_with_storage
+    import pickle
+    import base64
+
+    # Convert input_data to numpy array
+    try:
+        if isinstance(input_data, list):
+            input_array = np.array(input_data)
+        elif isinstance(input_data, dict):
+            # Assume it's a pandas DataFrame-like structure
+            input_array = np.array(list(input_data.values())).T
+        else:
+            input_array = np.array(input_data)
+    except Exception as e:
+        raise ValueError(f'Failed to convert input_data to array: {str(e)}')
+
+    # Get training results from Storage or legacy JSONB
+    training_results = fetch_training_results_with_storage(session_id)
+
+    if not training_results:
+        raise ValueError(f'No training results found for session {session_id}')
+
+    scalers = training_results.get('scalers', {})
+    input_scalers = scalers.get('input', {})
+
+    if not input_scalers:
+        raise ValueError(f'No input scalers found for session {session_id}')
+
+    # Helper function to deserialize scalers
+    def deserialize_scaler(scaler_data):
+        """Convert serialized scaler back to usable object"""
+        if scaler_data is None:
+            return None
+        elif isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+            # Deserialize pickled scaler
+            try:
+                model_b64 = scaler_data['_model_data']
+                model_bytes = base64.b64decode(model_b64)
+                scaler = pickle.loads(model_bytes)
+                return scaler
+            except Exception as e:
+                logger.error(f"Error deserializing scaler: {str(e)}")
+                return None
+        else:
+            return scaler_data
+
+    # Scale the input data
+    scaled_data = input_array.copy()
+    scaling_info = {}
+
+    for i in range(input_array.shape[1]):
+        if str(i) in input_scalers:
+            scaler = deserialize_scaler(input_scalers[str(i)])
+            if scaler is not None:
+                try:
+                    # Scale the column
+                    original_data = input_array[:, i].reshape(-1, 1)
+                    scaled_column = scaler.transform(original_data)
+                    scaled_data[:, i] = scaled_column.flatten()
+
+                    scaling_info[f'feature_{i}'] = {
+                        'scaled': True,
+                        'original_range': [float(np.min(original_data)), float(np.max(original_data))],
+                        'scaled_range': [float(np.min(scaled_column)), float(np.max(scaled_column))],
+                        'feature_range': scaler.feature_range
+                    }
+                except Exception as e:
+                    logger.error(f"Error scaling feature {i}: {str(e)}")
+                    scaling_info[f'feature_{i}'] = {'scaled': False, 'error': str(e)}
+            else:
+                scaling_info[f'feature_{i}'] = {'scaled': False, 'reason': 'no_scaler'}
+        else:
+            scaling_info[f'feature_{i}'] = {'scaled': False, 'reason': 'scaler_not_found'}
+
+    # Optionally save scaled data
+    saved_file_path = None
+    if save_scaled:
+        try:
+            import os
+            from datetime import datetime
+
+            # Create scaled data directory if it doesn't exist
+            scaled_dir = f"temp_uploads/scaled_data_{session_id}"
+            os.makedirs(scaled_dir, exist_ok=True)
+
+            # Save as CSV
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_name = f"scaled_input_data_{timestamp}.csv"
+            file_path = os.path.join(scaled_dir, file_name)
+
+            # Create DataFrame and save
+            scaled_df = pd.DataFrame(scaled_data, columns=[f'feature_{i}' for i in range(scaled_data.shape[1])])
+            scaled_df.to_csv(file_path, index=False)
+            saved_file_path = file_path
+
+            logger.info(f"Scaled data saved to: {file_path}")
+        except Exception as e:
+            logger.error(f"Error saving scaled data: {str(e)}")
+
+    return {
+        'scaled_data': scaled_data.tolist(),  # Convert to list for JSON serialization
+        'scaling_info': scaling_info,
+        'metadata': {
+            'original_shape': input_array.shape,
+            'scaled_shape': scaled_data.shape,
+            'features_scaled': sum(1 for info in scaling_info.values() if info.get('scaled', False)),
+            'total_features': len(scaling_info),
+            'saved_file_path': saved_file_path
+        }
+    }
