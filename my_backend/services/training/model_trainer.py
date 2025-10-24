@@ -20,7 +20,6 @@ try:
 except ImportError as e:
     logger.warning(f"TensorFlow not available: {e}")
     TENSORFLOW_AVAILABLE = False
-    # Create dummy classes for type hints
     Sequential = None
     Dense = None
     LSTM = None
@@ -36,9 +35,6 @@ from .config import MDL
 
 logger = logging.getLogger(__name__)
 
-# ACTIVATION FUNCTION MAPPING
-# Maps string names to TensorFlow activation functions
-# Exactly as used in training_original.py
 ACTIVATION_FUNCTIONS = {
     'relu': 'relu',
     'ReLU': 'relu',
@@ -86,7 +82,6 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
         logger.warning("TensorFlow not available, skipping dense neural network training")
         return None, float('inf'), 0
     
-    # Validation: Check if we have enough features to train Dense network
     if train_x.size == 0 or len(train_x.shape) < 3:
         logger.error(f"train_x is empty or has invalid shape: {train_x.shape}")
         return None, float('inf'), 0
@@ -95,22 +90,15 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
         logger.error(f"Cannot train Dense network with 0 features. Input shape: {train_x.shape}")
         return None, float('inf'), 0
        
-    # MODELLDEFINITION ########################################################
     
-    # Modellinitialisierung (Sequentielles Modell mit linear 
-    # hintereinandergeordneten Schichten)
     model = tf.keras.Sequential()
     
-    # Input-Schicht → Mehrdimensionale Daten werden in einen 1D-Vektor 
-    # umgewandelt
     model.add(tf.keras.layers.Flatten())
     
-    # Dense-Layer hinzufügen
     for _ in range(MDL.LAY):
-        model.add(tf.keras.layers.Dense(MDL.N,                  # Anzahl an Neuronen
-                                        activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF)) # Aktivierungsfunktion
+        model.add(tf.keras.layers.Dense(MDL.N,
+                                        activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF))
     
-    # Output-Schicht
     model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
                                   kernel_initializer = tf.initializers.zeros))
     model.add(tf.keras.layers.Reshape([train_y.shape[1], train_y.shape[2]]))
@@ -128,13 +116,11 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
         patience               = 2, 
         restore_best_weights   = True)
 
-    # Konfiguration des Modells für das Training    
     model.compile(
         optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
         loss = tf.keras.losses.MeanSquaredError(),
         metrics = [tf.keras.metrics.RootMeanSquaredError()])
     
-    # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
     
@@ -165,24 +151,14 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     MDL.......Informationen zum Modell
     """
     
-    # MODELLDEFINITION ########################################################
     
-    # Modellinitialisierung (Sequentielles Modell mit linear 
-    # hintereinandergeordneten Schichten)    
     model = tf.keras.Sequential()
        
-    # Konverterierung in ein 4D-Array (Conv2D-Layer erwartet Eingabedaten mit vier Dimensionen)
-    # - batch_size: Anzahl der Trainingsbeispiele
-    # - Höhe und Breite: räumliche Dimensionen deiner Eingabedaten
-    # - Kanäle: Anzahl der Kanäle pro Pixel (z. B. 3 für RGB-Bilder, 1 für Graustufen)
-    # NOTE: Original has bug here - uses trn_x instead of train_x
-    # We'll keep it EXACTLY as original with the variable name fix for it to work
     train_x = train_x.reshape(train_x.shape[0], train_x.shape[1], train_x.shape[2], 1)
     
     
     for i in range(MDL.LAY):
         if i == 0:
-            # Input-Layer mit Angabe der Input-Shape
             model.add(tf.keras.layers.Conv2D(filters        = MDL.N, 
                                              kernel_size    = MDL.K,
                                              padding        = 'same',
@@ -194,9 +170,6 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
                                              padding        = 'same',
                                              activation     = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF))
     
-    # Output-Layer: Convolution mit 1 Filter (oder Anzahl Kanäle von train_y)
-    # und linearer Aktivierung, damit die Ausgabe dieselbe Form wie train_y hat.
-    # Falls train_y z.B. (Batch, H, W, C), dann Filteranzahl = C.
     
     output_channels = train_y.shape[-1] if len(train_y.shape) == 4 else 1
     
@@ -206,7 +179,6 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
                                      activation         = 'linear',
                                      kernel_initializer = tf.initializers.zeros))
     
-    # Callback EarlyStopping
     earlystopping = tf.keras.callbacks.EarlyStopping(
         monitor                 = "val_loss",
         mode                    = "min",
@@ -219,10 +191,8 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
         metrics     = [tf.keras.metrics.RootMeanSquaredError()]
     )
     
-    # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
-    # Use user-provided EP value, don't hardcode
     model.fit(
         x               = train_x,
         y               = train_y,
@@ -248,44 +218,35 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
         logger.warning("TensorFlow not available, skipping LSTM training")
         return None, float('inf'), 0
     
-    # MODELLDEFINITION ########################################################
     
-    # Modellinitialisierung
     model = tf.keras.Sequential()
     
-    # LSTM-Layer hinzufügen - EXACTLY as in original lines 1507-1517
     for i in range(MDL.LAY):
         if i == 0:
-            # First layer - always with return_sequences=True as in original
             model.add(tf.keras.layers.LSTM(MDL.N,
                                          activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
                                          input_shape = (train_x.shape[1], train_x.shape[2]),
                                          return_sequences = True))
         else:
-            # All other layers also with return_sequences=True as in original
             model.add(tf.keras.layers.LSTM(MDL.N,
                                          activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
                                          return_sequences = True))
     
-    # Output-Schicht - using TimeDistributed as in original line 1519
     model.add(tf.keras.layers.TimeDistributed(
         tf.keras.layers.Dense(train_y.shape[2], 
                            kernel_initializer = tf.initializers.zeros)))
     
-    # Early Stopping
     earlystopping = tf.keras.callbacks.\
         EarlyStopping(monitor  = "val_loss", 
         mode                   = "min", 
         patience               = 2, 
         restore_best_weights   = True)
 
-    # Konfiguration des Modells für das Training    
     model.compile(
         optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
         loss = tf.keras.losses.MeanSquaredError(),
         metrics = [tf.keras.metrics.RootMeanSquaredError()])
     
-    # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
     
@@ -310,44 +271,35 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
     Extracted from training_backend_test_2.py lines 389-457
     """
     
-    # MODELLDEFINITION ########################################################
     
-    # Modellinitialisierung
     model = tf.keras.Sequential()
     
-    # LSTM-Layer hinzufügen - EXACTLY as in original lines 408-420
     for i in range(MDL.LAY):
         if i == 0:
-            # First layer - always with return_sequences=True as in original
             model.add(tf.keras.layers.LSTM(MDL.N,
                                          activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
                                          input_shape = (train_x.shape[1], train_x.shape[2]),
                                          return_sequences = True))
         else:
-            # All other layers also with return_sequences=True as in original
             model.add(tf.keras.layers.LSTM(MDL.N,
                                          activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
                                          return_sequences = True))
     
-    # Output-Schicht - using TimeDistributed as in original lines 423-427
     model.add(tf.keras.layers.TimeDistributed(
         tf.keras.layers.Dense(train_y.shape[2], 
                            kernel_initializer = tf.initializers.zeros)))
     
-    # Early Stopping
     earlystopping = tf.keras.callbacks.\
         EarlyStopping(monitor  = "val_loss", 
         mode                   = "min", 
         patience               = 2, 
         restore_best_weights   = True)
 
-    # Konfiguration des Modells für das Training    
     model.compile(
         optimizer = tf.keras.optimizers.Adam(learning_rate = 0.001),
         loss = tf.keras.losses.MeanSquaredError(),
         metrics = [tf.keras.metrics.RootMeanSquaredError()])
     
-    # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
     
@@ -375,7 +327,6 @@ def train_svr_dir(train_x, train_y, MDL):
     MDL.......Informationen zum Modell
     """
     
-    # MODELLDEFINITION ########################################################
     
     n_samples, n_timesteps, n_features = train_x.shape
     X = train_x.reshape(n_samples * n_timesteps, n_features)
@@ -384,7 +335,6 @@ def train_svr_dir(train_x, train_y, MDL):
     for i in range(n_features):
         y.append(train_y[:, :, i].reshape(-1))
 
-    # TRAINIEREN ##############################################################
 
     print("Modell wird trainiert.")
     
@@ -407,24 +357,19 @@ def train_svr_mimo(train_x, train_y, MDL):
     EXACTLY as in training_original.py lines 493-530
     """
     
-    # MODELLDEFINITION ########################################################
     
     n_samples, n_timesteps, n_features_in = train_x.shape
     _, _, n_features_out = train_y.shape
     
-    # Eingabedaten 2D umformen: (n_samples * n_timesteps, n_features_in)
     X = train_x.reshape(n_samples * n_timesteps, n_features_in)
     
-    # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
     
     model = []
     for i in range(n_features_out):
-        # Für jedes Ausgabefeature das passende Ziel erstellen
         y_i = train_y[:, :, i].reshape(-1)
         
-        # Pipeline mit StandardScaler + SVR (EXACTLY as original)
         svr = make_pipeline(StandardScaler(),
                             SVR(kernel=MDL.KERNEL,
                                 C=MDL.C,
@@ -443,15 +388,12 @@ def train_linear_model(trn_x, trn_y):
     Extracted from training_backend_test_2.py lines 531-551
     """
     
-    # MODELLDEFINITION ########################################################
     
-    # Daten umformen
     n_samples, n_timesteps, n_features_in = trn_x.shape
     _, _, n_features_out = trn_y.shape
     
-    X = trn_x.reshape(n_samples * n_timesteps, n_features_in)   # (390, 2)
+    X = trn_x.reshape(n_samples * n_timesteps, n_features_in)
     
-    # TRAINIEREN ##############################################################
     
     print("Modell wird trainiert.")
     models = []
@@ -493,31 +435,25 @@ class ModelTrainer:
         try:
             results = {}
             
-            # Validate training_split is provided
             if not training_split:
                 raise ValueError("Training split parameters are required but not provided")
             
-            # Create models directory if it doesn't exist
             models_dir = os.path.join('uploads', 'trained_models')
             os.makedirs(models_dir, exist_ok=True)
             
             for dataset_name, dataset in datasets.items():
                 X, y = dataset['X'], dataset['y']
                 
-                # Split data using user parameters
                 X_train, X_test, y_train, y_test = self._split_data(X, y, training_split)
                 
                 dataset_results = {}
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 
-                # Use the real training functions extracted from original
                 if self.config.MODE == "Dense":
                     model = train_dense(X_train, y_train, X_test, y_test, self.config)
-                    # Save Keras model to .h5 file
                     model_path = os.path.join(models_dir, f'dense_{dataset_name}_{timestamp}.h5')
                     model.save(model_path)
                     
-                    # Calculate metrics
                     predictions = model.predict(X_test)
                     metrics = self._calculate_metrics(y_test, predictions)
                     
@@ -530,7 +466,6 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "CNN":
                     model = train_cnn(X_train, y_train, X_test, y_test, self.config)
-                    # Save Keras model to .h5 file
                     model_path = os.path.join(models_dir, f'cnn_{dataset_name}_{timestamp}.h5')
                     model.save(model_path)
                     
@@ -546,7 +481,6 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "LSTM":
                     model = train_lstm(X_train, y_train, X_test, y_test, self.config)
-                    # Save Keras model to .h5 file
                     model_path = os.path.join(models_dir, f'lstm_{dataset_name}_{timestamp}.h5')
                     model.save(model_path)
                     
@@ -562,7 +496,6 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "AR LSTM":
                     model = train_ar_lstm(X_train, y_train, X_test, y_test, self.config)
-                    # Save Keras model to .h5 file
                     model_path = os.path.join(models_dir, f'ar_lstm_{dataset_name}_{timestamp}.h5')
                     model.save(model_path)
                     
@@ -578,12 +511,10 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "SVR_dir":
                     models = train_svr_dir(X_train, y_train, self.config)
-                    # Save sklearn models using pickle
                     model_path = os.path.join(models_dir, f'svr_dir_{dataset_name}_{timestamp}.pkl')
                     with open(model_path, 'wb') as f:
                         pickle.dump(models, f)
                     
-                    # Calculate predictions and metrics for SVR
                     predictions = self._predict_svr(models, X_test, y_test.shape)
                     metrics = self._calculate_metrics(y_test, predictions)
                     
@@ -596,12 +527,10 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "SVR_MIMO":
                     models = train_svr_mimo(X_train, y_train, self.config)
-                    # Save sklearn models using pickle
                     model_path = os.path.join(models_dir, f'svr_mimo_{dataset_name}_{timestamp}.pkl')
                     with open(model_path, 'wb') as f:
                         pickle.dump(models, f)
                     
-                    # Calculate predictions and metrics for SVR MIMO
                     predictions = self._predict_svr_mimo(models, X_test, y_test.shape)
                     metrics = self._calculate_metrics(y_test, predictions)
                     
@@ -614,12 +543,10 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "LIN":
                     models = train_linear_model(X_train, y_train)
-                    # Save sklearn models using pickle
                     model_path = os.path.join(models_dir, f'linear_{dataset_name}_{timestamp}.pkl')
                     with open(model_path, 'wb') as f:
                         pickle.dump(models, f)
                     
-                    # Calculate predictions and metrics for Linear
                     predictions = self._predict_linear(models, X_test, y_test.shape)
                     metrics = self._calculate_metrics(y_test, predictions)
                     
@@ -653,24 +580,20 @@ class ModelTrainer:
         try:
             from sklearn.model_selection import train_test_split
             
-            # Require user parameters - NO DEFAULTS
             if not training_split:
                 raise ValueError("Training split parameters are required but not provided")
             
-            # Validate required parameters
             required_params = ['testPercentage', 'random_dat']
             for param in required_params:
                 if param not in training_split:
                     raise ValueError(f"Training split parameter '{param}' is required")
             
-            # Calculate test_size from user percentages
             test_percentage = training_split['testPercentage']
             if test_percentage <= 0 or test_percentage >= 100:
                 raise ValueError(f"testPercentage must be between 0 and 100, got {test_percentage}")
             
             test_size = test_percentage / 100.0
             
-            # Use randomization setting from user
             random_state = None if training_split['random_dat'] else 42
             
             
@@ -694,25 +617,21 @@ class ModelTrainer:
         import math
         
         try:
-            # Flatten arrays if needed
             if len(y_true.shape) > 2:
                 y_true = y_true.reshape(y_true.shape[0], -1)
             if len(y_pred.shape) > 2:
                 y_pred = y_pred.reshape(y_pred.shape[0], -1)
             
-            # Calculate basic metrics
             mae = mean_absolute_error(y_true, y_pred)
             mse = mean_squared_error(y_true, y_pred)
             rmse = np.sqrt(mse)
             
-            # Calculate MAPE with zero handling
             mask = y_true != 0
             if np.any(mask):
                 mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
             else:
                 mape = 0.0
             
-            # Clean NaN and Infinity values
             def clean_metric(value):
                 if math.isnan(value) or math.isinf(value):
                     return 0.0
@@ -826,7 +745,6 @@ class ModelTrainer:
             return np.zeros(y_shape)
 
 
-# Factory function to create model trainer
 def create_model_trainer(config=None) -> ModelTrainer:
     """
     Create and return a ModelTrainer instance

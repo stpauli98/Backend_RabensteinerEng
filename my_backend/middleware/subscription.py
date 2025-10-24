@@ -22,7 +22,6 @@ def get_user_subscription(user_id: str, access_token: str) -> Optional[dict]:
     try:
         supabase = get_supabase_user_client(access_token)
 
-        # Get active subscription with plan details
         response = supabase.table('user_subscriptions') \
             .select('*, subscription_plans(*)') \
             .eq('user_id', user_id) \
@@ -55,11 +54,9 @@ def get_user_usage(user_id: str, access_token: str) -> dict:
     try:
         supabase = get_supabase_user_client(access_token)
 
-        # Get current billing period (first day of current month)
         now = datetime.now(timezone.utc)
         period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # Get usage tracking for current period
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
@@ -70,7 +67,6 @@ def get_user_usage(user_id: str, access_token: str) -> dict:
         if response and response.data:
             return response.data
 
-        # No usage record yet for this period, return zeros
         logger.info(f"No usage record for user {user_id} in current period")
         return {
             'uploads_count': 0,
@@ -109,7 +105,6 @@ def require_subscription(f):
             logger.error("require_subscription used without require_auth")
             return jsonify({'error': 'Authentication required'}), 401
 
-        # Get subscription
         subscription = get_user_subscription(g.user_id, g.access_token)
 
         if not subscription:
@@ -119,9 +114,7 @@ def require_subscription(f):
                 'message': 'Please subscribe to a plan to access this feature'
             }), 403
 
-        # Add subscription and plan to g object
         g.subscription = subscription
-        # Plan data is embedded as 'subscription_plans' from the join
         g.plan = subscription.get('subscription_plans', {})
 
         logger.info(f"User {g.user_email} has {g.plan.get('name', 'Unknown')} plan")
@@ -151,12 +144,10 @@ def check_upload_limit(f):
             logger.error("check_upload_limit used without require_auth and require_subscription")
             return jsonify({'error': 'Authentication and subscription required'}), 401
 
-        # Get current usage
         usage = get_user_usage(g.user_id, g.access_token)
         uploads_used = usage.get('uploads_count', 0)
         uploads_limit = g.plan.get('max_uploads_per_month', 0)
 
-        # Check limit
         if uploads_used >= uploads_limit:
             logger.warning(f"Upload limit reached for user {g.user_email}: {uploads_used}/{uploads_limit}")
             return jsonify({
@@ -167,7 +158,6 @@ def check_upload_limit(f):
                 'plan': g.plan.get('name')
             }), 403
 
-        # Add usage info to g object
         g.usage = usage
         g.uploads_remaining = uploads_limit - uploads_used
 
@@ -198,12 +188,10 @@ def check_processing_limit(f):
             logger.error("check_processing_limit used without require_auth and require_subscription")
             return jsonify({'error': 'Authentication and subscription required'}), 401
 
-        # Get current usage
         usage = get_user_usage(g.user_id, g.access_token)
         processing_used = usage.get('processing_count', 0)
         processing_limit = g.plan.get('max_processing_jobs_per_month', 0)
 
-        # Check limit
         if processing_used >= processing_limit:
             logger.warning(f"Processing limit reached for user {g.user_email}: {processing_used}/{processing_limit}")
             return jsonify({
@@ -214,7 +202,6 @@ def check_processing_limit(f):
                 'plan': g.plan.get('name')
             }), 403
 
-        # Add usage info to g object
         g.usage = usage
         g.processing_remaining = processing_limit - processing_used
 
@@ -245,13 +232,11 @@ def check_storage_limit(f):
             logger.error("check_storage_limit used without require_auth and require_subscription")
             return jsonify({'error': 'Authentication and subscription required'}), 401
 
-        # Get current usage
         usage = get_user_usage(g.user_id, g.access_token)
         storage_used_mb = usage.get('storage_used_mb', 0)
         storage_limit_gb = g.plan.get('max_storage_gb', 0)
-        storage_limit_mb = storage_limit_gb * 1024  # Convert GB to MB
+        storage_limit_mb = storage_limit_gb * 1024
 
-        # Check limit
         if storage_used_mb >= storage_limit_mb:
             logger.warning(f"Storage limit reached for user {g.user_email}: {storage_used_mb}/{storage_limit_mb} MB")
             return jsonify({
@@ -262,7 +247,6 @@ def check_storage_limit(f):
                 'plan': g.plan.get('name')
             }), 403
 
-        # Add usage info to g object
         g.usage = usage
         g.storage_remaining_mb = storage_limit_mb - storage_used_mb
 
@@ -293,7 +277,6 @@ def check_training_limit(f):
             logger.error("check_training_limit used without require_auth and require_subscription")
             return jsonify({'error': 'Authentication and subscription required'}), 401
 
-        # Check if training is allowed for this plan
         can_use_training = g.plan.get('can_use_training', False)
 
         if not can_use_training:
@@ -304,18 +287,15 @@ def check_training_limit(f):
                 'plan': g.plan.get('name')
             }), 403
 
-        # Get current usage
         usage = get_user_usage(g.user_id, g.access_token)
         training_used = usage.get('training_runs_count', 0)
         training_limit = g.plan.get('max_training_runs_per_month', 0)
 
-        # Check if limit is unlimited (-1)
         if training_limit == -1:
             logger.info(f"Unlimited training for {g.user_email}")
             g.usage = usage
             return f(*args, **kwargs)
 
-        # Check limit
         if training_used >= training_limit:
             logger.warning(f"Training limit reached for user {g.user_email}: {training_used}/{training_limit}")
             return jsonify({
@@ -326,7 +306,6 @@ def check_training_limit(f):
                 'plan': g.plan.get('name')
             }), 403
 
-        # Add usage info to g object
         g.usage = usage
         g.training_remaining = training_limit - training_used
 

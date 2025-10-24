@@ -54,19 +54,15 @@ class Visualizer:
         try:
             visualizations = {}
             
-            # Create violin plots
             violin_plots = self.create_violin_plots(evaluation_results)
             visualizations.update(violin_plots)
             
-            # Create forecast plots
             forecast_plots = self.create_forecast_plots(training_results, evaluation_results)
             visualizations.update(forecast_plots)
             
-            # Create metrics comparison plots
             comparison_plots = self.create_metrics_comparison_plots(evaluation_results)
             visualizations.update(comparison_plots)
             
-            # Create training history plots
             history_plots = self.create_training_history_plots(training_results)
             visualizations.update(history_plots)
             
@@ -111,14 +107,12 @@ class Visualizer:
             forecast_plots = {}
             
             for dataset_name, dataset_results in training_results.items():
-                # Get evaluation DataFrame if available
                 eval_dataframes = evaluation_results.get('evaluation_dataframes', {}).get(dataset_name, {})
                 df_eval_ts = eval_dataframes.get('df_eval_ts', [])
                 
                 if df_eval_ts:
                     df_ts = pd.DataFrame(df_eval_ts)
                     
-                    # Create forecast plot for each model
                     models = df_ts['model'].unique() if 'model' in df_ts.columns else []
                     
                     for model_name in models:
@@ -127,8 +121,6 @@ class Visualizer:
                         if len(model_data) > 0:
                             fig, ax = plt.subplots(figsize=PLOT_SETTINGS['figure_size'])
                             
-                            # TODO: Extract actual forecast plot logic from training_backend_test_2.py
-                            # This is placeholder implementation
                             
                             if 'timestamp' in model_data.columns:
                                 ax.plot(model_data['timestamp'], model_data.get('actual', []), 
@@ -144,7 +136,6 @@ class Visualizer:
                             plt.xticks(rotation=45)
                             plt.tight_layout()
                             
-                            # Convert to base64
                             plot_key = f'forecast_{dataset_name}_{model_name}'
                             forecast_plots[plot_key] = self._figure_to_base64(fig)
                             
@@ -170,12 +161,10 @@ class Visualizer:
             comparison_plots = {}
             
             for dataset_name, dataset_results in evaluation_results.get('evaluation_metrics', {}).items():
-                # Prepare data for comparison
                 models = list(dataset_results.keys())
                 metrics = ['mae', 'mse', 'rmse', 'mape']
                 
                 if models:
-                    # Create comparison bar plot
                     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
                     axes = axes.flatten()
                     
@@ -183,7 +172,6 @@ class Visualizer:
                         if i < len(axes):
                             ax = axes[i]
                             
-                            # Collect metric values
                             metric_values = []
                             model_names = []
                             
@@ -198,7 +186,6 @@ class Visualizer:
                                 ax.set_ylabel(f'{metric.upper()} Value')
                                 plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
                                 
-                                # Add value labels on bars
                                 for bar, value in zip(bars, metric_values):
                                     height = bar.get_height()
                                     ax.text(bar.get_x() + bar.get_width()/2., height,
@@ -207,7 +194,6 @@ class Visualizer:
                     plt.suptitle(f'Metrics Comparison - {dataset_name}', fontsize=16)
                     plt.tight_layout()
                     
-                    # Convert to base64
                     plot_key = f'comparison_{dataset_name}'
                     comparison_plots[plot_key] = self._figure_to_base64(fig)
                     
@@ -240,7 +226,6 @@ class Visualizer:
                         if history and 'loss' in history:
                             fig, axes = plt.subplots(1, 2, figsize=(15, 5))
                             
-                            # Plot training loss
                             axes[0].plot(history['loss'], label='Training Loss')
                             if 'val_loss' in history:
                                 axes[0].plot(history['val_loss'], label='Validation Loss')
@@ -250,7 +235,6 @@ class Visualizer:
                             axes[0].legend()
                             axes[0].grid(True, alpha=0.3)
                             
-                            # Plot training metrics
                             if 'mae' in history:
                                 axes[1].plot(history['mae'], label='Training MAE')
                                 if 'val_mae' in history:
@@ -264,7 +248,6 @@ class Visualizer:
                             plt.suptitle(f'Training History - {model_name} - {dataset_name}', fontsize=16)
                             plt.tight_layout()
                             
-                            # Convert to base64
                             plot_key = f'history_{dataset_name}_{model_name}'
                             history_plots[plot_key] = self._figure_to_base64(fig)
                             
@@ -309,7 +292,6 @@ class Visualizer:
                             predicted = model_data['prediction']
                             residuals = actual - predicted
                             
-                            # Residual plot
                             axes[0].scatter(predicted, residuals, alpha=0.6)
                             axes[0].axhline(y=0, color='r', linestyle='--')
                             axes[0].set_xlabel('Predicted Values')
@@ -317,7 +299,6 @@ class Visualizer:
                             axes[0].set_title(f'Residual Plot - {model_name}')
                             axes[0].grid(True, alpha=0.3)
                             
-                            # Q-Q plot
                             from scipy import stats
                             stats.probplot(residuals, dist="norm", plot=axes[1])
                             axes[1].set_title(f'Q-Q Plot - {model_name}')
@@ -326,7 +307,6 @@ class Visualizer:
                             plt.suptitle(f'Residual Analysis - {model_name} - {dataset_name}', fontsize=16)
                             plt.tight_layout()
                             
-                            # Convert to base64
                             plot_key = f'residual_{dataset_name}_{model_name}'
                             residual_plots[plot_key] = self._figure_to_base64(fig)
                             
@@ -378,16 +358,12 @@ class Visualizer:
                 logger.warning("No plots to save")
                 return False
 
-            # TODO: Implement saving plots to Supabase storage
-            # This is placeholder implementation
 
             for plot_name, plot_data in self.plots.items():
-                # Extract base64 data
                 if plot_data.startswith('data:image/png;base64,'):
                     base64_data = plot_data.split(',')[1]
                     image_data = base64.b64decode(base64_data)
 
-                    # Save to storage
                     file_path = f"plots/{session_id}/{plot_name}.png"
 
                     try:
@@ -396,7 +372,7 @@ class Visualizer:
                         )
 
                         if response:
-                            pass  # Response saved successfully
+                            pass
                     except Exception as e:
                         logger.error(f"Error saving plot {plot_name}: {str(e)}")
                         continue
@@ -424,14 +400,12 @@ class Visualizer:
             from utils.training_storage import fetch_training_results_with_storage
             from utils.database import get_supabase_client, create_or_get_session_uuid
 
-            # Get training results from Storage or legacy JSONB
             results = fetch_training_results_with_storage(session_id)
 
             input_variables = []
             output_variables = []
 
             if results:
-                # Try different places where variable names might be stored
                 input_variables = (
                     results.get('input_features') or
                     results.get('input_columns') or
@@ -443,7 +417,6 @@ class Visualizer:
                     results.get('data_info', {}).get('output_columns', [])
                 )
 
-            # If no variables found, try to get from files
             if not input_variables and not output_variables:
                 supabase = get_supabase_client()
                 uuid_session_id = create_or_get_session_uuid(session_id)
@@ -459,7 +432,6 @@ class Visualizer:
                         elif file_type == 'output' and not output_variables:
                             output_variables = [col for col in columns if col.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
 
-            # Default fallback
             if not input_variables:
                 input_variables = ['Temperature', 'Load']
             if not output_variables:
@@ -472,7 +444,6 @@ class Visualizer:
 
         except Exception as e:
             logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
-            # Return fallback values on error
             return {
                 'input_variables': ['Temperature', 'Load'],
                 'output_variables': ['Predicted_Load']
@@ -498,7 +469,6 @@ class Visualizer:
             supabase = get_supabase_client()
             uuid_session_id = create_or_get_session_uuid(session_id)
 
-            # Get visualizations from database
             response = supabase.table('training_visualizations').select('*').eq('session_id', uuid_session_id).execute()
 
             if not response.data or len(response.data) == 0:
@@ -509,7 +479,6 @@ class Visualizer:
                     'message': 'No visualizations found for this session'
                 }
 
-            # Organize plots by plot_name
             plots = {}
             metadata = {}
             created_at = None
@@ -562,7 +531,6 @@ class Visualizer:
             import seaborn as sns
             import io
 
-            # Get plot settings
             num_sbpl = plot_settings.get('num_sbpl', 17)
             x_sbpl = plot_settings.get('x_sbpl', 'UTC')
             y_sbpl_fmt = plot_settings.get('y_sbpl_fmt', 'original')
@@ -576,25 +544,20 @@ class Visualizer:
             logger.info(f"Output variables selected: {[k for k, v in df_plot_out.items() if v]}")
             logger.info(f"Forecast variables selected: {[k for k, v in df_plot_fcst.items() if v]}")
 
-            # Fetch training results from Storage or legacy JSONB
             results = fetch_training_results_with_storage(session_id, model_id=model_id)
 
             if not results:
                 raise ValueError('Model not trained yet. Please train the model first.')
 
-            # Get model data from results and deserialize if needed
             model_data = results.get('trained_model')
 
-            # Deserialize model if it's in serialized format
             trained_model = None
             if model_data:
-                # Handle list format (model_data is a list with one dict element)
                 if isinstance(model_data, list) and len(model_data) > 0:
                     model_data = model_data[0]
 
                 if isinstance(model_data, dict) and model_data.get('_model_type') == 'serialized_model':
                     try:
-                        # Decode base64 and deserialize model
                         model_bytes = base64.b64decode(model_data['_model_data'])
                         trained_model = pickle.loads(model_bytes)
                         logger.info(f"Successfully deserialized model of type {model_data.get('_model_class')}")
@@ -602,24 +565,19 @@ class Visualizer:
                         logger.error(f"Failed to deserialize model: {e}")
                         trained_model = None
                 else:
-                    # Legacy format - model stored as string or other format
                     trained_model = model_data
 
             test_data = results.get('test_data', {})
             metadata = results.get('metadata', {})
             scalers = results.get('scalers', {})
 
-            # Check if we have test data - support both naming conventions
             has_test_data = False
             if test_data:
-                # Check for both possible naming conventions
                 if 'X' in test_data and 'y' in test_data:
-                    # New format: X, y
                     tst_x = np.array(test_data.get('X'))
                     tst_y = np.array(test_data.get('y'))
                     has_test_data = True
                 elif 'X_test' in test_data and 'y_test' in test_data:
-                    # Old format: X_test, y_test
                     tst_x = np.array(test_data.get('X_test'))
                     tst_y = np.array(test_data.get('y_test'))
                     has_test_data = True
@@ -628,58 +586,44 @@ class Visualizer:
                 logger.error(f"No test data found in database for session {session_id}")
                 raise ValueError('No training data available for this session. Please train a model first before generating plots')
 
-            # Generate predictions using trained model if available
             if trained_model and hasattr(trained_model, 'predict'):
-                # Get model type to handle SVR models differently
                 model_type = results.get('model_type', 'Unknown')
 
-                # SVR models need special handling (2D input instead of 3D)
                 if model_type in ['SVR_dir', 'SVR_MIMO', 'LIN']:
                     logger.info(f"Using SVR/LIN prediction logic for model type: {model_type}")
-                    # For SVR models, we need to predict on 2D data
                     n_samples = tst_x.shape[0]
                     n_outputs = tst_y.shape[-1] if len(tst_y.shape) > 2 else 1
 
-                    # Initialize predictions array
                     tst_fcst = []
 
-                    # Predict for each sample
                     for i in range(n_samples):
-                        # Squeeze to 2D (timesteps, features)
                         inp = np.squeeze(tst_x[i:i+1], axis=0)
 
-                        # trained_model is a list of models for SVR_dir/SVR_MIMO
                         if isinstance(trained_model, list):
                             pred = []
                             for model_i in trained_model:
                                 pred.append(model_i.predict(inp))
-                            out = np.array(pred).T  # Transpose to (timesteps, outputs)
+                            out = np.array(pred).T
                         else:
-                            # For LIN or single model
                             out = trained_model.predict(inp)
 
-                        # Expand dims back to 3D
                         out = np.expand_dims(out, axis=0)
                         tst_fcst.append(out[0])
 
                     tst_fcst = np.array(tst_fcst)
                 else:
-                    # For Dense, CNN, LSTM, AR LSTM - direct prediction
                     logger.info(f"Using standard prediction logic for model type: {model_type}")
                     tst_fcst = trained_model.predict(tst_x)
 
-                    # CNN models need to squeeze the last dimension
                     if model_type == 'CNN':
                         logger.info(f"Squeezing last dimension for CNN model, shape before: {tst_fcst.shape}")
                         tst_fcst = np.squeeze(tst_fcst, axis=-1)
                         logger.info(f"Shape after squeeze: {tst_fcst.shape}")
             else:
-                # Model is not available as object, cannot generate predictions
                 logger.error(f"Model is not available as an object for session {session_id} (stored as: {type(trained_model).__name__})")
                 raise ValueError('Model not available for predictions. The trained model cannot be used for predictions. Please retrain the model.')
 
-            # Create figure based on settings
-            num_sbpl = min(num_sbpl, len(tst_x))  # Limit to available test samples
+            num_sbpl = min(num_sbpl, len(tst_x))
             num_sbpl_x = int(np.ceil(np.sqrt(num_sbpl)))
             num_sbpl_y = int(np.ceil(num_sbpl / num_sbpl_x))
 
@@ -687,41 +631,33 @@ class Visualizer:
                                    figsize=(20, 13),
                                    layout='constrained')
 
-            # Flatten axs array for easier indexing
             if num_sbpl == 1:
                 axs = [axs]
             else:
                 axs = axs.flatten()
 
-            # Color palette - make sure we have enough colors
-            # Count total number of variables to plot
             total_vars = len([k for k, v in df_plot_in.items() if v]) + \
                         len([k for k, v in df_plot_out.items() if v]) + \
                         len([k for k, v in df_plot_fcst.items() if v])
             palette = sns.color_palette("tab20", max(20, total_vars))
 
-            # Plot each subplot
             for i_sbpl in range(num_sbpl):
                 ax = axs[i_sbpl] if num_sbpl > 1 else axs[0]
 
-                # Create x-axis values
                 if x_sbpl == 'UTC':
-                    # Create UTC timestamps
                     x_values = pd.date_range(start='2024-01-01',
                                             periods=tst_x.shape[1],
                                             freq='1h')
                 else:
-                    # Use timestep indices
                     x_values = np.arange(tst_x.shape[1])
 
-                # Plot selected input variables
                 color_idx = 0
                 for var_name, selected in df_plot_in.items():
                     if selected and color_idx < tst_x.shape[-1]:
                         if y_sbpl_fmt == 'original':
                             y_values = tst_x[i_sbpl, :, color_idx]
                         else:
-                            y_values = tst_x[i_sbpl, :, color_idx]  # Already scaled
+                            y_values = tst_x[i_sbpl, :, color_idx]
 
                         ax.plot(x_values, y_values,
                                label=f'IN: {var_name}',
@@ -730,13 +666,12 @@ class Visualizer:
                                linewidth=1)
                         color_idx += 1
 
-                # Plot selected output variables (ground truth)
                 for i_out, (var_name, selected) in enumerate(df_plot_out.items()):
                     if selected and i_out < tst_y.shape[-1]:
                         if y_sbpl_fmt == 'original':
                             y_values = tst_y[i_sbpl, :, i_out]
                         else:
-                            y_values = tst_y[i_sbpl, :, i_out]  # Already scaled
+                            y_values = tst_y[i_sbpl, :, i_out]
 
                         ax.plot(x_values[:len(y_values)], y_values,
                                label=f'OUT: {var_name}',
@@ -745,7 +680,6 @@ class Visualizer:
                                linewidth=1)
                         color_idx += 1
 
-                # Plot selected forecast variables (predictions)
                 for i_fcst, (var_name, selected) in enumerate(df_plot_fcst.items()):
                     if selected and i_fcst < tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1:
                         if len(tst_fcst.shape) == 3:
@@ -762,7 +696,6 @@ class Visualizer:
                                linewidth=1, linestyle='--')
                         color_idx += 1
 
-                # Configure subplot
                 ax.set_title(f'Sample {i_sbpl + 1}', fontsize=10)
                 ax.legend(loc='upper left', fontsize=8)
                 ax.grid(True, alpha=0.3)
@@ -775,16 +708,12 @@ class Visualizer:
 
                 ax.set_ylabel('Value', fontsize=9)
 
-                # Handle y-axis configuration
                 if y_sbpl_set == 'separate Achsen':
-                    # Each line gets its own y-axis scale
-                    pass  # Already handled by matplotlib auto-scaling
+                    pass
 
-            # Remove empty subplots
             for i in range(num_sbpl, len(axs)):
                 fig.delaxes(axs[i])
 
-            # Save plot to base64 string
             buffer = io.BytesIO()
             plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
             buffer.seek(0)
@@ -799,7 +728,6 @@ class Visualizer:
             }
 
         except ValueError as e:
-            # Re-raise ValueError as-is for proper error handling in HTTP layer
             raise
         except Exception as e:
             logger.error(f"Error generating plot: {str(e)}")
@@ -808,7 +736,6 @@ class Visualizer:
             raise
 
 
-# Factory function to create visualizer
 def create_visualizer() -> Visualizer:
     """
     Create and return a Visualizer instance

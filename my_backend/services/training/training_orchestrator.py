@@ -45,9 +45,7 @@ def clean_for_json(obj: Any) -> Any:
     Returns:
         JSON-serializable version of the object
     """
-    # Check for custom MDL class
     if hasattr(obj, '__class__') and obj.__class__.__name__ == 'MDL':
-        # Convert MDL object to dict with its attributes
         return {
             'MODE': getattr(obj, 'MODE', 'Dense'),
             'LAY': getattr(obj, 'LAY', None),
@@ -59,7 +57,6 @@ def clean_for_json(obj: Any) -> Any:
             'C': getattr(obj, 'C', None),
             'EPSILON': getattr(obj, 'EPSILON', None)
         }
-    # Check numpy array first before other checks
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, (pd.Timestamp, datetime)):
@@ -76,7 +73,6 @@ def clean_for_json(obj: Any) -> Any:
         return {k: clean_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
         return [clean_for_json(item) for item in obj]
-    # Check for NaN after numpy types since pd.isna might fail on arrays
     elif obj is None:
         return None
     else:
@@ -86,15 +82,11 @@ def clean_for_json(obj: Any) -> Any:
         except (ValueError, TypeError):
             pass
 
-        # Special handling for ML models and scalers - serialize to base64
         try:
-            # Check if it's a sklearn scaler or transformer
             if (hasattr(obj, 'fit') and hasattr(obj, 'transform')) or \
                (hasattr(obj, 'predict') and hasattr(obj, 'fit')) or \
                (hasattr(obj, '__class__') and 'sklearn' in str(obj.__class__.__module__)):
-                # Serialize model/scaler to bytes
                 model_bytes = pickle.dumps(obj)
-                # Encode to base64 for JSON storage
                 model_b64 = base64.b64encode(model_bytes).decode('utf-8')
                 return {
                     '_model_type': 'serialized_model',
@@ -105,7 +97,6 @@ def clean_for_json(obj: Any) -> Any:
             logger.warning(f"Could not serialize model/scaler: {e}")
             pass
 
-        # Try to convert unknown objects to string as last resort
         try:
             json.dumps(obj)
             return obj
@@ -145,13 +136,10 @@ def save_training_results(
     from utils.supabase_client import get_supabase_admin_client
     from utils.training_storage import upload_training_results
 
-    # Use admin client for training results INSERT to avoid timeout
     supabase = get_supabase_admin_client()
 
-    # Check if we got a valid UUID
     if not uuid_session_id:
         logger.error(f"Failed to get UUID for session {session_id}")
-        # Try once more after a short delay
         import time
         time.sleep(1)
         uuid_session_id = create_or_get_session_uuid(session_id)
@@ -160,15 +148,12 @@ def save_training_results(
             logger.error(f"Failed to get UUID for session {session_id} after retry")
             raise ValueError('Failed to save training results - session mapping error')
 
-    # Extract and clean results from training
-    # Get metrics from multiple possible locations
     evaluation_metrics = result.get('evaluation_metrics', {})
     if not evaluation_metrics:
         evaluation_metrics = training_results.get('evaluation_metrics', {})
     if not evaluation_metrics:
         evaluation_metrics = training_results.get('metrics', {})
 
-    # IMPORTANT: Save ALL training data for plotting
     cleaned_results = clean_for_json({
         'model_type': model_config.get('MODE', 'Dense'),
         'parameters': model_config,
@@ -177,7 +162,6 @@ def save_training_results(
         'dataset_count': result.get('dataset_count', 0),
         'evaluation_metrics': evaluation_metrics,
         'metadata': training_results.get('metadata', {}),
-        # Add full training results for plotting
         'trained_model': training_results.get('trained_model'),
         'train_data': training_results.get('train_data', {}),
         'val_data': training_results.get('val_data', {}),
@@ -188,16 +172,14 @@ def save_training_results(
     })
 
     try:
-        # Upload results to Storage (NO TIMEOUT - can handle up to 5GB)
         logger.info(f"📤 Uploading training results to storage for session {uuid_session_id}...")
         storage_result = upload_training_results(
             session_id=uuid_session_id,
             results=cleaned_results,
-            compress=True  # Compress for 70-90% size reduction
+            compress=True
         )
         logger.info(f"✅ Storage upload complete: {storage_result['file_size'] / 1024 / 1024:.2f}MB")
 
-        # Save metadata to database (FAST - only ~1KB, no timeout)
         training_data = {
             'session_id': uuid_session_id,
             'status': 'completed',
@@ -205,7 +187,7 @@ def save_training_results(
             'file_size_bytes': storage_result['file_size'],
             'compressed': storage_result['compressed'],
             'results_metadata': storage_result['metadata'],
-            'results': None  # Deprecated field - leave NULL for new results
+            'results': None
         }
 
         supabase.table('training_results').insert(training_data).execute()
@@ -216,7 +198,6 @@ def save_training_results(
         import traceback
         logger.error(traceback.format_exc())
 
-        # Fallback: Try to save at least the metadata without full results
         try:
             logger.warning("Attempting fallback: saving metadata only...")
             fallback_data = {
@@ -230,16 +211,13 @@ def save_training_results(
         except Exception as fallback_error:
             logger.error(f"Fallback save also failed: {fallback_error}")
 
-        raise storage_error  # Re-raise original error
+        raise storage_error
 
-    # Save violin plots if available
     if result.get('violin_plots'):
         try:
             violin_plots = result.get('violin_plots')
             if isinstance(violin_plots, dict):
-                # Save each violin plot separately
                 for plot_name, plot_data in violin_plots.items():
-                    # Extract just the base64 part if it includes data URI prefix
                     if isinstance(plot_data, str) and plot_data.startswith('data:image'):
                         base64_data = plot_data
                     else:
@@ -299,17 +277,14 @@ def run_model_training_async(
         logger.info(f"🚀 TRAINING THREAD STARTED for session {session_id}")
         logger.info(f"Model config: {model_config}")
 
-        # Create runner
         runner = ModernMiddlemanRunner()
         if socketio_instance:
             runner.set_socketio(socketio_instance)
 
-        # Run training script
         result = runner.run_training_script(session_id, model_config)
         logger.info(f"✅ runner.run_training_script completed with success={result.get('success')}")
 
         if result['success']:
-            # Save training results to database
             try:
                 uuid_session_id = create_or_get_session_uuid(session_id)
                 training_results = result.get('results', {})

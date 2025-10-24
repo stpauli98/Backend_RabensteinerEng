@@ -8,7 +8,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from core.extensions import init_extensions
 from core.socketio_handlers import register_socketio_handlers
 
-# Configure logging
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -19,16 +18,12 @@ def create_app():
     """Application factory function"""
     app = Flask(__name__)
     
-    # Configure request size limits
-    app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB limit
+    app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
     
-    # Initialize extensions
     socketio = init_extensions(app)
     
-    # Register Socket.IO handlers
     register_socketio_handlers(socketio)
     
-    # Add explicit OPTIONS handler for all routes
     @app.before_request
     def handle_preflight():
         if request.method == "OPTIONS":
@@ -41,15 +36,12 @@ def create_app():
             headers['Access-Control-Max-Age'] = '3600'
             return response
     
-    # Register blueprints
     from api.routes import register_blueprints
     register_blueprints(app)
     
-    # Error handlers - preserve specific error messages from routes
     @app.errorhandler(400)
     def bad_request(error):
         logger.error(f"Bad request (400): {error}")
-        # Check if this is already a JSON response with specific error message
         if hasattr(error, 'response') and error.response:
             return error.response
         return jsonify({'error': 'Bad Request', 'message': str(error)}), 400
@@ -57,7 +49,6 @@ def create_app():
     @app.errorhandler(413)
     def payload_too_large(error):
         logger.error(f"Payload too large (413): {error}")
-        # Check if this is already a JSON response with specific error message
         if hasattr(error, 'response') and error.response:
             return error.response
         return jsonify({'error': 'Payload Too Large', 'message': 'Request entity is too large'}), 413
@@ -65,12 +56,10 @@ def create_app():
     @app.errorhandler(500)
     def internal_error(error):
         logger.error(f"Internal server error (500): {error}")
-        # Check if this is already a JSON response with specific error message
         if hasattr(error, 'response') and error.response:
             return error.response
         return jsonify({'error': 'Internal Server Error', 'message': str(error)}), 500
     
-    # Health check endpoint
     @app.route('/health')
     def health():
         return jsonify(status="ok"), 200
@@ -91,13 +80,10 @@ def create_app():
             logger.error(f"Error in index route: {e}")
             return jsonify({'error': str(e)}), 500
     
-    # Initialize the scheduler
     scheduler = BackgroundScheduler(daemon=True)
     
-    # Import cleanup function
     from services.adjustments.cleanup import cleanup_old_files
     
-    # Create a wrapper function that runs cleanup_old_files within the app context
     def run_cleanup_with_app_context():
         with app.app_context():
             try:
@@ -106,9 +92,7 @@ def create_app():
             except Exception as e:
                 logger.error(f"Error in scheduled cleanup: {str(e)}")
     
-    # Schedule the wrapper function to run every 30 minutes
     scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='cleanup_job')
-    # Start the scheduler
     scheduler.start()
     
     return app, socketio

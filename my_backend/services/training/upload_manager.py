@@ -24,7 +24,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Constants
 UPLOAD_BASE_DIR = os.environ.get('UPLOAD_BASE_DIR', 'uploads/file_uploads')
 
 
@@ -66,7 +65,6 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
     if not os.path.exists(upload_dir):
         raise FileNotFoundError(f'Upload directory not found: {upload_dir}')
 
-    # Load chunk metadata
     metadata_path = os.path.join(upload_dir, 'metadata.json')
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f'Metadata file not found: {metadata_path}')
@@ -74,16 +72,13 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
     with open(metadata_path, 'r') as f:
         chunk_metadata = json.load(f)
 
-    # Filter chunks for this specific file
     file_chunks = [c for c in chunk_metadata if c['fileName'] == filename]
 
     if not file_chunks:
         raise ValueError(f'No chunks found for file: {filename}')
 
-    # Sort chunks by index
     file_chunks.sort(key=lambda x: x['chunkIndex'])
 
-    # Assemble file
     assembled_file_path = os.path.join(upload_dir, filename)
 
     with open(assembled_file_path, 'wb') as assembled_file:
@@ -93,7 +88,6 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
                 with open(chunk_path, 'rb') as chunk_file:
                     assembled_file.write(chunk_file.read())
 
-    # Delete chunk files after assembly
     for chunk_info in file_chunks:
         chunk_path = chunk_info['filePath']
         if os.path.exists(chunk_path):
@@ -127,7 +121,6 @@ def save_session_metadata_locally(session_id: str, metadata: dict) -> bool:
 
     metadata_path = os.path.join(upload_dir, 'session_metadata.json')
 
-    # Add timestamp
     metadata['lastUpdated'] = datetime.now().isoformat()
 
     with open(metadata_path, 'w') as f:
@@ -178,17 +171,14 @@ def update_session_metadata(session_id: str, data: Dict) -> Dict:
     Raises:
         ValueError: If session not found
     """
-    # Load existing metadata
     existing_metadata = get_session_metadata_locally(session_id)
 
     if existing_metadata is None:
         raise ValueError(f'Session metadata not found for: {session_id}')
 
-    # Merge new data
     existing_metadata.update(data)
     existing_metadata['lastUpdated'] = datetime.now().isoformat()
 
-    # Save updated metadata
     save_session_metadata_locally(session_id, existing_metadata)
 
     return existing_metadata
@@ -264,7 +254,6 @@ def process_chunk_upload(
         ValueError: If required metadata fields missing
         Exception: If chunk processing fails
     """
-    # Validate required metadata
     required_fields = ['chunkIndex', 'totalChunks', 'fileName', 'sessionId']
     for field in required_fields:
         if field not in metadata:
@@ -275,18 +264,15 @@ def process_chunk_upload(
     total_chunks = metadata['totalChunks']
     filename = metadata['fileName']
 
-    # Create upload directory
     upload_dir = os.path.join(UPLOAD_BASE_DIR, upload_id)
     os.makedirs(upload_dir, exist_ok=True)
 
-    # Save chunk file
     chunk_filename = f"{filename}_{chunk_index}"
     chunk_path = os.path.join(upload_dir, chunk_filename)
 
     with open(chunk_path, 'wb') as f:
         f.write(chunk_data)
 
-    # Load/create chunk metadata
     metadata_path = os.path.join(upload_dir, 'metadata.json')
     chunk_metadata = []
 
@@ -297,7 +283,6 @@ def process_chunk_upload(
         except json.JSONDecodeError:
             chunk_metadata = []
 
-    # Create chunk info
     chunk_info = {
         'chunkIndex': chunk_index,
         'totalChunks': total_chunks,
@@ -308,18 +293,15 @@ def process_chunk_upload(
         'params': additional_data or {}
     }
 
-    # Update or add chunk metadata
     existing_chunk = next((c for c in chunk_metadata if c['chunkIndex'] == chunk_index), None)
     if existing_chunk:
         existing_chunk.update(chunk_info)
     else:
         chunk_metadata.append(chunk_info)
 
-    # Save updated chunk metadata
     with open(metadata_path, 'w') as f:
         json.dump(chunk_metadata, f, indent=2)
 
-    # Update session metadata if first chunk
     if chunk_index == 0 and additional_data:
         _update_session_metadata_from_chunk(upload_id, filename, additional_data)
 
@@ -329,11 +311,9 @@ def process_chunk_upload(
         'assembled': False
     }
 
-    # Assemble file if last chunk
     if chunk_index == total_chunks - 1:
         assembled_path = assemble_file_locally(upload_id, filename)
 
-        # Get file info
         file_size = os.path.getsize(assembled_path)
 
         result['assembled'] = True
@@ -343,7 +323,6 @@ def process_chunk_upload(
 
         logger.info(f"File assembled: {filename}, size: {file_size / 1024:.2f} KB")
 
-        # Try to load as DataFrame for CSV files
         if filename.endswith('.csv'):
             try:
                 df = pd.read_csv(assembled_path)
@@ -377,7 +356,6 @@ def _update_session_metadata_from_chunk(
     upload_dir = os.path.join(UPLOAD_BASE_DIR, upload_id)
     session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
 
-    # Load existing session metadata
     session_metadata = {}
     if os.path.exists(session_metadata_path):
         try:
@@ -386,7 +364,6 @@ def _update_session_metadata_from_chunk(
         except json.JSONDecodeError:
             session_metadata = {}
 
-    # Update session info
     if 'timeInfo' not in session_metadata:
         session_metadata['timeInfo'] = additional_data.get('timeInfo', {})
     if 'zeitschritte' not in session_metadata:
@@ -394,13 +371,11 @@ def _update_session_metadata_from_chunk(
     if 'sessionInfo' not in session_metadata:
         session_metadata['sessionInfo'] = additional_data.get('sessionInfo', {})
 
-    # Update file metadata
     if 'files' not in session_metadata:
         session_metadata['files'] = []
 
     file_metadata = additional_data.get('fileMetadata', {})
     if file_metadata:
-        # Check if file already exists in metadata
         file_exists = False
         for i, existing_file in enumerate(session_metadata.get('files', [])):
             if existing_file.get('fileName') == filename:
@@ -408,14 +383,11 @@ def _update_session_metadata_from_chunk(
                 file_exists = True
                 break
 
-        # Add new file if not exists
         if not file_exists:
             session_metadata['files'].append(file_metadata)
 
-    # Update timestamp
     session_metadata['lastUpdated'] = datetime.now().isoformat()
 
-    # Save session metadata
     with open(session_metadata_path, 'w') as f:
         json.dump(session_metadata, f, indent=2)
 
@@ -439,18 +411,15 @@ def create_csv_file_record(session_id: str, file_data: Dict) -> Dict:
     """
     from utils.database import get_supabase_client, create_or_get_session_uuid
 
-    # Get session UUID
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
-    # Validate required fields
     required_fields = ['file_name', 'type']
     for field in required_fields:
         if field not in file_data:
             raise ValueError(f'Missing required field: {field}')
 
-    # Prepare file record
     file_record = {
         'session_id': str(uuid_session_id),
         'file_name': file_data['file_name'],
@@ -459,7 +428,6 @@ def create_csv_file_record(session_id: str, file_data: Dict) -> Dict:
         'created_at': datetime.now().isoformat()
     }
 
-    # Insert into database
     supabase = get_supabase_client()
     response = supabase.table('files').insert(file_record).execute()
 
@@ -493,7 +461,6 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
     import uuid as uuid_lib
     from utils.database import get_supabase_client
 
-    # Validate file_id is UUID
     try:
         uuid_lib.UUID(file_id)
     except (ValueError, TypeError):
@@ -501,7 +468,6 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
 
     supabase = get_supabase_client()
 
-    # Allowed fields for update
     allowed_fields = [
         'file_name', 'bezeichnung', 'min', 'max', 'offset', 'datenpunkte',
         'numerische_datenpunkte', 'numerischer_anteil', 'datenform',
@@ -510,18 +476,15 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
         'zeithorizont_start', 'zeithorizont_end', 'type'
     ]
 
-    # Numeric fields that need string conversion
     numeric_fields = [
         'min', 'max', 'offset', 'datenpunkte', 'numerische_datenpunkte',
         'numerischer_anteil', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
         'zeitschrittweite_min', 'skalierung_max', 'skalierung_min'
     ]
 
-    # Prepare update data
     update_data = {}
     for field in allowed_fields:
         if field in file_data:
-            # Convert numbers to strings for database storage
             if field in numeric_fields:
                 update_data[field] = str(file_data[field])
             else:
@@ -530,7 +493,6 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
     if not update_data:
         raise ValueError('No valid fields to update')
 
-    # Update database
     response = supabase.table('files').update(update_data).eq('id', file_id).execute()
 
     if not response.data or len(response.data) == 0:
@@ -567,7 +529,6 @@ def delete_csv_file_record(file_id: str) -> Dict:
     import uuid as uuid_lib
     from utils.database import get_supabase_client
 
-    # Validate file_id is UUID
     try:
         uuid_lib.UUID(file_id)
     except (ValueError, TypeError):
@@ -575,7 +536,6 @@ def delete_csv_file_record(file_id: str) -> Dict:
 
     supabase = get_supabase_client()
 
-    # Get file record first to know storage path and type
     file_response = supabase.table('files').select('*').eq('id', file_id).execute()
 
     if not file_response.data or len(file_response.data) == 0:
@@ -587,7 +547,6 @@ def delete_csv_file_record(file_id: str) -> Dict:
 
     storage_deleted = False
 
-    # Delete from storage if storage_path exists
     if storage_path:
         try:
             bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
@@ -596,9 +555,7 @@ def delete_csv_file_record(file_id: str) -> Dict:
             storage_deleted = True
         except Exception as storage_error:
             logger.warning(f"Could not delete file from storage: {str(storage_error)}")
-            # Continue with database deletion even if storage deletion fails
 
-    # Delete from database
     delete_response = supabase.table('files').delete().eq('id', file_id).execute()
 
     if not delete_response.data or len(delete_response.data) == 0:

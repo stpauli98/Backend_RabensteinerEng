@@ -25,14 +25,12 @@ def validate_session_id(session_id):
     if not session_id or not isinstance(session_id, str):
         return False
 
-    # Check if it's a valid UUID
     try:
         uuid.UUID(session_id)
         return True
     except ValueError:
         pass
 
-    # Check if it's in session_XXXXX_XXXXX format
     pattern = r'^session_\d+_[a-zA-Z0-9]+$'
     return bool(re.match(pattern, session_id))
 

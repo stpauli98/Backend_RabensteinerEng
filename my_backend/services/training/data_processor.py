@@ -42,16 +42,12 @@ class TimeFeatures:
             DataFrame with added time features
         """
         try:
-            # TODO: Extract actual time features logic from training_backend_test_2.py
-            # This is placeholder based on typical time series features
             
             df = df.copy()
             
-            # Convert to datetime if not already
             if not pd.api.types.is_datetime64_any_dtype(df[time_column]):
                 df[time_column] = pd.to_datetime(df[time_column])
             
-            # Extract basic time features
             df['year'] = df[time_column].dt.year
             df['month'] = df[time_column].dt.month
             df['day'] = df[time_column].dt.day
@@ -60,7 +56,6 @@ class TimeFeatures:
             df['weekday'] = df[time_column].dt.weekday
             df['week'] = df[time_column].dt.isocalendar().week
             
-            # Cyclical features
             df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
             df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
             df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
@@ -68,7 +63,6 @@ class TimeFeatures:
             df['weekday_sin'] = np.sin(2 * np.pi * df['weekday'] / 7)
             df['weekday_cos'] = np.cos(2 * np.pi * df['weekday'] / 7)
             
-            # Add holiday features
             df = self._add_holiday_features(df, time_column)
             
             return df
@@ -80,12 +74,9 @@ class TimeFeatures:
     def _add_holiday_features(self, df: pd.DataFrame, time_column: str) -> pd.DataFrame:
         """Add holiday features based on HOL dictionary"""
         try:
-            # TODO: Extract actual holiday logic from training_backend_test_2.py
-            # This is placeholder implementation
             
             df['is_holiday'] = False
             
-            # Check for fixed holidays
             for country, holidays in HOL.items():
                 for holiday_name, (month, day) in holidays.items():
                     if isinstance(month, int) and isinstance(day, int):
@@ -122,11 +113,9 @@ class DataProcessor:
             Dict containing processed data
         """
         try:
-            # Load data from files
             input_data = self._load_data_files(input_files)
             output_data = self._load_data_files(output_files)
             
-            # Process each dataset
             processed_input = {}
             processed_output = {}
             
@@ -136,7 +125,6 @@ class DataProcessor:
             for file_path, df in output_data.items():
                 processed_output[file_path] = self._process_dataframe(df, session_data)
             
-            # Create datasets for training
             train_datasets = self._create_training_datasets(processed_input, processed_output, session_data)
             
             return {
@@ -185,28 +173,21 @@ class DataProcessor:
             Processed DataFrame
         """
         try:
-            # TODO: Extract actual processing logic from training_backend_test_2.py
-            # This includes the transf() function and related preprocessing
             
             df = df.copy()
             
-            # Convert UTC column to datetime
             if 'UTC' in df.columns:
                 df['UTC'] = pd.to_datetime(df['UTC'])
             
-            # Add time features if enabled
             if self.config.use_time_features:
                 df = self.time_features.add_time_features(df)
             
-            # Apply interpolation if enabled
             if self.config.interpolation:
                 df = self._apply_interpolation(df)
             
-            # Remove outliers if enabled
             if self.config.outlier_removal:
                 df = self._remove_outliers(df)
             
-            # Apply scaling if enabled
             if self.config.scaling:
                 df = self._apply_scaling(df)
             
@@ -227,8 +208,6 @@ class DataProcessor:
             DataFrame with interpolated values
         """
         try:
-            # TODO: Extract actual interpolation logic from training_backend_test_2.py
-            # This is placeholder implementation
             
             numeric_columns = df.select_dtypes(include=[np.number]).columns
             df[numeric_columns] = df[numeric_columns].interpolate(method='linear')
@@ -250,8 +229,6 @@ class DataProcessor:
             DataFrame with outliers removed
         """
         try:
-            # TODO: Extract actual outlier removal logic from training_backend_test_2.py
-            # This is placeholder implementation using IQR method
             
             numeric_columns = df.select_dtypes(include=[np.number]).columns
             
@@ -282,8 +259,6 @@ class DataProcessor:
             DataFrame with scaled values
         """
         try:
-            # TODO: Extract actual scaling logic from training_backend_test_2.py
-            # This should use MinMaxScaler as mentioned in the analysis
             
             from sklearn.preprocessing import MinMaxScaler
             
@@ -311,21 +286,16 @@ class DataProcessor:
             Dict containing training datasets
         """
         try:
-            # TODO: Extract actual dataset creation logic from training_backend_test_2.py
-            # This is around lines 1055-1873 in the original file
             
             zeitschritte = session_data.get('zeitschritte', {})
             
             time_steps_in = int(zeitschritte.get('eingabe', 24))
             time_steps_out = int(zeitschritte.get('ausgabe', 1))
             
-            # Create sequences for time series
             datasets = {}
             
-            # Combine input and output data
             for input_file, input_df in input_data.items():
                 for output_file, output_df in output_data.items():
-                    # Create sequences
                     X, y = self._create_sequences(input_df, output_df, time_steps_in, time_steps_out)
                     
                     dataset_name = f"{input_file}_{output_file}"
@@ -357,16 +327,12 @@ class DataProcessor:
             Tuple of (X, y) arrays
         """
         try:
-            # TODO: Extract actual sequence creation logic from training_backend_test_2.py
-            # This is placeholder implementation
             
-            # Get numerical columns only
             input_numeric = input_df.select_dtypes(include=[np.number]).values
             output_numeric = output_df.select_dtypes(include=[np.number]).values
             
             X, y = [], []
             
-            # Create sequences
             for i in range(len(input_numeric) - time_steps_in - time_steps_out + 1):
                 X.append(input_numeric[i:(i + time_steps_in)])
                 y.append(output_numeric[i + time_steps_in:(i + time_steps_in + time_steps_out)])
@@ -397,16 +363,13 @@ class DataProcessor:
                     (inf.loc[key, "th_end"] -
                      inf.loc[key, "th_strt"]) * 60 / (N - 1)
                 
-                # OFFSET CAN BE CALCULATED (check for division by zero first)
                 if inf.loc[key, "delt_transf"] != 0 and \
                    round(60 / inf.loc[key, "delt_transf"]) == \
                     60 / inf.loc[key, "delt_transf"]:
                       
-                    # Offset [min]
                     ofst_transf = OFST - (inf.loc[key, "th_strt"] -
                                         math.floor(inf.loc[key, "th_strt"])) * 60 + 60
                     
-                    # Prevent infinite loop if delt_transf is 0 or negative
                     loop_counter = 0
                     max_iterations = 1000
                     while (ofst_transf - inf.loc[key, "delt_transf"] >= 0 and 
@@ -417,7 +380,6 @@ class DataProcessor:
                     
                     inf.loc[key, "ofst_transf"] = ofst_transf
                         
-                # OFFSET CANNOT BE CALCULATED
                 else: 
                     inf.loc[key, "ofst_transf"] = "var"
                     
@@ -445,49 +407,35 @@ class DataProcessor:
         """
         val_list = []
         
-        # AVERAGING MODE (Mittelwertbildung)
         if avg and utc_th_strt and utc_th_end:
-            # First index
             idx1 = utc_idx_post(data, utc_th_strt)
-            # Second index
             idx2 = utc_idx_pre(data, utc_th_end)
             
-            # Calculate mean
             val = data.iloc[idx1:idx2, 1].mean()
             
-            # Check if mean calculation was possible
             if math.isnan(float(val)):
                 raise ValueError("Cannot calculate mean - no numeric data")
             
-            # Return mean value repeated for all timestamps
             return [val] * len(utc_timestamps)
         
-        # LINEAR INTERPOLATION MODE
         for utc in utc_timestamps:
-            # First index (previous timestamp)
             idx1 = utc_idx_pre(data, utc)
-            # Second index (next timestamp)
             idx2 = utc_idx_post(data, utc)
             
-            # Check time boundaries
             if idx1 is None or idx2 is None:
                 raise ValueError(f"Timestamp {utc} outside data range")
             
             if idx1 == idx2:
-                # Exact match found
                 val = data.iloc[idx1, 1]
             else:
-                # Interpolate between two points
                 utc1 = data.iloc[idx1, 0]
                 utc2 = data.iloc[idx2, 0]
                 
                 val1 = data.iloc[idx1, 1]
                 val2 = data.iloc[idx2, 1]
                 
-                # Linear interpolation formula
                 val = (utc - utc1) / (utc2 - utc1) * (val2 - val1) + val1
             
-            # Check if value is a number
             if math.isnan(float(val)):
                 raise ValueError(f"NaN value at timestamp {utc}")
             
@@ -535,7 +483,6 @@ class DataProcessor:
             raise
 
 
-# Factory function to create data processor
 def create_data_processor(config: MTS) -> DataProcessor:
     """
     Create and return a DataProcessor instance

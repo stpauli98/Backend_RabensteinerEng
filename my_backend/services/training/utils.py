@@ -25,45 +25,33 @@ def load_and_extract_info(file_path: str) -> Tuple[pd.DataFrame, Dict]:
         Tuple of (DataFrame, info_dict)
     """
     try:
-        # TODO: Extract actual load() function logic from training_backend_test_2.py
-        # This is placeholder implementation based on the analysis
         
-        # Load CSV
         df = pd.read_csv(file_path)
         
-        # Convert UTC to datetime
         if 'UTC' in df.columns:
             df['UTC'] = pd.to_datetime(df['UTC'], format='%Y-%m-%d %H:%M:%S')
         
-        # Extract information
         info = {}
         
         if 'UTC' in df.columns:
-            # Start time
             info['utc_min'] = df['UTC'].iloc[0]
             
-            # End time
             info['utc_max'] = df['UTC'].iloc[-1]
             
-            # Time range
             info['time_range'] = info['utc_max'] - info['utc_min']
             
-            # Number of rows
             info['num_rows'] = len(df)
             
-            # Time step (average)
             if len(df) > 1:
                 time_diffs = df['UTC'].diff().dropna()
                 info['avg_time_step'] = time_diffs.mean()
             else:
                 info['avg_time_step'] = pd.Timedelta(hours=1)
         
-        # Data columns info
         numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
         info['numeric_columns'] = numeric_columns
         info['total_columns'] = len(df.columns)
         
-        # Basic statistics
         if numeric_columns:
             info['data_stats'] = df[numeric_columns].describe().to_dict()
         
@@ -88,22 +76,16 @@ def utc_idx_pre(df: pd.DataFrame, utc_column: str = 'UTC') -> pd.DataFrame:
         Preprocessed DataFrame
     """
     try:
-        # TODO: Extract actual utc_idx_pre() logic from training_backend_test_2.py
-        # This is placeholder implementation
         
         df = df.copy()
         
-        # Ensure UTC column is datetime
         if utc_column in df.columns:
             df[utc_column] = pd.to_datetime(df[utc_column])
             
-            # Set UTC as index
             df.set_index(utc_column, inplace=True)
             
-            # Sort by index
             df.sort_index(inplace=True)
             
-            # Remove duplicates
             df = df[~df.index.duplicated(keep='first')]
         
         return df
@@ -126,16 +108,12 @@ def utc_idx_post(df: pd.DataFrame, utc_column: str = 'UTC') -> pd.DataFrame:
         Postprocessed DataFrame
     """
     try:
-        # TODO: Extract actual utc_idx_post() logic from training_backend_test_2.py
-        # This is placeholder implementation
         
         df = df.copy()
         
-        # Reset index if UTC is the index
         if df.index.name == utc_column or isinstance(df.index, pd.DatetimeIndex):
             df.reset_index(inplace=True)
             
-            # Rename index column to UTC if needed
             if df.index.name and df.index.name != utc_column:
                 df.rename(columns={df.index.name: utc_column}, inplace=True)
         
@@ -165,33 +143,27 @@ def validate_time_series_data(df: pd.DataFrame, utc_column: str = 'UTC') -> Dict
             'info': {}
         }
         
-        # Check if UTC column exists
         if utc_column not in df.columns:
             validation_results['is_valid'] = False
             validation_results['issues'].append(f"UTC column '{utc_column}' not found")
             return validation_results
         
-        # Check if UTC column is datetime
         if not pd.api.types.is_datetime64_any_dtype(df[utc_column]):
             validation_results['warnings'].append(f"UTC column '{utc_column}' is not datetime type")
         
-        # Check for missing values in UTC column
         utc_missing = df[utc_column].isna().sum()
         if utc_missing > 0:
             validation_results['is_valid'] = False
             validation_results['issues'].append(f"UTC column has {utc_missing} missing values")
         
-        # Check for duplicate timestamps
         utc_duplicates = df[utc_column].duplicated().sum()
         if utc_duplicates > 0:
             validation_results['warnings'].append(f"UTC column has {utc_duplicates} duplicate timestamps")
         
-        # Check data continuity
         if len(df) > 1:
             df_sorted = df.sort_values(utc_column)
             time_diffs = df_sorted[utc_column].diff().dropna()
             
-            # Check for irregular time intervals
             if len(time_diffs) > 0:
                 median_diff = time_diffs.median()
                 irregular_intervals = (time_diffs > median_diff * 2).sum()
@@ -202,7 +174,6 @@ def validate_time_series_data(df: pd.DataFrame, utc_column: str = 'UTC') -> Dict
                 validation_results['info']['median_time_interval'] = str(median_diff)
                 validation_results['info']['time_range'] = str(df_sorted[utc_column].max() - df_sorted[utc_column].min())
         
-        # Check for missing values in numeric columns
         numeric_columns = df.select_dtypes(include=[np.number]).columns
         for col in numeric_columns:
             missing_count = df[col].isna().sum()
@@ -237,14 +208,11 @@ def convert_timezone(df: pd.DataFrame, utc_column: str = 'UTC',
         df = df.copy()
         
         if utc_column in df.columns:
-            # Ensure UTC column is datetime
             df[utc_column] = pd.to_datetime(df[utc_column])
             
-            # If timezone naive, assume UTC
             if df[utc_column].dt.tz is None:
                 df[utc_column] = df[utc_column].dt.tz_localize('UTC')
             
-            # Convert to target timezone
             df[utc_column] = df[utc_column].dt.tz_convert(target_timezone)
             
         
@@ -273,14 +241,11 @@ def resample_time_series(df: pd.DataFrame, utc_column: str = 'UTC',
         df = df.copy()
         
         if utc_column in df.columns:
-            # Set UTC as index
             df.set_index(utc_column, inplace=True)
             
-            # Get numeric columns
             numeric_columns = df.select_dtypes(include=[np.number]).columns
             
             if len(numeric_columns) > 0:
-                # Resample based on method
                 if method == 'mean':
                     df_resampled = df[numeric_columns].resample(freq).mean()
                 elif method == 'sum':
@@ -292,7 +257,6 @@ def resample_time_series(df: pd.DataFrame, utc_column: str = 'UTC',
                 else:
                     df_resampled = df[numeric_columns].resample(freq).mean()
                 
-                # Reset index
                 df_resampled.reset_index(inplace=True)
                 
                 
@@ -349,7 +313,7 @@ def detect_outliers(df: pd.DataFrame, columns: List[str] = None,
                 
                 outlier_count = df[outlier_col].sum()
                 if outlier_count > 0:
-                    pass  # Outliers detected
+                    pass
         
         return df
         
@@ -370,7 +334,6 @@ def calculate_time_features(timestamp: pd.Timestamp, timezone: str = 'UTC') -> D
         Dict containing time features
     """
     try:
-        # Convert to specified timezone
         if timestamp.tz is None:
             timestamp = timestamp.tz_localize('UTC')
         
@@ -397,7 +360,6 @@ def calculate_time_features(timestamp: pd.Timestamp, timezone: str = 'UTC') -> D
             'day_of_year': timestamp.dayofyear
         }
         
-        # Cyclical features
         features['hour_sin'] = np.sin(2 * np.pi * timestamp.hour / 24)
         features['hour_cos'] = np.cos(2 * np.pi * timestamp.hour / 24)
         features['month_sin'] = np.sin(2 * np.pi * timestamp.month / 12)

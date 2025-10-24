@@ -46,7 +46,6 @@ class DataScaler:
         """
         try:
             
-            # Extract scaling lists from configuration
             i_scal_list = [config.get('scale', False) for config in input_scaling_config]
             i_scal_max_list = [config.get('scale_max', 1.0) for config in input_scaling_config]
             i_scal_min_list = [config.get('scale_min', 0.0) for config in input_scaling_config]
@@ -55,21 +54,18 @@ class DataScaler:
             o_scal_max_list = [config.get('scale_max', 1.0) for config in output_scaling_config]
             o_scal_min_list = [config.get('scale_min', 0.0) for config in output_scaling_config]
             
-            # Count total scaling operations for progress tracking
             total_scaling_ops = sum(i_scal_list) + sum(o_scal_list)
             current_op = 0
             
-            # Initialize input scalers
             self.input_scalers = {}
             
-            for i in range(input_combined_array.shape[1]):  # Loop over columns
+            for i in range(input_combined_array.shape[1]):
                 if i < len(i_scal_list) and i_scal_list[i]:
                     
                     if progress_callback:
                         progress = current_op / total_scaling_ops * 100 if total_scaling_ops > 0 else 0
                         progress_callback(f"Setting up input scaler {i+1}", progress)
                     
-                    # Create MinMaxScaler with specified range
                     scaler = MinMaxScaler(feature_range=(i_scal_min_list[i], i_scal_max_list[i]))
                     scaler.fit(input_combined_array[:, i].reshape(-1, 1))
                     self.input_scalers[i] = scaler
@@ -80,17 +76,15 @@ class DataScaler:
                 else:
                     self.input_scalers[i] = None
             
-            # Initialize output scalers
             self.output_scalers = {}
             
-            for i in range(output_combined_array.shape[1]):  # Loop over columns
+            for i in range(output_combined_array.shape[1]):
                 if i < len(o_scal_list) and o_scal_list[i]:
                     
                     if progress_callback:
                         progress = current_op / total_scaling_ops * 100 if total_scaling_ops > 0 else 0
                         progress_callback(f"Setting up output scaler {i+1}", progress)
                     
-                    # Create MinMaxScaler with specified range
                     scaler = MinMaxScaler(feature_range=(o_scal_min_list[i], o_scal_max_list[i]))
                     scaler.fit(output_combined_array[:, i].reshape(-1, 1))
                     self.output_scalers[i] = scaler
@@ -101,7 +95,6 @@ class DataScaler:
                 else:
                     self.output_scalers[i] = None
             
-            # Store configuration for later use
             self.scaling_config = {
                 'input_config': input_scaling_config,
                 'output_config': output_scaling_config,
@@ -136,7 +129,6 @@ class DataScaler:
         """
         try:
             
-            # Make copies to avoid modifying original data
             scaled_input = copy.deepcopy(input_array_3d)
             scaled_output = copy.deepcopy(output_array_3d)
             
@@ -144,44 +136,34 @@ class DataScaler:
             n_input_features = scaled_input.shape[2]
             n_output_features = scaled_output.shape[2]
             
-            # Apply scaling to input data
             for sample_idx in range(n_samples):
                 
                 if progress_callback:
-                    progress = sample_idx / n_samples * 50  # First 50% for input scaling
+                    progress = sample_idx / n_samples * 50
                     progress_callback(f"Scaling input data: sample {sample_idx+1}/{n_samples}", progress)
                 
-                # Scale each input feature
                 for feat_idx in range(n_input_features):
                     
                     if self.input_scalers.get(feat_idx) is not None:
-                        # Extract feature column for this sample
                         feature_data = scaled_input[sample_idx, :, feat_idx].reshape(-1, 1)
                         
-                        # Apply scaler
                         scaled_feature = self.input_scalers[feat_idx].transform(feature_data)
                         
-                        # Update array
                         scaled_input[sample_idx, :, feat_idx] = scaled_feature.ravel()
             
-            # Apply scaling to output data
             for sample_idx in range(n_samples):
                 
                 if progress_callback:
-                    progress = 50 + (sample_idx / n_samples * 50)  # Second 50% for output scaling
+                    progress = 50 + (sample_idx / n_samples * 50)
                     progress_callback(f"Scaling output data: sample {sample_idx+1}/{n_samples}", progress)
                 
-                # Scale each output feature
                 for feat_idx in range(n_output_features):
                     
                     if self.output_scalers.get(feat_idx) is not None:
-                        # Extract feature column for this sample
                         feature_data = scaled_output[sample_idx, :, feat_idx].reshape(-1, 1)
                         
-                        # Apply scaler
                         scaled_feature = self.output_scalers[feat_idx].transform(feature_data)
                         
-                        # Update array
                         scaled_output[sample_idx, :, feat_idx] = scaled_feature.ravel()
             
             if progress_callback:
@@ -209,13 +191,11 @@ class DataScaler:
         """
         try:
             
-            # Make copy to avoid modifying original data
             unscaled_predictions = copy.deepcopy(scaled_predictions)
             
             n_samples = unscaled_predictions.shape[0]
             n_features = unscaled_predictions.shape[2]
             
-            # Apply inverse scaling to each sample and feature
             for sample_idx in range(n_samples):
                 
                 if progress_callback:
@@ -225,13 +205,10 @@ class DataScaler:
                 for feat_idx in range(n_features):
                     
                     if self.output_scalers.get(feat_idx) is not None:
-                        # Extract feature column for this sample
                         feature_data = unscaled_predictions[sample_idx, :, feat_idx].reshape(-1, 1)
                         
-                        # Apply inverse transform
                         unscaled_feature = self.output_scalers[feat_idx].inverse_transform(feature_data)
                         
-                        # Update array
                         unscaled_predictions[sample_idx, :, feat_idx] = unscaled_feature.ravel()
             
             if progress_callback:
@@ -269,7 +246,6 @@ class DataScaler:
         """
         try:
             
-            # Validate ratios
             total_ratio = train_ratio + val_ratio + test_ratio
             if abs(total_ratio - 1.0) > 1e-6:
                 logger.warning(f"Ratios don't sum to 1.0: {total_ratio}. Normalizing...")
@@ -279,27 +255,22 @@ class DataScaler:
             
             n_samples = input_array_3d.shape[0]
             
-            # Calculate split indices
             n_train = int(train_ratio * n_samples)
             n_val = int(val_ratio * n_samples)
-            n_test = n_samples - n_train - n_val  # Ensure all samples are used
+            n_test = n_samples - n_train - n_val
             
             
-            # Create indices
             indices = np.arange(n_samples)
             
-            # Shuffle if requested
             if shuffle:
                 if random_seed is not None:
                     np.random.seed(random_seed)
                 np.random.shuffle(indices)
             
-            # Split indices
             train_indices = indices[:n_train]
             val_indices = indices[n_train:n_train + n_val]
             test_indices = indices[n_train + n_val:]
             
-            # Create data splits
             splits = {
                 'train_x': input_array_3d[train_indices],
                 'val_x': input_array_3d[val_indices],
@@ -346,7 +317,6 @@ class DataScaler:
                 }
             }
             
-            # Input scaler statistics
             for idx, scaler in self.input_scalers.items():
                 if scaler is not None:
                     stats['input_scalers'][idx] = {
@@ -357,7 +327,6 @@ class DataScaler:
                     }
                     stats['summary']['total_input_scalers'] += 1
             
-            # Output scaler statistics
             for idx, scaler in self.output_scalers.items():
                 if scaler is not None:
                     stats['output_scalers'][idx] = {
@@ -396,7 +365,6 @@ def create_default_scaling_config(data_info: Dict,
     try:
         config = []
         
-        # If data_info contains feature names
         if 'features' in data_info:
             for feature_name in data_info['features']:
                 config.append({
@@ -407,7 +375,6 @@ def create_default_scaling_config(data_info: Dict,
                     'scaler_type': 'MinMaxScaler'
                 })
         
-        # If data_info contains feature count
         elif 'n_features' in data_info:
             for i in range(data_info['n_features']):
                 config.append({
@@ -445,7 +412,6 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
     """
     try:
         
-        # Default configurations
         if scaling_config is None:
             scaling_config = {
                 'input_config': create_default_scaling_config({'n_features': input_array_3d.shape[2]}),
@@ -461,14 +427,11 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
                 'random_seed': None
             }
         
-        # Initialize scaler
         scaler = DataScaler()
         
-        # Phase 1: Prepare scalers
         if progress_callback:
             progress_callback("Preparing scalers", 10)
         
-        # Create combined arrays for scaler fitting
         input_combined = input_array_3d.reshape(-1, input_array_3d.shape[2])
         output_combined = output_array_3d.reshape(-1, output_array_3d.shape[2])
         
@@ -479,7 +442,6 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
             scaling_config['output_config']
         )
         
-        # Phase 2: Apply scaling 
         if progress_callback:
             progress_callback("Applying scaling", 30)
         
@@ -488,7 +450,6 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
             output_array_3d
         )
         
-        # Phase 3: Split data
         if progress_callback:
             progress_callback("Splitting data", 80)
         
@@ -498,7 +459,6 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
             **split_config
         )
         
-        # Also create original data splits (unscaled)
         original_splits = scaler.split_train_val_test(
             input_array_3d,
             output_array_3d,
@@ -508,7 +468,6 @@ def prepare_data_for_training(input_array_3d: np.ndarray,
         if progress_callback:
             progress_callback("Data preparation completed", 100)
         
-        # Return comprehensive results
         results = {
             'scaled_data': data_splits,
             'original_data': original_splits,

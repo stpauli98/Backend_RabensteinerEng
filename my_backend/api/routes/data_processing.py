@@ -1,4 +1,3 @@
-# Standard library imports
 import csv
 import json
 import logging
@@ -7,12 +6,10 @@ import os
 import re
 import tempfile
 
-# Third-party imports
 import numpy as np
 import pandas as pd
 from flask import Blueprint, request, Response, jsonify, send_file, current_app
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -20,12 +17,10 @@ bp = Blueprint('data_processing', __name__)
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "upload_chunks")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Security configuration
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_FILE_SIZE = 100 * 1024 * 1024
 ALLOWED_EXTENSIONS = {'.csv', '.txt'}
-MAX_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB per chunk (matching frontend)
+MAX_CHUNK_SIZE = 10 * 1024 * 1024
 
-# Progress tracking constants
 PROGRESS_COMBINING = 65
 PROGRESS_PROCESSING = 70
 PROGRESS_CLEANING_START = 75
@@ -33,7 +28,6 @@ PROGRESS_CLEANED = 85
 PROGRESS_STREAMING_START = 90
 PROGRESS_COMPLETE = 100
 
-# Data processing constants
 STREAMING_CHUNK_SIZE = 50000
 TOTAL_CLEANING_STEPS = 7
 CLEANING_PROGRESS_RANGE = 10
@@ -44,29 +38,23 @@ def secure_path_join(base_dir, user_input):
     if not user_input:
         raise ValueError("Empty path component")
 
-    # Check for path traversal attempts BEFORE cleaning
     if '..' in user_input or '/' in user_input or '\\' in user_input:
         raise ValueError("Path traversal attempt detected")
 
-    # Additional check for encoded traversal attempts
     if '%2e%2e' in user_input.lower() or '%2f' in user_input.lower() or '%5c' in user_input.lower():
         raise ValueError("Encoded path traversal attempt detected")
 
-    # Clean the input - only basename, remove dangerous chars
     clean_input = os.path.basename(user_input)
 
-    # Remove any remaining dangerous characters
     dangerous_chars = ['<', '>', ':', '"', '|', '?', '*', '\x00']
     for char in dangerous_chars:
         clean_input = clean_input.replace(char, '')
 
-    # Check if input is valid after cleaning
     if not clean_input or clean_input in ['.', '..', ''] or len(clean_input.strip()) == 0:
         raise ValueError("Invalid path component")
 
     full_path = os.path.join(base_dir, clean_input)
 
-    # Ensure resolved path is within base directory
     base_real = os.path.realpath(base_dir)
     full_real = os.path.realpath(full_path)
 
@@ -99,13 +87,11 @@ def validate_processing_params(params):
                 raise ValueError(f"{description} must be between {min_val} and {max_val}")
             validated[param] = value
 
-    # Validate radio button parameters - allow empty/undefined values
     radio_params = ['radioValueNull', 'radioValueNotNull']
     for param in radio_params:
         if param in params:
-            # Allow empty, None, or undefined values (frontend sends these when checkbox not selected)
             if params[param] in [None, '', 'undefined', 'null']:
-                validated[param] = ''  # Normalize to empty string
+                validated[param] = ''
             else:
                 validated[param] = params[param]
 
@@ -116,29 +102,24 @@ def validate_file_upload(file_chunk, filename):
     if not filename:
         raise ValueError("Empty filename")
 
-    # Check file extension
     _, ext = os.path.splitext(filename.lower())
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError(f"Unsupported file type: {ext}. Only CSV and TXT files allowed.")
 
-    # Check chunk size
     chunk_data = file_chunk.read()
     if len(chunk_data) > MAX_CHUNK_SIZE:
         raise ValueError("Chunk size too large")
 
-    file_chunk.seek(0)  # Reset for further reading
+    file_chunk.seek(0)
     return chunk_data
 
 def safe_error_response(error_msg, status_code=500, error_type=None):
     """Sanitize error messages to prevent information disclosure while preserving specific error types"""
-    # Remove file paths from error messages
     sanitized = re.sub(r'/[^\s]+', '[PATH]', str(error_msg))
-    # Remove detailed stack trace info - keep only first line
     sanitized = sanitized.split('\n')[0]
 
-    logger.error(f"Error occurred: {error_msg}")  # Log full error for debugging
+    logger.error(f"Error occurred: {error_msg}")
 
-    # Provide specific error messages for common validation failures
     if error_type == 'validation' or 'validation' in str(error_msg).lower():
         if 'parameter' in str(error_msg).lower():
             return jsonify({"error": f"Parameter validation failed: {sanitized}"}), status_code
@@ -164,7 +145,6 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
         current_step += 1
         if emit_progress_func and upload_id:
             progress = PROGRESS_CLEANING_START + (current_step / TOTAL_CLEANING_STEPS) * CLEANING_PROGRESS_RANGE
-            # Enhanced message with step count and removal info
             message = f"Step {current_step}/{TOTAL_CLEANING_STEPS}: {step_name}"
             if removed_count is not None:
                 message += f" - Removed: {removed_count} values"
@@ -173,7 +153,6 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
     
     df["UTC"] = pd.to_datetime(df["UTC"], format="%Y-%m-%d %H:%M:%S")
 
-    # Remove measurement failures (identical consecutive values)
     if params.get("eqMax"):
         emit_cleaning_progress("Removing measurement failures")
         logger.info("Removing measurement failures (identical consecutive values)")
@@ -197,12 +176,10 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                     for i_frm in range(idx_strt, idx_end+1):
                         df.iloc[i_frm, df.columns.get_loc(value_column)] = np.nan
 
-    # Remove values above upper threshold
     if params.get("elMax") is not None:
         logger.info("Removing values above upper threshold")
         el_max = float(params["elMax"])
         values_to_remove = 0
-        # Manual loop - identical to data_edit.py logic
         for i in range(len(df)):
             try:
                 if float(df.iloc[i][value_column]) > el_max:
@@ -213,12 +190,10 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                 values_to_remove += 1
         emit_cleaning_progress("Removing values above upper threshold", values_to_remove)
 
-    # Remove values below lower threshold
     if params.get("elMin") is not None:
         logger.info("Removing values below lower threshold")
         el_min = float(params["elMin"])
         values_to_remove = 0
-        # Manual loop - identical to data_edit.py logic
         for i in range(len(df)):
             try:
                 if float(df.iloc[i][value_column]) < el_min:
@@ -229,22 +204,18 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                 values_to_remove += 1
         emit_cleaning_progress("Removing values below lower threshold", values_to_remove)
 
-    # Remove null values (zeros)
     if params.get("radioValueNull") == "ja":
         logger.info("Removing null values")
         values_to_remove = 0
-        # Manual loop - identical to data_edit.py logic
         for i in range(len(df)):
             if df.iloc[i][value_column] == 0:
                 df.iloc[i, df.columns.get_loc(value_column)] = np.nan
                 values_to_remove += 1
         emit_cleaning_progress("Removing null values", values_to_remove)
 
-    # Remove non-numeric values
     if params.get("radioValueNotNull") == "ja":
         logger.info("Removing non-numeric values")
         values_to_remove = 0
-        # Manual loop with try/except - identical to data_edit.py logic
         for i in range(len(df)):
             try:
                 float(df.iloc[i][value_column])
@@ -256,7 +227,6 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                 values_to_remove += 1
         emit_cleaning_progress("Removing non-numeric values", values_to_remove)
 
-    # Remove outliers based on rate of change
     if params.get("chgMax") and params.get("lgMax"):
         emit_cleaning_progress("Removing outliers")
         logger.info("Removing outliers")
@@ -287,7 +257,6 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                 elif frm == 1 and (df.iloc[i]["UTC"] - df.iloc[idx_strt]["UTC"]).total_seconds() / 60 > lg_max:
                     frm = 0
 
-    # Fill measurement gaps with linear interpolation
     if params.get("gapMax"):
         emit_cleaning_progress("Filling measurement gaps")
         logger.info("Filling measurement gaps")
@@ -308,12 +277,9 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                         df.iloc[i_frm, df.columns.get_loc(value_column)] = float(df.iloc[idx_strt-1][value_column]) + gap_min*dif_min
                 frm = 0
 
-    # Final validation: ensure interpolated values respect elMin/elMax limits
     if params.get("elMin") is not None:
         el_min = float(params["elMin"])
-        # Count ALL values below elMin threshold (including NaN)
         final_violations_min = (df[value_column] < el_min).sum()
-        # Also check for zero values specifically
         zero_values = (df[value_column] == 0).sum()
         logger.info(f"Final validation: Found {final_violations_min} values < {el_min} and {zero_values} zero values")
         if final_violations_min > 0:
@@ -344,15 +310,13 @@ def _combine_chunks_efficiently(upload_dir, total_chunks):
                 raise FileNotFoundError(f"Missing chunk file: {i}")
 
             with open(chunk_path, "rb") as chunk_file:
-                # Stream chunks in blocks to avoid loading entire chunk into memory
                 while True:
-                    block = chunk_file.read(8192)  # 8KB blocks
+                    block = chunk_file.read(8192)
                     if not block:
                         break
                     temp_file.write(block)
                     total_size += len(block)
 
-                    # Check file size limit during streaming
                     if total_size > MAX_FILE_SIZE:
                         temp_file.close()
                         os.unlink(temp_file.name)
@@ -362,7 +326,6 @@ def _combine_chunks_efficiently(upload_dir, total_chunks):
         return temp_file.name, total_size
 
     except Exception:
-        # Cleanup on error
         if not temp_file.closed:
             temp_file.close()
         if os.path.exists(temp_file.name):
@@ -373,7 +336,6 @@ def _emit_progress_update(upload_id, step, progress, message):
     """Emit progress update via Socket.IO"""
     if upload_id:
         try:
-            # Import socketio directly from app module to avoid context issues
             from app import socketio
             logger.info(f"Emitting Socket.IO progress: {progress}% - {step} - {message} to room: {upload_id}")
             socketio.emit('processing_progress', {
@@ -384,7 +346,6 @@ def _emit_progress_update(upload_id, step, progress, message):
             }, room=upload_id)
         except Exception as e:
             logger.error(f"Error emitting progress: {e}")
-            # Fallback: try current_app method
             try:
                 socketio = current_app.extensions.get('socketio')
                 if socketio:
@@ -401,7 +362,6 @@ def _emit_progress_update(upload_id, step, progress, message):
 @bp.route("/api/dataProcessingMain/upload-chunk", methods=["POST"])
 def upload_chunk():
     try:
-        # Minimal logging for performance
         logger.info(f"Processing chunk {request.form.get('chunkIndex')}/{request.form.get('totalChunks')}")
 
         if not all(key in request.form for key in ["uploadId", "chunkIndex", "totalChunks"]):
@@ -422,7 +382,6 @@ def upload_chunk():
             logger.error("Empty filename in fileChunk")
             return safe_error_response("Empty filename", 400)
 
-        # Validate and read the chunk
         try:
             chunk = validate_file_upload(file_chunk, file_chunk.filename)
             chunk_size = len(chunk)
@@ -434,7 +393,6 @@ def upload_chunk():
             logger.error("Received empty chunk")
             return jsonify({"error": "Empty chunk received"}), 400
 
-        # Create upload directory (secure path join)
         try:
             upload_dir = secure_path_join(UPLOAD_FOLDER, upload_id)
             os.makedirs(upload_dir, exist_ok=True)
@@ -443,14 +401,12 @@ def upload_chunk():
             return safe_error_response("Invalid upload identifier", 400, 'security')
         chunk_path = os.path.join(upload_dir, f"chunk_{chunk_index:04d}.part")
         
-        # Save the chunk
         with open(chunk_path, "wb") as f:
             f.write(chunk)
 
         if chunk_index < total_chunks - 1:
             return jsonify({"status": "chunk received", "chunkIndex": chunk_index})
 
-        # Combine all chunks efficiently
         logger.info("Starting to combine all chunks")
         _emit_progress_update(upload_id, 'combining', PROGRESS_COMBINING, 'Combining uploaded chunks...')
 
@@ -458,14 +414,13 @@ def upload_chunk():
             combined_file_path, total_size = _combine_chunks_efficiently(upload_dir, total_chunks)
         except (FileNotFoundError, ValueError) as e:
             logger.error(f"Chunk combination failed: {e}")
-            # Clean up chunks on error
             for i in range(total_chunks):
                 part_path = os.path.join(upload_dir, f"chunk_{i:04d}.part")
                 try:
                     if os.path.exists(part_path):
                         os.remove(part_path)
                 except OSError:
-                    pass  # Ignore cleanup errors
+                    pass
 
             if "exceeds" in str(e):
                 return safe_error_response("File too large", 413, 'validation')
@@ -474,16 +429,14 @@ def upload_chunk():
 
         if total_size == 0:
             logger.error("No data in combined chunks")
-            os.unlink(combined_file_path)  # Clean up empty file
+            os.unlink(combined_file_path)
             return jsonify({"error": "No data in combined chunks"}), 400
 
-        # Process the combined data
         try:
             _emit_progress_update(upload_id, 'processing', PROGRESS_PROCESSING, 'Processing combined data...')
             with open(combined_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Clean up temporary combined file
             os.unlink(combined_file_path)
             lines = content.splitlines()
             
@@ -506,11 +459,9 @@ def upload_chunk():
                 return jsonify({"error": "No data rows found"}), 400
 
             df = pd.DataFrame(data, columns=["UTC", value_column])
-            # Replace empty strings with NaN before numeric conversion
             df[value_column] = df[value_column].replace('', np.nan)
             df[value_column] = pd.to_numeric(df[value_column].str.replace(",", "."), errors='coerce')
 
-            # Validate processing parameters
             raw_params = {
                 "eqMax": request.form.get("eqMax"),
                 "elMax": request.form.get("elMax"),
@@ -533,38 +484,29 @@ def upload_chunk():
             _emit_progress_update(upload_id, 'cleaned', PROGRESS_CLEANED, f'Data cleaning completed. Processing {len(df_clean)} rows...')
 
             def generate():
-                # Create a custom JSON encoder to handle Pandas Timestamp objects
                 class CustomJSONEncoder(json.JSONEncoder):
                     def default(self, obj):
                         if isinstance(obj, pd.Timestamp):
                             return obj.strftime('%Y-%m-%d %H:%M:%S')
                         return super().default(obj)
                 
-                # Emit progress for streaming start
                 _emit_progress_update(upload_id, 'streaming', PROGRESS_STREAMING_START, f'Starting to stream {len(df_clean)} processed rows...')
                 
-                # First send total rows
                 yield json.dumps({"total_rows": len(df_clean)}, cls=CustomJSONEncoder) + "\n"
                 
-                # Process data in chunks
                 chunk_size = STREAMING_CHUNK_SIZE
                 for i in range(0, len(df_clean), chunk_size):
-                    # Emit progress for chunk processing
                     chunk_progress = PROGRESS_STREAMING_START + ((i / len(df_clean)) * STREAMING_PROGRESS_RANGE)
                     _emit_progress_update(upload_id, 'streaming', chunk_progress, f'Streaming chunk {i//chunk_size + 1}/{(len(df_clean)//chunk_size) + 1}...')
-                    # Create a copy of the chunk and convert UTC in one step
                     chunk = df_clean.iloc[i:i + chunk_size].copy()
                     chunk.loc[:, 'UTC'] = chunk['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Log first 10 rows of the first chunk
                     if i == 0:
                         logger.info("First 10 rows of processed data:")
                         logger.info(chunk.head(10).to_string())
                     
-                    # Convert to dict and ensure all values are JSON serializable
                     chunk_data = []
                     for _, row in chunk.iterrows():
-                        # Ensure UTC is a string, not a Timestamp object
                         utc_value = row['UTC']
                         if isinstance(utc_value, pd.Timestamp):
                             utc_value = utc_value.strftime('%Y-%m-%d %H:%M:%S')
@@ -575,11 +517,9 @@ def upload_chunk():
                         }
                         chunk_data.append(record)
                     
-                    # Yield all records in the chunk at once
                     for record in chunk_data:
                         yield json.dumps(record, cls=CustomJSONEncoder) + "\n"
                 
-                # Send completion status
                 _emit_progress_update(upload_id, 'complete', PROGRESS_COMPLETE, f'Processing completed! Generated {len(df_clean)} data points.')
                 yield json.dumps({"status": "complete"}, cls=CustomJSONEncoder) + "\n"
                         
@@ -609,7 +549,6 @@ def prepare_save():
 
         logger.info(f"Preparing to save file: {file_name} with {len(rows)} rows")
 
-        # Sanitize filename securely
         try:
             safe_file_name = os.path.basename(file_name).replace(" ", "_")
             file_path = secure_path_join(tempfile.gettempdir(), safe_file_name)
@@ -617,7 +556,6 @@ def prepare_save():
             logger.error(f"Invalid filename: {file_name}")
             return safe_error_response("Invalid filename", 400, 'validation')
 
-        # Write CSV
         with open(file_path, "w", newline='', encoding='utf-8') as f:
             writer = csv.writer(f, delimiter=";")
             for row in rows:
@@ -634,7 +572,6 @@ def prepare_save():
 @bp.route("/api/dataProcessingMain/download/<file_id>", methods=["GET"])
 def download_file(file_id):
     try:
-        # Secure path validation
         try:
             path = secure_path_join(tempfile.gettempdir(), file_id)
         except ValueError as e:

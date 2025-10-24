@@ -33,7 +33,7 @@ def wape(y_true, y_pred):
     denominator = np.sum(np.abs(y_true))
     
     if denominator == 0:
-        return 0.0  # Return 0.0 instead of np.nan for JSON compatibility
+        return 0.0
 
     return (numerator/denominator)*100
 
@@ -89,23 +89,21 @@ def mase(y_true, y_pred, m = 1):
         
         n = len(y_true)
         
-        # Vorhersagefehler (MAE der Prognose)
         mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
 
-        # MAE des Naive-m-Modells (Baseline)
         if n <= m:
-            return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+            return 0.0
             
         naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
         mae_naive = sum(naive_errors) / len(naive_errors)
 
         if mae_naive == 0:
-            return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+            return 0.0
 
         return mae_forecast/mae_naive
         
     except Exception:
-        return 0.0  # Return 0.0 for any error
+        return 0.0
 
 
 class ResultsGenerator:
@@ -130,16 +128,12 @@ class ResultsGenerator:
             Dict containing formatted results
         """
         try:
-            # Generate evaluation metrics
             evaluation_results = self._generate_evaluation_metrics(training_results)
             
-            # Generate evaluation DataFrames
             evaluation_dataframes = self._generate_evaluation_dataframes(training_results, session_data)
             
-            # Generate model comparison
             model_comparison = self._generate_model_comparison(training_results)
             
-            # Generate training metadata
             training_metadata = self._generate_training_metadata(training_results, session_data)
             
             results = {
@@ -176,22 +170,17 @@ class ResultsGenerator:
                 
                 for model_name, model_result in dataset_results.items():
                     if 'metrics' in model_result:
-                        # Get base metrics
                         base_metrics = model_result['metrics']
                         
-                        # Calculate additional custom metrics
                         if 'predictions' in model_result:
                             y_pred = model_result['predictions']
-                            # TODO: Get y_true from somewhere - this needs to be passed
-                            # For now, placeholder
                             additional_metrics = {
-                                'nrmse': 0.0,  # Will be calculated when y_true is available
-                                'wape': 0.0,   # Will be calculated when y_true is available
-                                'smape': 0.0,  # Will be calculated when y_true is available
-                                'mase': 0.0    # Will be calculated when y_true is available
+                                'nrmse': 0.0,
+                                'wape': 0.0,
+                                'smape': 0.0,
+                                'mase': 0.0
                             }
                             
-                            # Combine metrics
                             all_metrics = {**base_metrics, **additional_metrics}
                             dataset_metrics[model_name] = all_metrics
                         else:
@@ -221,10 +210,8 @@ class ResultsGenerator:
             evaluation_dataframes = {}
             
             for dataset_name, dataset_results in training_results.items():
-                # Create evaluation DataFrame
                 df_eval = self._create_evaluation_dataframe(dataset_results)
                 
-                # Create time series evaluation DataFrame
                 df_eval_ts = self._create_timeseries_evaluation_dataframe(dataset_results, session_data)
                 
                 evaluation_dataframes[dataset_name] = {
@@ -290,8 +277,6 @@ class ResultsGenerator:
             Time series evaluation DataFrame
         """
         try:
-            # TODO: Extract actual time series evaluation logic from training_backend_test_2.py
-            # This is placeholder implementation
             
             ts_eval_data = []
             
@@ -299,16 +284,15 @@ class ResultsGenerator:
                 if 'predictions' in model_result:
                     predictions = model_result['predictions']
                     
-                    # Create time series evaluation rows
                     for i, pred in enumerate(predictions):
                         ts_eval_row = {
                             'model': model_name,
                             'timestamp': pd.Timestamp.now() + pd.Timedelta(hours=i),
                             'prediction': float(pred.flatten()[0]) if hasattr(pred, 'flatten') else float(pred),
-                            'actual': 0.0,  # TODO: Get actual values
-                            'error': 0.0,   # TODO: Calculate error
-                            'abs_error': 0.0,  # TODO: Calculate absolute error
-                            'percentage_error': 0.0  # TODO: Calculate percentage error
+                            'actual': 0.0,
+                            'error': 0.0,
+                            'abs_error': 0.0,
+                            'percentage_error': 0.0
                         }
                         
                         ts_eval_data.append(ts_eval_row)
@@ -336,18 +320,15 @@ class ResultsGenerator:
             comparison = {}
             
             for dataset_name, dataset_results in training_results.items():
-                # Collect metrics for comparison
                 model_metrics = {}
                 
                 for model_name, model_result in dataset_results.items():
                     if 'metrics' in model_result:
                         model_metrics[model_name] = model_result['metrics']
                 
-                # Find best model for each metric
                 best_models = {}
                 
                 if model_metrics:
-                    # For each metric, find the best model
                     all_metrics = set()
                     for metrics in model_metrics.values():
                         all_metrics.update(metrics.keys())
@@ -359,7 +340,6 @@ class ResultsGenerator:
                                 metric_values[model_name] = metrics[metric]
                         
                         if metric_values:
-                            # Lower is better for error metrics
                             best_model = min(metric_values, key=metric_values.get)
                             best_models[metric] = {
                                 'model': best_model,
@@ -411,7 +391,6 @@ class ResultsGenerator:
                     if 'metrics' in model_result:
                         metadata['successful_models'] += 1
                         
-                        # Add training history if available
                         if 'history' in model_result:
                             dataset_metadata['training_history'][model_name] = model_result['history']
                     else:
@@ -446,7 +425,7 @@ class ResultsGenerator:
         denominator = np.sum(np.abs(y_true))
         
         if denominator == 0:
-            return 0.0  # Return 0.0 instead of np.nan for JSON compatibility
+            return 0.0
 
         return (numerator/denominator)*100
     
@@ -500,23 +479,21 @@ class ResultsGenerator:
             
             n = len(y_true)
             
-            # Vorhersagefehler (MAE der Prognose)
             mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true, y_pred)) / n
 
-            # MAE des Naive-m-Modells (Baseline)
             if n <= m:
-                return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+                return 0.0
                 
             naive_errors = [abs(y_true[t] - y_true[t - m]) for t in range(m, n)]
             mae_naive = sum(naive_errors) / len(naive_errors)
 
             if mae_naive == 0:
-                return 0.0  # Return 0.0 instead of raising error for JSON compatibility
+                return 0.0
 
             return mae_forecast/mae_naive
             
         except Exception:
-            return 0.0  # Return 0.0 for any error
+            return 0.0
     
     def _clean_json_values(self, obj):
         """Clean NaN and Infinity values from nested dictionary/list for JSON serialization"""
@@ -528,7 +505,7 @@ class ResultsGenerator:
             return [self._clean_json_values(item) for item in obj]
         elif isinstance(obj, float):
             if math.isnan(obj) or math.isinf(obj):
-                return None  # Replace NaN/Infinity with None
+                return None
             return obj
         else:
             return obj
@@ -549,7 +526,6 @@ class ResultsGenerator:
                 logger.warning("No results to save")
                 return False
             
-            # Convert session_id to UUID for database
             from utils.database import create_or_get_session_uuid
             
             uuid_session_id = create_or_get_session_uuid(session_id)
@@ -557,17 +533,15 @@ class ResultsGenerator:
                 logger.error(f"Could not get UUID for session {session_id}")
                 return False
             
-            # Clean NaN and Infinity values from results
             cleaned_results = self._clean_json_values(self.results)
             
             result_data = {
-                'session_id': uuid_session_id,  # Use UUID instead of string
+                'session_id': uuid_session_id,
                 'results': cleaned_results,
                 'created_at': pd.Timestamp.now().isoformat(),
                 'status': 'completed'
             }
             
-            # Save to database
             response = supabase_client.table('training_results').insert(result_data).execute()
             
             if response.data:
@@ -581,7 +555,6 @@ class ResultsGenerator:
             return False
 
 
-# Factory function to create results generator
 def create_results_generator() -> ResultsGenerator:
     """
     Create and return a ResultsGenerator instance

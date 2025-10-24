@@ -48,21 +48,16 @@ class TimeFeatureExtractor:
             features = {}
             
             if mode == "Zeithorizont":
-                # TIME HORIZON MODE
                 if not use_local_time:
-                    # UTC REFERENCE
                     sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                     
-                    # 31557600 = 60×60×24×365.25 (seconds in average year)
                     features["y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
                     features["y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
                     
                 else:
-                    # LOCAL TIME REFERENCE
                     utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
                     local_timestamps = [dt.astimezone(pytz.timezone(self.timezone)) for dt in utc_timestamps]
                     
-                    # Generate seconds timestamp
                     sec = np.array([
                         (dt.timetuple().tm_yday - 1) * 86400 +
                         dt.hour * 3600 +
@@ -71,31 +66,25 @@ class TimeFeatureExtractor:
                         for dt in local_timestamps
                     ])
                     
-                    # Years as NumPy array
                     years = np.array([dt.year for dt in local_timestamps])
                     
-                    # Vectorized leap year check
                     is_leap = np.vectorize(calendar.isleap)(years)
                     
-                    # Number of seconds in the year
-                    sec_y = np.where(is_leap, 31622400, 31536000)  # 366 or 365 days
+                    sec_y = np.where(is_leap, 31622400, 31536000)
                     
                     features["y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
                     features["y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
                     
             elif mode == "Aktuelle Zeit":
-                # CURRENT TIME MODE (single timestamp)
                 if len(timestamps) > 0:
-                    utc_ref = timestamps[0]  # Use first timestamp as reference
+                    utc_ref = timestamps[0]
                     
                     if not use_local_time:
-                        # UTC REFERENCE
                         sec = utc_ref.timestamp()
                         features["y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
                         features["y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
                         
                     else:
-                        # LOCAL TIME REFERENCE
                         if utc_ref.tzinfo is None:
                             utc_ref = pytz.utc.localize(utc_ref)
                         local_time = utc_ref.astimezone(pytz.timezone(self.timezone))
@@ -105,11 +94,10 @@ class TimeFeatureExtractor:
                               local_time.minute * 60 + 
                               local_time.second)
                         
-                        # Number of seconds in the year
                         if calendar.isleap(local_time.year):
-                            sec_y = 31622400  # 366 days
+                            sec_y = 31622400
                         else:
-                            sec_y = 31536000  # 365 days
+                            sec_y = 31536000
                             
                         features["y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
                         features["y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
@@ -139,19 +127,15 @@ class TimeFeatureExtractor:
             
             if mode == "Zeithorizont":
                 if not use_local_time:
-                    # UTC REFERENCE
                     sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                     
-                    # 2629800 = 60×60×24×365.25/12 (seconds in average month)
                     features["m_sin"] = np.sin(sec / 2629800 * 2 * np.pi)
                     features["m_cos"] = np.cos(sec / 2629800 * 2 * np.pi)
                     
                 else:
-                    # LOCAL TIME REFERENCE
                     utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
                     local_timestamps = [dt.astimezone(pytz.timezone(self.timezone)) for dt in utc_timestamps]
                     
-                    # Calculate seconds within month cycle
                     sec = np.array([
                         (dt.timetuple().tm_yday - 1) * 86400 +
                         dt.hour * 3600 +
@@ -164,7 +148,6 @@ class TimeFeatureExtractor:
                     features["m_cos"] = np.cos(sec / 2629800 * 2 * np.pi)
                     
             elif mode == "Aktuelle Zeit":
-                # CURRENT TIME MODE
                 if len(timestamps) > 0:
                     utc_ref = timestamps[0]
                     
@@ -207,21 +190,17 @@ class TimeFeatureExtractor:
             features = {}
             
             if not use_local_time:
-                # UTC REFERENCE
                 sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                 
-                # 604800 = 60×60×24×7 (seconds in week)
                 features["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
                 features["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
                 
             else:
-                # LOCAL TIME REFERENCE
                 utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
                 local_timestamps = [dt.astimezone(pytz.timezone(self.timezone)) for dt in utc_timestamps]
                 
-                # Calculate seconds within week
                 sec = np.array([
-                    dt.weekday() * 86400 +  # Days from Monday (0)
+                    dt.weekday() * 86400 +
                     dt.hour * 3600 +
                     dt.minute * 60 +
                     dt.second
@@ -253,19 +232,15 @@ class TimeFeatureExtractor:
             features = {}
             
             if not use_local_time:
-                # UTC REFERENCE
                 sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                 
-                # 86400 = 60×60×24 (seconds in day)
                 features["d_sin"] = np.sin((sec % 86400) / 86400 * 2 * np.pi)
                 features["d_cos"] = np.cos((sec % 86400) / 86400 * 2 * np.pi)
                 
             else:
-                # LOCAL TIME REFERENCE
                 utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
                 local_timestamps = [dt.astimezone(pytz.timezone(self.timezone)) for dt in utc_timestamps]
                 
-                # Calculate seconds within day
                 sec = np.array([
                     dt.hour * 3600 +
                     dt.minute * 60 +
@@ -298,19 +273,15 @@ class TimeFeatureExtractor:
             features = {}
             
             if not use_local_time:
-                # UTC REFERENCE
                 sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                 
-                # 3600 = 60×60 (seconds in hour)
                 features["h_sin"] = np.sin((sec % 3600) / 3600 * 2 * np.pi)
                 features["h_cos"] = np.cos((sec % 3600) / 3600 * 2 * np.pi)
                 
             else:
-                # LOCAL TIME REFERENCE
                 utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
                 local_timestamps = [dt.astimezone(pytz.timezone(self.timezone)) for dt in utc_timestamps]
                 
-                # Calculate seconds within hour
                 sec = np.array([
                     dt.minute * 60 + dt.second
                     for dt in local_timestamps
@@ -348,7 +319,7 @@ class TimeFeatureExtractor:
                 'monthly': True,
                 'weekly': True,
                 'daily': True,
-                'hourly': False  # Usually not needed for most applications
+                'hourly': False
             }
         
         all_features = {}
@@ -398,20 +369,17 @@ def extract_time_features_from_dataframe(df: pd.DataFrame,
         DataFrame with added time feature columns
     """
     try:
-        # Ensure timestamp column is datetime
         if timestamp_column in df.columns:
             if not pd.api.types.is_datetime64_any_dtype(df[timestamp_column]):
                 df[timestamp_column] = pd.to_datetime(df[timestamp_column])
             
             timestamps = df[timestamp_column].tolist()
             
-            # Extract features
             extractor = TimeFeatureExtractor(timezone)
             time_features = extractor.extract_all_time_features(
                 timestamps, features_config, use_local_time=(timezone != 'UTC')
             )
             
-            # Add features to DataFrame
             result_df = df.copy()
             for feature_name, feature_values in time_features.items():
                 if len(feature_values) == len(df):
@@ -429,7 +397,6 @@ def extract_time_features_from_dataframe(df: pd.DataFrame,
         return df
 
 
-# Holiday detection functionality (simplified version)
 def detect_holidays(timestamps: List[datetime.datetime], 
                    country_code: str = 'DE') -> List[bool]:
     """
@@ -443,17 +410,13 @@ def detect_holidays(timestamps: List[datetime.datetime],
         List of boolean values indicating holidays
     """
     try:
-        # This is a simplified implementation
-        # In real implementation, you would use libraries like 'holidays'
-        # or implement country-specific holiday logic
         
         holidays = []
         for timestamp in timestamps:
-            # Simple check for common holidays (New Year, Christmas)
             is_holiday = (
-                (timestamp.month == 1 and timestamp.day == 1) or  # New Year
-                (timestamp.month == 12 and timestamp.day == 25) or  # Christmas
-                (timestamp.month == 12 and timestamp.day == 26)     # Boxing Day
+                (timestamp.month == 1 and timestamp.day == 1) or
+                (timestamp.month == 12 and timestamp.day == 25) or
+                (timestamp.month == 12 and timestamp.day == 26)
             )
             holidays.append(is_holiday)
         

@@ -11,25 +11,19 @@ from flask import Blueprint, request, jsonify, send_file, current_app
 import pandas as pd
 from flask_socketio import join_room
 
-# Helper function to get socketio instance
 def get_socketio():
     return current_app.extensions['socketio']
 
-# Socket.IO event handlers will be registered in app.py
 
-# Create Blueprint
 bp = Blueprint('load_row_data', __name__)
 
-# Konfiguracija logginga
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Globalni rječnici za privremene fajlove i chunk-ove
 temp_files = {}
 chunk_storage = {}
 
-# Vrijeme nakon kojeg se brišu stari uploadi (30 minuta)
-UPLOAD_EXPIRY_TIME = 30 * 60  # sekundi
+UPLOAD_EXPIRY_TIME = 30 * 60
 
 def cleanup_old_uploads():
     """Briše stare uploade koji nisu završeni"""
@@ -39,27 +33,26 @@ def cleanup_old_uploads():
         if current_time - upload_info.get('last_activity', 0) > UPLOAD_EXPIRY_TIME:
             del chunk_storage[upload_id]
 
-# Lista podržanih formata datuma i vremena
 SUPPORTED_DATE_FORMATS = [
-    '%Y-%m-%dT%H:%M:%S%z',  # ISO format with timezone and seconds
-    '%Y-%m-%dT%H:%M%z',     # ISO format with timezone
-    '%Y-%m-%dT%H:%M:%S',    # ISO format without timezone
+    '%Y-%m-%dT%H:%M:%S%z',
+    '%Y-%m-%dT%H:%M%z',
+    '%Y-%m-%dT%H:%M:%S',
     '%Y-%m-%d %H:%M:%S',
     '%d.%m.%Y %H:%M',
     '%Y-%m-%d %H:%M',
     '%d.%m.%Y %H:%M:%S',
-    '%d.%m.%Y %H:%M:%S.%f',  # Added for milliseconds
+    '%d.%m.%Y %H:%M:%S.%f',
     '%Y/%m/%d %H:%M:%S',
     '%d/%m/%Y %H:%M:%S',
     '%Y/%m/%d',
     '%d/%m/%Y',
-    '%d-%m-%Y %H:%M:%S',  # Added missing formats
+    '%d-%m-%Y %H:%M:%S',
     '%d-%m-%Y %H:%M',
     '%Y/%m/%d %H:%M',
     '%d/%m/%Y %H:%M',
     '%d-%m-%Y',
-    '%H:%M:%S',  # Pure time format
-    '%H:%M'       # Pure time format
+    '%H:%M:%S',
+    '%H:%M'
 ]
 
 def check_date_format(sample_date):
@@ -71,7 +64,6 @@ def check_date_format(sample_date):
     if not isinstance(sample_date, str):
         sample_date = str(sample_date)
     
-    # Pokušaj parsiranje sa svim podržanim formatima
     for fmt in SUPPORTED_DATE_FORMATS:
         try:
             pd.to_datetime(sample_date, format=fmt)
@@ -103,7 +95,6 @@ def clean_time(time_str):
     if not isinstance(time_str, str):
         return time_str
     
-    # Očisti vrijeme od nevažećih znakova, zadrži samo brojeve i separatore
     cleaned = ''
     for c in str(time_str):
         if c.isdigit() or c in ':-+.T ':
@@ -117,19 +108,16 @@ def clean_file_content(file_content, delimiter):
     cleaned_lines = [line.rstrip(f"{delimiter};,") for line in file_content.splitlines()]
     return "\n".join(cleaned_lines)
 
-# Datum i vrijeme su spojeni
 def parse_datetime_column(df, datetime_col, custom_format=None):
     """
     Pokušava parsirati datetime kolonu pomoću custom formata ili podržanih formata.
     Vraca tuple: (success: bool, parsed_dates: Series ili None, error_message: str ili None)
     """
     try:
-        # Očisti podatke prije parsiranja
         df = df.copy()
         df[datetime_col] = df[datetime_col].astype(str).str.strip()
         sample_datetime = df[datetime_col].iloc[0]
 
-        # Prvo probamo sa custom formatom ako je prosleđen
         if custom_format:
             try:
                 parsed_dates = pd.to_datetime(df[datetime_col], format=custom_format, errors='coerce')
@@ -138,8 +126,7 @@ def parse_datetime_column(df, datetime_col, custom_format=None):
             except Exception as e:
                 return False, None, f"Fehler mit custom Format: {str(e)}. Beispielwert: {sample_datetime}"
 
-        # Ako nemamo custom format ili nije uspeo, probamo sa podržanim formatima
-        if SUPPORTED_DATE_FORMATS:  # Samo ako imamo podržane formate
+        if SUPPORTED_DATE_FORMATS:
             for fmt in SUPPORTED_DATE_FORMATS:
                 try:
                     parsed_dates = pd.to_datetime(df[datetime_col], format=fmt, errors='coerce')
@@ -148,13 +135,11 @@ def parse_datetime_column(df, datetime_col, custom_format=None):
                 except Exception:
                     continue
 
-        # Ako nijedan format nije uspeo, vrati grešku
         return False, None, f"Format nicht unterstützt. Beispielwert: %d.%m.%Y %H:%M:%S"
 
     except Exception as e:
         return False, None, f"Fehler beim Parsen: {str(e)}"
 
-# Datum i vrijeme su odvojeni
 def is_format_supported(value, formats):
     """
     Proverava da li je vrednost u nekom od podržanih formata.
@@ -170,7 +155,6 @@ def is_format_supported(value, formats):
             continue
     return False, None
 
-# Datum i vrijeme razdvojeni
 def parse_datetime(df, date_column, time_column, custom_format=None):
     """
     Kombinuje odvojene kolone datuma i vremena u jednu datetime kolonu.
@@ -185,11 +169,9 @@ def parse_datetime(df, date_column, time_column, custom_format=None):
     try:
         df = df.copy()
         
-        # Kombinujemo datum i vreme u jednu kolonu
         df['datetime'] = df[date_column].astype(str).str.strip() + ' ' + df[time_column].astype(str).str.strip()
         sample_datetime = df['datetime'].iloc[0]
         
-        # Prvo probamo sa custom formatom ako je prosleđen
         if custom_format:
             try:
                 df['datetime'] = pd.to_datetime(df['datetime'], format=custom_format, errors='coerce')
@@ -201,7 +183,6 @@ def parse_datetime(df, date_column, time_column, custom_format=None):
                     "message": f"Fehler mit custom Format: {str(e)}. Beispielwert: {sample_datetime}"
                 }), 400
         
-        # Ako nemamo custom format ili nije uspeo, probamo sa podržanim formatima
         is_supported, detected_format = is_format_supported(sample_datetime, SUPPORTED_DATE_FORMATS)
         if not is_supported:
             return jsonify({
@@ -209,7 +190,6 @@ def parse_datetime(df, date_column, time_column, custom_format=None):
                 "message": f"Format nicht unterstützt. Beispielwert: %d.%m.%Y %H:%M:%S"
             }), 400
             
-        # Parsiranje sa detektovanim formatom
         try:
             df['datetime'] = pd.to_datetime(df['datetime'], format=detected_format, errors='coerce')
             if df['datetime'].isna().all():
@@ -486,7 +466,7 @@ def upload_files(file_content, params):
         has_separate_date_time = dropdown_count == 3
         has_header = params.get('has_header', False)
 
-        date_column = selected_columns.get('column1')  # npr. 'Datum'
+        date_column = selected_columns.get('column1')
         time_column = selected_columns.get('column2') if has_separate_date_time else None
         value_column = selected_columns.get('column3') if has_separate_date_time else selected_columns.get('column2') 
 

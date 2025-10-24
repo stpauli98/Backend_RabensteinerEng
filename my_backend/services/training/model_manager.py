@@ -94,18 +94,15 @@ def save_models_to_storage(session_id: str) -> Dict:
 
     logger.info(f"📦 Saving models to storage - session: {session_id}")
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
-    # Fetch training results from Storage or legacy JSONB
     training_results = fetch_training_results_with_storage(session_id)
 
     if not training_results:
         raise ValueError('No training results found')
 
-    # Extract serialized models from training results
     serialized_models = extract_serialized_models(training_results)
 
     if not serialized_models:
@@ -113,7 +110,6 @@ def save_models_to_storage(session_id: str) -> Dict:
 
     logger.info(f"Found {len(serialized_models)} serialized model(s) in training results")
 
-    # Deserialize and upload models to Storage
     uploaded_models = []
     failed_models = []
 
@@ -125,36 +121,28 @@ def save_models_to_storage(session_id: str) -> Dict:
         try:
             logger.info(f"📥 Deserializing model {idx + 1}/{len(serialized_models)}: {model_class}")
 
-            # Decode base64 and unpickle
             model_bytes = base64.b64decode(model_data)
             model_obj = pickle.loads(model_bytes)
 
             logger.info(f"✅ Model deserialized successfully: {model_class}")
 
-            # Determine file extension based on model type
             is_keras_model = hasattr(model_obj, 'save') and hasattr(model_obj, 'predict')
             file_extension = '.h5' if is_keras_model else '.pkl'
 
-            # Create temporary file
             with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False, mode='wb') as temp_file:
                 temp_file_path = temp_file.name
 
             try:
-                # Save model to file
                 if is_keras_model:
-                    # Keras/TensorFlow model - save as .h5
                     model_obj.save(temp_file_path)
                     logger.info(f"💾 Saved Keras model to {temp_file_path}")
                 else:
-                    # Scikit-learn scaler/model - save as .pkl
                     with open(temp_file_path, 'wb') as f:
                         pickle.dump(model_obj, f)
                     logger.info(f"💾 Saved sklearn model to {temp_file_path}")
 
-                # Upload to Storage
                 logger.info(f"📤 Uploading {model_class} model to storage...")
 
-                # Extract dataset name from path if available
                 dataset_name = path.split('.')[0] if '.' in path else 'default'
 
                 storage_result = upload_trained_model(
@@ -177,7 +165,6 @@ def save_models_to_storage(session_id: str) -> Dict:
                 logger.info(f"✅ Uploaded {model_class} model: {storage_result['file_path']}")
 
             finally:
-                # Clean up temporary file
                 if os.path.exists(temp_file_path):
                     os.unlink(temp_file_path)
                     logger.debug(f"🗑️ Cleaned up temporary file: {temp_file_path}")
@@ -223,12 +210,10 @@ def get_models_list(session_id: str) -> List[Dict]:
 
     logger.info(f"📋 Listing models from Storage - session: {session_id}")
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
-    # List models from Storage
     models = list_session_models(str(uuid_session_id))
 
     logger.info(f"✅ Found {len(models)} model(s) in Storage for session {session_id}")
@@ -256,26 +241,21 @@ def download_model_file(session_id: str, filename: str = None) -> Tuple[bytes, s
 
     logger.info(f"📥 Download request - session: {session_id}, filename: {filename or 'first .h5 model'}")
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
-    # List available models
     models = list_session_models(str(uuid_session_id))
 
     if not models:
         raise ValueError('No models found for this session')
 
-    # Find the model to download
     target_model = None
     if filename:
-        # Find specific model by filename
         target_model = next((m for m in models if m['filename'] == filename), None)
         if not target_model:
             raise ValueError(f'Model {filename} not found')
     else:
-        # Default: download first .h5 model
         h5_models = [m for m in models if m['format'] == 'h5']
         if not h5_models:
             raise ValueError('No .h5 models found for this session')
@@ -283,7 +263,6 @@ def download_model_file(session_id: str, filename: str = None) -> Tuple[bytes, s
 
     logger.info(f"📥 Downloading model: {target_model['filename']}")
 
-    # Download model from Storage
     file_data = download_trained_model(
         session_id=str(uuid_session_id),
         file_path=target_model['storage_path']

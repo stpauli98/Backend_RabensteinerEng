@@ -17,34 +17,29 @@ import base64
 from collections import OrderedDict
 from threading import Lock
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.patches import Polygon
 
 
-# Create blueprint
 bp = Blueprint('cloud', __name__)
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Security and validation constants
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB per file
-MAX_ROWS = 1_000_000  # Maximum rows in CSV
-MAX_COLUMNS = 100  # Maximum columns in CSV
-MAX_ACTIVE_UPLOADS = 1000  # Maximum concurrent uploads
-UPLOAD_ID_PATTERN = re.compile(r'^[\w\-]{1,64}$')  # Alphanumeric, underscore, hyphen only
+MAX_FILE_SIZE = 100 * 1024 * 1024
+MAX_ROWS = 1_000_000
+MAX_COLUMNS = 100
+MAX_ACTIVE_UPLOADS = 1000
+UPLOAD_ID_PATTERN = re.compile(r'^[\w\-]{1,64}$')
 
-# Performance constants
 TOLERANCE_ADJUSTMENT_FACTOR = 2
-MIN_TOLERANCE_THRESHOLD = 0.01  # 1% of data range
-DEFAULT_TOLERANCE_RATIO = 0.1   # 10% of data range
+MIN_TOLERANCE_THRESHOLD = 0.01
+DEFAULT_TOLERANCE_RATIO = 0.1
 STREAMING_CHUNK_SIZE = 5000
-FILE_BUFFER_SIZE = 1024 * 1024  # 1MB
+FILE_BUFFER_SIZE = 1024 * 1024
 
-# Upload session management with TTL
 class UploadManager:
     """Thread-safe upload session manager with TTL cleanup."""
 
@@ -75,11 +70,9 @@ class UploadManager:
         with self.lock:
             self.cleanup_expired()
 
-            # Remove oldest if at capacity
             if len(self.uploads) >= self.max_size and upload_id not in self.uploads:
                 oldest_id, oldest_data = self.uploads.popitem(last=False)
                 logger.warning(f"Upload capacity reached. Removed oldest upload: {oldest_id}")
-                # Clean up files for removed upload
                 try:
                     chunk_dir = os.path.join(CHUNK_DIR, oldest_id)
                     if os.path.exists(chunk_dir):
@@ -91,7 +84,6 @@ class UploadManager:
                 'data': data,
                 'created_at': datetime.now()
             }
-            # Move to end (most recently used)
             self.uploads.move_to_end(upload_id)
 
     def get(self, upload_id: str) -> dict:
@@ -99,7 +91,6 @@ class UploadManager:
         with self.lock:
             self.cleanup_expired()
             if upload_id in self.uploads:
-                # Move to end (most recently used)
                 self.uploads.move_to_end(upload_id)
                 return self.uploads[upload_id]['data']
             return None
@@ -131,7 +122,6 @@ class UploadManager:
         for uid in expired:
             logger.info(f"Removing expired upload session: {uid}")
             del self.uploads[uid]
-            # Clean up files
             try:
                 chunk_dir = os.path.join(CHUNK_DIR, uid)
                 if os.path.exists(chunk_dir):
@@ -139,18 +129,14 @@ class UploadManager:
             except Exception as e:
                 logger.error(f"Error cleaning up expired upload {uid}: {e}")
 
-# Dictionary to store temporary files
 temp_files = {}
 
-# Initialize upload manager (replaces chunk_uploads dictionary)
 upload_manager = UploadManager()
-chunk_uploads = upload_manager  # Backward compatibility alias
+chunk_uploads = upload_manager
 
-# Directory for storing chunks
 CHUNK_DIR = os.path.join(tempfile.gettempdir(), 'cloud_chunks')
 os.makedirs(CHUNK_DIR, exist_ok=True)
 
-# Valid file types for chunked uploads
 VALID_FILE_TYPES = ['temp_file', 'load_file', 'interpolate_file']
 
 def sanitize_upload_id(upload_id: str) -> str:
@@ -173,7 +159,6 @@ def sanitize_upload_id(upload_id: str) -> str:
         logger.error(f"Invalid upload ID format: {upload_id}")
         raise ValueError(f"Invalid upload ID format. Only alphanumeric characters, hyphens, and underscores allowed (max 64 chars)")
 
-    # Additional check: ensure no path separators
     if os.path.sep in upload_id or '/' in upload_id or '\\' in upload_id:
         logger.error(f"Upload ID contains path separators: {upload_id}")
         raise ValueError("Upload ID cannot contain path separators")
@@ -224,7 +209,6 @@ def get_chunk_dir(upload_id: str) -> str:
     Returns:
         Path to chunk directory
     """
-    # upload_id should already be sanitized by caller, but validate anyway
     sanitized_id = sanitize_upload_id(upload_id)
     chunk_dir = os.path.join(CHUNK_DIR, sanitized_id)
     os.makedirs(chunk_dir, exist_ok=True)
@@ -244,7 +228,6 @@ def upload_chunk():
         file_chunk = request.files['file']
         upload_id = request.form.get('uploadId')
         file_type = request.form.get('fileType')
-        # chunkIndex i totalChunks moraju biti int, validacija
         try:
             chunk_index = int(request.form.get('chunkIndex', 0))
             total_chunks = int(request.form.get('totalChunks', 1))
@@ -256,16 +239,13 @@ def upload_chunk():
         if not file_type or file_type not in VALID_FILE_TYPES:
             return jsonify({'success': False, 'data': {'error': 'Invalid file type'}}), 400
 
-        # Sanitize upload_id to prevent path traversal
         try:
             upload_id = sanitize_upload_id(upload_id)
         except ValueError as e:
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
-        # Create directory for this upload if it doesn't exist
         chunk_dir = get_chunk_dir(upload_id)
 
-        # Save chunk information
         if upload_id not in chunk_uploads:
             chunk_uploads[upload_id] = {
                 'temp_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None},
@@ -273,12 +253,10 @@ def upload_chunk():
                 'interpolate_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None}
             }
 
-        # Update chunk tracking
         chunk_uploads[upload_id][file_type]['total_chunks'] = total_chunks
         chunk_uploads[upload_id][file_type]['received_chunks'].add(chunk_index)
         chunk_uploads[upload_id][file_type]['filename'] = file_chunk.filename
 
-        # Save the chunk to disk
         chunk_path = os.path.join(chunk_dir, f"{file_type}_{chunk_index}")
         file_chunk.save(chunk_path)
 
@@ -302,27 +280,22 @@ def calculate_bounds(predictions, tolerance_type, tol_cnt, tol_dep):
     if tolerance_type == 'cnt':
         upper_bound = predictions + tol_cnt
         lower_bound = predictions - tol_cnt
-    else:  # tolerance_type == 'dep'
+    else:
         upper_bound = predictions * (1 + tol_dep) + tol_cnt
         lower_bound = predictions * (1 - tol_dep) - tol_cnt
 
-    # Do not force lower bound to be >= 0; allow negative values if regression/tolerance allows
-    # lower_bound = np.maximum(lower_bound, 0)
 
     return upper_bound, lower_bound
 
-# Route for handling chunked upload completion
 @bp.route('/complete', methods=['POST', 'OPTIONS'])
 def complete_redirect():
     """Handle chunked upload completion directly instead of redirecting."""
     try:
         if request.method == 'OPTIONS':
-            # Handle CORS preflight request, response format uvek sa 'data'
             response = jsonify({
                 'success': True,
                 'data': {'message': 'CORS preflight request successful'}
             })
-            # Set CORS headers
             response.headers.add('Access-Control-Allow-Origin', '*')
             response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
             response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
@@ -332,7 +305,6 @@ def complete_redirect():
         logger.info(f"Request method: {request.method}")
         logger.info(f"Request content type: {request.content_type}")
         
-        # Handle both FormData and JSON
         if request.content_type and 'multipart/form-data' in request.content_type:
             logger.info("Processing FormData request")
             data = request.form.to_dict()
@@ -344,7 +316,6 @@ def complete_redirect():
                 logger.info(f"JSON data: {data}")
             except Exception as e:
                 logger.error(f"Error parsing JSON: {str(e)}")
-                # Error: loš format zahteva
                 return jsonify({
                     'success': False,
                     'data': {'error': 'Invalid request format. Expected JSON or FormData.'}
@@ -357,7 +328,6 @@ def complete_redirect():
             logger.error("No upload ID provided")
             return jsonify({'success': False, 'data': {'error': 'No upload ID provided'}}), 400
 
-        # Sanitize upload_id to prevent path traversal
         try:
             upload_id = sanitize_upload_id(upload_id)
         except ValueError as e:
@@ -365,20 +335,17 @@ def complete_redirect():
 
         if upload_id not in chunk_uploads:
             logger.error(f"Invalid upload ID: {upload_id}")
-            # Error: uploadId nije validan
             return jsonify({'success': False, 'data': {'error': 'Invalid upload ID'}}), 400
 
         upload_info = chunk_uploads[upload_id]
         chunk_dir = get_chunk_dir(upload_id)
 
-        # Check if all chunks have been received for both files
         temp_info = upload_info['temp_file']
         load_info = upload_info['load_file']
 
         logger.info(f"Temp file: {temp_info['received_chunks']}/{temp_info['total_chunks']} chunks")
         logger.info(f"Load file: {load_info['received_chunks']}/{load_info['total_chunks']} chunks")
 
-        # Validate that both files have chunks uploaded
         if temp_info['total_chunks'] == 0 or load_info['total_chunks'] == 0:
             logger.error(f"Missing file uploads. Temp chunks: {temp_info['total_chunks']}, Load chunks: {load_info['total_chunks']}")
             return jsonify({
@@ -393,7 +360,6 @@ def complete_redirect():
         if (len(temp_info['received_chunks']) != temp_info['total_chunks'] or
             len(load_info['received_chunks']) != load_info['total_chunks']):
             logger.error(f"Not all chunks received. Temp: {len(temp_info['received_chunks'])}/{temp_info['total_chunks']}, Load: {len(load_info['received_chunks'])}/{load_info['total_chunks']}")
-            # Error: nisu svi chunkovi primljeni
             return jsonify({
                 'success': False,
                 'data': {
@@ -405,7 +371,6 @@ def complete_redirect():
 
         logger.info("All chunks received, reassembling files")
         
-        # Reassemble the files
         temp_file_path = os.path.join(chunk_dir, 'temp_out.csv')
         load_file_path = os.path.join(chunk_dir, 'load.csv')
         
@@ -423,7 +388,6 @@ def complete_redirect():
         
         logger.info("Files reassembled, processing data")
 
-        # Validate file sizes before processing
         try:
             validate_csv_size(temp_file_path)
             validate_csv_size(load_file_path)
@@ -431,16 +395,13 @@ def complete_redirect():
             logger.error(f"File size validation failed: {str(e)}")
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
-        # Read the reassembled files
         try:
             df1 = pd.read_csv(temp_file_path, sep=';')
             df2 = pd.read_csv(load_file_path, sep=';')
 
-            # Validate DataFrame dimensions
             validate_dataframe(df1, "Temperature file")
             validate_dataframe(df2, "Load file")
 
-            # Extract parameters from request
             processing_params = {
                 'REG': data.get('REG', 'lin'),
                 'TR': data.get('TR', 'cnt'),
@@ -451,10 +412,8 @@ def complete_redirect():
             
             logger.info(f"Processing data with parameters: {processing_params}")
             
-            # Process the data
             result = _process_data_frames(df1, df2, processing_params)
             
-            # Clean up chunks
             try:
                 chunk_dir = get_chunk_dir(upload_id)
                 if os.path.exists(chunk_dir):
@@ -465,28 +424,22 @@ def complete_redirect():
             except Exception as e:
                 logger.warning(f"Error cleaning up chunks: {str(e)}")
 
-            # Očekuje se da _process_data_frames vraća jsonify sa {'success': True, 'data': ...}
             return result
         except Exception as e:
             logger.error(f"Error processing uploaded files: {str(e)}")
-            # Error: problem sa obradom fajlova
             return jsonify({'success': False, 'data': {'error': f'Error processing uploaded files: {str(e)}'}}), 500
     except Exception as e:
         logger.error(f"Error in complete_redirect: {str(e)}")
-        # Error: generalni exception
         return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
 def interpolate_data(df1, df2, x_col, y_col, max_time_span):
-    # Create a copy of the input data
     df = pd.DataFrame()
     df['UTC'] = pd.to_datetime(df1['UTC'])
     df['value'] = pd.to_numeric(df2[y_col], errors='coerce')
     df = df.sort_values('UTC').reset_index(drop=True)
     
-    # Initialize final dataframe
     df_final = df.copy()
     
-    # Find first non-NaN value
     i = 0
     while i < len(df_final):
         if pd.isna(df_final.at[i, 'value']):
@@ -498,38 +451,29 @@ def interpolate_data(df1, df2, x_col, y_col, max_time_span):
         logger.warning("No numeric data found for interpolation")
         return df_final, 0
     
-    # Initialize variables
     frame = "non"
     i_start = 0
     
-    # Main processing loop
     i = 0
     while i < len(df_final):
-        # No frame open - look for NaN to start a frame
         if frame == "non":
             if pd.isna(df_final.at[i, 'value']):
                 i_start = i
                 frame = "open"
             i += 1
-        # Frame is open - look for a number to close it
         elif frame == "open":
             if not pd.isna(df_final.at[i, 'value']):
-                # Calculate frame width in minutes
                 frame_width = (df_final.at[i, 'UTC'] - df_final.at[i_start-1, 'UTC']).total_seconds() / 60
                 
-                # Only interpolate if the gap is within max_time_span
                 if frame_width <= max_time_span:
-                    # Get the values for interpolation
                     y0 = df_final.at[i_start-1, 'value']
                     y1 = df_final.at[i, 'value']
                     t0 = df_final.at[i_start-1, 'UTC']
                     t1 = df_final.at[i, 'UTC']
                     
-                    # Calculate the difference and rate of change
                     y_diff = y1 - y0
                     diff_per_min = y_diff / frame_width
                     
-                    # Perform linear interpolation for each point in the gap
                     for j in range(i_start, i):
                         gap_min = (df_final.at[j, 'UTC'] - t0).total_seconds() / 60
                         df_final.at[j, 'value'] = y0 + (gap_min * diff_per_min)
@@ -541,11 +485,9 @@ def interpolate_data(df1, df2, x_col, y_col, max_time_span):
         else:
             i += 1
         
-        # Safety check to prevent infinite loops
         if i >= len(df_final):
             break
     
-    # Calculate how many points were added (interpolated)
     original_nans = df['value'].isna().sum()
     final_nans = df_final['value'].isna().sum()
     added_points = original_nans - final_nans
@@ -558,7 +500,6 @@ def _validate_and_prepare_data(df1, df2):
     logger.info(f"Columns in temperature file: {df1.columns.tolist()}")
     logger.info(f"Columns in load file: {df2.columns.tolist()}")
 
-    # Find temperature and load columns
     temp_cols = [col for col in df1.columns if col != 'UTC']
     load_cols = [col for col in df2.columns if col != 'UTC']
 
@@ -572,15 +513,12 @@ def _validate_and_prepare_data(df1, df2):
     logger.info(f"Using temperature column: {x}")
     logger.info(f"Using load column: {y}")
 
-    # Convert timestamps and sort
     df1['UTC'] = pd.to_datetime(df1['UTC'], format="%Y-%m-%d %H:%M:%S")
     df2['UTC'] = pd.to_datetime(df2['UTC'], format="%Y-%m-%d %H:%M:%S")
 
-    # Convert to numeric
     df1[x] = pd.to_numeric(df1[x], errors='coerce')
     df2[y] = pd.to_numeric(df2[y], errors='coerce')
 
-    # Sort by time
     df1 = df1.sort_values('UTC')
     df2 = df2.sort_values('UTC')
 
@@ -588,7 +526,6 @@ def _validate_and_prepare_data(df1, df2):
     logger.info(f"Temperature range: {df1[x].min():.2f} to {df1[x].max():.2f} °C")
     logger.info(f"Load range before conversion: {df2[y].min():.2f} to {df2[y].max():.2f} kW")
 
-    # Merge dataframes
     df_merged = pd.merge(df1[['UTC', x]], df2[['UTC', y]], on='UTC', how='inner')
     if df_merged.empty:
         raise ValueError('No matching timestamps found between files. Please ensure both files have matching timestamps.')
@@ -596,13 +533,11 @@ def _validate_and_prepare_data(df1, df2):
     logger.info(f"First few timestamps in first file: {df1['UTC'].head().tolist()}")
     logger.info(f"First few timestamps in second file: {df2['UTC'].head().tolist()}")
 
-    # Check for duplicates
     df1_duplicates = df1['UTC'].duplicated().sum()
     df2_duplicates = df2['UTC'].duplicated().sum()
     if df1_duplicates > 0 or df2_duplicates > 0:
         raise ValueError('Duplicate timestamps found in data')
 
-    # Clean data
     df1 = df1.dropna()
     df2 = df2.dropna()
     if df1.empty or df2.empty:
@@ -610,7 +545,6 @@ def _validate_and_prepare_data(df1, df2):
 
     logger.info(f"Data cleaned. New shapes: {df1.shape}, {df2.shape}")
 
-    # Combine data
     cld = pd.DataFrame()
     cld[x] = df1[x]
     cld[y] = df2[y]
@@ -620,7 +554,6 @@ def _validate_and_prepare_data(df1, df2):
 
     logger.info(f"Combined data shape: {cld.shape}")
 
-    # Sort by x and validate
     cld_srt = cld.sort_values(by=x).copy()
     if cld_srt[x].isna().any() or cld_srt[y].isna().any():
         raise ValueError('NaN values found in processed data')
@@ -739,10 +672,8 @@ def _process_data_frames(df1, df2, data):
     Refactored to use helper functions for better maintainability.
     """
     try:
-        # Validate and prepare data
         cld_srt, x, y, df2_original = _validate_and_prepare_data(df1, df2)
 
-        # Get regression and tolerance parameters
         REG = data.get('REG', 'lin')
         TR = data.get('TR', 'cnt')
         y_range = df2_original[y].max() - df2_original[y].min()
@@ -750,10 +681,9 @@ def _process_data_frames(df1, df2, data):
 
         logger.info(f"Final parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}")
 
-        # Perform regression
         if REG == "lin":
             result_data = _perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP)
-        else:  # REG == "poly"
+        else:
             result_data = _perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP)
 
         logger.info("Sending response:")
@@ -767,7 +697,6 @@ def _process_data_frames(df1, df2, data):
         traceback.print_exc()
         return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
-# Route for handling chunked upload completion
 @bp.route('/clouddata', methods=['POST'])
 def clouddata():
     if request.method == 'OPTIONS':
@@ -796,7 +725,6 @@ def _process_data():
             logger.error("No data received")
             return jsonify({'success': False, 'data': {'error': 'No data received'}}), 400
 
-        # Preuzmi fajlove iz zahteva
         temp_data = data['files'].get('temp_out.csv')
         load_data = data['files'].get('load.csv')
 
@@ -805,7 +733,6 @@ def _process_data():
             return jsonify({'success': False, 'data': {'error': 'One or both files are empty'}}), 400
 
         try:
-            # Dekodiraj base64 podatke i učitaj u DataFrame
             logger.info("Attempting to decode and read temperature data...")
             temp_decoded = base64.b64decode(temp_data).decode('utf-8')
             logger.debug(f"Temperature data preview: {temp_decoded[:200]}")
@@ -823,14 +750,11 @@ def _process_data():
             logger.debug(f"{df1.head()}")
             logger.debug(f"{df2.head()}")
 
-            # Validate DataFrame dimensions
             validate_dataframe(df1, "Temperature file")
             validate_dataframe(df2, "Load file")
 
-            # Obradi podatke koristeći zajedničku funkciju
             return _process_data_frames(df1, df2, data)
         except ValueError as e:
-            # Validation errors
             logger.error(f"Validation error: {str(e)}")
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
         except Exception as e:
@@ -843,7 +767,6 @@ def _process_data():
         return jsonify({'success': False, 'data': {'error': str(e)}}), 500
 
 
-# Route for handling chunked upload for interpolation
 @bp.route('/interpolate-chunked', methods=['POST'])
 def interpolate_chunked():
     """
@@ -854,113 +777,89 @@ def interpolate_chunked():
     try:
         logger.info("Received request to /interpolate-chunked")
 
-        # Get upload ID and parameters from request
         data = request.json
         if not data or 'uploadId' not in data:
             logger.error("Missing uploadId in request")
-            # Error: uploadId nedostaje
             return jsonify({'success': False, 'data': {'error': 'Upload ID is required'}}), 400
 
         upload_id = data['uploadId']
         logger.info(f"Processing upload ID: {upload_id}")
 
-        # Sanitize upload_id to prevent path traversal
         try:
             upload_id = sanitize_upload_id(upload_id)
         except ValueError as e:
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
-        # Validate max_time_span parameter
         try:
             max_time_span = float(data.get('max_time_span', '60'))
             logger.info(f"Using max_time_span: {max_time_span}")
         except ValueError as e:
             logger.error(f"Invalid max_time_span value: {data.get('max_time_span')}")
-            # Error: loš max_time_span
             return jsonify({'success': False, 'data': {'error': 'Invalid max_time_span parameter'}}), 400
 
-        # Check if upload exists
         if upload_id not in chunk_uploads:
             logger.error(f"Upload ID not found: {upload_id}")
-            # Error: upload ne postoji
             return jsonify({'success': False, 'data': {'error': 'Upload ID not found'}}), 404
 
-        # Check if all chunks have been received
         upload_info = chunk_uploads[upload_id]['interpolate_file']
         if len(upload_info['received_chunks']) < upload_info['total_chunks']:
             logger.error(f"Not all chunks received for upload {upload_id}")
-            # Error: nisu svi chunkovi primljeni
             return jsonify({'success': False, 'data': {'error': f"Incomplete upload: Only {len(upload_info['received_chunks'])}/{upload_info['total_chunks']} chunks received"}}), 400
 
-        # Combine chunks into a single file
         chunk_dir = get_chunk_dir(upload_id)
         combined_file_path = os.path.join(chunk_dir, 'combined_interpolate_file.csv')
 
-        # Optimizacija: Koristimo binary mode i veći buffer za brže kombinovanje fajlova
         with open(combined_file_path, 'wb') as outfile:
             for i in range(upload_info['total_chunks']):
                 chunk_path = os.path.join(chunk_dir, f"interpolate_file_{i}")
                 if os.path.exists(chunk_path):
                     with open(chunk_path, 'rb') as infile:
-                        # Kopiranje u većim blokovima za bolje performanse
                         shutil.copyfileobj(infile, outfile, FILE_BUFFER_SIZE)
 
         logger.info(f"Combined file created at: {combined_file_path}")
 
-        # Validate file size to prevent resource exhaustion
         try:
             validate_csv_size(combined_file_path)
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
-        # Optimizacija: Koristimo engine='c' za brže parsiranje CSV-a
         try:
-            # Detektujemo separator bez učitavanja celog fajla
             with open(combined_file_path, 'r', encoding='utf-8') as f:
                 first_line = f.readline()
 
-            # Try different separators if needed
             if ';' in first_line:
                 sep = ';'
             elif ',' in first_line:
                 sep = ','
             else:
-                sep = None  # Let pandas detect
+                sep = None
 
             logger.info(f"Using separator: {sep}")
 
-            # Optimizacija: Učitavamo samo potrebne kolone i koristimo engine='c'
             df2 = pd.read_csv(combined_file_path,
                              sep=sep,
                              decimal=',',
-                             engine='c')   # Brži C engine
+                             engine='c')
 
-            # Validate DataFrame dimensions
             validate_dataframe(df2, "Interpolation file")
 
         except ValueError as e:
-            # Validation errors (file size, DataFrame dimensions)
             logger.error(f"Validation error: {str(e)}")
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
         except Exception as e:
             logger.error(f"Error reading CSV file: {str(e)}")
-            # Error: CSV parsiranje nije uspelo
             return jsonify({'success': False, 'data': {'error': f'Error reading CSV file: {str(e)}'}}), 400
 
-        # Check if UTC column exists
         if 'UTC' not in df2.columns:
             logger.error("UTC column not found in the file")
-            # Error: nema UTC kolone
             return jsonify({'success': False, 'data': {'error': 'UTC column not found. The file must contain a UTC column with timestamps'}}), 400
 
-        # Optimizacija: Brža pretraga load kolone
         load_terms = set(['last', 'load', 'leistung', 'kw', 'w'])
         load_cols = [col for col in df2.columns if 
                     any(term in str(col).lower() for term in load_terms)]
 
         if not load_cols:
-            # If no specific load column found, use the first non-UTC column
             non_utc_cols = [col for col in df2.columns if col != 'UTC']
             if non_utc_cols:
                 y_col = non_utc_cols[0]
@@ -976,22 +875,14 @@ def interpolate_chunked():
             y_col = load_cols[0]
             logger.info(f"Found load column: {y_col}")
         
-        # Optimizacija: Zadržavamo samo potrebne kolone za smanjenje memorije
         df2 = df2[['UTC', y_col]].copy()
         
-        # Optimizacija: Brža konverzija u numeričke vrednosti
         if not pd.api.types.is_numeric_dtype(df2[y_col]):
-            # Direktna konverzija u numeričke vrednosti
             df2[y_col] = pd.to_numeric(df2[y_col].astype(str).str.replace(',', '.').str.replace(r'[^\d\-\.]', '', regex=True), errors='coerce')
         
-        # Keep NaN values as NaN for interpolation (don't convert to string yet)
-        # This ensures the column remains numeric for interpolation
         
-        # Optimizacija: Brža konverzija vremena
         try:
-            # Koristimo cache=True za brže parsiranje datuma
             df2['UTC'] = pd.to_datetime(df2['UTC'], errors='coerce', cache=True)
-            # Drop rows with invalid datetime
             df2.dropna(subset=['UTC'], inplace=True)
                 
         except Exception as e:
@@ -1002,14 +893,11 @@ def interpolate_chunked():
                 'message': 'Please check the timestamp format in the file'
             }), 400
         
-        # Sort by time
         df2.sort_values('UTC', inplace=True)
         
-        # Optimizacija: Direktno koristimo postojeće kolone umesto kreiranja novog DataFrame-a
         df2.rename(columns={y_col: 'load'}, inplace=True)
         df_load = df2.set_index('UTC')
         
-        # Check if we have enough data points
         if len(df_load) < 2:
             logger.error("Not enough valid data points for interpolation")
             return jsonify({
@@ -1018,40 +906,31 @@ def interpolate_chunked():
                 'message': 'The file must contain at least 2 valid data points for interpolation'
             }), 400
         
-        # Optimizacija: Brže računanje vremenskih razlika
-        time_diffs = (df_load.index[1:] - df_load.index[:-1]).total_seconds() / 60  # in minutes
+        time_diffs = (df_load.index[1:] - df_load.index[:-1]).total_seconds() / 60
         max_gap = time_diffs.max() if len(time_diffs) > 0 else 0
         logger.info(f"Maximum time gap in data: {max_gap} minutes")
         
-        # Optimizacija: Prilagodljivi interval resample-a za velike skupove podataka
-        # Koristimo veći interval za velike skupove podataka da smanjimo broj tačaka
         total_minutes = (df_load.index[-1] - df_load.index[0]).total_seconds() / 60
         
-        # Izaberemo interval na osnovu ukupnog vremenskog raspona
-        if total_minutes > 10000:  # Ako je vremenski raspon veći od ~7 dana
-            resample_interval = '5min'  # Koristimo 5-minutni interval
+        if total_minutes > 10000:
+            resample_interval = '5min'
             logger.info(f"Large time span detected ({total_minutes} minutes), using 5-minute intervals")
         else:
-            resample_interval = '1min'  # Standardni 1-minutni interval
+            resample_interval = '1min'
             logger.info(f"Using standard 1-minute intervals")
         
-        # Replace the resampling section with this:
         if not pd.api.types.is_numeric_dtype(df_load['load']):
             logger.info("Converting load column to numeric before interpolation")
             df_load['load'] = pd.to_numeric(df_load['load'], errors='coerce')
         
-        # Define limit for interpolation
-        limit = int(max_time_span)  # Convert to integer number of minutes
+        limit = int(max_time_span)
         logger.info(f"Using interpolation limit of {limit} minutes")
             
-        # Instead of resampling, just interpolate at existing points
         df2_resampled = df_load.copy()
         df2_resampled['load'] = df_load['load'].interpolate(method='linear', limit=limit)
 
-        # Reset index to get UTC back as a column
         df2_resampled.reset_index(inplace=True)
         
-        # Calculate added points
         original_points = len(df2)
         total_points = len(df2_resampled)
         added_points = total_points - original_points
@@ -1060,16 +939,12 @@ def interpolate_chunked():
         logger.info(f"Interpolated points: {total_points}")
         logger.info(f"Added points: {added_points}")
         
-        # Prepare data for frontend chart
         chart_data = []
         for _, row in df2_resampled.iterrows():
-            # Convert NaN values to string 'NaN' instead of skipping them
-            # Only skip rows with invalid timestamps (NaT)
             if pd.isna(row['UTC']):
                 logger.warning(f"Skipping row with NaT timestamp: {row}")
                 continue
             
-            # Convert NaN load values to string 'NaN'
             load_value = 'NaN' if pd.isna(row['load']) else float(row['load'])
                 
             try:
@@ -1081,12 +956,9 @@ def interpolate_chunked():
                 logger.warning(f"Error converting row to chart data: {e}. Row: {row}")
                 continue
 
-        # Clean up the chunks after processing
         try:
-            # Only remove the specific upload's directory, not the entire chunk directory
             shutil.rmtree(chunk_dir)
             logger.info(f"Cleaned up chunk directory for upload {upload_id}")
-            # Remove from memory
             del chunk_uploads[upload_id]
         except Exception as e:
             logger.warning(f"Error cleaning up chunks: {str(e)}")
@@ -1094,7 +966,6 @@ def interpolate_chunked():
         logger.info(f"Sample of chart data being sent: {chart_data[:5] if chart_data else 'No data'}")
         logger.info(f"Total points in chart data: {len(chart_data)}")
         
-        # Ako nema validnih tačaka, vrati grešku u novom formatu
         if not chart_data:
             logger.error("No valid data points after processing")
             return jsonify({
@@ -1105,43 +976,31 @@ def interpolate_chunked():
                 }
             }), 400
 
-        # Define chunk size for streaming (number of data points per chunk)
         CHUNK_SIZE = STREAMING_CHUNK_SIZE
         
-        # Calculate total number of chunks needed
         total_rows = len(df2_resampled)
-        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE  # Ceiling division
+        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
         
         logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
         
-        # Prepare data for streaming
-        # Optimizacija: Efikasnija konverzija DataFrame-a u JSON format
-        # Only filter out rows with invalid timestamps, keep NaN load values
         valid_mask = ~df2_resampled['UTC'].isna()
         valid_df = df2_resampled[valid_mask].copy()
         
-        # Convert NaN load values to string 'NaN' after interpolation
         valid_df['load'] = valid_df['load'].apply(lambda x: 'NaN' if pd.isna(x) else x)
         
-        # Formatiramo UTC kolonu
         valid_df['UTC'] = valid_df['UTC'].dt.strftime("%Y-%m-%d %H:%M:%S")
         
-        # Konvertujemo u DataFrame sa potrebnim kolonama
         chart_df = valid_df.rename(columns={'load': 'value'})[['UTC', 'value']]
         
-        # Određujemo broj redova i chunk-ova
         total_rows = len(chart_df)
-        CHUNK_SIZE = STREAMING_CHUNK_SIZE  # Optimizovana veličina chunk-a za bolje performanse
-        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE  # Ceiling division
+        CHUNK_SIZE = STREAMING_CHUNK_SIZE
+        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
         
-        # Sačuvamo broj originalnih tačaka za meta podatke
-        original_points_count = original_points  # Koristimo već definisanu promenljivu
+        original_points_count = original_points
         
         logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
         
-        # Funkcija za generisanje chunk-ova
         def generate_chunks():
-            # First, send metadata about the dataset
             meta_data = {
                 'type': 'meta',
                 'total_rows': total_rows,
@@ -1152,12 +1011,10 @@ def interpolate_chunked():
             }
             yield json.dumps(meta_data, separators=(',', ':')) + '\n'
             
-            # Optimizacija: Procesiramo chunk-ove efikasnije
             for chunk_idx in range(total_chunks):
                 start_idx = chunk_idx * CHUNK_SIZE
                 end_idx = min(start_idx + CHUNK_SIZE, total_rows)
                 
-                # Konvertujemo chunk direktno u listu rečnika
                 chunk_data_list = chart_df.iloc[start_idx:end_idx].to_dict('records')
                 
                 chunk_data = {
@@ -1168,14 +1025,12 @@ def interpolate_chunked():
                 
                 yield json.dumps(chunk_data, separators=(',', ':')) + '\n'
             
-            # Finally, send completion message
             yield json.dumps({
                 'type': 'complete',
                 'message': 'Data streaming completed',
                 'success': True
             }, separators=(',', ':')) + '\n'
             
-            # Clean up the chunks after processing
             try:
                 chunk_dir = get_chunk_dir(upload_id)
                 if os.path.exists(chunk_dir):
@@ -1186,7 +1041,6 @@ def interpolate_chunked():
             except Exception as e:
                 logger.warning(f"Error cleaning up chunks: {str(e)}")
         
-        # Return a streaming response
         return Response(generate_chunks(), mimetype='application/x-ndjson')
     except Exception as e:
         logger.error(f"Error in interpolation-chunked endpoint: {str(e)}")
@@ -1198,7 +1052,6 @@ def interpolate_chunked():
         }), 500
 
 
-# Route for handling prepare save
 @bp.route('/prepare-save', methods=['POST'])
 def prepare_save():
     """
@@ -1221,7 +1074,6 @@ def prepare_save():
             logger.error("No data provided in request.")
             return jsonify({"success": False, "data": {"error": "No data provided in request."}}), 400
             
-        # Handle data saving request
         if 'data' in data:
             csv_data = data['data']
             filename = data.get('filename', 'interpolated_data')
@@ -1232,20 +1084,16 @@ def prepare_save():
                 
             logger.info(f"Preparing CSV file with name: {filename}")
             
-            # Create a temporary file to store the CSV data
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
             
             try:
-                # Write the data to the CSV file
                 with open(temp_file.name, 'w', newline='') as f:
                     writer = csv.writer(f, delimiter=';')
                     for row in csv_data:
                         writer.writerow(row)
                         
-                # Generate a unique file ID
                 file_id = f"csv_{datetime.now().strftime('%Y%m%d%H%M%S')}_{os.getpid()}"
                 
-                # Store the file info for later retrieval
                 temp_files[file_id] = {
                     'path': temp_file.name,
                     'filename': filename,
@@ -1261,7 +1109,6 @@ def prepare_save():
                 })
                 
             except Exception as e:
-                # Clean up the temporary file if an error occurs
                 if os.path.exists(temp_file.name):
                     os.unlink(temp_file.name)
                 raise e
@@ -1273,7 +1120,6 @@ def prepare_save():
         logger.error(traceback.format_exc())
         return jsonify({"success": False, "data": {"error": str(e)}}), 500
 
-# Route for handling file download
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     """Download a previously prepared file.
@@ -1299,7 +1145,6 @@ def download_file(file_id):
             logger.error(f"File path does not exist: {file_path}")
             return jsonify({"success": False, "error": "File not found"}), 404
 
-        # Use the custom filename provided by the user, or fall back to a default
         download_name = f"{custom_filename}.csv"
         logger.info(f"Sending file with name: {download_name}")
         
@@ -1314,7 +1159,6 @@ def download_file(file_id):
         logger.error(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
-        # Clean up the temporary file
         if file_id in temp_files:
             try:
                 os.unlink(temp_files[file_id]['path'])

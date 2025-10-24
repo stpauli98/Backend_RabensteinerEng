@@ -15,7 +15,6 @@ def test_generate_datasets(session_id):
     """Test the /generate-datasets endpoint"""
     print(f"\n🧪 Testing /generate-datasets/{session_id}")
     
-    # Prepare request with Dense model configuration
     payload = {
         "model_parameters": {
             "MODE": "Dense",
@@ -60,7 +59,6 @@ def test_train_models(session_id):
     """Test the /train-models endpoint"""
     print(f"\n🧪 Testing /train-models/{session_id}")
     
-    # Test with CNN model
     payload = {
         "model_parameters": {
             "MODE": "CNN",
@@ -68,13 +66,13 @@ def test_train_models(session_id):
             "N": 16,
             "K": 3,
             "EP": 3,
-            "ACTF": "ReLU"  # Test capital ReLU
+            "ACTF": "ReLU"
         },
         "training_split": {
             "train_ratio": 0.7,
             "validation_ratio": 0.2,
             "test_ratio": 0.1,
-            "shuffle": False  # Test with no shuffle
+            "shuffle": False
         }
     }
     
@@ -166,7 +164,6 @@ def test_all_models(session_id):
         except Exception as e:
             print(f"❌ {model['name']} - Error: {str(e)}")
         
-        # Small delay between requests
         time.sleep(1)
 
 def main():
@@ -175,7 +172,6 @@ def main():
     print("🔬 API Integration Test")
     print("=" * 60)
     
-    # Check if session ID provided
     if len(sys.argv) < 2:
         print("\n⚠️  No session ID provided, using test session")
         session_id = "test_session_api_" + str(int(time.time()))
@@ -184,25 +180,20 @@ def main():
     
     print(f"\n📍 Using session ID: {session_id}")
     
-    # Test endpoints
     print("\n" + "=" * 60)
     print("Testing Individual Endpoints")
     print("=" * 60)
     
-    # Test dataset generation
     datasets_ok = test_generate_datasets(session_id)
     
-    # Test model training
     training_ok = test_train_models(session_id)
     
-    # Test all models if basic tests pass
     if datasets_ok and training_ok:
         print("\n" + "=" * 60)
         print("Testing All Model Types")
         print("=" * 60)
         test_all_models(session_id)
     
-    # Summary
     print("\n" + "=" * 60)
     print("📊 Test Summary")
     print("=" * 60)

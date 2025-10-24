@@ -10,7 +10,6 @@ from middleware.subscription import (
 )
 from utils.usage_tracking import increment_upload_count
 
-# Create blueprint
 auth_example_bp = Blueprint('auth_example', __name__, url_prefix='/api/auth-example')
 
 
@@ -85,12 +84,11 @@ def profile_route():
 @check_upload_limit
 def upload_check():
     """Example upload endpoint with limit checking"""
-    # Increment upload count (in real endpoint, do this after successful upload)
     increment_upload_count(g.user_id)
 
     return jsonify({
         'message': 'Upload successful',
-        'uploads_remaining': g.uploads_remaining - 1,  # Subtract 1 since we just incremented
+        'uploads_remaining': g.uploads_remaining - 1,
         'plan': g.plan.get('name')
     })
 

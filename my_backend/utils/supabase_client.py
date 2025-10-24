@@ -25,8 +25,6 @@ def get_supabase_client() -> Client:
 
     logger.info(f"Initializing Supabase client for URL: {supabase_url}")
 
-    # Timeout is handled at database level (statement_timeout = '0' for service_role)
-    # This allows long-running operations without client-side timeout
     return create_client(supabase_url, supabase_key)
 
 
@@ -48,10 +46,8 @@ def get_supabase_user_client(access_token: str) -> Client:
     if not supabase_url or not supabase_key:
         raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
 
-    # Create client
     client = create_client(supabase_url, supabase_key)
 
-    # Set the user's access token for RLS
     client.postgrest.auth(access_token)
 
     return client
@@ -76,6 +72,4 @@ def get_supabase_admin_client() -> Client:
 
     logger.info(f"Initializing Supabase admin client for URL: {supabase_url}")
 
-    # Timeout is handled at database level (statement_timeout = '0' for service_role)
-    # This allows long-running INSERT operations without timeout errors
     return create_client(supabase_url, supabase_service_key)

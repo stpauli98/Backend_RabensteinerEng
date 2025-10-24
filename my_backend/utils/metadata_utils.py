@@ -57,7 +57,6 @@ def extract_file_metadata(session_id, upload_base_dir):
         dict: Dictionary containing file metadata fields or None if not found
     """
     try:
-        # Get path to session directory
         upload_dir = os.path.join(upload_base_dir, session_id)
         metadata_path = os.path.join(upload_dir, 'metadata.json')
 
@@ -65,11 +64,9 @@ def extract_file_metadata(session_id, upload_base_dir):
             logger.error(f"Metadata file not found for session {session_id}")
             return None
 
-        # Load metadata
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
 
-        # Find the first chunk which should contain fileMetadata
         for chunk in metadata:
             if 'params' in chunk and 'fileMetadata' in chunk['params']:
                 file_metadata = chunk['params']['fileMetadata']

@@ -34,18 +34,14 @@ def prepare_data_for_training(
         supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id)
         
-        # Get training results to retrieve processed data
-        # Since file_metadata table doesn't exist, use training_results instead
         results_response = supabase.table('training_results').select('*').eq(
             'session_id', uuid_session_id
         ).order('created_at.desc').limit(1).execute()
         
         if results_response.data and len(results_response.data) > 0:
-            # Use data from existing training results
             result = results_response.data[0]
             data_splits = result.get('data_splits', {})
             
-            # Combine all splits to get full dataset
             X_data = []
             y_data = []
             
@@ -64,26 +60,21 @@ def prepare_data_for_training(
                     'message': 'Please process data first'
                 }
         else:
-            # No existing data - return error
             return {
                 'success': False,
                 'error': 'No processed data found for session',
                 'message': 'Please upload and process a file first'
             }
         
-        # Convert to numpy arrays
         X = np.array(X_data)
         y = np.array(y_data)
         
-        # Ensure y is 2D
         if len(y.shape) == 1:
             y = y.reshape(-1, 1)
         
-        # Calculate test ratio
         test_ratio = 1.0 - train_ratio - val_ratio
         
         if random_dat:
-            # Sequential split (no shuffling)
             n_samples = len(X)
             n_train = int(n_samples * train_ratio)
             n_val = int(n_samples * val_ratio)
@@ -99,13 +90,10 @@ def prepare_data_for_training(
             
             logger.info(f"Sequential split: train={n_train}, val={n_val}, test={len(X_test)}")
         else:
-            # Random split with shuffling
-            # First split into train+val and test
             X_temp, X_test, y_temp, y_test = train_test_split(
                 X, y, test_size=test_ratio, random_state=42, shuffle=True
             )
             
-            # Then split train+val into train and val
             val_size = val_ratio / (train_ratio + val_ratio)
             X_train, X_val, y_train, y_val = train_test_split(
                 X_temp, y_temp, test_size=val_size, random_state=42, shuffle=True
@@ -113,7 +101,6 @@ def prepare_data_for_training(
             
             logger.info(f"Random split: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}")
         
-        # Get feature names from model metadata if available
         if results_response.data and len(results_response.data) > 0:
             model_metadata = result.get('model_metadata', {})
             input_features = model_metadata.get('input_features', [])
@@ -122,7 +109,6 @@ def prepare_data_for_training(
             input_features = []
             output_features = []
         
-        # If feature names not available, generate defaults
         if not input_features:
             input_features = [f"Feature_{i+1}" for i in range(X.shape[1])]
         if not output_features:

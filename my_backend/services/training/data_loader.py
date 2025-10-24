@@ -14,7 +14,6 @@ from supabase import create_client
 from typing import Dict, List, Optional, Tuple
 import logging
 
-# Import existing supabase client
 from utils.database import get_supabase_client, create_or_get_session_uuid
 
 logger = logging.getLogger(__name__)
@@ -35,7 +34,7 @@ class DataLoader:
         try:
             import uuid
             uuid.UUID(session_id)
-            return session_id  # Already UUID
+            return session_id
         except (ValueError, TypeError):
             uuid_session_id = create_or_get_session_uuid(session_id)
             if not uuid_session_id:
@@ -58,16 +57,12 @@ class DataLoader:
             Dict containing all session data
         """
         try:
-            # Load session info
             session_data = self._load_session_info(session_id)
             
-            # Load time configuration
             time_info = self._load_time_info(session_id)
             
-            # Load zeitschritte configuration
             zeitschritte = self._load_zeitschritte(session_id)
             
-            # Load file metadata
             files_info = self._load_files_info(session_id)
             
             return {
@@ -84,14 +79,12 @@ class DataLoader:
     def _load_session_info(self, session_id: str) -> Dict:
         """Load basic session information"""
         try:
-            # Convert to UUID for database query
             uuid_session_id = self._convert_to_uuid(session_id)
             
             response = self.supabase.table('sessions').select('*').eq('id', uuid_session_id).execute()
             
             if not response.data:
                 logger.warning(f"Session {session_id} not found in sessions table")
-                # Return minimal session info if not found
                 return {
                     'id': uuid_session_id,
                     'string_id': session_id,
@@ -107,13 +100,11 @@ class DataLoader:
     def _load_time_info(self, session_id: str) -> Dict:
         """Load time configuration for the session"""
         try:
-            # Convert to UUID for database query
             uuid_session_id = self._convert_to_uuid(session_id)
             
             response = self.supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
             
             if not response.data:
-                # Return default time info if none exists
                 return {
                     'jahr': True,
                     'monat': True,
@@ -131,13 +122,11 @@ class DataLoader:
     def _load_zeitschritte(self, session_id: str) -> Dict:
         """Load zeitschritte (time steps) configuration"""
         try:
-            # Convert to UUID for database query
             uuid_session_id = self._convert_to_uuid(session_id)
             
             response = self.supabase.table('zeitschritte').select('*').eq('session_id', uuid_session_id).execute()
             
             if not response.data:
-                # Return default zeitschritte if none exists
                 return {
                     'eingabe': '24',
                     'ausgabe': '1',
@@ -154,7 +143,6 @@ class DataLoader:
     def _load_files_info(self, session_id: str) -> List[Dict]:
         """Load file metadata for the session"""
         try:
-            # Convert to UUID for database query
             uuid_session_id = self._convert_to_uuid(session_id)
             
             response = self.supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
@@ -181,10 +169,9 @@ class DataLoader:
             
             for file_info in files_info:
                 file_type = file_info.get('type', 'unknown')
-                file_name = file_info.get('file_name', 'unknown.csv')  # Use 'file_name' key from database
+                file_name = file_info.get('file_name', 'unknown.csv')
                 storage_path = file_info.get('storage_path', '')
                 
-                # Download file from storage
                 local_path = self._download_file(storage_path, file_name, session_id, file_type)
                 downloaded_files[file_type] = local_path
             
@@ -208,17 +195,13 @@ class DataLoader:
             Local file path
         """
         try:
-            # Create local file path
             local_file_path = os.path.join(self.temp_dir, f"{session_id}_{file_name}")
             
-            # Determine bucket based on file type
             bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
             
             
-            # Download from the appropriate bucket
             response = self.supabase.storage.from_(bucket_name).download(storage_path)
             
-            # Save to local file
             with open(local_file_path, 'wb') as f:
                 f.write(response)
             
@@ -270,13 +253,10 @@ class DataLoader:
         try:
             df = pd.read_csv(file_path, delimiter=delimiter)
             
-            # Basic validation
             if df.empty:
                 raise ValueError(f"CSV file {file_path} is empty")
                 
-            # Ensure the first column is treated as UTC timestamp
             if len(df.columns) >= 2:
-                # Rename columns to match expected format (UTC, data_value)
                 df.columns = ['UTC', 'data_value']
             else:
                 raise ValueError(f"CSV file must have at least 2 columns, found {len(df.columns)}")
@@ -297,7 +277,6 @@ class DataLoader:
         try:
             import glob
             
-            # Find all files for this session
             pattern = os.path.join(self.temp_dir, f"{session_id}_*")
             files_to_remove = glob.glob(pattern)
             
@@ -319,58 +298,43 @@ class DataLoader:
             Tuple of updated (dat, inf)
         """
         try:
-            # Get the last loaded dataframe
             df_name, df = next(reversed(dat.items()))
 
-            # Convert UTC to datetime
             df["UTC"] = pd.to_datetime(df["UTC"], format="%Y-%m-%d %H:%M:%S")
 
-            # Start time
             utc_min = df["UTC"].iloc[0]
             
-            # End time
             utc_max = df["UTC"].iloc[-1]
             
-            # Number of data points
             n_all = len(df)
             
-            # Time step width [min]
             delt = (df["UTC"].iloc[-1] - df["UTC"].iloc[0]).total_seconds() / (60 * (n_all - 1))
 
-            # Constant Offset
             if round(60/delt) == 60/delt:
                 ofst = (df["UTC"].iloc[0] -
                         (df["UTC"].iloc[0]).replace(minute=0, second=0, microsecond=0)).total_seconds()/60
                 while ofst - delt >= 0:
                    ofst -= delt
-            # Variable Offset
             else:
                 ofst = "var"
 
-            # Number of numeric data points
             n_num = n_all
             for i in range(n_all):
                 try:
-                    # Use 'data_value' column instead of iloc[i, 1]
                     float(df['data_value'].iloc[i])
                     if math.isnan(float(df['data_value'].iloc[i])):
                        n_num -= 1
                 except:
                     n_num -= 1  
             
-            # Percentage of numeric data points
             rate_num = round(n_num/n_all*100, 2)
                 
-            # Maximum value
             val_max = df['data_value'].max() 
             
-            # Minimum value
             val_min = df['data_value'].min()
             
-            # Update dataframe
             dat[df_name] = df
 
-            # Insert information - include all columns needed by data_processor
             row_data = {
                 "utc_min":      utc_min,
                 "utc_max":      utc_max, 
@@ -381,19 +345,18 @@ class DataLoader:
                 "rate_num":     rate_num,
                 "val_min":      val_min,
                 "val_max":      val_max,
-                "spec":         "Historische Daten",  # Default value
-                "th_strt":      -2,                   # Default value (from original script)
-                "th_end":       0,                    # Default value (from original script)
-                "meth":         "Lineare Interpolation", # Default value
+                "spec":         "Historische Daten",
+                "th_strt":      -2,
+                "th_end":       0,
+                "meth":         "Lineare Interpolation",
                 "avg":          False,
-                "delt_transf":  None,                 # Will be calculated by transform_data
-                "ofst_transf":  None,                 # Will be calculated by transform_data
+                "delt_transf":  None,
+                "ofst_transf":  None,
                 "scal":         False,
-                "scal_max":     1,                    # Default scaling max
-                "scal_min":     0                     # Default scaling min
+                "scal_max":     1,
+                "scal_min":     0
             }
             
-            # Create new row in DataFrame
             if inf.empty:
                 inf = pd.DataFrame(columns=row_data.keys())
             inf.loc[df_name] = row_data
@@ -405,7 +368,6 @@ class DataLoader:
             raise
 
 
-# EXACT FUNCTIONS FROM training_original.py ###################################
 
 def load(dat, inf):
     """
@@ -420,26 +382,19 @@ def load(dat, inf):
         Tuple of updated (dat, inf)
     """
     
-    # Zuletzt geladener Dataframe
     df_name, df = next(reversed(dat.items()))
 
-    # UTC in datetime umwandeln
     df["UTC"] = pd.to_datetime(df["UTC"], 
                                format = "%Y-%m-%d %H:%M:%S")
 
-    # Startzeit
     utc_min = df["UTC"].iloc[0]
     
-    # Endzeit
     utc_max = df["UTC"].iloc[-1]
     
-    # Anzahl der Datenpunkte
     n_all = len(df)
     
-    # Zeitschrittweite [min]
     delt = (df["UTC"].iloc[-1]-df["UTC"].iloc[0]).total_seconds()/(60*(n_all-1))
 
-    # Konstanter Offset
     if round(60/delt) == 60/delt:
         
         ofst = (df["UTC"].iloc[0]-
@@ -449,12 +404,10 @@ def load(dat, inf):
         while ofst-delt >= 0:
            ofst -= delt
     
-    # Variabler Offset
     else:
         
         ofst = "var"
 
-    # Anzahl der numerischen Datenpunkte
     n_num = n_all
     for i in range(n_all):
         try:
@@ -464,20 +417,14 @@ def load(dat, inf):
         except:
             n_num -= 1  
     
-    # Anteil an numerischen Datenpunkten [%]
     rate_num = round(n_num/n_all*100, 2)
         
-    # Maximalwert [#]
     val_max = df.iloc[:, 1].max() 
     
-    # Minimalwert [#]
     val_min = df.iloc[:, 1].min()
     
-    # Dataframe aktualisieren
     dat[df_name] = df
 
-    # Information einfügen
-    # Initialize DataFrame columns if empty
     if inf.empty:
         inf = pd.DataFrame(columns=["utc_min", "utc_max", "delt", "ofst", "n_all", 
                                    "n_num", "rate_num", "val_min", "val_max", "scal", "avg"])
@@ -520,11 +467,9 @@ def transf(inf, N, OFST):
             (inf.loc[key, "th_end"]-\
              inf.loc[key, "th_strt"])*60/(N-1)
         
-        # OFFSET KANN BERECHNET WERDEN
         if round(60/inf.loc[key, "delt_transf"]) == \
             60/inf.loc[key, "delt_transf"]:
               
-            # Offset [min]
             ofst_transf = OFST-(inf.loc[key, "th_strt"]-
                                 math.floor(inf.loc[key, "th_strt"]))*60+60
             
@@ -534,7 +479,6 @@ def transf(inf, N, OFST):
             
             inf.loc[key, "ofst_transf"] = ofst_transf
                 
-        # OFFSET KANN NICHT BERECHNET WERDEN
         else: 
             inf.loc[key, "ofst_transf"] = "var"
             
@@ -554,14 +498,11 @@ def utc_idx_pre(dat, utc):
         Index of element <= utc, or None if not found
     """
         
-    # Index des ersten Elements, das kleinergleich "utc" ist
     idx = dat["UTC"].searchsorted(utc, side = 'right')
 
-    # Ausgabe des Wertes
     if idx > 0:
         return dat.index[idx-1]
 
-    # Kein passender Eintrag
     return None    
 
 
@@ -578,13 +519,10 @@ def utc_idx_post(dat, utc):
         Index of element >= utc, or None if not found
     """
 
-    # Index des ersten Elements, das größergleich "utc" ist
     idx = dat["UTC"].searchsorted(utc, side = 'left')
 
-    # Ausgabe des Wertes
     if idx < len(dat):
         return dat.index[idx]
 
-    # Kein passender Eintrag
     return None
         

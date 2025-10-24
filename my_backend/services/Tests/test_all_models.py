@@ -6,7 +6,6 @@ Tests: Dense, CNN, LSTM, AR-LSTM, SVR_dir, SVR_MIMO, Linear
 import sys
 import os
 import numpy as np
-# Add parent directories to path to access training modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from services.training.config import MDL, MTS
@@ -19,17 +18,14 @@ print("="*60)
 print("TESTING ALL MODEL TYPES")
 print("="*60)
 
-# Create test data
 mts = MTS()
-n_samples = 20  # Small number for quick testing
-n_timesteps = mts.I_N  # 13
+n_samples = 20
+n_timesteps = mts.I_N
 n_features = 2
 
-# Training data
 train_x = np.random.randn(n_samples, n_timesteps, n_features)
 train_y = np.random.randn(n_samples, mts.O_N, 1)
 
-# Validation data
 val_x = np.random.randn(5, n_timesteps, n_features)
 val_y = np.random.randn(5, mts.O_N, 1)
 
@@ -37,10 +33,8 @@ print(f"\nTest data shapes:")
 print(f"Train X: {train_x.shape}, Train Y: {train_y.shape}")
 print(f"Val X: {val_x.shape}, Val Y: {val_y.shape}")
 
-# Track results
 results = {}
 
-# Test 1: LINEAR Model
 print("\n" + "-"*40)
 print("1. Testing LINEAR Model...")
 print("-"*40)
@@ -56,7 +50,6 @@ except Exception as e:
     print(f"❌ LINEAR: Error - {str(e)}")
     results['LINEAR'] = f'ERROR: {str(e)}'
 
-# Test 2: DENSE Neural Network
 print("\n" + "-"*40)
 print("2. Testing DENSE Neural Network...")
 print("-"*40)
@@ -64,13 +57,11 @@ try:
     mdl = MDL(mode="Dense")
     print(f"Config: LAY={mdl.LAY}, N={mdl.N}, EP={mdl.EP}, ACTF={mdl.ACTF}")
     
-    # Set epochs to 1 for quick testing
     mdl.EP = 1
     
     model = train_dense(train_x, train_y, val_x, val_y, mdl)
     if model is not None:
         print("✅ DENSE: Success! Model trained")
-        # Test prediction
         pred = model.predict(val_x[:1])
         print(f"   Prediction shape: {pred.shape}")
         results['DENSE'] = 'SUCCESS'
@@ -81,7 +72,6 @@ except Exception as e:
     print(f"❌ DENSE: Error - {str(e)}")
     results['DENSE'] = f'ERROR: {str(e)}'
 
-# Test 3: CNN Model
 print("\n" + "-"*40)
 print("3. Testing CNN Model...")
 print("-"*40)
@@ -89,12 +79,10 @@ try:
     mdl = MDL(mode="CNN")
     print(f"Config: LAY={mdl.LAY}, N={mdl.N}, K={mdl.K}, EP={mdl.EP}, ACTF={mdl.ACTF}")
     
-    # Set epochs to 1 for quick testing
     mdl.EP = 1
     
     model = train_cnn(train_x, train_y, val_x, val_y, mdl)
     if model is not None:
-        # CNN reshapes data to 4D internally, so we need to reshape for prediction
         test_input = val_x[:1].reshape(1, val_x.shape[1], val_x.shape[2], 1)
         pred = model.predict(test_input)
         print("✅ CNN: Success! Model trained")
@@ -107,7 +95,6 @@ except Exception as e:
     print(f"❌ CNN: Error - {str(e)}")
     results['CNN'] = f'ERROR: {str(e)}'
 
-# Test 4: LSTM Model
 print("\n" + "-"*40)
 print("4. Testing LSTM Model...")
 print("-"*40)
@@ -115,7 +102,6 @@ try:
     mdl = MDL(mode="LSTM")
     print(f"Config: LAY={mdl.LAY}, N={mdl.N}, EP={mdl.EP}, ACTF={mdl.ACTF}")
     
-    # Set epochs to 1 for quick testing
     mdl.EP = 1
     
     model = train_lstm(train_x, train_y, val_x, val_y, mdl)
@@ -131,7 +117,6 @@ except Exception as e:
     print(f"❌ LSTM: Error - {str(e)}")
     results['LSTM'] = f'ERROR: {str(e)}'
 
-# Test 5: AR-LSTM Model
 print("\n" + "-"*40)
 print("5. Testing AR-LSTM Model...")
 print("-"*40)
@@ -139,7 +124,6 @@ try:
     mdl = MDL(mode="AR LSTM")
     print(f"Config: LAY={mdl.LAY}, N={mdl.N}, EP={mdl.EP}, ACTF={mdl.ACTF}")
     
-    # Set epochs to 1 for quick testing
     mdl.EP = 1
     
     model = train_ar_lstm(train_x, train_y, val_x, val_y, mdl)
@@ -155,7 +139,6 @@ except Exception as e:
     print(f"❌ AR-LSTM: Error - {str(e)}")
     results['AR-LSTM'] = f'ERROR: {str(e)}'
 
-# Test 6: SVR_dir Model
 print("\n" + "-"*40)
 print("6. Testing SVR_dir Model...")
 print("-"*40)
@@ -166,7 +149,6 @@ try:
     models = train_svr_dir(train_x, train_y, mdl)
     if models and len(models) > 0:
         print(f"✅ SVR_dir: Success! Trained {len(models)} SVR models")
-        # Test prediction with first model
         X_test = val_x[:1].reshape(1 * n_timesteps, n_features)
         pred = models[0].predict(X_test)
         print(f"   Prediction shape: {pred.shape}")
@@ -178,7 +160,6 @@ except Exception as e:
     print(f"❌ SVR_dir: Error - {str(e)}")
     results['SVR_dir'] = f'ERROR: {str(e)}'
 
-# Test 7: SVR_MIMO Model
 print("\n" + "-"*40)
 print("7. Testing SVR_MIMO Model...")
 print("-"*40)
@@ -188,9 +169,7 @@ try:
     
     models = train_svr_mimo(train_x, train_y, mdl)
     if models is not None and len(models) > 0:
-        # SVR_MIMO returns list of models, test with first
         X_test = val_x[:1].reshape(1, -1)
-        # Predict with all models and combine
         predictions = [m.predict(X_test) for m in models]
         print(f"✅ SVR_MIMO: Success! Trained {len(models)} SVR models")
         print(f"   First prediction shape: {predictions[0].shape}")
@@ -202,7 +181,6 @@ except Exception as e:
     print(f"❌ SVR_MIMO: Error - {str(e)}")
     results['SVR_MIMO'] = f'ERROR: {str(e)}'
 
-# Summary
 print("\n" + "="*60)
 print("TEST SUMMARY")
 print("="*60)
@@ -227,7 +205,6 @@ if fail_count == 0:
 else:
     print(f"\n⚠️  {fail_count} models have issues")
 
-# Test activation functions
 print("\n" + "="*60)
 print("TESTING ACTIVATION FUNCTIONS")
 print("="*60)
@@ -238,13 +215,12 @@ print("\nSupported activation functions:")
 for key, value in ACTIVATION_FUNCTIONS.items():
     print(f"  '{key}' → '{value}'")
 
-# Test with ReLU specifically (user asked about it)
 print("\n" + "-"*40)
 print("Testing Dense with ReLU activation...")
 print("-"*40)
 try:
     mdl = MDL(mode="Dense")
-    mdl.ACTF = "ReLU"  # Capital ReLU as user asked
+    mdl.ACTF = "ReLU"
     mdl.EP = 1
     
     model = train_dense(train_x, train_y, val_x, val_y, mdl)

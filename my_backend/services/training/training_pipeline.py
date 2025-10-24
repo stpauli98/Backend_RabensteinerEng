@@ -62,18 +62,14 @@ class TrainingPipeline:
         try:
             self.current_session_id = session_id
             
-            # Initialize progress tracking
             self._update_progress(0, 'Initializing real training pipeline')
             
-            # Use the real integrated pipeline instead of placeholder methods
             self._update_progress(1, 'Running real training pipeline')
             final_results = run_real_training_pipeline(session_id, self.supabase, self.socketio)
             
-            # Step 7: Save results to database
             self._update_progress(6, 'Saving results to database')
             self._save_results_to_database(session_id, final_results)
             
-            # Mark as completed
             self._update_progress(7, 'Training completed successfully', completed=True)
             
             return final_results
@@ -83,10 +79,8 @@ class TrainingPipeline:
             logger.error(error_msg)
             logger.error(traceback.format_exc())
             
-            # Update progress with error
             self._update_progress(self.progress['completed_steps'], f'Training failed: {str(e)}', error=True)
             
-            # Save error to database
             self._save_error_to_database(session_id, str(e), traceback.format_exc())
             
             raise
@@ -104,17 +98,13 @@ class TrainingPipeline:
         try:
             self.current_session_id = session_id
             
-            # Initialize progress tracking
             self._update_progress(0, 'Generating datasets and violin plots')
             
-            # Use the new dataset generation pipeline
             results = run_dataset_generation_pipeline(session_id, self.supabase, self.socketio)
             
-            # Save dataset generation results to database
             self._update_progress(1, 'Saving dataset generation results')
             self._save_dataset_generation_to_database(session_id, results)
             
-            # Mark as completed
             self._update_progress(2, 'Dataset generation completed successfully', completed=True)
             
             return results
@@ -124,10 +114,8 @@ class TrainingPipeline:
             logger.error(error_msg)
             logger.error(traceback.format_exc())
             
-            # Update progress with error
             self._update_progress(self.progress['completed_steps'], f'Dataset generation failed: {str(e)}', error=True)
             
-            # Save error to database
             self._save_error_to_database(session_id, str(e), traceback.format_exc())
             
             raise
@@ -146,17 +134,13 @@ class TrainingPipeline:
         try:
             self.current_session_id = session_id
             
-            # Initialize progress tracking
             self._update_progress(0, 'Training models with user parameters')
             
-            # Use the new model training pipeline
             results = run_model_training_pipeline(session_id, model_params, self.supabase, self.socketio)
             
-            # Save training results to database
             self._update_progress(6, 'Saving training results to database')
             self._save_results_to_database(session_id, results)
             
-            # Mark as completed
             self._update_progress(7, 'Model training completed successfully', completed=True)
             
             return results
@@ -166,10 +150,8 @@ class TrainingPipeline:
             logger.error(error_msg)
             logger.error(traceback.format_exc())
             
-            # Update progress with error
             self._update_progress(self.progress['completed_steps'], f'Model training failed: {str(e)}', error=True)
             
-            # Save error to database
             self._save_error_to_database(session_id, str(e), traceback.format_exc())
             
             raise
@@ -185,13 +167,10 @@ class TrainingPipeline:
             Tuple of (session_data, input_files, output_files)
         """
         try:
-            # Create data loader
             data_loader = create_data_loader(self.supabase)
             
-            # Load session data
             session_data = data_loader.load_session_data(session_id)
             
-            # Download files
             input_files, output_files = data_loader.prepare_file_paths(session_id)
             
             
@@ -214,13 +193,10 @@ class TrainingPipeline:
             Processed data
         """
         try:
-            # Create MTS config from session data
             config = self._create_mts_config(session_data)
             
-            # Create data processor
             data_processor = create_data_processor(config)
             
-            # Process data
             processed_data = data_processor.process_session_data(session_data, input_files, output_files)
             
             
@@ -242,13 +218,10 @@ class TrainingPipeline:
             Training results
         """
         try:
-            # Create MDL config from session data
             config = self._create_mdl_config(session_data)
             
-            # Create model trainer
             model_trainer = create_model_trainer(config)
             
-            # Train models
             training_results = model_trainer.train_all_models(
                 processed_data.get('train_datasets', {}), 
                 session_data
@@ -273,10 +246,8 @@ class TrainingPipeline:
             Evaluation results
         """
         try:
-            # Create results generator
             results_generator = create_results_generator()
             
-            # Generate evaluation results
             evaluation_results = results_generator.generate_results(training_results, session_data)
             
             
@@ -300,24 +271,17 @@ class TrainingPipeline:
         try:
             visualizations = {}
             
-            # Create non-violin visualizations using visualization.py
             visualizer = create_visualizer()
             
-            # Create forecast plots
             forecast_plots = visualizer.create_forecast_plots(training_results, evaluation_results)
             visualizations.update(forecast_plots)
             
-            # Create metrics comparison plots
             comparison_plots = visualizer.create_metrics_comparison_plots(evaluation_results)
             visualizations.update(comparison_plots)
             
-            # Create training history plots
             history_plots = visualizer.create_training_history_plots(training_results)
             visualizations.update(history_plots)
             
-            # Create violin plots using consolidated violin_plot_generator
-            # Note: Violin plots are typically created separately during training
-            # This is a fallback if they're needed at this stage
             
             return visualizations
             
@@ -380,15 +344,14 @@ class TrainingPipeline:
             return data
         elif isinstance(data, float):
             if math.isnan(data) or math.isinf(data):
-                return None  # Replace inf/nan with None
+                return None
             return data
         elif isinstance(data, np.ndarray):
-            # Convert numpy arrays to lists and clean
             return self._clean_json_data(data.tolist())
-        elif hasattr(data, 'item'):  # numpy scalars
+        elif hasattr(data, 'item'):
             return self._clean_json_data(data.item())
         else:
-            return str(data)  # Convert other types to string
+            return str(data)
     
     def _save_results_to_database(self, session_id: str, results: Dict) -> bool:
         """
@@ -402,18 +365,15 @@ class TrainingPipeline:
             True if successful
         """
         try:
-            # Extract structured results from real pipeline output
             evaluation_results = results.get('evaluation_results', {})
             training_results = results.get('training_results', {})
             visualizations = results.get('visualizations', {})
             summary = results.get('summary', {})
             
-            # Clean all data to remove inf/nan values
             evaluation_results = self._clean_json_data(evaluation_results)
             training_results = self._clean_json_data(training_results)
             summary = self._clean_json_data(summary)
             
-            # Save main training results
             result_data = {
                 'session_id': session_id,
                 'evaluation_metrics': evaluation_results.get('evaluation_metrics', {}),
@@ -429,7 +389,6 @@ class TrainingPipeline:
             if response.data:
                 result_id = response.data[0]['id']
                 
-                # Save visualizations to separate table
                 self._save_visualizations_to_database(session_id, visualizations)
                 
                 return True
@@ -494,7 +453,6 @@ class TrainingPipeline:
             True if successful
         """
         try:
-            # Save dataset generation info to training_results with status 'datasets_generated'
             dataset_data = {
                 'session_id': session_id,
                 'status': 'datasets_generated',
@@ -506,7 +464,6 @@ class TrainingPipeline:
             response = self.supabase.table('training_results').insert(dataset_data).execute()
             
             if response.data:
-                # Save violin plots to visualizations table
                 visualizations = results.get('visualizations', {})
                 if visualizations:
                     self._save_visualizations_to_database(session_id, visualizations)
@@ -541,14 +498,12 @@ class TrainingPipeline:
             elif error:
                 self.progress['current_step'] = f'Error: {message}'
             
-            # Emit progress via SocketIO if available
             if self.socketio and self.current_session_id:
                 self.socketio.emit('training_progress', {
                     'session_id': self.current_session_id,
                     'progress': self.progress
                 }, room=self.current_session_id)
             
-            # Save progress to database
             self._save_progress_to_database()
             
             
@@ -559,7 +514,6 @@ class TrainingPipeline:
         """Save progress to database"""
         try:
             if self.current_session_id:
-                # Clean progress data to avoid inf/nan issues
                 clean_progress = self._clean_json_data(self.progress)
                 
                 progress_data = {
@@ -571,7 +525,6 @@ class TrainingPipeline:
                     'progress_percentage': clean_progress.get("overall", 0)
                 }
                 
-                # Insert into training_logs instead of training_progress
                 self.supabase.table('training_logs').insert(progress_data).execute()
                 
         except Exception as e:
@@ -590,18 +543,15 @@ class TrainingPipeline:
         try:
             config = MTS()
             
-            # Configure from session data
             time_info = session_data.get('time_info', {})
             zeitschritte = session_data.get('zeitschritte', {})
             
-            # Set time features
             config.jahr = time_info.get('jahr', True)
             config.monat = time_info.get('monat', True)
             config.woche = time_info.get('woche', True)
             config.feiertag = time_info.get('feiertag', True)
             config.timezone = time_info.get('zeitzone', 'UTC')
             
-            # Set time steps
             config.time_steps_in = int(zeitschritte.get('eingabe', 24))
             config.time_steps_out = int(zeitschritte.get('ausgabe', 1))
             config.time_step_size = int(zeitschritte.get('zeitschrittweite', 1))
@@ -626,8 +576,6 @@ class TrainingPipeline:
         try:
             config = MDL()
             
-            # TODO: Configure models based on session data
-            # For now, use defaults
             
             return config
             
@@ -669,7 +617,6 @@ class TrainingPipeline:
             return {'name': 'unknown', 'dataset': 'unknown', 'mae': float('inf')}
 
 
-# Factory function to create training pipeline
 def create_training_pipeline(supabase_client, socketio_instance=None) -> TrainingPipeline:
     """
     Create and return a TrainingPipeline instance
@@ -684,7 +631,6 @@ def create_training_pipeline(supabase_client, socketio_instance=None) -> Trainin
     return TrainingPipeline(supabase_client, socketio_instance)
 
 
-# Main execution function for use in middleman_runner.py
 def run_training_for_session(session_id: str, supabase_client, socketio_instance=None) -> Dict:
     """
     Main function to run training for a session
@@ -699,10 +645,8 @@ def run_training_for_session(session_id: str, supabase_client, socketio_instance
         Training results
     """
     try:
-        # Create training pipeline
         pipeline = create_training_pipeline(supabase_client, socketio_instance)
         
-        # Run training
         results = pipeline.run_training_pipeline(session_id)
         
         return results

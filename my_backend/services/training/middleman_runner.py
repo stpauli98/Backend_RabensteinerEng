@@ -11,19 +11,15 @@ import traceback
 import pandas as pd
 from datetime import datetime
 
-# Import existing supabase client and UUID conversion
 from utils.database import get_supabase_client, create_or_get_session_uuid
 
-# Import verified pipeline that produces identical results to original
 from services.training.pipeline_exact import run_exact_training_pipeline
 from services.training.data_loader import DataLoader
 from services.training.config import MDL
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configuration
 BACKEND_URL = "http://127.0.0.1:8080"
 
 class ModernMiddlemanRunner:
@@ -34,7 +30,7 @@ class ModernMiddlemanRunner:
     
     def __init__(self):
         self.supabase = get_supabase_client()
-        self.socketio = None  # Will be set if SocketIO is available
+        self.socketio = None
         
     def set_socketio(self, socketio_instance):
         """Set SocketIO instance for real-time progress updates"""
@@ -54,69 +50,52 @@ class ModernMiddlemanRunner:
         try:
             logger.info(f"📍 Step 1: Starting run_training_script for session {session_id}")
 
-            # First try to get files from filesystem (for testing)
             import glob
             temp_dir = "temp_training_data"
             pattern = f"{temp_dir}/session_{session_id}_*"
             found_files = glob.glob(pattern)
             
-            # Only validate session if no files found in filesystem
             if not found_files:
-                # Validate session exists
                 if not self._validate_session(session_id):
                     raise ValueError(f"Session {session_id} not found or invalid")
             
-            # Load session data
             data_loader = DataLoader(self.supabase)
             
             if found_files:
-                # Use filesystem files directly
                 input_files = [f for f in found_files if "Leistung" in f]
                 output_files = [f for f in found_files if "Temp" in f]
             else:
-                # Fall back to database
                 session_data = data_loader.load_session_data(session_id)
-                # Get file paths
                 input_files, output_files = data_loader.prepare_file_paths(session_id)
             
             logger.info(f"📍 Step 2: Loading CSV data from {len(input_files)} input files and {len(output_files)} output files")
 
-            # Load CSV data
             i_dat = {}
             o_dat = {}
 
-            # Load input files
             for file_path in input_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
-                # Extract just the base filename without session prefix
-                # e.g. "session_123_Leistung.csv" -> "Leistung"
                 file_name = file_path.split('/')[-1].replace('.csv', '')
                 if '_' in file_name:
-                    # Remove session prefix if present
                     parts = file_name.split('_')
                     if len(parts) > 2 and parts[0] == 'session':
-                        file_name = '_'.join(parts[3:])  # Skip "session_ID_wq29wok_"
+                        file_name = '_'.join(parts[3:])
                 i_dat[file_name] = df
                 
-            # Load output files  
             for file_path in output_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
-                # Extract just the base filename without session prefix
                 file_name = file_path.split('/')[-1].replace('.csv', '')
                 if '_' in file_name:
                     parts = file_name.split('_')
                     if len(parts) > 2 and parts[0] == 'session':
-                        file_name = '_'.join(parts[3:])  # Skip "session_ID_wq29wok_"
+                        file_name = '_'.join(parts[3:])
                 o_dat[file_name] = df
             
-            # Import load and transf functions from data_loader
             from services.training.data_loader import load, transf
             from services.training.config import MTS
             
-            # Create MTS instance
             mts_config = MTS()
             
-            # Initialize info DataFrames with all required columns as in training_original.py
             i_dat_inf = pd.DataFrame(columns=[
                 "utc_min", "utc_max", "delt", "ofst", "n_all", "n_num", 
                 "rate_num", "val_min", "val_max", "spec", "th_strt", 
@@ -131,10 +110,8 @@ class ModernMiddlemanRunner:
                 "scal", "scal_max", "scal_min"
             ])
             
-            # Process all input files at once through load() (EXACT as training_original.py)
             logger.info(f"📍 Step 3: Processing input files through load() function")
 
-            # Log input file info for debugging
             for file_name, df in i_dat.items():
                 logger.info(f"   Input file '{file_name}': {len(df)} rows, {len(df.columns)} columns")
 
@@ -155,10 +132,8 @@ class ModernMiddlemanRunner:
                     'stage': 'load_input_files'
                 }
 
-            # Process all output files at once through load()
             logger.info(f"📍 Step 4: Processing output files through load() function")
 
-            # Log output file info for debugging
             for file_name, df in o_dat.items():
                 logger.info(f"   Output file '{file_name}': {len(df)} rows, {len(df.columns)} columns")
 
@@ -179,53 +154,42 @@ class ModernMiddlemanRunner:
                     'stage': 'load_output_files'
                 }
             
-            # Set required column values for all input files (as in training_original.py)
             for key in i_dat_inf.index:
                 i_dat_inf.loc[key, "spec"] = "Historische Daten"
-                i_dat_inf.loc[key, "th_strt"] = -1  # Time horizon start (hours before reference)
-                i_dat_inf.loc[key, "th_end"] = 0    # Time horizon end (at reference time)
+                i_dat_inf.loc[key, "th_strt"] = -1
+                i_dat_inf.loc[key, "th_end"] = 0
                 i_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
-                i_dat_inf.loc[key, "avg"] = False   # No averaging by default
-                i_dat_inf.loc[key, "scal"] = True   # Enable scaling
-                i_dat_inf.loc[key, "scal_max"] = 1  # Max scaling value
-                i_dat_inf.loc[key, "scal_min"] = 0  # Min scaling value
+                i_dat_inf.loc[key, "avg"] = False
+                i_dat_inf.loc[key, "scal"] = True
+                i_dat_inf.loc[key, "scal_max"] = 1
+                i_dat_inf.loc[key, "scal_min"] = 0
             
-            # Set required column values for all output files
             for key in o_dat_inf.index:
                 o_dat_inf.loc[key, "spec"] = "Historische Daten"
-                o_dat_inf.loc[key, "th_strt"] = 0   # Time horizon start (at reference time)
-                o_dat_inf.loc[key, "th_end"] = 1    # Time horizon end (1 hour after reference)
+                o_dat_inf.loc[key, "th_strt"] = 0
+                o_dat_inf.loc[key, "th_end"] = 1
                 o_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
-                o_dat_inf.loc[key, "avg"] = False   # No averaging by default
-                o_dat_inf.loc[key, "scal"] = True   # Enable scaling
-                o_dat_inf.loc[key, "scal_max"] = 1  # Max scaling value
-                o_dat_inf.loc[key, "scal_min"] = 0  # Min scaling value
+                o_dat_inf.loc[key, "avg"] = False
+                o_dat_inf.loc[key, "scal"] = True
+                o_dat_inf.loc[key, "scal_max"] = 1
+                o_dat_inf.loc[key, "scal_min"] = 0
             
-            # Apply transformations
             logger.info(f"📍 Step 5: Applying transformations")
             i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
             o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
             logger.info(f"📍 Step 5 complete: Transformations applied")
             
-            # Get time boundaries from data (EXACT as training_original.py lines 1056-1059)
-            # Use data min/max instead of fixed time period
             utc_strt = i_dat_inf["utc_min"].min()
             utc_end = i_dat_inf["utc_max"].max()
             
-            # Adjust based on output data if available  
             if not o_dat_inf.empty:
                 utc_strt = max(utc_strt, o_dat_inf["utc_min"].min())
                 utc_end = min(utc_end, o_dat_inf["utc_max"].max())
             
-            # IMPORTANT: Adjust start time to ensure we have enough historical data
-            # Since th_strt = -1 (1 hour before), we need at least 1 hour of data before utc_strt
-            # Add buffer to ensure interpolation can work
-            utc_strt = utc_strt + pd.Timedelta(hours=1.5)  # Skip first 1.5 hours to ensure enough history
+            utc_strt = utc_strt + pd.Timedelta(hours=1.5)
             
-            # Create MDL configuration from model_params or use defaults
             mdl_config = None
             if model_params:
-                # Map frontend mode names to backend mode names
                 mode_mapping = {
                     'Linear': 'LIN',
                     'Dense': 'Dense',
@@ -241,7 +205,6 @@ class ModernMiddlemanRunner:
                 
                 mdl_config = MDL(mode=backend_mode)
                 
-                # Set parameters based on model type
                 if backend_mode in ['Dense', 'CNN', 'LSTM', 'AR LSTM']:
                     if 'LAY' in model_params:
                         mdl_config.LAY = model_params['LAY']
@@ -261,7 +224,6 @@ class ModernMiddlemanRunner:
                     if 'EPSILON' in model_params:
                         mdl_config.EPSILON = model_params['EPSILON']
             
-            # Run the verified pipeline
             logger.info(f"📍 Step 6: Running training pipeline with utc_strt={utc_strt}, utc_end={utc_end}")
             logger.info(f"   Model config: MODE={getattr(mdl_config, 'MODE', 'default')}, LAY={getattr(mdl_config, 'LAY', None)}, N={getattr(mdl_config, 'N', None)}")
 
@@ -289,27 +251,22 @@ class ModernMiddlemanRunner:
                 }
             
             
-            # Generate visualizations
             violin_plots = {}
             try:
                 from services.training.violin_plot_generator import create_violin_plots_from_viz_data
                 
-                # Prepare data for visualization
                 viz_data = {
                     'i_combined_array': results.get('scalers', {}).get('i_combined_array'),
                     'o_combined_array': results.get('scalers', {}).get('o_combined_array')
                 }
                 
-                # If combined arrays not in scalers, try to get from metadata
                 if viz_data['i_combined_array'] is None:
-                    # Use train/val/test data
                     import numpy as np
                     train_x = results.get('train_data', {}).get('X_orig')
                     val_x = results.get('val_data', {}).get('X_orig')
                     test_x = results.get('test_data', {}).get('X_orig')
                     
                     if train_x is not None and val_x is not None and test_x is not None:
-                        # Combine all data for visualization
                         all_x = np.vstack([train_x, val_x, test_x])
                         viz_data['i_combined_array'] = all_x.reshape(-1, all_x.shape[-1])
                     
@@ -321,7 +278,6 @@ class ModernMiddlemanRunner:
                         all_y = np.vstack([train_y, val_y, test_y])
                         viz_data['o_combined_array'] = all_y.reshape(-1, all_y.shape[-1])
                 
-                # Create violin plots
                 if viz_data['i_combined_array'] is not None or viz_data['o_combined_array'] is not None:
                     violin_plots = create_violin_plots_from_viz_data(session_id, viz_data)
                 else:
@@ -332,11 +288,9 @@ class ModernMiddlemanRunner:
                 import traceback as tb
                 logger.error(tb.format_exc())
             
-            # Extract metrics for easy access
             evaluation_metrics = results.get('evaluation_metrics', {})
-            metrics = results.get('metrics', evaluation_metrics)  # Use either key
+            metrics = results.get('metrics', evaluation_metrics)
             
-            # Return structured response
             return {
                 'success': True,
                 'session_id': session_id,
@@ -354,7 +308,6 @@ class ModernMiddlemanRunner:
             import traceback as tb
             logger.error(tb.format_exc())
             
-            # Save error to database
             self._save_error_to_database(session_id, str(e), tb.format_exc())
             
             return {
@@ -375,10 +328,8 @@ class ModernMiddlemanRunner:
             True if valid, False otherwise
         """
         try:
-            # Convert string session ID to UUID if needed
             uuid_session_id = create_or_get_session_uuid(session_id)
             
-            # Check if session exists - sessions table uses UUID
             response = self.supabase.table('sessions').select('id').eq('id', uuid_session_id).execute()
             
             if not response.data:
@@ -387,14 +338,12 @@ class ModernMiddlemanRunner:
             
             session_uuid = response.data[0]['id']
             
-            # Check if session has files
             files_response = self.supabase.table('files').select('*').eq('session_id', session_uuid).execute()
             
             if not files_response.data:
                 logger.error(f"No files found for session {session_id}")
                 return False
             
-            # Check for input and output files
             input_files = [f for f in files_response.data if f.get('type') == 'input']
             output_files = [f for f in files_response.data if f.get('type') == 'output']
             
@@ -415,7 +364,6 @@ class ModernMiddlemanRunner:
     def _save_error_to_database(self, session_id: str, error_message: str, error_traceback: str):
         """Save error information to database"""
         try:
-            # Convert string session ID to UUID if needed
             uuid_session_id = create_or_get_session_uuid(session_id)
             
             error_data = {
@@ -463,7 +411,6 @@ def main():
         print("\n✅ Training completed successfully!")
         print(f"Results: {result.get('message', 'Training completed')}")
         
-        # Print some key results if available
         if 'results' in result and 'summary' in result['results']:
             summary = result['results']['summary']
             print(f"📊 Summary:")

@@ -21,14 +21,12 @@ def require_auth(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Get Authorization header
         auth_header = request.headers.get('Authorization')
 
         if not auth_header:
             logger.warning("Missing Authorization header")
             return jsonify({'error': 'Missing authorization header'}), 401
 
-        # Extract token (format: "Bearer <token>")
         try:
             token_type, token = auth_header.split(' ', 1)
             if token_type.lower() != 'bearer':
@@ -38,18 +36,15 @@ def require_auth(f):
             logger.warning("Malformed Authorization header")
             return jsonify({'error': 'Malformed authorization header'}), 401
 
-        # Validate token with Supabase
         try:
             supabase = get_supabase_client()
 
-            # Get user from token
             response = supabase.auth.get_user(token)
 
             if not response or not response.user:
                 logger.warning("Invalid or expired token")
                 return jsonify({'error': 'Invalid or expired token'}), 401
 
-            # Add user info to Flask g object for access in route handlers
             g.user_id = response.user.id
             g.user_email = response.user.email
             g.user_metadata = response.user.user_metadata
@@ -85,26 +80,20 @@ def optional_auth(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Get Authorization header
         auth_header = request.headers.get('Authorization')
 
         if not auth_header:
-            # No auth header, continue without authentication
             return f(*args, **kwargs)
 
-        # Try to extract and validate token
         try:
             token_type, token = auth_header.split(' ', 1)
             if token_type.lower() != 'bearer':
-                # Invalid format, continue without authentication
                 return f(*args, **kwargs)
 
-            # Validate token with Supabase
             supabase = get_supabase_client()
             response = supabase.auth.get_user(token)
 
             if response and response.user:
-                # Add user info to Flask g object
                 g.user_id = response.user.id
                 g.user_email = response.user.email
                 g.user_metadata = response.user.user_metadata

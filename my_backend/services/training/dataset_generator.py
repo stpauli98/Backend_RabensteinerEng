@@ -54,30 +54,25 @@ def generate_violin_plots_for_session(
 
     logger.info(f"Generating violin plots for session {session_id} WITHOUT training")
 
-    # Initialize data loader
     data_loader = DataLoader()
 
-    # Check if files exist in database
     session_data = data_loader.load_session_data(session_id)
     files_info = session_data.get('files', [])
 
     if not files_info:
         raise ValueError('No data available for visualization. Please upload CSV files first')
 
-    # Download and read CSV files
     downloaded_files = data_loader.download_session_files(session_id)
 
-    # Load CSV data for visualization with separator detection
     csv_data = {}
     for file_type, file_path in downloaded_files.items():
         if os.path.exists(file_path):
-            # Try different separators (following original training_original.py approach)
             try:
-                df = pd.read_csv(file_path, sep=';')  # Try semicolon first
-                if df.shape[1] == 1:  # If still one column, try comma
+                df = pd.read_csv(file_path, sep=';')
+                if df.shape[1] == 1:
                     df = pd.read_csv(file_path, sep=',')
             except:
-                df = pd.read_csv(file_path)  # Fallback to default
+                df = pd.read_csv(file_path)
 
             csv_data[file_type] = df
             logger.info(f"Loaded {file_type} file with {len(df)} rows and {len(df.columns)} columns: {list(df.columns)}")
@@ -85,22 +80,18 @@ def generate_violin_plots_for_session(
     if not csv_data:
         raise Exception('Could not load CSV data. CSV files could not be read')
 
-    # Create data_info structure from CSV files
     input_data = None
     output_data = None
     input_features = []
     output_features = []
 
-    # Process input files (assume they have numeric data)
     if 'input' in csv_data:
         input_df = csv_data['input']
-        # Get numeric columns only (skip UTC/timestamp columns)
         numeric_cols = input_df.select_dtypes(include=[np.number]).columns.tolist()
         if numeric_cols:
             input_data = input_df[numeric_cols].values
             input_features = numeric_cols
 
-    # Process output files
     if 'output' in csv_data:
         output_df = csv_data['output']
         numeric_cols = output_df.select_dtypes(include=[np.number]).columns.tolist()
@@ -119,7 +110,6 @@ def generate_violin_plots_for_session(
         'output_features': output_features
     }
 
-    # Generate plots from CSV data
     plot_result = generate_violin_plots_from_data(
         session_id,
         input_data=data_info.get('input_data'),
@@ -128,7 +118,6 @@ def generate_violin_plots_for_session(
         output_features=data_info.get('output_features')
     )
 
-    # Return plot results without training
     result = {
         'success': plot_result['success'],
         'violin_plots': plot_result.get('plots', {}),

@@ -23,7 +23,6 @@ from utils.database import get_string_id_from_uuid
 
 logger = logging.getLogger(__name__)
 
-# Configuration
 UPLOAD_BASE_DIR = os.getenv('UPLOAD_BASE_DIR', 'uploads/file_uploads')
 
 
@@ -50,11 +49,9 @@ def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict) -> 
     if not session_id:
         raise ValueError('Missing session ID')
 
-    # Create directory for session
     upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
     os.makedirs(upload_dir, exist_ok=True)
 
-    # Save initial session metadata
     session_metadata = {
         'timeInfo': time_info,
         'zeitschritte': zeitschritte,
@@ -65,17 +62,14 @@ def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict) -> 
         'lastUpdated': datetime.now().isoformat()
     }
 
-    # Save session metadata
     session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
     with open(session_metadata_path, 'w') as f:
         json.dump(session_metadata, f, indent=2)
 
-    # Create session in Supabase
     try:
         from utils.database import create_or_get_session_uuid
         session_uuid = create_or_get_session_uuid(session_id)
         if session_uuid:
-            # Save session data to Supabase
             from api.routes.training import save_session_to_supabase
             success = save_session_to_supabase(session_id)
             if not success:
@@ -84,7 +78,6 @@ def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict) -> 
             logger.warning(f"Failed to create session UUID for {session_id}")
     except Exception as e:
         logger.error(f"Error saving session data to Supabase: {str(e)}")
-        # Continue even if Supabase save fails
 
     return {
         'session_id': session_id,
@@ -116,27 +109,21 @@ def finalize_session(session_id: str, session_data: Dict) -> Dict:
         save_session_to_database
     )
 
-    # 1. Update session metadata with finalization info
     updated_metadata = update_session_metadata(session_id, session_data)
 
-    # 2. Verify files and update metadata
     final_metadata, file_count = verify_session_files(session_id, updated_metadata)
 
-    # 3. Calculate n_dat (total number of data samples)
     n_dat = calculate_n_dat_from_session(session_id)
     final_metadata['n_dat'] = n_dat
 
-    # Save updated metadata with n_dat
     save_session_metadata_locally(session_id, final_metadata)
 
-    # 4. Save session data to Supabase
     try:
         success = save_session_to_database(session_id, n_dat, file_count)
         if not success:
             logger.warning(f"Failed to save session {session_id} to database, but continuing")
     except Exception as e:
         logger.error(f"Error saving session {session_id} to database: {str(e)}")
-        # Continue even if database save fails
 
     return {
         'session_id': session_id,
@@ -166,7 +153,6 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
     if not supabase:
         raise Exception('Database connection not available')
 
-    # Complex query with JOINs to get all session data
     sessions_query = """
     SELECT
         sm.string_session_id as session_id,
@@ -194,7 +180,6 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
     """
 
     try:
-        # Try RPC for complex query
         response = supabase.rpc('execute_sql', {
             'sql_query': sessions_query,
             'params': [limit]
@@ -206,7 +191,6 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
     except Exception as e:
         logger.warning(f"Complex query failed, using fallback: {str(e)}")
 
-    # Fallback: manual JOIN with multiple queries
     sessions_response = supabase.table('session_mappings').select(
         'string_session_id, uuid_session_id, created_at'
     ).order('created_at', desc=True).limit(limit).execute()
@@ -216,24 +200,20 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
         session_uuid = session_mapping['uuid_session_id']
         session_id = session_mapping['string_session_id']
 
-        # Get session details
         session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
         session_details = session_response.data[0] if session_response.data else {}
 
-        # Get file details and count
         files_response = supabase.table('files').select(
             'id, type, file_name, bezeichnung'
         ).eq('session_id', session_uuid).execute()
         files_info = files_response.data if files_response.data else []
         file_count = len(files_info)
 
-        # Get zeitschritte count
         zeit_response = supabase.table('zeitschritte').select(
             'id', count='exact'
         ).eq('session_id', session_uuid).execute()
         zeitschritte_count = zeit_response.count or 0
 
-        # Get time_info count
         time_response = supabase.table('time_info').select(
             'id', count='exact'
         ).eq('session_id', session_uuid).execute()
@@ -307,7 +287,6 @@ def get_session_info(session_id: str) -> Dict:
     metadata_path = os.path.join(upload_dir, 'session_metadata.json')
 
     if not os.path.exists(metadata_path):
-        # Return basic info if metadata doesn't exist
         return {
             'sessionId': session_id,
             'status': 'incomplete',
@@ -335,14 +314,12 @@ def get_session_from_database(session_id: str) -> Dict:
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found in database')
 
     supabase = get_supabase_client()
 
-    # Query session from database
     response = supabase.table('sessions').select('*').eq('id', str(uuid_session_id)).execute()
 
     if not response.data or len(response.data) == 0:
@@ -371,7 +348,6 @@ def delete_session(session_id: str) -> Dict:
     from utils.database import create_or_get_session_uuid, get_supabase_client
     import shutil
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
@@ -380,43 +356,34 @@ def delete_session(session_id: str) -> Dict:
     deleted_files = 0
     deleted_db_records = 0
 
-    # 1. Delete local files
     upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
     if os.path.exists(upload_dir):
         shutil.rmtree(upload_dir)
         deleted_files = 1
         logger.info(f"Deleted local directory for session {session_id}")
 
-    # 2. Delete from database tables
     try:
-        # Delete from training_results
         supabase.table('training_results').delete().eq('session_id', str(uuid_session_id)).execute()
         deleted_db_records += 1
 
-        # Delete from files
         supabase.table('files').delete().eq('session_id', str(uuid_session_id)).execute()
         deleted_db_records += 1
 
-        # Delete from time_info
         supabase.table('time_info').delete().eq('session_id', str(uuid_session_id)).execute()
         deleted_db_records += 1
 
-        # Delete from zeitschritte
         supabase.table('zeitschritte').delete().eq('session_id', str(uuid_session_id)).execute()
         deleted_db_records += 1
 
-        # Delete from sessions
         supabase.table('sessions').delete().eq('id', str(uuid_session_id)).execute()
         deleted_db_records += 1
 
-        # Delete from session_mappings
         supabase.table('session_mappings').delete().eq('uuid_session_id', str(uuid_session_id)).execute()
         deleted_db_records += 1
 
         logger.info(f"Deleted database records for session {session_id}")
     except Exception as e:
         logger.error(f"Error deleting database records: {str(e)}")
-        # Continue even if some deletions fail
 
     return {
         'deleted_files': deleted_files,
@@ -453,7 +420,6 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
 
     supabase = get_supabase_client()
 
-    # Count current data before deletion
     initial_counts = {}
     database_errors = []
 
@@ -480,7 +446,6 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
     except Exception as e:
         logger.error(f"Error getting initial counts: {str(e)}")
 
-    # 1. Delete all CSV files from Supabase Storage
     storage_deleted = {'csv-files': 0, 'aus-csv-files': 0}
 
     try:
@@ -504,7 +469,6 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
         logger.error(f"Error deleting from storage: {str(e)}")
         database_errors.append(f"Storage deletion error: {str(e)}")
 
-    # 2. Delete from database tables (order matters due to foreign keys)
     tables_to_delete = [
         'training_results',
         'training_visualizations',
@@ -534,7 +498,6 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
             database_errors.append(f"Table {table}: {str(table_error)}")
             deleted_counts[table] = 'error'
 
-    # 3. Delete all local session directories
     local_deleted = {'directories': 0, 'files': 0}
     local_errors = []
 
@@ -543,14 +506,11 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
             for item in os.listdir(UPLOAD_BASE_DIR):
                 item_path = os.path.join(UPLOAD_BASE_DIR, item)
 
-                # Only delete directories that look like session directories
                 if os.path.isdir(item_path) and item.startswith('session_'):
                     try:
-                        # Count files before deletion
                         file_count = sum([len(files) for r, d, files in os.walk(item_path)])
                         local_deleted['files'] += file_count
 
-                        # Delete directory and all contents
                         shutil.rmtree(item_path)
                         local_deleted['directories'] += 1
                         logger.info(f"🗂️  Deleted local directory: {item_path} ({file_count} files)")
@@ -565,7 +525,6 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
         logger.error(f"Error during local cleanup: {str(e)}")
         local_errors.append(f"Local cleanup error: {str(e)}")
 
-    # Prepare result
     all_errors = database_errors + local_errors
     total_database_records = sum([count for count in deleted_counts.values() if isinstance(count, int)])
     total_storage_files = sum(storage_deleted.values())
@@ -617,7 +576,6 @@ def update_session_name(session_id: str, new_name: str) -> Dict:
     from utils.database import update_session_name as db_update_session_name
     from utils.database import ValidationError, SessionNotFoundError
 
-    # Validate inputs
     if not session_id:
         raise ValueError('sessionId is required')
 
@@ -627,7 +585,6 @@ def update_session_name(session_id: str, new_name: str) -> Dict:
     if not isinstance(new_name, str):
         raise ValueError('sessionName must be a string')
 
-    # Trim and validate session name
     new_name = new_name.strip()
     if len(new_name) == 0:
         raise ValueError('sessionName cannot be empty')
@@ -635,7 +592,6 @@ def update_session_name(session_id: str, new_name: str) -> Dict:
     if len(new_name) > 255:
         raise ValueError('sessionName too long (max 255 characters)')
 
-    # Update in database
     try:
         result = db_update_session_name(session_id, new_name)
         return {
@@ -663,7 +619,6 @@ def save_time_info_data(session_id: str, time_info: Dict) -> bool:
     """
     from utils.database import save_time_info
 
-    # Validate session_id format
     if not session_id or not isinstance(session_id, str):
         raise ValueError('Invalid session_id format')
 
@@ -691,7 +646,6 @@ def save_zeitschritte_data(session_id: str, zeitschritte: Dict) -> bool:
     """
     from utils.database import save_zeitschritte
 
-    # Validate inputs
     if not session_id or not isinstance(session_id, str):
         raise ValueError('Invalid session_id format')
 
@@ -721,14 +675,12 @@ def get_time_info_data(session_id: str) -> Dict:
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
     supabase = get_supabase_client()
 
-    # Query time_info from database
     response = supabase.table('time_info').select('*').eq('session_id', str(uuid_session_id)).execute()
 
     if not response.data or len(response.data) == 0:
@@ -752,14 +704,12 @@ def get_zeitschritte_data(session_id: str) -> Dict:
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
     supabase = get_supabase_client()
 
-    # Query zeitschritte from database
     response = supabase.table('zeitschritte').select('*').eq('session_id', str(uuid_session_id)).execute()
 
     if not response.data or len(response.data) == 0:
@@ -784,17 +734,14 @@ def get_csv_files_for_session(session_id: str, file_type: str = None) -> List[Di
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
     supabase = get_supabase_client()
 
-    # Query files from database
     query = supabase.table('files').select('*').eq('session_id', str(uuid_session_id))
     
-    # Apply file type filter if provided
     if file_type:
         query = query.eq('type', file_type)
     
@@ -818,14 +765,12 @@ def get_session_status(session_id: str) -> Dict:
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    # Get UUID for session
     uuid_session_id = create_or_get_session_uuid(session_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
     supabase = get_supabase_client()
 
-    # Query session from database
     response = supabase.table('sessions').select('*').eq('id', str(uuid_session_id)).execute()
 
     if not response.data or len(response.data) == 0:
@@ -833,7 +778,6 @@ def get_session_status(session_id: str) -> Dict:
 
     session_data = response.data[0]
 
-    # Query training results to get status
     training_response = supabase.table('training_results').select('*').eq('session_id', str(uuid_session_id)).execute()
 
     training_status = 'not_started'
@@ -885,35 +829,28 @@ def get_upload_status(session_id: str) -> Dict:
     from utils.database import get_supabase_client, create_or_get_session_uuid
     import uuid as uuid_lib
 
-    # Check if provided ID is UUID or string ID
     try:
         uuid_lib.UUID(session_id)
-        # It's a UUID, get the string ID for local file access
         string_session_id = get_string_id_from_uuid(session_id)
         if not string_session_id:
             raise ValueError('Session mapping not found for UUID')
     except (ValueError, TypeError):
-        # It's a string ID, use it directly
         string_session_id = session_id
 
-    # Check session exists in database
     supabase = get_supabase_client()
     if supabase:
         session_uuid = create_or_get_session_uuid(string_session_id)
         if not session_uuid:
             raise ValueError('Session mapping not found')
 
-        # Get session from database
         session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
         if not session_response.data or len(session_response.data) == 0:
             raise ValueError('Session not found in database')
 
         session_data = session_response.data[0]
 
-        # Check local files exist
         upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         if not os.path.exists(upload_dir):
-            # Session exists in DB but no local files yet
             return {
                 'status': 'pending',
                 'progress': 0,
@@ -921,12 +858,10 @@ def get_upload_status(session_id: str) -> Dict:
                 'finalized': session_data.get('finalized', False)
             }
     else:
-        # No Supabase client, check local only
         upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         if not os.path.exists(upload_dir):
             raise ValueError('Session not found')
 
-    # Directory exists, check session metadata
     upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
     session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
 
@@ -940,7 +875,6 @@ def get_upload_status(session_id: str) -> Dict:
     with open(session_metadata_path, 'r') as f:
         session_metadata = json.load(f)
 
-    # Check if finalized
     if session_metadata.get('finalized', False):
         return {
             'status': 'completed',
@@ -948,18 +882,15 @@ def get_upload_status(session_id: str) -> Dict:
             'message': 'Session completed successfully'
         }
 
-    # Check upload progress
     metadata_path = os.path.join(upload_dir, 'metadata.json')
     if os.path.exists(metadata_path):
         with open(metadata_path, 'r') as f:
             chunks_metadata = json.load(f)
 
-        # Calculate progress based on uploaded files
         total_files = session_metadata.get('sessionInfo', {}).get('totalFiles', 0)
         if total_files > 0:
-            # Count unique files
             unique_files = {chunk.get('fileName') for chunk in chunks_metadata if chunk.get('fileName')}
-            progress = (len(unique_files) / total_files) * 90  # 90% for upload, 10% for finalization
+            progress = (len(unique_files) / total_files) * 90
 
             return {
                 'status': 'processing',
@@ -967,7 +898,6 @@ def get_upload_status(session_id: str) -> Dict:
                 'message': f'Uploading files: {len(unique_files)}/{total_files}'
             }
 
-    # No metadata.json, session just initialized
     return {
         'status': 'pending',
         'progress': 5,
@@ -999,7 +929,6 @@ def create_database_session(session_id: str, session_name: str = None) -> str:
     if not uuid_session_id:
         raise ValueError('Failed to create session in database')
 
-    # Optionally update session name
     if session_name:
         try:
             update_session_name(session_id, session_name)

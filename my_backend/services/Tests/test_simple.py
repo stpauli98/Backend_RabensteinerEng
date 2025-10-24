@@ -4,12 +4,10 @@ Simple test to verify backend works without frontend
 """
 import sys
 import os
-# Add parent directories to path to access training modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 print("Testing backend modules...")
 
-# Test 1: Import modules
 print("\n1. Testing imports...")
 try:
     from services.training.config import MDL, MTS, T
@@ -20,7 +18,6 @@ except Exception as e:
     print(f"✗ Import failed: {e}")
     sys.exit(1)
 
-# Test 2: Create config objects
 print("\n2. Testing config objects...")
 try:
     mts = MTS()
@@ -31,12 +28,10 @@ except Exception as e:
     print(f"✗ Config failed: {e}")
     sys.exit(1)
 
-# Test 3: Test with simple numpy arrays
 print("\n3. Testing linear model training...")
 try:
     import numpy as np
     
-    # Create simple test data
     n_samples = 10
     n_timesteps = mts.I_N
     n_features = 2
@@ -47,13 +42,11 @@ try:
     print(f"✓ Train X shape: {train_x.shape}")
     print(f"✓ Train Y shape: {train_y.shape}")
     
-    # Train simple linear model
     models = train_linear_model(train_x, train_y)
     
     if models is not None and len(models) > 0:
         print(f"✓ Linear model trained successfully ({len(models)} models)")
         
-        # Make prediction with first model
         X_test = train_x[:1].reshape(1 * n_timesteps, n_features)
         pred = models[0].predict(X_test)
         print(f"✓ Prediction shape: {pred.shape}")

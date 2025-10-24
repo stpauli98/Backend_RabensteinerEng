@@ -11,11 +11,9 @@ import time
 import sys
 from pathlib import Path
 
-# Configuration
 API_URL = "http://localhost:8080"
 SOCKET_URL = "http://localhost:8080"
 
-# Test files (small CSVs for quick testing)
 TEST_FILES = [
     "temp_training_data/0057f6f4-aedf-4c63-8090-648d4df930bd_Leistung.csv",
     "temp_training_data/0057f6f4-aedf-4c63-8090-648d4df930bd_Temp.csv"
@@ -32,7 +30,6 @@ class StreamingTester:
         self.total_files = 0
         self.upload_id = None
 
-        # Setup SocketIO listeners
         self.setup_listeners()
 
     def setup_listeners(self):
@@ -58,12 +55,10 @@ class StreamingTester:
                 print(f"   - Chunked: {data.get('chunked', False)}")
                 print(f"   - File {data.get('fileIndex', 0) + 1}/{data.get('totalFiles', 0)}")
 
-                # Add info_record
                 if data.get('info_record'):
                     self.results['info_df'].append(data['info_record'])
                     print(f"   - Info record added ✓")
 
-                # Add dataframe chunk (if not chunked)
                 if not data.get('chunked') and data.get('dataframe_chunk'):
                     self.results['dataframe'].extend(data['dataframe_chunk'])
                     print(f"   - Added {len(data['dataframe_chunk'])} rows")
@@ -77,7 +72,6 @@ class StreamingTester:
                 total_chunks = data.get('totalChunks', 0)
                 print(f"🟢 DATAFRAME_CHUNK: {chunk_idx + 1}/{total_chunks} for {data.get('filename')}")
 
-                # Add chunk data
                 if data.get('chunk'):
                     self.results['dataframe'].extend(data['chunk'])
                     print(f"   - Added {len(data['chunk'])} rows")
@@ -92,15 +86,12 @@ class StreamingTester:
         """Upload a file in chunks"""
         print(f"\n📤 Uploading: {file_path}")
 
-        # Generate upload ID
         import uuid
         upload_id = f"test_{uuid.uuid4()}"
 
-        # Read file
         with open(file_path, 'r') as f:
             content = f.read()
 
-        # For simplicity, upload in one chunk
         form_data = {
             'uploadId': upload_id,
             'chunkIndex': '0',
@@ -128,18 +119,14 @@ class StreamingTester:
         """Process uploaded data"""
         print(f"\n🔄 Processing data...")
 
-        # Use first upload_id for SocketIO room
         self.upload_id = list(upload_ids.values())[0]
         self.total_files = len(upload_ids)
 
-        # Join SocketIO room
         self.sio.emit('join', {'uploadId': self.upload_id})
         print(f"📡 Joined SocketIO room: {self.upload_id}")
 
-        # Get first file info for parameters
         first_info = list(file_info.values())[0]
 
-        # Step 1: Send parameters via adjust-data-chunk
         print(f"\n📝 Step 1: Sending parameters via /adjust-data-chunk...")
 
         adjust_payload = {
@@ -163,10 +150,8 @@ class StreamingTester:
 
         print(f"✅ Parameters set successfully")
 
-        # Step 2: Complete processing
         print(f"\n📝 Step 2: Completing processing...")
 
-        # Prepare request
         payload = {
             'uploadId': self.upload_id,
             'totalChunks': 1,
@@ -180,7 +165,6 @@ class StreamingTester:
 
         print(f"📝 Complete request payload: {json.dumps(payload, indent=2)}")
 
-        # Send complete request
         response = requests.post(
             f"{API_URL}/api/adjustmentsOfData/adjustdata/complete",
             json=payload,
@@ -197,8 +181,7 @@ class StreamingTester:
                 print(f"   - Total files: {data.get('totalFiles')}")
                 print(f"   - Waiting for streaming results...")
 
-                # Wait for all files to be received
-                timeout = 30  # 30 seconds
+                timeout = 30
                 start_time = time.time()
 
                 while self.files_received < self.total_files:
@@ -227,11 +210,9 @@ class StreamingTester:
         print("=" * 60)
 
         try:
-            # Connect to SocketIO
             print("\n📡 Connecting to SocketIO...")
             self.sio.connect(SOCKET_URL)
 
-            # Upload files
             upload_ids = {}
             file_info = {}
 
@@ -245,10 +226,8 @@ class StreamingTester:
                 print("\n❌ No files uploaded successfully")
                 return False
 
-            # Process data
             success = self.process_data(upload_ids, file_info)
 
-            # Show results
             print("\n" + "=" * 60)
             print("📊 RESULTS SUMMARY")
             print("=" * 60)
@@ -285,7 +264,6 @@ class StreamingTester:
             return False
 
         finally:
-            # Cleanup
             if self.sio.connected:
                 self.sio.disconnect()
             print("\n🔌 Disconnected from SocketIO")

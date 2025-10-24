@@ -14,52 +14,43 @@ import json
 from services.adjustments.cleanup import cleanup_old_files
 from core.extensions import socketio
 
-# Create Blueprint
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 
-# Configure temp upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Global dictionaries to store data with timestamps for cleanup
-adjustment_chunks = {}  # Store chunks during adjustment
-adjustment_chunks_timestamps = {}  # {upload_id: timestamp}
-temp_files = {}  # Store temporary files for download: {file_id: {path, timestamp}}
-chunk_buffer = {}  # In-memory chunk storage: {upload_id: {chunk_index: content}}
-chunk_buffer_timestamps = {}  # {upload_id: timestamp}
-stored_data = {}  # Temporary data storage
-stored_data_timestamps = {}  # {filename: timestamp}
-info_df_cache = {}  # Fast file info lookup: {filename: {timestep, offset, start_time, end_time}}
-info_df_cache_timestamps = {}  # {filename: timestamp}
+adjustment_chunks = {}
+adjustment_chunks_timestamps = {}
+temp_files = {}
+chunk_buffer = {}
+chunk_buffer_timestamps = {}
+stored_data = {}
+stored_data_timestamps = {}
+info_df_cache = {}
+info_df_cache_timestamps = {}
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# UTC format
 UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
-# Constants
-UPLOAD_EXPIRY_TIME = 60 * 60  # 60 minuta (1 sat) u sekundama
-DATAFRAME_CHUNK_SIZE = 10000  # Max rows per SocketIO emit for large datasets
-CHUNK_BUFFER_TIMEOUT = 30 * 60  # FIX P8: 30 minutes timeout for chunk buffer cleanup
-ADJUSTMENT_CHUNKS_TIMEOUT = 60 * 60  # 1 hour timeout for adjustment chunks cleanup
-TEMP_FILES_TIMEOUT = 60 * 60  # 1 hour timeout for temp files cleanup
-STORED_DATA_TIMEOUT = 60 * 60  # 1 hour timeout for stored data cleanup
-INFO_CACHE_TIMEOUT = 2 * 60 * 60  # 2 hours timeout for info cache cleanup
-SOCKETIO_CHUNK_DELAY = 0.1  # 100ms delay between Socket.IO chunks to prevent overflow
-PROGRESS_UPDATE_INTERVAL = 1.0  # Minimum 1 second between progress updates
+UPLOAD_EXPIRY_TIME = 60 * 60
+DATAFRAME_CHUNK_SIZE = 10000
+CHUNK_BUFFER_TIMEOUT = 30 * 60
+ADJUSTMENT_CHUNKS_TIMEOUT = 60 * 60
+TEMP_FILES_TIMEOUT = 60 * 60
+STORED_DATA_TIMEOUT = 60 * 60
+INFO_CACHE_TIMEOUT = 2 * 60 * 60
+SOCKETIO_CHUNK_DELAY = 0.1
+PROGRESS_UPDATE_INTERVAL = 1.0
 
 
-# Progress stage constants
 class ProgressStages:
     """Constants for Socket.IO progress tracking"""
-    # Upload phase (0-30%)
     FILE_COMBINATION = 25
     FILE_ANALYSIS = 28
     FILE_COMPLETE = 30
 
-    # Processing phase (30-100%)
     PARAMETER_PROCESSING = 50
     DATA_PROCESSING_START = 60
     FILE_PROCESSING_START = 60
@@ -114,7 +105,6 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
         total_files (int): Total number of files being processed
     """
     try:
-        # If result_data is small (<CHUNK_SIZE rows), send in one emit
         if len(result_data) <= DATAFRAME_CHUNK_SIZE:
             socketio.emit('file_result', {
                 'uploadId': upload_id,
@@ -127,23 +117,19 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
             }, room=upload_id)
             logger.info(f"Emitted single file_result for {filename} ({len(result_data)} rows)")
         else:
-            # Large dataset - send in chunks
             total_chunks = (len(result_data) + DATAFRAME_CHUNK_SIZE - 1) // DATAFRAME_CHUNK_SIZE
 
-            # First emit with info_record
             socketio.emit('file_result', {
                 'uploadId': upload_id,
                 'filename': filename,
                 'info_record': info_record,
-                'dataframe_chunk': [],  # Empty, will be sent via chunks
+                'dataframe_chunk': [],
                 'fileIndex': file_index,
                 'totalFiles': total_files,
                 'chunked': True,
                 'totalChunks': total_chunks
             }, room=upload_id)
 
-            # Emit dataframe in chunks with aggressive delay to prevent message queue overflow
-            # Socket.IO is NOT designed for bulk data transfer - this is a workaround
             for chunk_idx in range(total_chunks):
                 start_idx = chunk_idx * DATAFRAME_CHUNK_SIZE
                 end_idx = min((chunk_idx + 1) * DATAFRAME_CHUNK_SIZE, len(result_data))
@@ -158,14 +144,10 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
                     'fileIndex': file_index
                 }, room=upload_id)
 
-                # CRITICAL: Delay after EVERY chunk to ensure Socket.IO can flush buffer
-                # Without this, Socket.IO drops messages due to buffer overflow
                 time.sleep(SOCKETIO_CHUNK_DELAY)
 
                 logger.info(f"Emitted chunk {chunk_idx + 1}/{total_chunks} for {filename} ({len(chunk)} rows)")
 
-            # CRITICAL: Emit completion signal after all chunks are sent
-            # Frontend waits for this to know all chunks have arrived
             socketio.emit('dataframe_complete', {
                 'uploadId': upload_id,
                 'filename': filename,
@@ -176,7 +158,6 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
 
     except Exception as e:
         logger.error(f"Failed to emit file_result for {filename}: {e}")
-        # Emit error event
         emit_file_error(upload_id, filename, str(e))
 
 
@@ -222,8 +203,6 @@ def check_files_need_methods(filenames, time_step, offset, methods, file_info_ca
     files_needing_methods = []
 
     for filename in filenames:
-        # Use cache for O(1) lookup instead of pandas filtering
-        # FIXED: Use upload-specific cache if provided (Cloud Run compatible)
         file_info = None
         if file_info_cache_local:
             file_info = file_info_cache_local.get(filename)
@@ -236,22 +215,18 @@ def check_files_need_methods(filenames, time_step, offset, methods, file_info_ca
         file_time_step = file_info['timestep']
         file_offset = file_info['offset']
 
-        # Normalize offset if needed
         requested_offset = offset
         if file_time_step > 0 and requested_offset >= file_time_step:
             requested_offset = requested_offset % file_time_step
 
-        # Check if processing is needed
         needs_processing = file_time_step != time_step or file_offset != requested_offset
 
         if needs_processing:
-            # Check if file has valid method
             method_info = methods.get(filename, {})
             method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
             has_valid_method = method and method in VALID_METHODS
 
             if not has_valid_method:
-                # File needs method - add to list
                 files_needing_methods.append({
                     "filename": filename,
                     "current_timestep": file_time_step,
@@ -264,38 +239,30 @@ def check_files_need_methods(filenames, time_step, offset, methods, file_info_ca
     return files_needing_methods
 
 
-# Dictionary to store DataFrames
 info_df = pd.DataFrame(columns=['Name der Datei', 'Name der Messreihe', 'Startzeit (UTC)', 'Endzeit (UTC)',
                                 'Zeitschrittweite [min]', 'Offset [min]', 'Anzahl der Datenpunkte',
-                                'Anzahl der numerischen Datenpunkte', 'Anteil an numerischen Datenpunkten'])  # DataFrame for file info
+                                'Anzahl der numerischen Datenpunkte', 'Anteil an numerischen Datenpunkten'])
 
-# Function to check if file is a CSV
 
 def allowed_file(filename):
     """Check if file has .csv extension"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() == 'csv'
 
-# Function to detect delimiter
 def detect_delimiter(file_content):
     """
     Detect the delimiter used in a CSV file contentt
     """
-    # Common delimiters
     delimiters = [';', ',', '\t']
     
-    # Get first line
     first_line = file_content.split('\n')[0]
     
-    # Count occurrences of each delimiter in the first line
     counts = {d: first_line.count(d) for d in delimiters}
     
-    # Return the delimiter with highest count
     max_count = max(counts.values())
     if max_count > 0:
         return max(counts.items(), key=lambda x: x[1])[0]
-    return ';'  # Default to semicolon if no delimiter found
+    return ';'
 
-# Function to get time column
 def get_time_column(df):
     """
     Check for common time column names and return the first one found
@@ -307,7 +274,6 @@ def get_time_column(df):
                 return col
     return None
 
-# First Step
 @bp.route('/upload-chunk', methods=['POST'])
 def upload_chunk():
     """
@@ -322,23 +288,19 @@ def upload_chunk():
     Ako su svi chunkovi primljeni, oni se spajaju i obrađuju.
     """
     try:
-        # Get upload metadata from form
         upload_id = request.form.get('uploadId')
         chunk_index = int(request.form.get('chunkIndex'))
         total_chunks = int(request.form.get('totalChunks'))
         filename = request.form.get('filename')
 
-        # Validacija parametara
         if not all([upload_id, isinstance(chunk_index, int), isinstance(total_chunks, int)]):
             return jsonify({"error": "Missing or invalid required parameters"}), 400
 
-        # SECURITY: Sanitize filename to prevent path traversal attacks
         try:
             filename = sanitize_filename(filename)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
             
-        # Get the file from request
         if 'files[]' not in request.files:
             return jsonify({'error': 'No file part'}), 400
             
@@ -346,28 +308,22 @@ def upload_chunk():
         if not file:
             return jsonify({'error': 'No selected file'}), 400
             
-        # Read file content
         file_content = file.read().decode('utf-8')
         if not file_content:
             return jsonify({'error': 'Empty file content'}), 400
 
-        # FIX P8: Store chunk in memory and track timestamp for cleanup
         if upload_id not in chunk_buffer:
             chunk_buffer[upload_id] = {}
             chunk_buffer_timestamps[upload_id] = time.time()
 
         chunk_buffer[upload_id][chunk_index] = file_content
 
-        # Periodically cleanup expired data
-        if chunk_index == 0:  # Only on first chunk to avoid overhead
+        if chunk_index == 0:
             cleanup_all_expired_data()
 
-        # Check if all chunks have been received
         received_chunks_count = len(chunk_buffer[upload_id])
 
-        # If this was the last chunk and we have all chunks, combine them
         if received_chunks_count == total_chunks:
-            # Emit progress update for file combination
             emit_progress(
                 upload_id,
                 ProgressStages.FILE_COMBINATION,
@@ -376,12 +332,10 @@ def upload_chunk():
                 'file_upload'
             )
 
-            # Combine chunks in memory (much faster than disk I/O)
             combined_content = ''.join(
                 chunk_buffer[upload_id][i] for i in range(total_chunks)
             )
 
-            # Create upload directory if needed and write final file once
             upload_dir = os.path.join(UPLOAD_FOLDER, upload_id)
             os.makedirs(upload_dir, exist_ok=True)
 
@@ -389,14 +343,11 @@ def upload_chunk():
             with open(final_path, 'w', encoding='utf-8') as outfile:
                 outfile.write(combined_content)
 
-            # FIX P8: Clear chunk buffer and timestamp to free memory
-            # Check if exists before deleting (multiple files may share same upload_id)
             if upload_id in chunk_buffer:
                 del chunk_buffer[upload_id]
             if upload_id in chunk_buffer_timestamps:
                 del chunk_buffer_timestamps[upload_id]
             
-            # Emit progress update for file analysis
             emit_progress(
                 upload_id,
                 ProgressStages.FILE_ANALYSIS,
@@ -405,17 +356,13 @@ def upload_chunk():
                 'file_upload'
             )
             
-            # Process the complete file
             try:
-                # Analyze the complete file
                 result = analyse_data(final_path, upload_id)
 
-                # Extract row count for user-friendly message
                 row_count = 0
                 if result and 'info_df' in result and len(result['info_df']) > 0:
                     row_count = result['info_df'][0].get('Anzahl der Datenpunkte', 0)
 
-                # Emit completion progress with file size info
                 emit_progress(
                     upload_id,
                     ProgressStages.FILE_COMPLETE,
@@ -444,7 +391,6 @@ def upload_chunk():
         
     except Exception as e:
         traceback.print_exc()
-        # FIX P8: Cleanup chunk buffer on error
         if upload_id in chunk_buffer:
             del chunk_buffer[upload_id]
         if upload_id in chunk_buffer_timestamps:
@@ -452,7 +398,6 @@ def upload_chunk():
         return jsonify({"error": str(e)}), 400
 
 
-# Cleanup functions for expired data
 def cleanup_expired_chunk_buffers():
     """Remove chunk buffers older than CHUNK_BUFFER_TIMEOUT"""
     current_time = time.time()
@@ -504,7 +449,6 @@ def cleanup_expired_temp_files():
         file_info = temp_files[file_id]
         file_path = file_info['path']
 
-        # Delete physical file
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
@@ -512,7 +456,6 @@ def cleanup_expired_temp_files():
             except Exception as e:
                 logger.error(f"Failed to delete temp file {file_path}: {e}")
 
-        # Remove from dict
         del temp_files[file_id]
 
     return len(expired_files)
@@ -587,18 +530,14 @@ def sanitize_filename(filename):
     if not filename:
         raise ValueError("Filename cannot be empty")
 
-    # Get basename to prevent directory traversal
     safe_filename = os.path.basename(filename)
 
-    # Check for path traversal attempts
     if '..' in safe_filename or safe_filename != filename:
         raise ValueError(f"Invalid filename: path traversal detected")
 
-    # Check for absolute paths
     if os.path.isabs(safe_filename):
         raise ValueError(f"Invalid filename: absolute paths not allowed")
 
-    # Additional validation: only allow alphanumeric, dash, underscore, dot, space, parentheses
     import re
     if not re.match(r'^[a-zA-Z0-9_\-\.\s\(\)]+$', safe_filename):
         raise ValueError(f"Invalid filename: contains forbidden characters")
@@ -617,18 +556,15 @@ def get_file_info_from_cache(filename, upload_id=None):
     Returns:
         dict or None: File info dict or None if not found
     """
-    # Try upload-specific cache first if upload_id provided
     if upload_id and upload_id in adjustment_chunks:
         file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
         file_info = file_info_cache_local.get(filename)
         if file_info:
             return file_info
 
-    # Fallback to global cache
     return info_df_cache.get(filename)
 
 
-# First Step Analyse
 def analyse_data(file_path, upload_id=None):
     """
     Analyze CSV file and extract relevant information
@@ -640,73 +576,57 @@ def analyse_data(file_path, upload_id=None):
     try:
         global stored_data, info_df
         
-        # Clear stored data for new analysis
         stored_data.clear()
         
         all_file_info = []
         processed_data = []
         
         try:
-            # Read file content
             with open(file_path, 'r', encoding='utf-8') as file:
                 file_content = file.read()
         except UnicodeDecodeError as e:
             logger.error(f"UnicodeDecodeError reading {file_path}: {str(e)}")
             raise ValueError(f"Could not decode file {file_path}. Make sure it's a valid UTF-8 encoded CSV file.")
         
-        # Detect delimiter from content
         delimiter = detect_delimiter(file_content)
 
-        # Read CSV with optimized parsing parameters
-        # Use C engine and parse_dates for faster performance
         df = pd.read_csv(
             StringIO(file_content),
             delimiter=delimiter,
-            engine='c',  # Faster C parser engine
-            low_memory=False  # Optimize for performance
+            engine='c',
+            low_memory=False
         )
 
-        # Find time column
         time_col = get_time_column(df)
         if time_col is None:
             raise ValueError(f"No time column found in file {os.path.basename(file_path)}. Expected one of: UTC, Timestamp, Time, DateTime, Date, Zeit")
 
-        # If time column is not 'UTC', rename it
         if time_col != 'UTC':
             df = df.rename(columns={time_col: 'UTC'})
 
-        # Convert UTC column to datetime with caching for performance
         df['UTC'] = pd.to_datetime(df['UTC'], utc=True, cache=True)
                     
-        # Store the DataFrame for later use
         filename = os.path.basename(file_path)
         stored_data[filename] = df
         stored_data_timestamps[filename] = time.time()
         
-        # Store DataFrame in adjustment_chunks if upload_id provided
         if upload_id:
             if upload_id not in adjustment_chunks:
                 adjustment_chunks[upload_id] = {'chunks': {}, 'params': {}, 'dataframes': {}}
                 adjustment_chunks_timestamps[upload_id] = time.time()
             adjustment_chunks[upload_id]['dataframes'][filename] = df
                     
-        # Calculate time step using vectorized numpy operations for performance
         time_step = None
         try:
-            # Convert to numpy datetime64 for vectorized operations (faster than pandas)
             time_values = df['UTC'].values.astype('datetime64[s]')
 
-            # Calculate differences using numpy (vectorized, much faster)
             time_diffs_sec = np.diff(time_values.astype(np.int64))
 
-            # Use median instead of mode (faster and more robust for regular intervals)
-            # Convert to minutes (use round to avoid truncation of values like 0.5)
             time_step = round(np.median(time_diffs_sec) / 60)
         except Exception as e:
             logger.error(f"Error calculating time step: {str(e)}")
             traceback.print_exc()
         
-        # Get the measurement column (second column or first non-time column)
         measurement_col = None
         for col in df.columns:
             if col != 'UTC':
@@ -714,7 +634,6 @@ def analyse_data(file_path, upload_id=None):
                 break
 
         if measurement_col:
-            # Izračunaj offset iz podataka
             first_time = df['UTC'].iloc[0]
             offset = first_time.minute % time_step if time_step else 0.0
             
@@ -731,12 +650,11 @@ def analyse_data(file_path, upload_id=None):
             }
             all_file_info.append(file_info)
                     
-        # Convert DataFrame to records with explicit type conversion
         df_records = []
         filename = os.path.basename(file_path)
         for record in df.to_dict('records'):
             converted_record = {
-                'Name der Datei': filename  # Add filename to each record
+                'Name der Datei': filename
             }
             for key, value in record.items():
                 if pd.isna(value):
@@ -751,20 +669,15 @@ def analyse_data(file_path, upload_id=None):
         
         processed_data.append(df_records)
         
-        # Update global info_df - append new info to existing
         if all_file_info:
             new_info_df = pd.DataFrame(all_file_info)
             if info_df.empty:
                 info_df = new_info_df
             else:
-                # Remove any existing entries for these files
                 existing_files = new_info_df['Name der Datei'].tolist()
                 info_df = info_df[~info_df['Name der Datei'].isin(existing_files)]
-                # Append new info
                 info_df = pd.concat([info_df, new_info_df], ignore_index=True)
 
-            # Populate info_df_cache for O(1) lookup
-            # FIXED: Store in upload_id-specific storage instead of global cache (Cloud Run compatible)
             if 'file_info_cache' not in adjustment_chunks[upload_id]:
                 adjustment_chunks[upload_id]['file_info_cache'] = {}
 
@@ -777,12 +690,10 @@ def analyse_data(file_path, upload_id=None):
                     'end_time': file_info_item['Endzeit (UTC)'],
                     'measurement_col': file_info_item['Name der Messreihe']
                 }
-                # Store in both places for backward compatibility
                 info_df_cache[filename_key] = file_info_data
                 info_df_cache_timestamps[filename_key] = time.time()
                 adjustment_chunks[upload_id]['file_info_cache'][filename_key] = file_info_data
 
-        # Return the upload_id
         return {
             'info_df': all_file_info,
             'upload_id': upload_id
@@ -792,7 +703,6 @@ def analyse_data(file_path, upload_id=None):
         logger.error(f"Error in analyse_data: {str(e)}\n{traceback.format_exc()}")
         raise
 
-# Second Step
 @bp.route('/adjust-data-chunk', methods=['POST'])
 def adjust_data():
     try:
@@ -802,33 +712,26 @@ def adjust_data():
         if not data:
             return jsonify({"error": "No JSON data received"}), 400
 
-        # Get required parameters
         upload_id = data.get('upload_id')
         if not upload_id:
             return jsonify({"error": "upload_id is required"}), 400
             
-        # Check if upload_id exists in adjustment_chunks
         if upload_id not in adjustment_chunks:
             return jsonify({"error": f"No data found for upload ID: {upload_id}"}), 404
             
-        # Get dataframes from adjustment_chunks
         dataframes = adjustment_chunks[upload_id]['dataframes']
         if not dataframes:
             return jsonify({"error": "No dataframes found for this upload"}), 404
         
-        # Get processing parameters
         start_time = data.get('startTime')
         end_time = data.get('endTime')
         time_step_size = data.get('timeStepSize')
         offset = data.get('offset')
 
-        # Get methods from request or existing params
         methods = data.get('methods', {})
         if not methods:
-            # If methods not in request, use existing methods
             methods = adjustment_chunks[upload_id]['params'].get('methods', {})
 
-        # Extract intrplMax values from methods
         intrpl_max_values = {}
         for filename, method_info in methods.items():
             if isinstance(method_info, dict) and 'intrpl_max' in method_info:
@@ -838,7 +741,6 @@ def adjust_data():
                     logger.warning(f"Could not convert intrplMax for {filename}: {e}")
                     intrpl_max_values[filename] = None
         
-        # Update or initialize chunk storage
         if upload_id not in adjustment_chunks:
             adjustment_chunks[upload_id] = {
                 'params': {
@@ -851,30 +753,23 @@ def adjust_data():
                 }
             }
         else:
-            # Update parameters if they changed
             params = adjustment_chunks[upload_id]['params']
             if start_time is not None: params['startTime'] = start_time
             if end_time is not None: params['endTime'] = end_time
             if time_step_size is not None: params['timeStepSize'] = time_step_size
             if offset is not None: params['offset'] = offset
             
-            # Initialize methods if it doesn't exist
             if 'methods' not in params:
                 params['methods'] = {}
             if methods:
                 params['methods'].update(methods)
             
-            # Update intrplMax values
             if 'intrplMaxValues' not in params:
                 params['intrplMaxValues'] = {}
             params['intrplMaxValues'].update(intrpl_max_values)
 
-        # Get list of files being processed
         filenames = list(dataframes.keys())
 
-        # Fast detection: Check if any files need methods (using cache for O(1) lookup)
-        # This provides immediate feedback to user instead of waiting for complete_adjustment()
-        # FIXED: Pass upload-specific cache (Cloud Run compatible)
         file_info_cache_local = adjustment_chunks[upload_id].get('file_info_cache', {})
         files_needing_methods = check_files_need_methods(
             filenames,
@@ -885,7 +780,6 @@ def adjust_data():
         )
 
         if files_needing_methods:
-            # Return immediately with methodsRequired: true
             return jsonify({
                 "success": True,
                 "methodsRequired": True,
@@ -897,7 +791,6 @@ def adjust_data():
                 }
             }), 200
 
-        # No methods needed - parameters updated successfully
         emit_progress(
             upload_id,
             ProgressStages.PARAMETER_PROCESSING,
@@ -917,7 +810,6 @@ def adjust_data():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 400
 
-# Route to complete adjustment
 @bp.route('/adjustdata/complete', methods=['POST'])
 def complete_adjustment():
     """
@@ -934,7 +826,6 @@ def complete_adjustment():
     Nakon toga, backend kombinira sve primljene chunkove,
     obrađuje ih i vraća konačni rezultat.
     """
-    # Handle CORS preflight
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
         response.headers.add('Access-Control-Allow-Origin', '*')
@@ -949,23 +840,19 @@ def complete_adjustment():
         if not data:
             return jsonify({"error": "No JSON data received"}), 400
 
-        # Obavezni parametri
         upload_id = data.get('uploadId')
         
         if not upload_id:
             return jsonify({"error": "Missing uploadId"}), 400
             
-        # Get stored parameters
         if upload_id not in adjustment_chunks:
             return jsonify({"error": "Upload ID not found"}), 404
         
-        # Update methods if provided in the request
         if 'methods' in data and data['methods']:
             adjustment_chunks[upload_id]['params']['methods'] = data['methods']
         
         params = adjustment_chunks[upload_id]['params']
         
-        # Check required parameters
         required_params = ['timeStepSize', 'offset']
         missing_params = [param for param in required_params if param not in params]
         
@@ -974,32 +861,24 @@ def complete_adjustment():
                 "error": f"Missing required parameters: {', '.join(missing_params)}"
             }), 400
         
-        # Get required parameters
         requested_time_step = params['timeStepSize']
         requested_offset = params['offset']
         
-        # Get optional parameters   OVO CE BITI BITNO ZA KASNIJE
         methods = params.get('methods', {})
         start_time = params.get('startTime')
         end_time = params.get('endTime')
         time_step = params.get('timeStepSize')
         offset = params.get('offset')
 
-        # STREAMING: No need to accumulate results - they're emitted immediately
-        # Results will be sent to frontend via SocketIO events
 
-        # Get intrplMax values for each file
         intrpl_max_values = params.get('intrplMaxValues', {})
         
-        # Get DataFrames and their filenames
         dataframes = adjustment_chunks[upload_id]['dataframes']
         if not dataframes:
             return jsonify({"error": "No data found for this upload ID"}), 404
             
-        # Get list of filenames from dataframes
         filenames = list(dataframes.keys())
         
-        # Emit progress update for data processing start
         emit_progress(
             upload_id,
             ProgressStages.DATA_PROCESSING_START,
@@ -1008,29 +887,21 @@ def complete_adjustment():
             'data_processing'
         )
         
-        # Clean up methods by stripping whitespace
         if methods:
             methods = {k: v.strip() if isinstance(v, str) else v for k, v in methods.items()}
             
-        # Define valid methods
         VALID_METHODS = {'mean', 'intrpl', 'nearest', 'nearest (mean)', 'nearest (max. delta)'}
         
-        # Process each file separately
-        # OPTIMIZATION: Throttle progress updates to reduce I/O overhead
         last_progress_time = time.time()
         progress_interval = PROGRESS_UPDATE_INTERVAL
 
-        # PHASE 1: Check ALL files first to see which need methods
-        # Don't process anything until all files have valid methods
         files_needing_methods = []
         logger.info(f"Phase 1: Checking {len(filenames)} files for method requirements")
 
         for filename in filenames:
             try:
-                # Get DataFrame for this file
                 df = dataframes[filename]
 
-                # Ensure we have the required columns
                 if 'UTC' not in df.columns:
                     error_msg = f"No UTC column found in file {filename}"
                     logger.error(error_msg)
@@ -1039,7 +910,6 @@ def complete_adjustment():
 
                 df['UTC'] = pd.to_datetime(df['UTC'])
 
-                # Get time step and offset from cache
                 file_info = get_file_info_from_cache(filename, upload_id)
 
                 if not file_info:
@@ -1051,17 +921,14 @@ def complete_adjustment():
                 file_time_step = file_info['timestep']
                 file_offset = file_info['offset']
 
-                # Convert requested_offset to minutes from midnight if needed
                 requested_offset_adjusted = offset
                 if file_time_step > 0 and requested_offset_adjusted >= file_time_step:
                     requested_offset_adjusted = requested_offset_adjusted % file_time_step
 
-                # Check if parameters match
                 needs_processing = file_time_step != time_step or file_offset != requested_offset_adjusted
 
                 logger.info(f"Phase 1 - File: {filename}, needs_processing: {needs_processing}")
 
-                # If file needs processing, check if it has a valid method
                 if needs_processing:
                     method_info = methods.get(filename, {})
                     method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
@@ -1070,7 +937,6 @@ def complete_adjustment():
                     logger.info(f"Phase 1 - File: {filename}, method: {method}, has_valid_method: {has_valid_method}")
 
                     if not has_valid_method:
-                        # Collect this file for method request
                         files_needing_methods.append({
                             "filename": filename,
                             "current_timestep": file_time_step,
@@ -1084,8 +950,6 @@ def complete_adjustment():
                 logger.error(f"Phase 1 error checking {filename}: {str(e)}")
                 continue
 
-        # If ANY files need methods, return ALL of them to frontend
-        # Don't process ANYTHING until all files have methods
         if files_needing_methods:
             logger.info(f"Requesting methods for {len(files_needing_methods)} files: {[f['filename'] for f in files_needing_methods]}")
             return jsonify({
@@ -1094,25 +958,22 @@ def complete_adjustment():
                 "hasValidMethod": False,
                 "message": f"{len(files_needing_methods)} Datei(en) benötigen Verarbeitungsmethoden.",
                 "data": {
-                    "info_df": files_needing_methods,  # ALL FILES that need methods!
+                    "info_df": files_needing_methods,
                     "dataframe": []
                 }
             }), 200
 
-        # PHASE 2: All files have methods - now process them sequentially
         logger.info(f"Phase 2: All files have methods - proceeding with processing")
 
         for file_index, filename in enumerate(filenames):
             try:
-                # Emit progress for current file processing (throttled)
                 current_time = time.time()
                 should_emit = (current_time - last_progress_time > progress_interval) or \
                              (file_index % max(1, len(filenames) // 10) == 0) or \
-                             (file_index == len(filenames) - 1)  # Always emit last
+                             (file_index == len(filenames) - 1)
 
                 if should_emit:
                     file_progress = ProgressStages.calculate_file_progress(file_index, len(filenames), 60, 85)
-                    # Calculate percentage for multi-file progress
                     file_percentage = int((file_index + 1) / len(filenames) * 100)
                     emit_progress(
                         upload_id,
@@ -1124,10 +985,8 @@ def complete_adjustment():
                     )
                     last_progress_time = current_time
 
-                # Get DataFrame for this file
                 df = dataframes[filename]
 
-                # Ensure we have the required columns
                 if 'UTC' not in df.columns:
                     error_msg = f"No UTC column found in file {filename}"
                     logger.error(error_msg)
@@ -1136,7 +995,6 @@ def complete_adjustment():
 
                 df['UTC'] = pd.to_datetime(df['UTC'])
 
-                # Get time step and offset from cache (O(1) instead of pandas filtering O(n))
                 file_info = get_file_info_from_cache(filename, upload_id)
 
                 if not file_info:
@@ -1148,21 +1006,15 @@ def complete_adjustment():
                 file_time_step = file_info['timestep']
                 file_offset = file_info['offset']
 
-                # Check if this file needs processingComplete adjustment
-                # Convert requested_offset to minutes from midnight if needed
                 if file_time_step > 0 and requested_offset >= file_time_step:
                     requested_offset = requested_offset % file_time_step
 
-                # Check if parameters match
                 needs_processing = file_time_step != time_step or file_offset != offset
 
-                # Phase 2: All files already validated in Phase 1
                 logger.info(f"Phase 2 - Processing file: {filename}, needs_processing: {needs_processing}, file_time_step: {file_time_step}, requested_time_step: {time_step}")
 
-                # Get intrplMax for this file if available
                 intrpl_max = intrpl_max_values.get(filename)
 
-                # Ako nema potrebe za obradom, direktno vrati podatke bez obrade
                 if not needs_processing:
                     conversion_progress = 65 + (file_index / len(filenames)) * 20
                     emit_progress(
@@ -1193,7 +1045,6 @@ def complete_adjustment():
                         detail=f'Time step: {file_time_step}min → {time_step}min, offset: {file_offset}min → {offset}min'
                     )
 
-                    # Process the data - koristimo originalne parametre ako ne treba obradu
                     process_time_step = time_step if needs_processing else file_time_step
                     process_offset = offset if needs_processing else file_offset
 
@@ -1208,9 +1059,7 @@ def complete_adjustment():
                         intrpl_max
                     )
 
-                # STREAMING: Emit results immediately instead of accumulating
                 if result_data is not None and info_record is not None:
-                    # Emit file result via SocketIO (handles chunking automatically)
                     emit_file_result(
                         upload_id,
                         filename,
@@ -1220,20 +1069,16 @@ def complete_adjustment():
                         len(filenames)
                     )
 
-                    # Emit completion progress for this file with data quality info
                     file_complete_progress = 70 + ((file_index + 1) / len(filenames)) * 15
 
-                    # Calculate data quality percentage from info_record
                     quality_percentage = 0
                     if info_record and 'Anteil an numerischen Datenpunkten' in info_record:
                         quality_percentage = info_record['Anteil an numerischen Datenpunkten']
 
-                    # Create comprehensive completion message
                     completion_msg = f'Completed processing {filename}'
                     if needs_processing:
                         completion_msg += f' (adjusted {file_time_step}min→{time_step}min)'
 
-                    # Create quality summary detail message
                     quality_detail = f'Generated {len(result_data):,} data points'
                     if quality_percentage > 0:
                         quality_detail += f' • {quality_percentage:.1f}% valid data'
@@ -1247,25 +1092,19 @@ def complete_adjustment():
                         detail=quality_detail
                     )
 
-                    # MEMORY CLEANUP: Free memory immediately after emitting
                     del result_data
                     del info_record
-                    # Also cleanup DataFrame from memory
                     if filename in adjustment_chunks[upload_id]['dataframes']:
                         del adjustment_chunks[upload_id]['dataframes'][filename]
-                    # Note: Removed manual gc.collect() - Python handles GC automatically
 
                     logger.info(f"Memory cleaned up for {filename}")
 
             except Exception as file_error:
-                # Per-file error handling - emit error but continue with other files
                 error_msg = f"Error processing {filename}: {str(file_error)}"
                 logger.error(f"{error_msg}\n{traceback.format_exc()}")
                 emit_file_error(upload_id, filename, error_msg)
-                # Continue with next file instead of failing entire request
                 continue
 
-        # Emit final completion progress
         emit_progress(
             upload_id,
             ProgressStages.COMPLETION,
@@ -1274,10 +1113,9 @@ def complete_adjustment():
             'finalization'
         )
 
-        # STREAMING RESPONSE: Return minimal JSON (results sent via SocketIO)
         return jsonify({
             "success": True,
-            "streaming": True,  # Signal to frontend to use SocketIO results
+            "streaming": True,
             "totalFiles": len(filenames),
             "message": "Results sent via SocketIO streaming"
         }), 200
@@ -1287,28 +1125,21 @@ def complete_adjustment():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 400
 
-# Pomoćne funkcije za obradu podataka
 def prepare_data(data, filename):
     """Priprema podataka za obradu"""
-    # Kopiranje DataFrame-a
     df = data.copy()
     
     if len(df) == 0:
         raise ValueError(f"No data found for file {filename}")
     
-    # Konverzija UTC kolone u datetime
     df['UTC'] = pd.to_datetime(df['UTC'])
     
-    # Identifikacija kolona merenja
     measurement_cols = [col for col in df.columns if col != 'UTC']
     if not measurement_cols:
         raise ValueError(f"No measurement columns found for file {filename}")
     
-    # Konverzija vrednosti merenja u float, ali sačuvaj originalne vrednosti
     for col in measurement_cols:
-        # Sačuvaj originalne vrednosti pre konverzije
         df[f"{col}_original"] = df[col].copy()
-        # Konvertuj u numeričke vrednosti, NaN za ne-numeričke
         df[col] = pd.to_numeric(df[col], errors='coerce')
     
     return df, measurement_cols
@@ -1316,7 +1147,6 @@ def prepare_data(data, filename):
 def filter_by_time_range(df, start_time, end_time):
     """Filtriranje podataka po vremenskom rasponu"""
     if start_time and end_time:
-        # Ensure timezone-aware comparison to match UTC-aware datetime in df['UTC']
         start_time = pd.to_datetime(start_time, utc=True)
         end_time = pd.to_datetime(end_time, utc=True)
         return df[(df['UTC'] >= start_time) & (df['UTC'] <= end_time)]
@@ -1336,17 +1166,13 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
     """
     import math
 
-    # Ensure UTC column is timezone-aware to match optimized CSV parsing
     df['UTC'] = pd.to_datetime(df['UTC'], utc=True)
     df = df.sort_values('UTC').reset_index(drop=True)
 
-    # OPTIMIZACIJA #1: Pre-convert to NumPy arrays for 5-10x faster access
-    # Keep as Series to preserve timezone-aware Timestamps for comparison
     utc_series = df['UTC']
     val_array = df[col].values
     df_len = len(df)
 
-    # Create timezone-aware timestamps to match df['UTC']
     t_strt = pd.to_datetime(start_time, utc=True) if start_time else df['UTC'].min()
     t_end = pd.to_datetime(end_time, utc=True) if end_time else df['UTC'].max()
 
@@ -1361,14 +1187,11 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
         t_list.append(t_ref)
         t_ref += pd.Timedelta(minutes=tss)
 
-    # OPTIMIZATION #2: Pre-allocate numpy array instead of list for 15-25% faster appends
     value_array = np.empty(len(t_list), dtype=np.float64)
-    value_idx = 0  # Track current index for value_array
+    value_idx = 0
 
-    # OPTIMIZATION #3: Pre-convert timestamps to unix seconds for faster comparisons
-    # Convert Series to unix timestamps (nanoseconds -> seconds)
     utc_unix_array = utc_series.values.astype('datetime64[ns]').astype(np.int64) / 1e9
-    tss_seconds = tss * 60  # Convert minutes to seconds
+    tss_seconds = tss * 60
 
     i2 = 0
     direct = 1
@@ -1377,14 +1200,12 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
         if method == 'mean':
             t_min = t_curr - pd.Timedelta(minutes=tss / 2)
             t_max = t_curr + pd.Timedelta(minutes=tss / 2)
-            # OPTIMIZACIJA: Use Series for timezone-aware comparison, array for values
             while i2 < df_len and utc_series.iloc[i2] < t_min:
                 i2 += 1
             idx_start = i2
             while i2 < df_len and utc_series.iloc[i2] <= t_max:
                 i2 += 1
             idx_end = i2
-            # OPTIMIZACIJA: NumPy array slicing + np.mean (30-40% faster)
             values = val_array[idx_start:idx_end]
             valid_values = values[pd.notna(values)]
             value_array[value_idx] = np.mean(valid_values) if len(valid_values) > 0 else float('nan')
@@ -1393,7 +1214,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
         elif method in ['nearest', 'nearest (mean)']:
             t_min = t_curr - pd.Timedelta(minutes=tss / 2)
             t_max = t_curr + pd.Timedelta(minutes=tss / 2)
-            # OPTIMIZACIJA: Series for timezone-aware comparison
             while i2 < df_len and utc_series.iloc[i2] < t_min:
                 i2 += 1
             idx_start = i2
@@ -1401,7 +1221,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
                 i2 += 1
             idx_end = i2
 
-            # Extract slices and filter valid values
             utc_slice = utc_series.iloc[idx_start:idx_end]
             val_slice = val_array[idx_start:idx_end]
             valid_mask = pd.notna(val_slice)
@@ -1409,14 +1228,12 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
             if valid_mask.any():
                 valid_utc = utc_slice[valid_mask]
                 valid_vals = val_slice[valid_mask]
-                # Vectorized delta calculation - valid_utc is already timezone-aware
                 deltas = np.abs([(t_curr - ts).total_seconds() for ts in valid_utc])
                 min_delta = np.min(deltas)
                 idx_all = np.where(deltas == min_delta)[0]
                 if method == 'nearest':
                     value_array[value_idx] = valid_vals[idx_all[0]]
                 else:
-                    # OPTIMIZACIJA: np.mean umesto statistics.mean
                     value_array[value_idx] = np.mean(valid_vals[idx_all])
             else:
                 value_array[value_idx] = float('nan')
@@ -1424,7 +1241,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
 
         elif method in ['intrpl', 'nearest (max. delta)']:
             if direct == 1:
-                # OPTIMIZACIJA: Series for timezone-aware comparison
                 while i2 < df_len:
                     if utc_series.iloc[i2] >= t_curr:
                         if pd.notna(val_array[i2]):
@@ -1454,7 +1270,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
                     i2 = 0
                     direct = 1
                     continue
-                # time_next and time_prior are already timezone-aware Timestamps
                 delta_t = (time_next - time_prior).total_seconds()
                 if delta_t == 0 or (value_prior == value_next and delta_t <= intrpl_max * 60):
                     value_array[value_idx] = value_prior
@@ -1476,7 +1291,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
                 direct = 1
 
         else:
-            # OPTIMIZACIJA: Direktan Series comparison (timezone-aware)
             matches = utc_series[utc_series == t_curr].index.tolist()
             if len(matches) > 0:
                 val = val_array[matches[0]]
@@ -1487,7 +1301,6 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
 
     result_df = pd.DataFrame({'UTC': t_list, col: value_array})
     return result_df
-# Kreiranje info zapisa za rezultate
 def create_info_record(df, col, filename, time_step, offset):
     """Kreiranje info zapisa za rezultate"""
     total_points = len(df)
@@ -1500,7 +1313,6 @@ def create_info_record(df, col, filename, time_step, offset):
         if hasattr(val, 'strftime'):
             return val.strftime(UTC_fmt)
         try:
-            # Ako je string, pokušaj parsirati
             dt = pd.to_datetime(val)
             return dt.strftime(UTC_fmt)
         except Exception:
@@ -1517,32 +1329,26 @@ def create_info_record(df, col, filename, time_step, offset):
         'Anzahl der numerischen Datenpunkte': int(numeric_points),
         'Anteil an numerischen Datenpunkten': float(numeric_ratio)
     }
-# Kreiranje zapisa za rezultate
 def create_records(df, col, filename):
     """
     Konverzija DataFrame-a u zapise
     OPTIMIZATION #4: Vectorized numpy operations instead of iterrows (50-100x faster)
     """
-    original_col = f"{col}_original"  # Kolona sa originalnim vrednostima
+    original_col = f"{col}_original"
 
-    # OPTIMIZATION: Convert to numpy arrays for vectorized operations
     utc_values = pd.to_datetime(df['UTC']).values
     col_values = df[col].values
 
-    # Pre-convert UTC to milliseconds timestamps (vectorized)
     utc_timestamps = (utc_values.astype('datetime64[ms]').astype(np.int64))
 
-    # Handle original column if exists
     has_original = original_col in df.columns
     original_values = df[original_col].values if has_original else None
 
-    # Vectorized record creation using list comprehension with zip (much faster than iterrows)
     records = []
     for idx in range(len(df)):
         utc_ts = int(utc_timestamps[idx])
         col_val = col_values[idx]
 
-        # Determine value (numeric, original string, or "None")
         if pd.notnull(col_val):
             value = float(col_val)
         elif has_original and pd.notnull(original_values[idx]):
@@ -1567,38 +1373,29 @@ def convert_data_without_processing(df, filename, time_step, offset):
     try:
         logger.info(f"Direct conversion without processing for {filename}")
         
-        # Kopiranje DataFrame-a
         df = df.copy()
         
-        # Konverzija UTC kolone u datetime ako već nije
         df['UTC'] = pd.to_datetime(df['UTC'])
         
-        # Identifikacija kolona merenja
         measurement_cols = [col for col in df.columns if col != 'UTC']
         
-        # Ako nemamo kolone merenja, vratimo prazne rezultate
         if not measurement_cols:
             logger.warning(f"No measurement columns found for {filename}")
             return [], None
         
         all_records = []
         
-        # Obrada za svaku kolonu merenja
         for col in measurement_cols:
-            # Direktno kreiranje zapisa bez transformacije podataka
             records = create_records(df, col, filename)
             all_records.extend(records)
             
-            # Kreiranje info zapisa za prvu kolonu
             if len(all_records) > 0 and not any(r.get('info_created') for r in all_records):
                 info_record = create_info_record(df, col, filename, time_step, offset)
                 return all_records, info_record
         
-        # Ako nemamo zapise, vratimo prazne rezultate
         if not all_records:
             return [], None
             
-        # Ako imamo više kolona, vratimo samo prvi info_record
         info_record = create_info_record(df, measurement_cols[0], filename, time_step, offset)
         return all_records, info_record
         
@@ -1607,59 +1404,45 @@ def convert_data_without_processing(df, filename, time_step, offset):
         traceback.print_exc()
         return [], None
 
-# Glavna funkcija za obradu podataka sa detaljnim logovanjem
 def process_data_detailed(data, filename, start_time=None, end_time=None, time_step=None, offset=None, methods={}, intrpl_max=None):
     try:
-        # 1. Priprema podataka
         df, measurement_cols = prepare_data(data, filename)
         
-        # 2. Filtriranje po vremenskom rasponu
         df = filter_by_time_range(df, start_time, end_time)
         
-        # 3. Dobijanje metode obrade za ovaj fajl
         method = get_method_for_file(methods, filename)
         
-        # Ako nemamo metodu, to je greška jer ako fajl treba obradu mora imati metodu
         if not method:
             logger.warning(f"No processing method specified for {filename} but processing is required")
-            # Vraćamo prazne rezultate umesto da koristimo praznu metodu
             return [], None
         
-        # 4. Obrada podataka za svaku kolonu merenja
         all_info_records = []
         
-        # Ako imamo samo jednu kolonu merenja, obrađujemo je direktno
         if len(measurement_cols) == 1:
             measurement_col = measurement_cols[0]
             
-            # Primena metode obrade
             processed_df = apply_processing_method(
                 df, measurement_col, method, time_step, offset, start_time, end_time, intrpl_max
             )
             
-            # Kreiranje zapisa i statistika
             records = create_records(processed_df, measurement_col, filename)
             info_record = create_info_record(processed_df, measurement_col, filename, time_step, offset)
             
             return records, info_record
         
-        # Ako imamo više kolona merenja, obrađujemo svaku pojedinačno
         combined_records = []
         
         for col in measurement_cols:
-            # Primena metode obrade
             processed_df = apply_processing_method(
                 df, col, method, time_step, offset, start_time, end_time, intrpl_max
             )
             
-            # Kreiranje zapisa i statistika
             records = create_records(processed_df, col, filename)
             info_record = create_info_record(processed_df, col, filename, time_step, offset)
             
             combined_records.extend(records)
             all_info_records.append(info_record)
         
-        # Ako imamo više kolona, vraćamo samo prvi info_record za kompatibilnost sa postojećim kodom
         return combined_records, all_info_records[0] if all_info_records else None
         
     except Exception as e:
@@ -1667,46 +1450,36 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         traceback.print_exc()
         raise
 
-# Route to prepare data for saving
 @bp.route('/prepare-save', methods=['POST'])
 def prepare_save():
     try:
-        # Try to get data from JSON
         try:
             data = request.get_json(force=True)
         except:
-            # If JSON fails, try form data
             data = request.form.to_dict()
             
         if not data:
             return jsonify({"error": "No data received"}), 400
             
-        # Handle both direct data and nested data format
         save_data = data.get('data', data)
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
 
-        # Convert save_data to list if it's a string (from form data)
         if isinstance(save_data, str):
             try:
                 save_data = json.loads(save_data)
             except json.JSONDecodeError:
                 return jsonify({"error": "Invalid data format"}), 400
 
-        # Generiši jedinstveni ID na osnovu trenutnog vremena (sa mikrosekundama za jedinstvenost)
         file_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
 
-        # Kreiraj fajl direktno u UPLOAD_FOLDER (ne u sistemskom /tmp/)
-        # Ovo omogućava da security validacija u download_file() prođe
         temp_path = os.path.join(UPLOAD_FOLDER, f"download_{file_id}.csv")
 
-        # Zapiši CSV podatke
         with open(temp_path, 'w', newline='', encoding='utf-8') as temp_file:
             writer = csv.writer(temp_file, delimiter=';')
             for row in save_data:
                 writer.writerow(row)
 
-        # Sačuvaj info o fajlu za download
         temp_files[file_id] = {
             'path': temp_path,
             'timestamp': time.time()
@@ -1718,9 +1491,6 @@ def prepare_save():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-# The complete_upload functionality has been moved to cloud.py
-# to avoid circular imports and infinite recursion
-# Route to download file
 @bp.route('/download/<file_id>', methods=['GET'])
 def download_file(file_id):
     try:
@@ -1730,11 +1500,9 @@ def download_file(file_id):
         file_info = temp_files[file_id]
         file_path = file_info['path']
 
-        # SECURITY: Validate file_path is within expected directory
         upload_folder_abs = os.path.abspath(UPLOAD_FOLDER)
         file_path_abs = os.path.abspath(file_path)
 
-        # Check file is within allowed directory
         if not file_path_abs.startswith(upload_folder_abs):
             logger.error(f"Security: Attempted to access file outside upload folder: {file_path}")
             return jsonify({"error": "Invalid file path"}), 403
@@ -1744,7 +1512,6 @@ def download_file(file_id):
 
         download_name = f"data_{file_id}.csv"
 
-        # Send file to client
         response = send_file(
             file_path,
             as_attachment=True,
@@ -1752,7 +1519,6 @@ def download_file(file_id):
             mimetype='text/csv'
         )
 
-        # Cleanup immediately after successful download (don't wait for periodic cleanup)
         try:
             os.remove(file_path)
             del temp_files[file_id]

@@ -20,20 +20,15 @@ from utils.database import save_session_to_supabase, get_string_id_from_uuid, cr
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit, check_training_limit
 from utils.usage_tracking import increment_processing_count, increment_training_count
-# Refactoring Phase 0: Import from new utils modules
 from utils.validation import validate_session_id, create_error_response, create_success_response
 from utils.metadata_utils import extract_file_metadata_fields, extract_file_metadata
 
-# Refactoring Phase 1: Import visualization service
 from services.training.visualization import Visualizer
 
-# Refactoring Phase 2: Import scaler service functions
 from services.training.scaler_manager import get_session_scalers, create_scaler_download_package, scale_new_data
 
-# Refactoring Phase 3: Import model management service functions
 from services.training.model_manager import save_models_to_storage, get_models_list, download_model_file
 
-# Refactoring Phase 4: Import session management service functions
 from services.training.session_manager import (
     initialize_session, finalize_session, get_sessions_list,
     get_session_info, get_session_from_database, delete_session,
@@ -43,7 +38,6 @@ from services.training.session_manager import (
     get_session_uuid, get_upload_status
 )
 
-# Refactoring Phase 5: Import upload management service functions
 from services.training.upload_manager import (
     process_chunk_upload, verify_file_hash, assemble_file_locally,
     save_session_metadata_locally, get_session_metadata_locally,
@@ -51,11 +45,9 @@ from services.training.upload_manager import (
     create_csv_file_record, update_csv_file_record, delete_csv_file_record
 )
 
-# Refactoring Phase 6: Import dataset generation and model training service functions
 from services.training.dataset_generator import generate_violin_plots_for_session
 from services.training.training_orchestrator import run_model_training_async
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -63,47 +55,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Create blueprint
 bp = Blueprint('training', __name__)
 
-# Validation helper functions
-# REFACTORING PHASE 0: Moved to utils/validation.py
-# def validate_session_id(session_id):
 #     """Validate session ID format - should be either UUID or session_XXXXXX_XXXXXX format"""
-#     if not session_id or not isinstance(session_id, str):
-#         return False
-#
-#     # Check if it's a valid UUID
-#     try:
-#         uuid.UUID(session_id)
-#         return True
-#     except ValueError:
-#         pass
-#
-#     # Check if it's in session_XXXXX_XXXXX format
-#     pattern = r'^session_\d+_[a-zA-Z0-9]+$'
-#     return bool(re.match(pattern, session_id))
-#
-# def create_error_response(message, status_code=400):
 #     """Create standardized error response"""
-#     return jsonify({
-#         'success': False,
-#         'error': message,
-#         'data': None
-#     }), status_code
-#
-# def create_success_response(data=None, message=None):
 #     """Create standardized success response"""
-#     response = {
-#         'success': True,
-#         'data': data
-#     }
-#     if message:
-#         response['message'] = message
-#     return jsonify(response)
 
-# REFACTORING PHASE 0: Moved to utils/metadata_utils.py
-# def extract_file_metadata_fields(file_metadata):
 #     """
 #     Helper function to extract standardized file metadata fields from a file metadata dictionary.
 #
@@ -113,29 +70,6 @@ bp = Blueprint('training', __name__)
 #     Returns:
 #         dict: Dictionary containing standardized file metadata fields
 #     """
-#     return {
-#         'id': file_metadata.get('id', ''),
-#         'fileName': file_metadata.get('fileName', ''),
-#         'bezeichnung': file_metadata.get('bezeichnung', ''),
-#         'utcMin': file_metadata.get('utcMin', ''),
-#         'utcMax': file_metadata.get('utcMax', ''),
-#         'zeitschrittweite': file_metadata.get('zeitschrittweite', ''),
-#         'min': file_metadata.get('min', ''),
-#         'max': file_metadata.get('max', ''),
-#         'offset': file_metadata.get('offset', ''),
-#         'datenpunkte': file_metadata.get('datenpunkte', ''),
-#         'numerischeDatenpunkte': file_metadata.get('numerischeDatenpunkte', ''),
-#         'numerischerAnteil': file_metadata.get('numerischerAnteil', ''),
-#         'datenform': file_metadata.get('datenform', ''),
-#         'zeithorizont': file_metadata.get('zeithorizont', ''),
-#         'datenanpassung': file_metadata.get('datenanpassung', ''),
-#         'zeitschrittweiteMittelwert': file_metadata.get('zeitschrittweiteMittelwert', ''),
-#         'zeitschrittweiteMin': file_metadata.get('zeitschrittweiteMin', ''),
-#         'skalierung': file_metadata.get('skalierung', ''),
-#         'skalierungMax': file_metadata.get('skalierungMax', ''),
-#         'skalierungMin': file_metadata.get('skalierungMin', ''),
-#         'type': file_metadata.get('type', '') # Dodajemo 'type' polje
-#     }
 
 def calculate_n_dat_from_session(session_id):
     """
@@ -157,7 +91,6 @@ def calculate_n_dat_from_session(session_id):
         total_samples = 0
         csv_files = []
         
-        # Find all CSV files in the upload directory
         for file_name in os.listdir(upload_dir):
             if file_name.lower().endswith('.csv') and os.path.isfile(os.path.join(upload_dir, file_name)):
                 csv_files.append(file_name)
@@ -166,11 +99,9 @@ def calculate_n_dat_from_session(session_id):
             logger.warning(f"No CSV files found in session {session_id}")
             return 0
         
-        # Process each CSV file to count data samples
         for csv_file in csv_files:
             file_path = os.path.join(upload_dir, csv_file)
             try:
-                # Read CSV file to count rows (excluding header)
                 df = pd.read_csv(file_path)
                 file_samples = len(df)
                 total_samples += file_samples
@@ -186,8 +117,6 @@ def calculate_n_dat_from_session(session_id):
         logger.error(f"Error calculating n_dat for session {session_id}: {str(e)}")
         return 0
 
-# REFACTORING PHASE 0: Moved to utils/metadata_utils.py (now requires upload_base_dir parameter)
-# def extract_file_metadata(session_id):
 #     """
 #     Extracts file metadata from session metadata.
 #
@@ -197,35 +126,9 @@ def calculate_n_dat_from_session(session_id):
 #     Returns:
 #         dict: Dictionary containing file metadata fields or None if not found
 #     """
-#     try:
-#         # Get path to session directory
-#         upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-#         metadata_path = os.path.join(upload_dir, 'metadata.json')
-#
-#         if not os.path.exists(metadata_path):
-#             logger.error(f"Metadata file not found for session {session_id}")
-#             return None
-#
-#         # Load metadata
-#         with open(metadata_path, 'r') as f:
-#             metadata = json.load(f)
-#
-#         # Find the first chunk which should contain fileMetadata
-#         for chunk in metadata:
-#             if 'params' in chunk and 'fileMetadata' in chunk['params']:
-#                 file_metadata = chunk['params']['fileMetadata']
-#                 return extract_file_metadata_fields(file_metadata)
-#
-#         logger.error(f"No file metadata found for session {session_id}")
-#         return None
-#     except Exception as e:
-#         logger.error(f"Error extracting file metadata: {str(e)}")
-#         return None
 
-# Constants for session management
-MAX_SESSIONS_TO_RETURN = 50  # Maximum number of sessions to return in list
+MAX_SESSIONS_TO_RETURN = 50
 
-# Base directory for file uploads (relative to /app working directory)
 UPLOAD_BASE_DIR = 'uploads/file_uploads'
 
 def verify_file_hash(file_data: bytes, expected_hash: str) -> bool:
@@ -248,18 +151,15 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
     Returns:
         str: Path to the assembled file
     """
-    # 🛡️ Security: Sanitize filename
     safe_filename = secure_filename(filename)
     if not safe_filename or safe_filename != filename:
         raise ValueError(f"Invalid filename: {filename}")
 
-    # 🛡️ Security: Validate upload_id format
     if not upload_id.replace('_', '').replace('-', '').isalnum():
         raise ValueError(f"Invalid upload_id format: {upload_id}")
 
     upload_dir = os.path.join(UPLOAD_BASE_DIR, upload_id)
 
-    # 🛡️ Security: Ensure upload_dir is within base directory
     upload_dir = os.path.abspath(upload_dir)
     base_dir = os.path.abspath(UPLOAD_BASE_DIR)
     if not upload_dir.startswith(base_dir):
@@ -268,7 +168,6 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
     if not os.path.exists(upload_dir):
         raise FileNotFoundError(f"Upload directory not found: {upload_dir}")
 
-    # Load and validate metadata
     metadata_path = os.path.join(upload_dir, 'metadata.json')
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
@@ -279,12 +178,10 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise ValueError(f"Invalid metadata file: {e}")
 
-    # Filter and validate chunks
     file_chunks = [c for c in chunks_metadata if c.get('fileName') == filename]
     if not file_chunks:
         raise FileNotFoundError(f"No chunks found for file {filename}")
 
-    # Sort and validate chunk sequence
     file_chunks.sort(key=lambda x: x.get('chunkIndex', 0))
     expected_chunks = file_chunks[0].get('totalChunks', 0)
 
@@ -294,20 +191,17 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
             f"Expected {expected_chunks}, found {len(file_chunks)}"
         )
 
-    # Validate chunk indices are sequential
     for i, chunk in enumerate(file_chunks):
         if chunk.get('chunkIndex') != i:
             raise ValueError(f"Non-sequential chunk index: expected {i}, got {chunk.get('chunkIndex')}")
 
-    # 🛡️ Security: Ensure assembled file is in upload directory
     assembled_file_path = os.path.join(upload_dir, safe_filename)
     assembled_file_path = os.path.abspath(assembled_file_path)
 
     if not assembled_file_path.startswith(upload_dir):
         raise ValueError("Invalid file path detected")
 
-    # ⚡ Performance: Stream assembly with buffer
-    BUFFER_SIZE = 64 * 1024  # 64KB buffer
+    BUFFER_SIZE = 64 * 1024
 
     try:
         with open(assembled_file_path, 'wb') as output_file:
@@ -316,12 +210,10 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
                 if not chunk_path or not os.path.exists(chunk_path):
                     raise FileNotFoundError(f"Chunk file not found: {chunk_path}")
 
-                # 🛡️ Security: Validate chunk path
                 chunk_path = os.path.abspath(chunk_path)
                 if not chunk_path.startswith(base_dir):
                     raise ValueError("Invalid chunk path detected")
 
-                # ⚡ Performance: Stream copy with buffer
                 with open(chunk_path, 'rb') as chunk_file:
                     while True:
                         chunk_data = chunk_file.read(BUFFER_SIZE)
@@ -338,7 +230,6 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
         return assembled_file_path
 
     except Exception as e:
-        # Cleanup partial file on error
         if os.path.exists(assembled_file_path):
             try:
                 os.remove(assembled_file_path)
@@ -359,27 +250,22 @@ def save_session_metadata_locally(session_id: str, metadata: dict) -> bool:
         bool: True if successful, False otherwise
     """
     try:
-        # 🛡️ Security: Validate session_id
         if not session_id or not isinstance(session_id, str):
             raise ValueError("Invalid session_id")
 
-        # Remove any path traversal attempts
         clean_session_id = session_id.replace('..', '').replace('/', '').replace('\\', '')
         if clean_session_id != session_id:
             raise ValueError("Invalid characters in session_id")
 
         upload_dir = os.path.join(UPLOAD_BASE_DIR, clean_session_id)
 
-        # 🛡️ Security: Ensure directory is within base
         upload_dir = os.path.abspath(upload_dir)
         base_dir = os.path.abspath(UPLOAD_BASE_DIR)
         if not upload_dir.startswith(base_dir):
             raise ValueError("Path traversal attempt detected")
 
-        # Create directory with proper permissions
         os.makedirs(upload_dir, mode=0o755, exist_ok=True)
 
-        # Save metadata with atomic write
         session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
         temp_path = session_metadata_path + '.tmp'
 
@@ -387,14 +273,12 @@ def save_session_metadata_locally(session_id: str, metadata: dict) -> bool:
             with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-            # Atomic move
             os.rename(temp_path, session_metadata_path)
 
             logger.info(f"Session metadata saved: {session_metadata_path}")
             return True
 
         except Exception as e:
-            # Cleanup temp file on error
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
@@ -417,7 +301,6 @@ def get_session_metadata_locally(session_id: str) -> Optional[dict]:
         dict: Metadata if found, None if not found
     """
     try:
-        # 🛡️ Security: Validate session_id
         if not session_id or not isinstance(session_id, str):
             logger.warning("Invalid session_id provided")
             return {}
@@ -429,7 +312,6 @@ def get_session_metadata_locally(session_id: str) -> Optional[dict]:
 
         upload_dir = os.path.join(UPLOAD_BASE_DIR, clean_session_id)
 
-        # 🛡️ Security: Ensure directory is within base
         upload_dir = os.path.abspath(upload_dir)
         base_dir = os.path.abspath(UPLOAD_BASE_DIR)
         if not upload_dir.startswith(base_dir):
@@ -467,50 +349,31 @@ def print_session_files(session_id, files_data):
         files_data: Dictionary of file names and their data
     """
     try:
-        # Only log minimal information unless in debug mode
-        # logger.info(f"Session {session_id} contains {len(files_data)} files")
         
-        # Skip detailed logging if not in debug mode
         if not logger.isEnabledFor(logging.DEBUG):
             return
             
-        # Get metadata
         metadata = get_session_metadata_locally(session_id)
                 
-        # Log timeInfo parameters
         time_info = metadata.get('timeInfo', {})
         if time_info:
-            # logger.debug(f"Time info: {json.dumps(time_info, indent=2)}")
             pass
         
-        # Process each file
         for file_name, file_data in files_data.items():
-            # logger.debug(f"File: {file_name}, Size: {len(file_data)} bytes")
             
-            # Try to parse as CSV but only log basic info
             try:
                 df = pd.read_csv(BytesIO(file_data), encoding='utf-8')
-                # logger.debug(f"CSV rows: {len(df)}, columns: {len(df.columns)}")
             except Exception as e:
-                # logger.debug(f"Not parseable as CSV: {str(e)}")
                 pass
                 
             try:
                 file_type = magic.from_buffer(file_data[:1024], mime=True)
-                # logger.debug(f"File type: {file_type}")
             except ImportError:
-                # Ako magic modul nije dostupan, pokušaj odrediti tip na osnovu ekstenzije
                 _, ext = os.path.splitext(file_name)
-                # logger.debug(f"File extension: {ext}")
                     
-            # Ako je tekstualna datoteka, prikaži preview
             try:
                 preview = file_data.decode('utf-8')[:1000]
-                # logger.debug("\nFile preview:")
-                # logger.debug(preview)
             except UnicodeDecodeError:
-                # logger.debug("Error decoding file as UTF-8 for preview")
-                # logger.debug(f"Binary file, size: {len(file_data)} bytes")
                 pass
                 
     except Exception as e:
@@ -527,7 +390,6 @@ def upload_chunk():
     Refactored: Business logic moved to upload_manager.process_chunk_upload()
     """
     try:
-        # Validate chunk file in request
         if 'chunk' not in request.files:
             return jsonify({'success': False, 'error': 'No chunk in request'}), 400
         
@@ -535,23 +397,18 @@ def upload_chunk():
         if not chunk_file.filename:
             return jsonify({'success': False, 'error': 'No chunk file selected'}), 400
         
-        # Validate metadata
         if 'metadata' not in request.form:
             return jsonify({'success': False, 'error': 'No metadata provided'}), 400
         
         metadata = json.loads(request.form['metadata'])
         
-        # Read chunk data
         chunk_data = chunk_file.read()
         
-        # Extract additional data if present
         additional_data = {}
         
-        # Process additional data from form
         if 'additionalData' in request.form:
             additional_data = json.loads(request.form['additionalData'])
         
-        # Add all other form parameters
         for key, value in request.form.items():
             if key not in ['metadata', 'additionalData']:
                 try:
@@ -559,14 +416,11 @@ def upload_chunk():
                 except (json.JSONDecodeError, TypeError):
                     additional_data[key] = value
         
-        # Add query parameters
         for key, value in request.args.items():
             additional_data[key] = value
         
-        # Process chunk upload through service layer
         result = process_chunk_upload(chunk_data, metadata, additional_data)
         
-        # Track CSV upload if file was assembled
         if result.get('assembled'):
             from flask import g
             increment_processing_count(g.user_id)
@@ -599,7 +453,7 @@ def update_session_metadata(session_id, data):
     existing_metadata = get_session_metadata_locally(session_id)
     
     finalization_metadata = {
-        **existing_metadata,  # Keep existing metadata
+        **existing_metadata,
         'finalized': True,
         'finalizationTime': datetime.now().isoformat(),
         'timeInfo': data.get('timeInfo', existing_metadata.get('timeInfo', {})),
@@ -624,18 +478,15 @@ def verify_session_files(session_id, metadata):
     file_count = 0
     files_metadata = metadata.get('files', [])
     
-    # Ako nema metapodataka o datotekama, pokušaj ih pronaći u direktoriju
     if not files_metadata:
         for file_name in os.listdir(upload_dir):
             if os.path.isfile(os.path.join(upload_dir, file_name)) and not file_name.endswith(('_metadata.json', '.json')) and '_' not in file_name:
                 file_count += 1
-                # Dodaj osnovne metapodatke o datoteci
                 files_metadata.append({
                     'fileName': file_name,
                     'createdAt': datetime.now().isoformat()
                 })
     else:
-        # Provjeri postoje li datoteke navedene u metapodacima
         for file_info in files_metadata:
             filename = file_info.get('fileName')
             if filename:
@@ -643,10 +494,8 @@ def verify_session_files(session_id, metadata):
                 if os.path.exists(file_path):
                     file_count += 1
     
-    # Ažuriraj metapodatke o datotekama
     metadata['files'] = files_metadata
     
-    # Spremi ažurirane metapodatke
     save_session_metadata_locally(session_id, metadata)
     
     return metadata, file_count
@@ -666,7 +515,6 @@ def save_session_to_database(session_id, n_dat=None, file_count=None):
     try:
         supabase_result = save_session_to_supabase(session_id, n_dat, file_count)
         if supabase_result:
-            # logger.info(f"Session {session_id} data saved to Supabase successfully")
             return True
         else:
             logger.warning(f"Failed to save session {session_id} data to Supabase")
@@ -689,7 +537,6 @@ def finalize_session_endpoint():
             
         session_id = data['sessionId']
         
-        # Call service layer
         result = finalize_session(session_id, data)
         
         return jsonify({
@@ -707,9 +554,6 @@ def finalize_session_endpoint():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
-# def finalize_session():
-#     ... 45 lines of business logic moved to session_manager.finalize_session()
 
 @bp.route('/list-sessions', methods=['GET'])
 def list_sessions():
@@ -719,10 +563,8 @@ def list_sessions():
     Refactored: Business logic moved to session_manager.get_sessions_list()
     """
     try:
-        # Get limit from query params or use default
         limit = request.args.get('limit', 50, type=int)
         
-        # Get sessions from service layer
         sessions = get_sessions_list(limit=limit)
         
         return jsonify({
@@ -750,7 +592,6 @@ def get_session_endpoint(session_id):
         if not session_id:
             return jsonify({'success': False, 'error': 'No session ID provided'}), 400
 
-        # Handle UUID to string conversion if needed
         try:
             import uuid
             uuid.UUID(session_id)
@@ -760,10 +601,8 @@ def get_session_endpoint(session_id):
         except (ValueError, TypeError):
             string_session_id = session_id
 
-        # Get session info from service layer
         session_metadata = get_session_info(string_session_id)
         
-        # Get file information
         upload_dir = os.path.join(UPLOAD_BASE_DIR, string_session_id)
         files = []
         
@@ -802,9 +641,6 @@ def get_session_endpoint(session_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
-# def get_session(session_id):
-#     ... 58 lines of business logic moved to session_manager.get_session_info()
 
 @bp.route('/session/<session_id>/database', methods=['GET'])
 def get_session_from_database_endpoint(session_id):
@@ -816,7 +652,6 @@ def get_session_from_database_endpoint(session_id):
         if not session_id:
             return jsonify({'success': False, 'error': 'No session ID provided'}), 400
 
-        # UUID conversion
         try:
             import uuid
             uuid.UUID(session_id)
@@ -834,7 +669,6 @@ def get_session_from_database_endpoint(session_id):
         if not supabase:
             return jsonify({'success': False, 'error': 'Database connection not available'}), 500
 
-        # Get aggregated data
         session_response = supabase.table('sessions').select('*').eq('id', database_session_id).execute()
         if not session_response.data:
             return jsonify({'success': False, 'error': 'Session not found in database'}), 404
@@ -844,7 +678,6 @@ def get_session_from_database_endpoint(session_id):
         time_info_response = supabase.table('time_info').select('*').eq('session_id', database_session_id).execute()
         zeitschritte_response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).execute()
 
-        # Format response
         session_info = {
             'sessionId': string_session_id,
             'databaseSessionId': database_session_id,
@@ -869,9 +702,6 @@ def get_session_from_database_endpoint(session_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
-# def get_session_from_database(session_id):
-#     ... 90 lines - complex aggregation kept in endpoint for now
 
 @bp.route('/session-status/<session_id>', methods=['GET'])
 def session_status(session_id):
@@ -888,13 +718,11 @@ def session_status(session_id):
                 'message': 'Missing session ID'
             }), 400
         
-        # Get upload status from service layer
         status_info = get_upload_status(session_id)
         
         return jsonify(status_info)
         
     except ValueError as e:
-        # Session not found
         return jsonify({
             'status': 'error',
             'progress': 0,
@@ -922,7 +750,6 @@ def init_session():
         time_info = data.get('timeInfo', {})
         zeitschritte = data.get('zeitschritte', {})
 
-        # Call service layer
         result = initialize_session(session_id, time_info, zeitschritte)
 
         return jsonify({
@@ -946,12 +773,10 @@ def save_time_info_endpoint():
     Refactored: Business logic moved to session_manager.save_time_info_data()
     """
     try:
-        # Check content type
         if not request.is_json:
             logger.error("Request is not JSON")
             return jsonify({'success': False, 'error': 'Request must be JSON'}), 400
 
-        # Get request data
         try:
             data = request.get_json(force=True)
         except Exception as e:
@@ -965,7 +790,6 @@ def save_time_info_endpoint():
         session_id = data['sessionId']
         time_info = data['timeInfo']
 
-        # Call service layer
         save_time_info_data(session_id, time_info)
 
         return jsonify({'success': True, 'message': 'Time info saved successfully'})
@@ -989,7 +813,6 @@ def create_database_session_endpoint():
         session_id = data.get('sessionId') if data else None
         session_name = data.get('sessionName') if data else None
 
-        # Call service layer
         session_uuid = create_database_session(session_id, session_name)
 
         return jsonify({
@@ -1013,18 +836,15 @@ def get_session_uuid_endpoint(session_id):
     Refactored: Business logic moved to session_manager.get_session_uuid()
     """
     try:
-        # Check if it's already a UUID
         try:
             import uuid
             uuid.UUID(session_id)
-            # It's already a UUID
             return jsonify({
                 'success': True,
                 'sessionUuid': session_id,
                 'message': 'Session ID is already in UUID format'
             })
         except (ValueError, TypeError):
-            # It's a string session ID, get UUID from service
             session_uuid = get_session_uuid(session_id)
 
             return jsonify({
@@ -1051,12 +871,10 @@ def save_zeitschritte_endpoint():
     Refactored: Business logic moved to session_manager.save_zeitschritte_data()
     """
     try:
-        # Check content type
         if not request.is_json:
             logger.error("Request is not JSON")
             return jsonify({'success': False, 'error': 'Request must be JSON'}), 400
 
-        # Get request data
         try:
             data = request.get_json(force=True)
         except Exception as e:
@@ -1070,7 +888,6 @@ def save_zeitschritte_endpoint():
         session_id = data['sessionId']
         zeitschritte = data['zeitschritte']
 
-        # Call service layer
         save_zeitschritte_data(session_id, zeitschritte)
 
         return jsonify({'success': True, 'message': 'Zeitschritte saved successfully'})
@@ -1111,9 +928,6 @@ def delete_session_endpoint(session_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# def delete_session(session_id):
-#     ... 160 lines of business logic moved to session_manager.delete_session()
 
 @bp.route('/get-zeitschritte/<session_id>', methods=['GET'])
 def get_zeitschritte_endpoint(session_id):
@@ -1123,7 +937,6 @@ def get_zeitschritte_endpoint(session_id):
     Get zeitschritte data for a session.
     """
     try:
-        # Validate session_id format
         if not validate_session_id(session_id):
             return create_error_response('Invalid session ID format', 400)
         
@@ -1137,9 +950,6 @@ def get_zeitschritte_endpoint(session_id):
         return create_error_response(f'Internal server error: {str(e)}', 500)
 
 
-# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# def get_zeitschritte(session_id):
-#     ... 40 lines of business logic moved to session_manager.get_zeitschritte_data()
 
 @bp.route('/get-time-info/<session_id>', methods=['GET'])
 def get_time_info_endpoint(session_id):
@@ -1169,11 +979,7 @@ def get_time_info_endpoint(session_id):
         }), 500
 
 
-# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# def get_time_info(session_id):
-#     ... 37 lines of business logic moved to session_manager.get_time_info_data()
 
-# CSV Files Management Endpoints
 
 @bp.route('/csv-files/<session_id>', methods=['GET'])
 def get_csv_files_endpoint(session_id):
@@ -1183,8 +989,7 @@ def get_csv_files_endpoint(session_id):
     Get all CSV files for a session.
     """
     try:
-        # Get file type filter from query params
-        file_type = request.args.get('type', None)  # 'input' or 'output'
+        file_type = request.args.get('type', None)
         
         files = get_csv_files_for_session(session_id, file_type)
         
@@ -1210,9 +1015,6 @@ def get_csv_files_endpoint(session_id):
         }), 500
 
 
-# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# def get_csv_files(session_id):
-#     ... 44 lines of business logic moved to session_manager.get_csv_files_for_session()
 
 @bp.route('/csv-files', methods=['POST'])
 @require_auth
@@ -1223,14 +1025,11 @@ def create_csv_file():
     try:
         from utils.database import save_file_info, save_csv_file_content
         
-        # Get JSON data and file from request
         if 'file' in request.files:
-            # Handle file upload with form data
             file = request.files['file']
             session_id = request.form.get('sessionId')
             file_data = request.form.to_dict()
         else:
-            # Handle JSON data only
             data = request.get_json()
             if not data:
                 return jsonify({'success': False, 'error': 'No data provided'}), 400
@@ -1242,14 +1041,11 @@ def create_csv_file():
         if not session_id:
             return jsonify({'success': False, 'error': 'Session ID is required'}), 400
             
-        # Save file metadata to database
         success, file_uuid = save_file_info(session_id, file_data)
         if not success:
             return jsonify({'success': False, 'error': 'Failed to save file metadata'}), 500
             
-        # If file was uploaded, save to storage
         if file and file_uuid:
-            # Save file temporarily
             import tempfile
             import os
             
@@ -1258,7 +1054,6 @@ def create_csv_file():
                 temp_path = temp_file.name
             
             try:
-                # Upload to Supabase storage
                 file_type = file_data.get('type', 'input')
                 storage_success = save_csv_file_content(
                     file_uuid, session_id, file.filename, temp_path, file_type
@@ -1268,13 +1063,11 @@ def create_csv_file():
                     logger.warning(f"Failed to upload file to storage for file {file_uuid}")
                     
             finally:
-                # Clean up temp file
                 try:
                     os.unlink(temp_path)
                 except:
                     pass
 
-        # Track CSV file creation as processing job
         from flask import g
         increment_processing_count(g.user_id)
         logger.info(f"Tracked CSV file creation for user {g.user_id}")
@@ -1306,7 +1099,6 @@ def update_csv_file(file_id):
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
         
-        # Update file record through service layer
         updated_file = update_csv_file_record(file_id, data)
         
         return jsonify({
@@ -1315,7 +1107,6 @@ def update_csv_file(file_id):
         })
         
     except ValueError as e:
-        # File not found or validation error
         return jsonify({
             'success': False,
             'error': str(e)
@@ -1336,7 +1127,6 @@ def delete_csv_file(file_id):
     Refactored: Business logic moved to upload_manager.delete_csv_file_record()
     """
     try:
-        # Delete file record through service layer
         result = delete_csv_file_record(file_id)
         
         return jsonify({
@@ -1345,7 +1135,6 @@ def delete_csv_file(file_id):
         })
         
     except ValueError as e:
-        # File not found or validation error
         return jsonify({
             'success': False,
             'error': str(e)
@@ -1370,13 +1159,10 @@ def get_training_results(session_id):
         from utils.training_storage import download_training_results
         supabase = get_supabase_client()
 
-        # Get or create UUID for session ID
         uuid_session_id = create_or_get_session_uuid(session_id)
 
         logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
 
-        # Get metadata from database (FAST - no full results)
-        # Exclude deprecated 'results' field to save bandwidth
         response = supabase.table('training_results')\
             .select('id, session_id, status, created_at, updated_at, '
                    'results_file_path, file_size_bytes, compressed, results_metadata')\
@@ -1388,7 +1174,6 @@ def get_training_results(session_id):
         if response.data and len(response.data) > 0:
             record = response.data[0]
 
-            # Download full results from Storage if file path exists
             if record.get('results_file_path'):
                 try:
                     logger.info(f"📥 Downloading full results from storage: {record['results_file_path']}")
@@ -1400,11 +1185,9 @@ def get_training_results(session_id):
                     logger.info(f"✅ Full results loaded from storage successfully")
                 except Exception as download_error:
                     logger.error(f"Failed to download results from storage: {download_error}")
-                    # Fallback: Return metadata only
                     record['results'] = record.get('results_metadata', {})
                     logger.warning("Returning metadata only (full results unavailable)")
             else:
-                # Old record with results in JSONB column (backward compatibility)
                 logger.info("No storage file path - checking for legacy JSONB results")
                 legacy_response = supabase.table('training_results')\
                     .select('results')\
@@ -1424,7 +1207,6 @@ def get_training_results(session_id):
                 'count': 1
             })
         else:
-            # No results found - this is normal if training hasn't been run yet
             logger.info(f"No training results found for session {session_id}")
             return jsonify({
                 'success': True,
@@ -1459,7 +1241,6 @@ def get_plot_variables(session_id):
     Refactored: business logic moved to Visualizer.get_available_variables()
     """
     try:
-        # Call service layer
         visualizer = Visualizer()
         variables = visualizer.get_available_variables(session_id)
 
@@ -1472,7 +1253,6 @@ def get_plot_variables(session_id):
 
     except Exception as e:
         logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
-        # Return fallback response - match original format
         return jsonify({
             'success': True,
             'session_id': session_id,
@@ -1481,8 +1261,6 @@ def get_plot_variables(session_id):
         })
 
 
-# PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
-# def get_plot_variables(session_id):
 
 
 @bp.route('/visualizations/<session_id>', methods=['GET'])
@@ -1492,11 +1270,9 @@ def get_training_visualizations(session_id):
     Refactored: business logic moved to Visualizer.get_session_visualizations()
     """
     try:
-        # Call service layer
         visualizer = Visualizer()
         viz_data = visualizer.get_session_visualizations(session_id)
 
-        # Check if no visualizations found
         if not viz_data.get('plots'):
             return jsonify({
                 'session_id': session_id,
@@ -1517,9 +1293,6 @@ def get_training_visualizations(session_id):
         return create_error_response(f'Failed to retrieve training visualizations: {str(e)}', 500)
 
 
-# PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
-# def get_training_visualizations(session_id):
-#     ... 48 lines of business logic moved to Visualizer.get_session_visualizations()
 
 
 @bp.route('/generate-plot', methods=['POST'])
@@ -1549,14 +1322,12 @@ def generate_plot():
         if not session_id:
             return create_error_response('Session ID is required', 400)
 
-        # Parse request data
         plot_settings = data.get('plot_settings', {})
         df_plot_in = data.get('df_plot_in', {})
         df_plot_out = data.get('df_plot_out', {})
         df_plot_fcst = data.get('df_plot_fcst', {})
-        model_id = data.get('model_id')  # Optional
+        model_id = data.get('model_id')
 
-        # Call service layer
         visualizer = Visualizer()
         result = visualizer.generate_custom_plot(
             session_id=session_id,
@@ -1567,7 +1338,6 @@ def generate_plot():
             model_id=model_id
         )
 
-        # Return flat structure to match original format
         return jsonify({
             'success': True,
             'session_id': session_id,
@@ -1576,7 +1346,6 @@ def generate_plot():
         })
 
     except ValueError as e:
-        # Validation errors (model not trained, no data, etc.)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -1588,13 +1357,10 @@ def generate_plot():
         return create_error_response(f'Failed to generate plot: {str(e)}', 500)
 
 
-# PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
-# def generate_plot():
-#     ... 320 lines of business logic moved to Visualizer.generate_custom_plot()
 
 
 @bp.route('/status/<session_id>', methods=['GET'])
-@bp.route('/session-status/<session_id>', methods=['GET'])  # Alias for frontend compatibility
+@bp.route('/session-status/<session_id>', methods=['GET'])
 def get_training_status(session_id: str):
     """
     Get training status for a session
@@ -1610,14 +1376,11 @@ def get_training_status(session_id: str):
         supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id)
 
-        # Check training_results table first
         results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
 
-        # Check training_logs table for detailed progress
         logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
 
         if results_response.data and len(results_response.data) > 0:
-            # Training is completed
             result_data = results_response.data[0]
             status = {
                 'session_id': session_id,
@@ -1631,7 +1394,6 @@ def get_training_status(session_id: str):
                 'message': 'Training completed successfully'
             }
         elif logs_response.data and len(logs_response.data) > 0:
-            # Training is in progress
             log_data = logs_response.data[0]
             progress_data = log_data.get('progress', {})
             status = {
@@ -1646,7 +1408,6 @@ def get_training_status(session_id: str):
                 'message': 'Training in progress'
             }
         else:
-            # No training found
             status = {
                 'session_id': session_id,
                 'status': 'not_found',
@@ -1674,9 +1435,6 @@ def get_training_status(session_id: str):
 
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
 @require_auth
-# TODO: Temporarily disabled for testing - re-enable after setting up test user subscription
-# @require_subscription
-# @check_processing_limit
 def generate_datasets(session_id):
     """
     Generate datasets and violin plots WITHOUT training models.
@@ -1689,11 +1447,9 @@ def generate_datasets(session_id):
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
         
-        # Extract model parameters and training split for data preparation
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
         
-        # Generate violin plots through service layer
         from services.training.dataset_generator import generate_violin_plots_for_session
         
         result = generate_violin_plots_for_session(
@@ -1702,20 +1458,17 @@ def generate_datasets(session_id):
             training_split=training_split
         )
         
-        # Save visualizations to database
         violin_plots = result.get('violin_plots', {})
         if violin_plots:
             from services.training.training_api import save_visualization_to_database
             
             for plot_name, plot_data in violin_plots.items():
                 try:
-                    if plot_data:  # Only save if data exists
+                    if plot_data:
                         save_visualization_to_database(session_id, plot_name, plot_data)
                 except Exception as viz_error:
                     logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
-                    # Continue even if one visualization fails to save
         
-        # Track dataset generation as processing job
         from flask import g
         increment_processing_count(g.user_id)
         logger.info(f"Tracked dataset generation for user {g.user_id}")
@@ -1723,12 +1476,11 @@ def generate_datasets(session_id):
         return jsonify({
             'success': True,
             'message': 'Datasets generated successfully',
-            'dataset_count': 10,  # Default dataset count for visualization
+            'dataset_count': 10,
             'violin_plots': violin_plots
         })
         
     except ValueError as e:
-        # Validation errors (no data, no numeric data, etc.)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -1740,9 +1492,6 @@ def generate_datasets(session_id):
 
 @bp.route('/train-models/<session_id>', methods=['POST'])
 @require_auth
-# TODO: Temporarily disabled for testing - re-enable after Phase 2 complete
-# @require_subscription
-# @check_training_limit
 def train_models(session_id):
     """
     Train models with user-specified parameters.
@@ -1755,22 +1504,16 @@ def train_models(session_id):
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
         
-        # Extract model parameters
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
         
-        # Get SocketIO instance
         from flask import current_app
         socketio_instance = current_app.extensions.get('socketio')
         
-        # Normalize activation function to lowercase for backend compatibility
-        # Frontend sends: ReLU, Tanh, Sigmoid, etc.
-        # Backend expects: relu, tanh, sigmoid, etc.
         actf = model_parameters.get('ACTF')
         if actf:
             actf = actf.lower()
         
-        # Prepare full model configuration
         model_config = {
             'MODE': model_parameters.get('MODE', 'Linear'),
             'LAY': model_parameters.get('LAY'),
@@ -1784,12 +1527,10 @@ def train_models(session_id):
             'random_dat': not training_split.get('shuffle', True)
         }
         
-        # Track training run usage
         from flask import g
         increment_training_count(g.user_id)
         logger.info(f"Tracked training run for user {g.user_id}")
         
-        # Start training in background using orchestrator service
         import threading
         from services.training.training_orchestrator import run_model_training_async
         
@@ -1819,7 +1560,6 @@ def delete_all_sessions_endpoint():
     ⚠️ WARNING: This will permanently delete all data! Use with extreme caution.
     """
     try:
-        # Get request data for confirmation (handle both JSON and form data)
         data = {}
         try:
             if request.is_json:
@@ -1845,7 +1585,6 @@ def delete_all_sessions_endpoint():
         confirmation = data.get('confirm_delete_all', False)
         logger.info(f"Parsed confirmation: {confirmation} from data: {data}")
 
-        # Call service layer
         result = delete_all_sessions(confirm=confirmation)
 
         response_data = {
@@ -1875,12 +1614,8 @@ def delete_all_sessions_endpoint():
         }), 500
 
 
-# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# def delete_all_sessions():
-#     ... 217 lines of business logic moved to session_manager.delete_all_sessions()
 
 
-# EVALUATION TABLES API ENDPOINTS
 
 @bp.route('/evaluation-tables/<session_id>', methods=['GET'])
 def get_evaluation_tables(session_id):
@@ -1889,13 +1624,11 @@ def get_evaluation_tables(session_id):
     Returns df_eval and df_eval_ts structures matching the original training output.
     """
     try:
-        # Get UUID for session
         from utils.database import get_supabase_client, create_or_get_session_uuid
         from utils.training_storage import download_training_results
         supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id)
 
-        # Get latest training results metadata
         response = supabase.table('training_results') \
             .select('id, results_file_path, compressed, results') \
             .eq('session_id', uuid_session_id) \
@@ -1912,7 +1645,6 @@ def get_evaluation_tables(session_id):
 
         record = response.data[0]
 
-        # Download full results from Storage if available
         if record.get('results_file_path'):
             logger.info(f"📥 Downloading evaluation data from storage: {record['results_file_path']}")
             results = download_training_results(
@@ -1920,22 +1652,16 @@ def get_evaluation_tables(session_id):
                 decompress=record.get('compressed', False)
             )
         else:
-            # Fallback to legacy JSONB column
             logger.info(f"Using legacy results column for evaluation data")
             results = record.get('results')
 
-        # Check for evaluation metrics
         eval_metrics = results.get('evaluation_metrics', {})
         if not eval_metrics or eval_metrics.get('error'):
-            # Try alternative location
             eval_metrics = results.get('metrics', {})
 
-        # Debug: Log what we found
         logger.info(f"Found eval_metrics keys: {eval_metrics.keys() if eval_metrics else 'None'}")
 
-        # If we have metrics but they contain an error, still try to use them if test/val metrics exist
         if eval_metrics and eval_metrics.get('test_metrics_scaled'):
-            # We have some metrics, proceed
             pass
         elif not eval_metrics or (eval_metrics.get('error') and not eval_metrics.get('test_metrics_scaled')):
             return jsonify({
@@ -1944,28 +1670,18 @@ def get_evaluation_tables(session_id):
                 'session_id': session_id
             }), 404
 
-        # Format metrics to match original training_original.py structure exactly
-        # The original uses nested dictionaries with output feature names as keys
 
-        # Get output feature names (default to "Netzlast [kW]" if not available)
         output_features = results.get('output_features', ['Netzlast [kW]'])
         if not output_features:
-            output_features = ['Netzlast [kW]']  # Default from original
+            output_features = ['Netzlast [kW]']
 
-        # df_eval - Dictionary with output features as keys
-        # Each contains a DataFrame with metrics for different time deltas
         df_eval = {}
 
-        # df_eval_ts - Dictionary with output features as keys
-        # Each contains another dict with time deltas as keys
         df_eval_ts = {}
 
-        # Time deltas in minutes (matching original n_max=12)
         time_deltas = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
 
-        # Process each output feature
         for feature_name in output_features:
-            # Initialize lists for df_eval metrics
             delt_list = []
             mae_list = []
             mape_list = []
@@ -1976,20 +1692,14 @@ def get_evaluation_tables(session_id):
             smape_list = []
             mase_list = []
 
-            # Initialize df_eval_ts for this feature
             df_eval_ts[feature_name] = {}
 
-            # Get test metrics if available
             test_metrics = eval_metrics.get('test_metrics_scaled', {})
             val_metrics = eval_metrics.get('val_metrics_scaled', {})
 
-            # For each time delta, calculate or use available metrics
             for delta in time_deltas:
-                # Add delta to list
                 delt_list.append(float(delta))
 
-                # For now, use the same test metrics for all deltas
-                # In production, these would be calculated for each time averaging
                 mae_list.append(float(test_metrics.get('MAE', 0.0)))
                 mape_list.append(float(test_metrics.get('MAPE', 0.0)))
                 mse_list.append(float(test_metrics.get('MSE', 0.0)))
@@ -1999,13 +1709,10 @@ def get_evaluation_tables(session_id):
                 smape_list.append(float(test_metrics.get('sMAPE', 0.0)))
                 mase_list.append(float(test_metrics.get('MASE', 0.0)))
 
-                # Create df_eval_ts entry for this delta
-                # This should contain per-timestep metrics
                 timestep_metrics = []
-                n_timesteps = results.get('n_timesteps', 96)  # Default 96 timesteps
+                n_timesteps = results.get('n_timesteps', 96)
 
                 for ts in range(n_timesteps):
-                    # In production, these would be actual per-timestep metrics
                     timestep_metrics.append({
                         'MAE': float(test_metrics.get('MAE', 0.0)),
                         'MAPE': float(test_metrics.get('MAPE', 0.0)),
@@ -2019,7 +1726,6 @@ def get_evaluation_tables(session_id):
 
                 df_eval_ts[feature_name][float(delta)] = timestep_metrics
 
-            # Create DataFrame-like structure for df_eval
             df_eval[feature_name] = {
                 "delta [min]": delt_list,
                 "MAE": mae_list,
@@ -2058,7 +1764,6 @@ def save_evaluation_tables(session_id):
         from utils.database import get_supabase_client, create_or_get_session_uuid
         from datetime import datetime
 
-        # Get request data
         data = request.get_json()
         if not data:
             return jsonify({
@@ -2076,11 +1781,9 @@ def save_evaluation_tables(session_id):
                 'error': 'No evaluation tables provided'
             }), 400
 
-        # Get UUID for session
         supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id)
 
-        # Prepare data for database
         evaluation_data = {
             'session_id': uuid_session_id,
             'df_eval': df_eval,
@@ -2090,7 +1793,6 @@ def save_evaluation_tables(session_id):
             'table_format': 'original_training_format'
         }
 
-        # Save to evaluation_tables table (create if doesn't exist)
         response = supabase.table('evaluation_tables').upsert(evaluation_data).execute()
 
         if response.data:
@@ -2115,7 +1817,6 @@ def save_evaluation_tables(session_id):
         }), 500
 
 
-# SCALER MANAGEMENT API ENDPOINTS
 
 @bp.route('/scalers/<session_id>', methods=['GET'])
 def get_scalers(session_id):
@@ -2124,7 +1825,6 @@ def get_scalers(session_id):
     Refactored: business logic moved to scaler_manager.get_session_scalers()
     """
     try:
-        # Call service layer
         scalers_data = get_session_scalers(session_id)
 
         return jsonify({
@@ -2134,7 +1834,6 @@ def get_scalers(session_id):
         })
 
     except ValueError as e:
-        # No results or scalers found
         return jsonify({
             'success': False,
             'error': str(e)
@@ -2148,9 +1847,6 @@ def get_scalers(session_id):
         }), 500
 
 
-# PHASE 2: OLD CODE - TO BE DELETED IN PHASE 6
-# def get_scalers(session_id):
-#     ... 55 lines of business logic moved to scaler_manager.get_session_scalers()
 
 
 @bp.route('/scalers/<session_id>/download', methods=['GET'])
@@ -2160,14 +1856,11 @@ def download_scalers_as_save_files(session_id):
     Refactored: business logic moved to scaler_manager.create_scaler_download_package()
     """
     try:
-        # Call service layer to create ZIP package
         zip_file_path = create_scaler_download_package(session_id)
 
-        # Extract timestamp from zip file path for download name
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-        # Send ZIP file as download
         return send_file(
             zip_file_path,
             as_attachment=True,
@@ -2182,9 +1875,6 @@ def download_scalers_as_save_files(session_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# PHASE 2: OLD CODE - TO BE DELETED IN PHASE 6
-# def download_scalers_as_save_files(session_id):
-#     ... 73 lines of business logic moved to scaler_manager.create_scaler_download_package()
 
 
 @bp.route('/scale-data/<session_id>', methods=['POST'])
@@ -2196,7 +1886,6 @@ def scale_input_data(session_id):
     Refactored: Business logic moved to scaler_manager.scale_new_data()
     """
     try:
-        # Get request data
         data = request.json
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
@@ -2207,10 +1896,8 @@ def scale_input_data(session_id):
 
         save_scaled = data.get('save_scaled', False)
 
-        # Call service layer
         result = scale_new_data(session_id, input_data, save_scaled)
 
-        # Return response matching original format
         return jsonify({
             'success': True,
             'session_id': session_id,
@@ -2220,7 +1907,6 @@ def scale_input_data(session_id):
         })
 
     except ValueError as e:
-        # Handle validation errors (no training results, no scalers, etc.)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -2254,10 +1940,8 @@ def cleanup_incomplete_uploads(upload_base_dir: str, max_age_hours: int = 24) ->
             if not session_dir.is_dir():
                 continue
 
-            # Check if session is old
             dir_age = current_time - session_dir.stat().st_mtime
             if dir_age > max_age_seconds:
-                # Check if session is incomplete (no finalized marker)
                 finalized_marker = session_dir / '.finalized'
                 if not finalized_marker.exists():
                     try:
@@ -2290,7 +1974,6 @@ def save_model(session_id):
         JSON response with model information and upload status
     """
     try:
-        # Call service layer
         result = save_models_to_storage(session_id)
 
         response = {
@@ -2308,7 +1991,6 @@ def save_model(session_id):
         return jsonify(response)
 
     except ValueError as e:
-        # Handle specific validation errors (session not found, no results, no models)
         error_msg = str(e)
         if 'Session' in error_msg and 'not found' in error_msg:
             return jsonify({
@@ -2338,7 +2020,6 @@ def save_model(session_id):
         import traceback
         logger.error(traceback.format_exc())
 
-        # Check if it's the "all uploads failed" case
         if 'All model uploads failed' in str(e):
             return jsonify({
                 'success': False,
@@ -2367,7 +2048,6 @@ def list_models_database(session_id):
         JSON response with list of models in Storage
     """
     try:
-        # Call service layer
         models = get_models_list(session_id)
 
         return jsonify({
@@ -2380,7 +2060,6 @@ def list_models_database(session_id):
         })
 
     except ValueError as e:
-        # Handle session not found error
         return jsonify({
             'success': False,
             'error': str(e)
@@ -2419,16 +2098,12 @@ def download_model_h5(session_id):
         from flask import request, send_file
         import io
 
-        # Get filename from query parameter
         filename = request.args.get('filename')
 
-        # Call service layer
         file_data, file_name = download_model_file(session_id, filename)
 
-        # Create file-like object from bytes
         file_obj = io.BytesIO(file_data)
 
-        # Send file as attachment
         return send_file(
             file_obj,
             as_attachment=True,
@@ -2437,7 +2112,6 @@ def download_model_h5(session_id):
         )
 
     except ValueError as e:
-        # Handle validation errors (session not found, no models, model not found)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -2468,7 +2142,6 @@ def change_session_name_endpoint():
     }
     """
     try:
-        # Get request data
         data = request.get_json()
         if not data:
             return create_error_response('No data provided', 400)
@@ -2476,7 +2149,6 @@ def change_session_name_endpoint():
         session_id = data.get('sessionId')
         session_name = data.get('sessionName')
 
-        # Call service layer
         result = update_session_name(session_id, session_name)
 
         return create_success_response(
@@ -2494,7 +2166,3 @@ def change_session_name_endpoint():
         logger.error(f"Error changing session name: {str(e)}")
         return create_error_response(f'Internal server error: {str(e)}', 500)
 
-
-# OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# def change_session_name():
-#     ... 73 lines of business logic moved to session_manager.update_session_name()

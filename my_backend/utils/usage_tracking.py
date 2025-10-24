@@ -30,7 +30,6 @@ def increment_upload_count(user_id: str) -> bool:
         supabase = get_supabase_admin_client()
         period_start = get_current_period_start()
 
-        # Try to get existing record
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
@@ -38,7 +37,6 @@ def increment_upload_count(user_id: str) -> bool:
             .execute()
 
         if response.data and len(response.data) > 0:
-            # Update existing record
             usage_id = response.data[0]['id']
             current_count = response.data[0].get('uploads_count', 0)
 
@@ -49,7 +47,6 @@ def increment_upload_count(user_id: str) -> bool:
 
             logger.info(f"Incremented upload count for user {user_id}: {current_count} -> {current_count + 1}")
         else:
-            # Create new record
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
                                       .replace(day=1) - timedelta(days=1)
@@ -90,7 +87,6 @@ def increment_processing_count(user_id: str) -> bool:
         supabase = get_supabase_admin_client()
         period_start = get_current_period_start()
 
-        # Try to get existing record
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
@@ -98,7 +94,6 @@ def increment_processing_count(user_id: str) -> bool:
             .execute()
 
         if response.data and len(response.data) > 0:
-            # Update existing record
             usage_id = response.data[0]['id']
             current_count = response.data[0].get('processing_jobs_count', 0)
 
@@ -109,7 +104,6 @@ def increment_processing_count(user_id: str) -> bool:
 
             logger.info(f"Incremented processing count for user {user_id}: {current_count} -> {current_count + 1}")
         else:
-            # Create new record
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
                                       .replace(day=1) - timedelta(days=1)
@@ -150,7 +144,6 @@ def increment_training_count(user_id: str) -> bool:
         supabase = get_supabase_admin_client()
         period_start = get_current_period_start()
 
-        # Try to get existing record
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
@@ -158,7 +151,6 @@ def increment_training_count(user_id: str) -> bool:
             .execute()
 
         if response.data and len(response.data) > 0:
-            # Update existing record
             usage_id = response.data[0]['id']
             current_count = response.data[0].get('training_runs_count', 0)
 
@@ -169,7 +161,6 @@ def increment_training_count(user_id: str) -> bool:
 
             logger.info(f"Incremented training count for user {user_id}: {current_count} -> {current_count + 1}")
         else:
-            # Create new record
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
                                       .replace(day=1) - timedelta(days=1)
@@ -211,7 +202,6 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
         supabase = get_supabase_admin_client()
         period_start = get_current_period_start()
 
-        # Try to get existing record
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
@@ -219,9 +209,8 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
             .execute()
 
         if response.data and len(response.data) > 0:
-            # Update existing record
             usage_id = response.data[0]['id']
-            storage_gb = storage_mb / 1024  # Convert MB to GB
+            storage_gb = storage_mb / 1024
 
             supabase.table('usage_tracking') \
                 .update({'storage_used_gb': storage_gb}) \
@@ -230,8 +219,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
 
             logger.info(f"Updated storage usage for user {user_id}: {storage_gb:.2f} GB ({storage_mb} MB)")
         else:
-            # Create new record
-            storage_gb = storage_mb / 1024  # Convert MB to GB
+            storage_gb = storage_mb / 1024
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
                                       .replace(day=1) - timedelta(days=1)
@@ -272,7 +260,6 @@ def get_usage_stats(user_id: str) -> dict:
         supabase = get_supabase_admin_client()
         period_start = get_current_period_start()
 
-        # Get usage record
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
@@ -288,10 +275,9 @@ def get_usage_stats(user_id: str) -> dict:
                 'processing_jobs_count': response.data.get('processing_jobs_count', 0),
                 'training_runs_count': response.data.get('training_runs_count', 0),
                 'storage_used_gb': storage_gb,
-                'storage_used_mb': storage_gb * 1024  # Also provide MB for backward compatibility
+                'storage_used_mb': storage_gb * 1024
             }
 
-        # No usage record yet
         return {
             'period_start': period_start.isoformat(),
             'uploads_count': 0,

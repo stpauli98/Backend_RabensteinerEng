@@ -11,15 +11,12 @@ import numpy as np
 from datetime import datetime
 import logging
 
-# Add parent directories to path to access training modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# Import training modules
 from services.training.data_loader import load, transf
 from services.training.pipeline_exact import run_exact_training_pipeline
 from services.training.config import MDL, MTS, T
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -32,65 +29,55 @@ def test_backend_training():
     print("="*60 + "\n")
     
     try:
-        # Step 1: Load test data
         print("1. UČITAVANJE TEST PODATAKA...")
         print("-" * 40)
         
-        # Create data dictionaries
         i_dat = {}
         o_dat = {}
         
-        # Load input CSV
         input_path = os.path.join(os.path.dirname(__file__), "data", "input_test.csv")
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Test input file not found: {input_path}")
             
         df_input = pd.read_csv(input_path, delimiter=';')
-        df_input.columns = ['UTC', 'value']  # Ensure correct column names
+        df_input.columns = ['UTC', 'value']
         i_dat['input_test'] = df_input
         print(f"✓ Učitan input fajl: {input_path}")
         print(f"  Shape: {df_input.shape}, Columns: {list(df_input.columns)}")
         
-        # Load output CSV
         output_path = os.path.join(os.path.dirname(__file__), "data", "output_test.csv")
         if not os.path.exists(output_path):
             raise FileNotFoundError(f"Test output file not found: {output_path}")
             
         df_output = pd.read_csv(output_path, delimiter=';')
-        df_output.columns = ['UTC', 'value']  # Ensure correct column names
+        df_output.columns = ['UTC', 'value']
         o_dat['output_test'] = df_output
         print(f"✓ Učitan output fajl: {output_path}")
         print(f"  Shape: {df_output.shape}, Columns: {list(df_output.columns)}")
         
-        # Step 2: Create info DataFrames using load() function
         print("\n2. KREIRANJE INFO DATAFRAMES...")
         print("-" * 40)
         
         i_dat_inf = pd.DataFrame()
         o_dat_inf = pd.DataFrame()
         
-        # Process input data
         i_dat, i_dat_inf = load(i_dat, i_dat_inf)
         print(f"✓ Procesiran input data")
         print(f"  i_dat_inf shape: {i_dat_inf.shape}")
         print(f"  UTC range: {i_dat_inf['utc_min'].iloc[0]} to {i_dat_inf['utc_max'].iloc[0]}")
         
-        # Process output data
         o_dat, o_dat_inf = load(o_dat, o_dat_inf)
         print(f"✓ Procesiran output data")
         print(f"  o_dat_inf shape: {o_dat_inf.shape}")
         
-        # Step 3: Apply transformations using transf()
         print("\n3. PRIMENA TRANSFORMACIJA...")
         print("-" * 40)
         
-        # Use default MTS configuration
         mts = MTS()
         print(f"MTS Config: I_N={mts.I_N}, O_N={mts.O_N}, DELT={mts.DELT}, OFST={mts.OFST}")
         
-        # Add required columns for transf function
-        i_dat_inf['th_strt'] = -2  # Default from original
-        i_dat_inf['th_end'] = 0    # Default from original
+        i_dat_inf['th_strt'] = -2
+        i_dat_inf['th_end'] = 0
         o_dat_inf['th_strt'] = -2
         o_dat_inf['th_end'] = 0
         
@@ -98,7 +85,6 @@ def test_backend_training():
         o_dat_inf = transf(o_dat_inf, mts.O_N, mts.OFST)
         print("✓ Transformacije primenjene")
         
-        # Add more required columns
         i_dat_inf['spec'] = 'Historische Daten'
         i_dat_inf['meth'] = 'Lineare Interpolation'
         i_dat_inf['avg'] = False
@@ -113,7 +99,6 @@ def test_backend_training():
         o_dat_inf['scal_min'] = 0
         o_dat_inf['scal_max'] = 1
         
-        # Step 4: Determine time boundaries
         print("\n4. ODREĐIVANJE VREMENSKIH GRANICA...")
         print("-" * 40)
         
@@ -127,11 +112,9 @@ def test_backend_training():
         print(f"✓ UTC Start: {utc_strt}")
         print(f"✓ UTC End: {utc_end}")
         
-        # Step 5: Test with different model configurations
         print("\n5. TESTIRANJE MODELA...")
         print("-" * 40)
         
-        # Test Linear model (simplest and fastest)
         print("\nTestiranje LINEAR modela...")
         mdl_config = MDL(mode="LIN")
         
@@ -151,7 +134,6 @@ def test_backend_training():
             print("✓✓✓ TEST USPEŠAN! ✓✓✓")
             print("="*60)
             
-            # Display results
             print("\n6. REZULTATI:")
             print("-" * 40)
             print(f"✓ Model treniran: {result['trained_model'] is not None}")
@@ -161,7 +143,6 @@ def test_backend_training():
             print(f"✓ Number of input scalers: {len([s for s in result['scalers']['input'].values() if s is not None])}")
             print(f"✓ Number of output scalers: {len([s for s in result['scalers']['output'].values() if s is not None])}")
             
-            # Metadata
             meta = result['metadata']
             print(f"\nMetadata:")
             print(f"  - Total datasets: {meta['n_dat']}")
@@ -170,9 +151,8 @@ def test_backend_training():
             print(f"  - Test sets: {meta['n_test']}")
             print(f"  - Model type: {meta['model_config'].MODE}")
             
-            # Make a test prediction (if model supports it)
             if hasattr(result['trained_model'], 'predict'):
-                test_input = result['test_data']['X'][:1]  # First test sample
+                test_input = result['test_data']['X'][:1]
                 prediction = result['trained_model'].predict(test_input)
                 print(f"\nTest predikcija:")
                 print(f"  - Input shape: {test_input.shape}")

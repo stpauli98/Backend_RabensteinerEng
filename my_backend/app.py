@@ -2,7 +2,6 @@
 import os
 from core.app_factory import create_app
 
-# Create the application
 app, socketio = create_app()
 
 if __name__ == '__main__':

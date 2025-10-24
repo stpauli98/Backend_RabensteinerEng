@@ -58,19 +58,16 @@ def upload_training_results(
     try:
         supabase = get_supabase_admin_client()
 
-        # Generate file path with timestamp
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         file_name = f"training_results_{timestamp}.json"
         if compress:
             file_name += ".gz"
         file_path = f"{session_id}/{file_name}"
 
-        # Prepare data
         json_str = json.dumps(results, indent=2)
         original_size = len(json_str.encode('utf-8'))
 
         if compress:
-            # Compress with gzip (level 9 = maximum compression)
             logger.info(f"Compressing training results...")
             compressed_data = gzip.compress(json_str.encode('utf-8'), compresslevel=9)
             upload_data = compressed_data
@@ -89,7 +86,6 @@ def upload_training_results(
         file_size = len(upload_data)
         logger.info(f"Uploading {file_size / 1024 / 1024:.2f}MB to storage: {file_path}")
 
-        # Upload to storage with retry logic
         max_retries = 3
         last_error = None
 
@@ -105,7 +101,7 @@ def upload_training_results(
                 )
 
                 logger.info(f"✅ Training results uploaded successfully: {file_path}")
-                break  # Success, exit retry loop
+                break
 
             except Exception as upload_error:
                 last_error = upload_error
@@ -115,12 +111,11 @@ def upload_training_results(
                         f"Retrying..."
                     )
                     import time
-                    time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                    time.sleep(2 ** attempt)
                 else:
                     logger.error(f"❌ All {max_retries} upload attempts failed")
                     raise upload_error
 
-        # Extract metadata for quick SQL queries (no need to download full file)
         metadata = {
             'accuracy': results.get('metrics', {}).get('accuracy'),
             'loss': results.get('metrics', {}).get('loss'),
@@ -171,14 +166,11 @@ def download_training_results(
 
         logger.info(f"Downloading training results: {file_path}")
 
-        # Download from storage
         response = supabase.storage.from_('training-results').download(file_path)
 
-        # Auto-detect compression from file extension if not specified
         if decompress is None:
             decompress = file_path.endswith('.gz')
 
-        # Decompress if needed
         if decompress:
             logger.info(f"Decompressing {len(response) / 1024 / 1024:.2f}MB...")
             data = gzip.decompress(response)
@@ -186,7 +178,6 @@ def download_training_results(
         else:
             data = response
 
-        # Parse JSON
         results = json.loads(data.decode('utf-8'))
 
         logger.info(f"✅ Training results downloaded successfully: {file_path}")
@@ -322,26 +313,21 @@ def fetch_training_results_with_storage(
     try:
         from utils.database import get_supabase_client, create_or_get_session_uuid
 
-        # Initialize Supabase client if not provided
         if supabase is None:
             supabase = get_supabase_client()
 
-        # Get UUID for session
         uuid_session_id = create_or_get_session_uuid(session_id)
         if not uuid_session_id:
             logger.warning(f"Session {session_id} not found")
             return None
 
-        # Build query for training results metadata
         query = supabase.table('training_results') \
             .select('id, results_file_path, compressed, results') \
             .eq('session_id', uuid_session_id)
 
-        # Filter by specific model ID if provided
         if model_id:
             query = query.eq('id', model_id)
         else:
-            # Get most recent results
             query = query.order('created_at.desc').limit(1)
 
         response = query.execute()
@@ -352,7 +338,6 @@ def fetch_training_results_with_storage(
 
         record = response.data[0]
 
-        # Try to download from Storage if file path exists
         if record.get('results_file_path'):
             logger.info(f"📥 Downloading training results from storage for session {session_id}")
             try:
@@ -364,9 +349,7 @@ def fetch_training_results_with_storage(
                 return results
             except Exception as download_error:
                 logger.error(f"Failed to download from storage: {download_error}")
-                # Continue to fallback...
 
-        # Fallback to legacy JSONB column
         if record.get('results'):
             logger.info(f"Using legacy JSONB results for session {session_id}")
             return record['results']

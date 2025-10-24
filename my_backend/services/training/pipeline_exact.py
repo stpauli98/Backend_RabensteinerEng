@@ -11,7 +11,6 @@ from typing import Dict, Tuple, Optional
 from datetime import datetime
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# Import all necessary modules
 from .data_loader import DataLoader, load, transf
 from .data_transformer import create_training_arrays
 from .scaler_manager import process_and_scale_data
@@ -35,44 +34,36 @@ def calculate_evaluation_metrics(y_true, y_pred):
     Returns:
         Dictionary containing all evaluation metrics
     """
-    # Ensure arrays are 2D for consistent calculation
     if len(y_true.shape) == 1:
         y_true = y_true.reshape(-1, 1)
     if len(y_pred.shape) == 1:
         y_pred = y_pred.reshape(-1, 1)
     
-    # Flatten for metric calculation
     y_true_flat = y_true.flatten()
     y_pred_flat = y_pred.flatten()
     
-    # Basic metrics
     mae = mean_absolute_error(y_true_flat, y_pred_flat)
     mse = mean_squared_error(y_true_flat, y_pred_flat)
     rmse = np.sqrt(mse)
     
-    # MAPE (Mean Absolute Percentage Error)
-    # Avoid division by zero
     mask = y_true_flat != 0
     if np.any(mask):
         mape = np.mean(np.abs((y_true_flat[mask] - y_pred_flat[mask]) / y_true_flat[mask])) * 100
     else:
         mape = 0.0
     
-    # NRMSE (Normalized RMSE)
     y_range = np.max(y_true_flat) - np.min(y_true_flat)
     if y_range > 0:
         nrmse = rmse / y_range
     else:
         nrmse = 0.0
     
-    # WAPE (Weighted Absolute Percentage Error)
     sum_abs_true = np.sum(np.abs(y_true_flat))
     if sum_abs_true > 0:
         wape = np.sum(np.abs(y_true_flat - y_pred_flat)) / sum_abs_true * 100
     else:
         wape = 0.0
     
-    # sMAPE (Symmetric Mean Absolute Percentage Error)
     denominator = np.abs(y_true_flat) + np.abs(y_pred_flat)
     mask = denominator != 0
     if np.any(mask):
@@ -80,8 +71,6 @@ def calculate_evaluation_metrics(y_true, y_pred):
     else:
         smape = 0.0
     
-    # MASE (Mean Absolute Scaled Error) - simplified version
-    # Using naive forecast (previous value) as baseline
     if len(y_true_flat) > 1:
         naive_errors = np.abs(np.diff(y_true_flat))
         mae_naive = np.mean(naive_errors)
@@ -146,7 +135,6 @@ def run_exact_training_pipeline(
     import logging
     logger = logging.getLogger(__name__)
 
-    # Step 1: Create training arrays using main time loop (lines 1068-1760)
     logger.info(f"   Pipeline Step 1: Creating training arrays from {utc_strt} to {utc_end}")
     try:
         (i_array_3D, o_array_3D,
@@ -161,10 +149,8 @@ def run_exact_training_pipeline(
         logger.error(f"   Traceback: {traceback.format_exc()}")
         raise
     
-    # Get number of datasets (line 1757)
     n_dat = i_array_3D.shape[0]
     
-    # Step 2: Process and scale data (lines 1764-2210)
     scaling_result = process_and_scale_data(
         i_array_3D, o_array_3D,
         i_combined_array, o_combined_array,
@@ -173,7 +159,6 @@ def run_exact_training_pipeline(
         utc_ref_log=utc_ref_log
     )
     
-    # Extract scaled and original arrays
     i_array_3D = scaling_result['i_array_3D']
     o_array_3D = scaling_result['o_array_3D']
     i_array_3D_orig = scaling_result['i_array_3D_orig']
@@ -184,13 +169,11 @@ def run_exact_training_pipeline(
     o_combined_array = scaling_result.get('o_combined_array')
     utc_ref_log = scaling_result['utc_ref_log']
     
-    # Step 3: Calculate split indices (lines 2040-2042)
-    n_train = round(0.7 * n_dat)  # EXACT as line 2040
-    n_val = round(0.2 * n_dat)    # EXACT as line 2041
-    n_test = n_dat - n_train - n_val  # EXACT as line 2042
+    n_train = round(0.7 * n_dat)
+    n_val = round(0.2 * n_dat)
+    n_test = n_dat - n_train - n_val
     
     
-    # SCALED DATASETS (lines 2217-2224)
     trn_x = i_array_3D[:n_train]
     val_x = i_array_3D[n_train:(n_train+n_val)]
     tst_x = i_array_3D[(n_train+n_val):]
@@ -199,7 +182,6 @@ def run_exact_training_pipeline(
     val_y = o_array_3D[n_train:(n_train+n_val)]
     tst_y = o_array_3D[(n_train+n_val):]
     
-    # ORIGINAL (UNSCALED) DATASETS (lines 2228-2234)
     trn_x_orig = i_array_3D_orig[:n_train]
     val_x_orig = i_array_3D_orig[n_train:(n_train+n_val)]
     tst_x_orig = i_array_3D_orig[(n_train+n_val):]
@@ -208,10 +190,9 @@ def run_exact_training_pipeline(
     val_y_orig = o_array_3D_orig[n_train:(n_train+n_val)]
     tst_y_orig = o_array_3D_orig[(n_train+n_val):]
     
-    # Step 4: Train model based on MDL.MODE (lines 2240-2259)
     
     if mdl_config is None:
-        mdl_config = MDL()  # Use default "LIN" mode
+        mdl_config = MDL()
     
     mdl = None
     
@@ -239,72 +220,51 @@ def run_exact_training_pipeline(
     else:
         raise ValueError(f"Unknown model mode: {mdl_config.MODE}")
     
-    # Calculate evaluation metrics on test data
     evaluation_metrics = {}
     
     try:
-        # Get predictions on test data
         if mdl is not None:
             if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
-                # Neural network models - use predict method
                 test_predictions = mdl.predict(tst_x, verbose=0)
             elif mdl_config.MODE == "SVR_dir":
-                # SVR direct - predict for each output separately
-                # Must reshape input data to 2D for SVR (same as in training)
                 n_samples, n_timesteps, n_features_in = tst_x.shape
                 tst_x_reshaped = tst_x.reshape(n_samples * n_timesteps, n_features_in)
                 
                 test_predictions = []
                 for svr_model in mdl:
                     pred = svr_model.predict(tst_x_reshaped)
-                    # Reshape back to (n_samples, n_timesteps)
                     pred = pred.reshape(n_samples, n_timesteps)
                     test_predictions.append(pred)
                 test_predictions = np.stack(test_predictions, axis=-1)
             elif mdl_config.MODE == "SVR_MIMO":
-                # SVR MIMO - list of models, one for each output dimension
-                # Must reshape input data to 2D for SVR
                 n_samples, n_timesteps, n_features_in = tst_x.shape
                 tst_x_reshaped = tst_x.reshape(n_samples * n_timesteps, n_features_in)
                 
                 test_predictions = []
                 for svr_model in mdl:
                     pred = svr_model.predict(tst_x_reshaped)
-                    # Reshape back to (n_samples, n_timesteps)
                     pred = pred.reshape(n_samples, n_timesteps)
                     test_predictions.append(pred)
                 
-                # Stack predictions for all outputs
                 test_predictions = np.stack(test_predictions, axis=-1)
-                # Result shape should be (n_samples, n_timesteps, n_features_out)
             elif mdl_config.MODE == "LIN":
-                # Linear models - predict for each output
-                # Must reshape exactly as in training: (n_samples * n_timesteps, n_features_in)
                 n_samples, n_timesteps, n_features_in = tst_x.shape
                 tst_x_reshaped = tst_x.reshape(n_samples * n_timesteps, n_features_in)
                 
                 test_predictions = []
                 for lin_model in mdl:
                     pred = lin_model.predict(tst_x_reshaped)
-                    # Reshape back to (n_samples, n_timesteps)
                     pred = pred.reshape(n_samples, n_timesteps)
                     test_predictions.append(pred)
                 
-                # Stack predictions for all outputs
                 test_predictions = np.stack(test_predictions, axis=-1)
-                # Result shape should be (n_samples, n_timesteps, n_features_out)
             else:
-                test_predictions = tst_y  # Fallback
+                test_predictions = tst_y
             
-            # Calculate metrics on scaled data
             test_metrics = calculate_evaluation_metrics(tst_y, test_predictions)
             
-            # Calculate metrics on original (unscaled) data if available
             if tst_y_orig is not None:
-                # Inverse transform predictions to original scale
-                # For simplicity, we'll use the test metrics for now
-                # In production, we'd inverse transform the predictions properly
-                original_metrics = test_metrics  # Placeholder
+                original_metrics = test_metrics
             else:
                 original_metrics = test_metrics
             
@@ -314,53 +274,40 @@ def run_exact_training_pipeline(
                 'model_type': mdl_config.MODE
             }
             
-            # Also calculate on validation data for comparison
             if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
                 val_predictions = mdl.predict(val_x, verbose=0)
             elif mdl_config.MODE == "SVR_dir":
-                # Must reshape input data to 2D for SVR (same as in training)
                 n_samples, n_timesteps, n_features_in = val_x.shape
                 val_x_reshaped = val_x.reshape(n_samples * n_timesteps, n_features_in)
                 
                 val_predictions = []
                 for svr_model in mdl:
                     pred = svr_model.predict(val_x_reshaped)
-                    # Reshape back to (n_samples, n_timesteps)
                     pred = pred.reshape(n_samples, n_timesteps)
                     val_predictions.append(pred)
                 val_predictions = np.stack(val_predictions, axis=-1)
             elif mdl_config.MODE == "SVR_MIMO":
-                # SVR MIMO - list of models, one for each output dimension
-                # Must reshape input data to 2D for SVR
                 n_samples, n_timesteps, n_features_in = val_x.shape
                 val_x_reshaped = val_x.reshape(n_samples * n_timesteps, n_features_in)
                 
                 val_predictions = []
                 for svr_model in mdl:
                     pred = svr_model.predict(val_x_reshaped)
-                    # Reshape back to (n_samples, n_timesteps)
                     pred = pred.reshape(n_samples, n_timesteps)
                     val_predictions.append(pred)
                 
-                # Stack predictions for all outputs
                 val_predictions = np.stack(val_predictions, axis=-1)
-                # Result shape should be (n_samples, n_timesteps, n_features_out)
             elif mdl_config.MODE == "LIN":
-                # Linear models - predict for each output
-                # Must reshape exactly as in training: (n_samples * n_timesteps, n_features_in)
                 n_samples, n_timesteps, n_features_in = val_x.shape
                 val_x_reshaped = val_x.reshape(n_samples * n_timesteps, n_features_in)
                 
                 val_predictions = []
                 for lin_model in mdl:
                     pred = lin_model.predict(val_x_reshaped)
-                    # Reshape back to (n_samples, n_timesteps)
                     pred = pred.reshape(n_samples, n_timesteps)
                     val_predictions.append(pred)
                 
-                # Stack predictions for all outputs
                 val_predictions = np.stack(val_predictions, axis=-1)
-                # Result shape should be (n_samples, n_timesteps, n_features_out)
             else:
                 val_predictions = val_y
             
@@ -369,7 +316,6 @@ def run_exact_training_pipeline(
             
     except Exception as e:
         logger.error(f"Error calculating evaluation metrics: {str(e)}")
-        # Provide empty metrics if calculation fails
         evaluation_metrics = {
             'test_metrics_scaled': {},
             'test_metrics_original': {},
@@ -378,7 +324,6 @@ def run_exact_training_pipeline(
             'error': str(e)
         }
     
-    # Return all results
     return {
         'trained_model': mdl,
         'train_data': {
@@ -415,7 +360,7 @@ def run_exact_training_pipeline(
             'random_data': random_dat
         },
         'evaluation_metrics': evaluation_metrics,
-        'metrics': evaluation_metrics  # Also include as 'metrics' for compatibility
+        'metrics': evaluation_metrics
     }
 
 
@@ -430,31 +375,24 @@ def prepare_data_for_training(session_data: Dict) -> Tuple[Dict, Dict, pd.DataFr
         Tuple of (i_dat, o_dat, i_dat_inf, o_dat_inf, utc_strt, utc_end)
     """
     
-    # Initialize data structures
     i_dat = {}
     o_dat = {}
     
-    # Load input data
     if 'input_files' in session_data:
         loader = DataLoader()
         for file_path in session_data['input_files']:
             df = pd.read_csv(file_path)
-            # Ensure UTC column is first, value column is second
             if 'UTC' in df.columns:
-                # Reorder columns to match original expectation
                 cols = df.columns.tolist()
                 if 'UTC' != cols[0]:
-                    # Move UTC to first position
                     cols.remove('UTC')
                     cols = ['UTC'] + cols
                     df = df[cols]
             i_dat[file_path] = df
     
-    # Load output data
     if 'output_files' in session_data:
         for file_path in session_data['output_files']:
             df = pd.read_csv(file_path)
-            # Ensure UTC column is first, value column is second
             if 'UTC' in df.columns:
                 cols = df.columns.tolist()
                 if 'UTC' != cols[0]:
@@ -463,62 +401,50 @@ def prepare_data_for_training(session_data: Dict) -> Tuple[Dict, Dict, pd.DataFr
                     df = df[cols]
             o_dat[file_path] = df
     
-    # Create info DataFrames using load() function
     i_dat_inf = pd.DataFrame()
     o_dat_inf = pd.DataFrame()
     
-    # Process each input file
     for key in i_dat:
         i_dat[key], i_dat_inf = load(i_dat, i_dat_inf)
     
-    # Process each output file
     for key in o_dat:
         o_dat[key], o_dat_inf = load(o_dat, o_dat_inf)
     
-    # Set up required columns for data_transformer (matching training_original.py)
-    # These columns must be set after load() but before transf()
     if not i_dat_inf.empty:
-        # Convert to object dtype to avoid warnings
         i_dat_inf["spec"] = i_dat_inf.get("spec", "").astype("object") if "spec" in i_dat_inf.columns else ""
         i_dat_inf["meth"] = i_dat_inf.get("meth", "").astype("object") if "meth" in i_dat_inf.columns else ""
         
-        # Set values for all input files
         for key in i_dat_inf.index:
             i_dat_inf.loc[key, "spec"] = "Historische Daten"
-            i_dat_inf.loc[key, "th_strt"] = -1  # Time horizon start (hours before reference)
-            i_dat_inf.loc[key, "th_end"] = 0    # Time horizon end (at reference time)
+            i_dat_inf.loc[key, "th_strt"] = -1
+            i_dat_inf.loc[key, "th_end"] = 0
             i_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
-            i_dat_inf.loc[key, "avg"] = False   # No averaging by default
-            i_dat_inf.loc[key, "scal"] = True   # Enable scaling
-            i_dat_inf.loc[key, "scal_max"] = 1  # Max scaling value
-            i_dat_inf.loc[key, "scal_min"] = 0  # Min scaling value
+            i_dat_inf.loc[key, "avg"] = False
+            i_dat_inf.loc[key, "scal"] = True
+            i_dat_inf.loc[key, "scal_max"] = 1
+            i_dat_inf.loc[key, "scal_min"] = 0
     
     if not o_dat_inf.empty:
-        # Convert to object dtype to avoid warnings
         o_dat_inf["spec"] = o_dat_inf.get("spec", "").astype("object") if "spec" in o_dat_inf.columns else ""
         o_dat_inf["meth"] = o_dat_inf.get("meth", "").astype("object") if "meth" in o_dat_inf.columns else ""
         
-        # Set values for all output files
         for key in o_dat_inf.index:
             o_dat_inf.loc[key, "spec"] = "Historische Daten"
-            o_dat_inf.loc[key, "th_strt"] = 0   # Time horizon start (at reference time)
-            o_dat_inf.loc[key, "th_end"] = 1    # Time horizon end (1 hour after reference)
+            o_dat_inf.loc[key, "th_strt"] = 0
+            o_dat_inf.loc[key, "th_end"] = 1
             o_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
-            o_dat_inf.loc[key, "avg"] = False   # No averaging by default
-            o_dat_inf.loc[key, "scal"] = True   # Enable scaling
-            o_dat_inf.loc[key, "scal_max"] = 1  # Max scaling value
-            o_dat_inf.loc[key, "scal_min"] = 0  # Min scaling value
+            o_dat_inf.loc[key, "avg"] = False
+            o_dat_inf.loc[key, "scal"] = True
+            o_dat_inf.loc[key, "scal_max"] = 1
+            o_dat_inf.loc[key, "scal_min"] = 0
     
-    # Apply transformations using transf()
     mts_config = MTS()
     i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
     o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
     
-    # Determine time boundaries
     utc_strt = i_dat_inf['utc_min'].min()
     utc_end = i_dat_inf['utc_max'].max()
     
-    # Adjust based on output data if available
     if not o_dat_inf.empty:
         utc_strt = max(utc_strt, o_dat_inf['utc_min'].min())
         utc_end = min(utc_end, o_dat_inf['utc_max'].max())

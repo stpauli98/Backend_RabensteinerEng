@@ -2,7 +2,6 @@
 import logging
 from flask_socketio import join_room, leave_room, emit
 from utils.database import get_supabase_client
-# Temporarily import from original location until we move the file
 from services.training.training_api import create_or_get_session_uuid
 
 logger = logging.getLogger(__name__)
@@ -21,12 +20,11 @@ def register_socketio_handlers(socketio):
     def handle_disconnect(*args, **kwargs):
         try:
             logger.info("Client disconnected")
-            return True  # Return True to indicate successful handling
+            return True
         except Exception as e:
             logger.error(f"Error in disconnect handler: {str(e)}")
             return False
 
-    # RowData Socket.IO event handlers
     @socketio.on('join_upload_room')
     def handle_join_upload_room(data):
         """Client joins a room for upload progress tracking"""
@@ -39,7 +37,6 @@ def register_socketio_handlers(socketio):
         except Exception as e:
             logger.error(f"Error in join_upload_room: {str(e)}")
 
-    # Enhanced SocketIO event handlers for training system
     @socketio.on('join_training_session')
     def handle_join_training_session(data):
         """
@@ -52,7 +49,6 @@ def register_socketio_handlers(socketio):
                 join_room(room)
                 logger.info(f"Client joined training room: {room}")
                 
-                # Send confirmation
                 emit('training_session_joined', {
                     'status': 'success',
                     'session_id': session_id,
@@ -101,12 +97,10 @@ def register_socketio_handlers(socketio):
         try:
             session_id = data.get('session_id')
             if session_id:
-                # Get current training status from database
                 supabase = get_supabase_client()
                 uuid_session_id = create_or_get_session_uuid(session_id)
                 
                 if uuid_session_id:
-                    # Get latest training result
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
                     
                     if results.data:
@@ -144,7 +138,6 @@ def register_socketio_handlers(socketio):
                 join_room(upload_id)
                 logger.info(f"Client joined Socket.IO room: {upload_id}")
                 
-                # Send status confirmation
                 socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
         except Exception as e:
             logger.error(f"Error in join handler: {str(e)}")
@@ -159,7 +152,6 @@ def register_socketio_handlers(socketio):
                 leave_room(upload_id)
                 logger.info(f"Client left Socket.IO room: {upload_id}")
                 
-                # Send confirmation
                 emit('left_room', {'uploadId': upload_id})
         except Exception as e:
             logger.error(f"Error in leave handler: {str(e)}")
@@ -173,12 +165,10 @@ def register_socketio_handlers(socketio):
             if session_id:
                 logger.info(f"Frontend requesting dataset status for session: {session_id}")
                 
-                # Get dataset status from database
                 supabase = get_supabase_client()
                 uuid_session_id = create_or_get_session_uuid(session_id)
                 
                 if uuid_session_id:
-                    # Get latest training result
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
                     
                     if results.data:
@@ -208,7 +198,6 @@ def register_socketio_handlers(socketio):
                 'message': f'Failed to get dataset status: {str(e)}'
             })
 
-    # Add global SocketIO error handler
     @socketio.on_error_default
     def default_error_handler(e):
         logger.error(f"SocketIO error: {str(e)}")

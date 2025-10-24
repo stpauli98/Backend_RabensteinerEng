@@ -60,28 +60,22 @@ def upload_trained_model(
     try:
         supabase = get_supabase_admin_client()
 
-        # Validate file exists
         if not os.path.exists(model_file_path):
             raise FileNotFoundError(f"Model file not found: {model_file_path}")
 
-        # Get file info
         file_size = os.path.getsize(model_file_path)
         filename = os.path.basename(model_file_path)
 
-        # Generate storage path: session_id/model_type_dataset_timestamp.{ext}
-        # Extract file extension from original file
-        file_extension = os.path.splitext(model_file_path)[1]  # .h5 or .pkl
+        file_extension = os.path.splitext(model_file_path)[1]
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         storage_filename = f"{model_type}_{dataset_name}_{timestamp}{file_extension}"
         file_path = f"{session_id}/{storage_filename}"
 
         logger.info(f"📤 Uploading model to storage: {file_path} ({file_size / 1024 / 1024:.2f}MB)")
 
-        # Read model file as binary
         with open(model_file_path, 'rb') as f:
             model_data = f.read()
 
-        # Upload to trained-models bucket
         bucket_name = 'trained-models'
 
         try:
@@ -106,22 +100,19 @@ def upload_trained_model(
             }
 
         except Exception as upload_error:
-            # Check if bucket exists
             if "Bucket not found" in str(upload_error):
                 logger.error(f"❌ Bucket '{bucket_name}' does not exist. Creating it...")
 
-                # Try to create bucket
                 try:
                     supabase.storage.create_bucket(
                         bucket_name,
                         options={
-                            "public": False,  # Private bucket
-                            "file_size_limit": 524288000  # 500MB limit
+                            "public": False,
+                            "file_size_limit": 524288000
                         }
                     )
                     logger.info(f"✅ Bucket '{bucket_name}' created successfully")
 
-                    # Retry upload
                     response = supabase.storage.from_(bucket_name).upload(
                         path=file_path,
                         file=model_data,
@@ -178,7 +169,6 @@ def download_trained_model(
 
         logger.info(f"📥 Downloading model from storage: {file_path}")
 
-        # Download from storage
         response = supabase.storage.from_(bucket_name).download(file_path)
 
         logger.info(f"✅ Model downloaded successfully: {file_path}")
@@ -208,24 +198,19 @@ def list_session_models(session_id: str) -> List[Dict]:
 
         logger.info(f"📋 Listing models for session: {session_id}")
 
-        # List files in session directory
         files = supabase.storage.from_(bucket_name).list(session_id)
 
         models = []
         for file_info in files:
             filename = file_info['name']
             if filename.endswith('.h5') or filename.endswith('.pkl'):
-                # Parse filename: ModelType_dataset_timestamp.extension
-                # Example: "Sequential_default_20251023_114355.h5"
-                parts = filename.rsplit('.', 1)  # Split extension
+                parts = filename.rsplit('.', 1)
                 file_extension = parts[1] if len(parts) > 1 else ''
 
-                # Extract model type and dataset from filename
                 name_parts = parts[0].split('_')
                 model_type = name_parts[0] if len(name_parts) > 0 else 'Unknown'
                 dataset_name = name_parts[1] if len(name_parts) > 1 else 'default'
 
-                # Convert size from bytes to MB
                 size_bytes = file_info.get('metadata', {}).get('size', 0)
                 size_mb = round(size_bytes / (1024 * 1024), 2) if size_bytes > 0 else 0.0
 
