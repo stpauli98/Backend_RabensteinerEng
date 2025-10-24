@@ -51,6 +51,9 @@ from services.training.upload_manager import (
     create_csv_file_record, update_csv_file_record, delete_csv_file_record
 )
 
+# Refactoring Phase 6: Import dataset generation and model training service functions
+from services.training.dataset_generator import generate_violin_plots_for_session
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -1725,7 +1728,8 @@ def generate_datasets(session_id):
     """
     Generate datasets and violin plots WITHOUT training models.
     This is phase 1 of the training workflow - data visualization only.
-    Following the original implementation approach.
+    
+    Refactored: Business logic moved to dataset_generator.generate_violin_plots_for_session()
     """
     try:
         data = request.json
@@ -1736,153 +1740,47 @@ def generate_datasets(session_id):
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
         
-        logger.info(f"Generating violin plots for session {session_id} WITHOUT training")
+        # Generate violin plots through service layer
+        from services.training.dataset_generator import generate_violin_plots_for_session
         
-        # Import the violin plot generator
-        import numpy as np
-        from services.training.violin_plot_generator import generate_violin_plots_from_data
+        result = generate_violin_plots_for_session(
+            session_id=session_id,
+            model_parameters=model_parameters,
+            training_split=training_split
+        )
         
-        # Load data directly from uploaded CSV files (following original training_original.py approach)
-        try:
-            logger.info(f"Loading raw CSV data for session {session_id} (original approach)")
-
-            from services.training.data_loader import DataLoader
-            data_loader = DataLoader()
-
-            # Check if files exist in database
-            session_data = data_loader.load_session_data(session_id)
-            files_info = session_data.get('files', [])
-
-            if not files_info:
-                return jsonify({
-                    'success': False,
-                    'error': 'No data available for visualization',
-                    'message': 'Please upload CSV files first'
-                }), 400
-
-            # Download and read CSV files
-            downloaded_files = data_loader.download_session_files(session_id)
-
-            # Load CSV data for visualization with separator detection
-            import os
-            csv_data = {}
-            for file_type, file_path in downloaded_files.items():
-                if os.path.exists(file_path):
-                    # Try different separators (following original training_original.py approach)
-                    try:
-                        df = pd.read_csv(file_path, sep=';')  # Try semicolon first (original script uses this)
-                        if df.shape[1] == 1:  # If still one column, try comma
-                            df = pd.read_csv(file_path, sep=',')
-                    except:
-                        df = pd.read_csv(file_path)  # Fallback to default
-
-                    csv_data[file_type] = df
-                    logger.info(f"Loaded {file_type} file with {len(df)} rows and {len(df.columns)} columns: {list(df.columns)}")
-
-            if not csv_data:
-                return jsonify({
-                    'success': False,
-                    'error': 'Could not load CSV data',
-                    'message': 'CSV files could not be read'
-                }), 400
-
-            # Create data_info structure from CSV files (following original script approach)
-            input_data = None
-            output_data = None
-            input_features = []
-            output_features = []
-
-            # Process input files (assume they have numeric data)
-            if 'input' in csv_data:
-                input_df = csv_data['input']
-                # Get numeric columns only (skip UTC/timestamp columns)
-                numeric_cols = input_df.select_dtypes(include=[np.number]).columns.tolist()
-                if numeric_cols:
-                    input_data = input_df[numeric_cols].values
-                    input_features = numeric_cols
-
-            # Process output files
-            if 'output' in csv_data:
-                output_df = csv_data['output']
-                numeric_cols = output_df.select_dtypes(include=[np.number]).columns.tolist()
-                if numeric_cols:
-                    output_data = output_df[numeric_cols].values
-                    output_features = numeric_cols
-
-            if input_data is None and output_data is None:
-                return jsonify({
-                    'success': False,
-                    'error': 'No numeric data found in CSV files',
-                    'message': 'CSV files must contain numeric columns for visualization'
-                }), 400
-
-            data_info = {
-                'success': True,
-                'input_data': input_data,
-                'output_data': output_data,
-                'input_features': input_features,
-                'output_features': output_features
-            }
-
-            # Generate plots from CSV data
-            plot_result = generate_violin_plots_from_data(
-                session_id,
-                input_data=data_info.get('input_data'),
-                output_data=data_info.get('output_data'),
-                input_features=data_info.get('input_features'),
-                output_features=data_info.get('output_features')
-            )
-
-        except Exception as e:
-            logger.error(f"Error loading CSV data for violin plots: {str(e)}")
-            return jsonify({
-                'success': False,
-                'error': f'Failed to load CSV data: {str(e)}',
-                'message': 'Could not read uploaded files'
-            }), 500
-        
-        # Return plot results without training
-        result = {
-            'success': plot_result['success'],
-            'violin_plots': plot_result.get('plots', {}),
-            'message': 'Violin plots generated successfully (no training performed)'
-        }
-        
-        if result['success']:
-            # logger.info(f"Dataset generation completed for session {session_id}")
+        # Save visualizations to database
+        violin_plots = result.get('violin_plots', {})
+        if violin_plots:
+            from services.training.training_api import save_visualization_to_database
             
-            # Save visualizations to database
-            violin_plots = result.get('violin_plots', {})
-            if violin_plots:
-                from services.training.training_api import save_visualization_to_database
-                
-                for plot_name, plot_data in violin_plots.items():
-                    try:
-                        if plot_data:  # Only save if data exists
-                            save_visualization_to_database(session_id, plot_name, plot_data)
-                            # logger.info(f"Saved visualization {plot_name} for session {session_id}")
-                    except Exception as viz_error:
-                        logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
-                        # Continue even if one visualization fails to save
-
-            # Track dataset generation as processing job
-            from flask import g
-            increment_processing_count(g.user_id)
-            logger.info(f"Tracked dataset generation for user {g.user_id}")
-
-            return jsonify({
-                'success': True,
-                'message': 'Datasets generated successfully',
-                'dataset_count': result.get('dataset_count', 10),
-                'violin_plots': violin_plots
-            })
-        else:
-            logger.error(f"Dataset generation failed: {result.get('error')}")
-            return jsonify({
-                'success': False,
-                'error': result.get('error', 'Dataset generation failed')
-            }), 500
-            
+            for plot_name, plot_data in violin_plots.items():
+                try:
+                    if plot_data:  # Only save if data exists
+                        save_visualization_to_database(session_id, plot_name, plot_data)
+                except Exception as viz_error:
+                    logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
+                    # Continue even if one visualization fails to save
+        
+        # Track dataset generation as processing job
+        from flask import g
+        increment_processing_count(g.user_id)
+        logger.info(f"Tracked dataset generation for user {g.user_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Datasets generated successfully',
+            'dataset_count': 10,  # Default dataset count for visualization
+            'violin_plots': violin_plots
+        })
+        
+    except ValueError as e:
+        # Validation errors (no data, no numeric data, etc.)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+        
     except Exception as e:
         logger.error(f"Error in generate_datasets: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
