@@ -263,7 +263,7 @@ class ModernMiddlemanRunner:
             
             # Run the verified pipeline
             logger.info(f"📍 Step 6: Running training pipeline with utc_strt={utc_strt}, utc_end={utc_end}")
-            logger.info(f"   Model config: MODE={mdl_config.MODE if mdl_config else 'default'}, LAY={mdl_config.LAY if mdl_config else 'default'}, N={mdl_config.N if mdl_config else 'default'}")
+            logger.info(f"   Model config: MODE={getattr(mdl_config, 'MODE', 'default')}, LAY={getattr(mdl_config, 'LAY', None)}, N={getattr(mdl_config, 'N', None)}")
 
             try:
                 results = run_exact_training_pipeline(

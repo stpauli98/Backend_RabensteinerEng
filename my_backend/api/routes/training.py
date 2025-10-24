@@ -30,6 +30,9 @@ from services.training.visualization import Visualizer
 # Refactoring Phase 2: Import scaler service functions
 from services.training.scaler_manager import get_session_scalers, create_scaler_download_package, scale_new_data
 
+# Refactoring Phase 3: Import model management service functions
+from services.training.model_manager import save_models_to_storage, get_models_list, download_model_file
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -3640,184 +3643,72 @@ def save_model(session_id):
     Save trained models to Supabase Storage and return download information.
     Extracts serialized models from training results, deserializes them,
     saves as .h5 (Keras) or .pkl (sklearn) files, and uploads to persistent storage.
-    
+
+    Refactored: Business logic moved to model_manager.save_models_to_storage()
+
     Args:
         session_id: Training session ID
-        
+
     Returns:
         JSON response with model information and upload status
     """
     try:
-        import os
-        import tempfile
-        import base64
-        import pickle
-        from tensorflow import keras
-        from utils.database import create_or_get_session_uuid
-        from utils.training_storage import fetch_training_results_with_storage
-        from utils.model_storage import upload_trained_model
-        
-        logger.info(f"📦 Saving models to storage - session: {session_id}")
-        
-        # Get UUID for session
-        uuid_session_id = create_or_get_session_uuid(session_id)
-        if not uuid_session_id:
-            return jsonify({
-                'success': False,
-                'error': f'Session {session_id} not found'
-            }), 404
-        
-        # Fetch training results from Storage or legacy JSONB
-        training_results = fetch_training_results_with_storage(session_id)
-        
-        if not training_results:
-            return jsonify({
-                'success': False,
-                'error': 'No training results found',
-                'message': 'Train a model first before attempting to save.'
-            }), 404
-        
-        # Extract serialized models from training results (same logic as /list-models)
-        def extract_models_info(obj, path=""):
-            """Recursively extract serialized models from training results"""
-            found_models = []
-            if isinstance(obj, dict):
-                if '_model_type' in obj and obj.get('_model_type') == 'serialized_model':
-                    model_class = obj.get('_model_class', 'Unknown')
-                    model_data = obj.get('_model_data', '')
-                    
-                    found_models.append({
-                        'model_class': model_class,
-                        'model_data': model_data,
-                        'path': path,
-                        'data_size': len(model_data)
-                    })
-                
-                for key, value in obj.items():
-                    found_models.extend(extract_models_info(value, f"{path}.{key}" if path else key))
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    found_models.extend(extract_models_info(item, f"{path}[{i}]" if path else f"[{i}]"))
-            
-            return found_models
-        
-        serialized_models = extract_models_info(training_results)
-        
-        if not serialized_models:
-            return jsonify({
-                'success': False,
-                'error': 'No trained models found in results',
-                'message': 'Training results exist but no models were saved.'
-            }), 404
-        
-        logger.info(f"Found {len(serialized_models)} serialized model(s) in training results")
-        
-        # Deserialize and upload models to Storage
-        uploaded_models = []
-        failed_models = []
-        
-        for idx, model_info in enumerate(serialized_models):
-            model_class = model_info['model_class']
-            model_data = model_info['model_data']
-            path = model_info['path']
-            
-            try:
-                logger.info(f"📥 Deserializing model {idx + 1}/{len(serialized_models)}: {model_class}")
-                
-                # Decode base64 and unpickle
-                model_bytes = base64.b64decode(model_data)
-                model_obj = pickle.loads(model_bytes)
-                
-                logger.info(f"✅ Model deserialized successfully: {model_class}")
-                
-                # Determine file extension based on model type
-                is_keras_model = hasattr(model_obj, 'save') and hasattr(model_obj, 'predict')
-                file_extension = '.h5' if is_keras_model else '.pkl'
-                
-                # Create temporary file
-                with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False, mode='wb') as temp_file:
-                    temp_file_path = temp_file.name
-                
-                try:
-                    # Save model to file
-                    if is_keras_model:
-                        # Keras/TensorFlow model - save as .h5
-                        model_obj.save(temp_file_path)
-                        logger.info(f"💾 Saved Keras model to {temp_file_path}")
-                    else:
-                        # Scikit-learn scaler/model - save as .pkl
-                        with open(temp_file_path, 'wb') as f:
-                            pickle.dump(model_obj, f)
-                        logger.info(f"💾 Saved sklearn model to {temp_file_path}")
-                    
-                    # Upload to Storage
-                    logger.info(f"📤 Uploading {model_class} model to storage...")
-                    
-                    # Extract dataset name from path if available
-                    dataset_name = path.split('.')[0] if '.' in path else 'default'
-                    
-                    storage_result = upload_trained_model(
-                        session_id=str(uuid_session_id),
-                        model_file_path=temp_file_path,
-                        model_type=model_class,
-                        dataset_name=dataset_name
-                    )
-                    
-                    uploaded_models.append({
-                        'dataset_name': dataset_name,
-                        'model_type': model_class.upper(),
-                        'filename': storage_result['original_filename'],
-                        'storage_path': storage_result['file_path'],
-                        'size_mb': round(storage_result['file_size'] / (1024 * 1024), 2),
-                        'path_in_results': path,
-                        'file_format': 'h5' if is_keras_model else 'pkl'
-                    })
-                    
-                    logger.info(f"✅ Uploaded {model_class} model: {storage_result['file_path']}")
-                    
-                finally:
-                    # Clean up temporary file
-                    if os.path.exists(temp_file_path):
-                        os.unlink(temp_file_path)
-                        logger.debug(f"🗑️ Cleaned up temporary file: {temp_file_path}")
-                    
-            except Exception as model_error:
-                logger.error(f"❌ Failed to process {model_class}: {model_error}")
-                import traceback
-                logger.error(traceback.format_exc())
-                failed_models.append({
-                    'model_class': model_class,
-                    'path': path,
-                    'error': str(model_error)
-                })
-        
-        if not uploaded_models and failed_models:
-            return jsonify({
-                'success': False,
-                'error': 'All model uploads failed',
-                'failed_models': failed_models
-            }), 500
-        
-        logger.info(f"✅ Saved {len(uploaded_models)} models to storage for session {session_id}")
-        
+        # Call service layer
+        result = save_models_to_storage(session_id)
+
         response = {
             'success': True,
-            'message': f'Successfully saved {len(uploaded_models)} model(s) to storage',
-            'models': uploaded_models,
-            'total_uploaded': len(uploaded_models),
+            'message': f'Successfully saved {result["total_uploaded"]} model(s) to storage',
+            'models': result['uploaded_models'],
+            'total_uploaded': result['total_uploaded'],
             'session_id': session_id
         }
-        
-        if failed_models:
-            response['failed_models'] = failed_models
-            response['total_failed'] = len(failed_models)
-        
+
+        if result['failed_models']:
+            response['failed_models'] = result['failed_models']
+            response['total_failed'] = result['total_failed']
+
         return jsonify(response)
-        
+
+    except ValueError as e:
+        # Handle specific validation errors (session not found, no results, no models)
+        error_msg = str(e)
+        if 'Session' in error_msg and 'not found' in error_msg:
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 404
+        elif 'No training results' in error_msg:
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'message': 'Train a model first before attempting to save.'
+            }), 404
+        elif 'No trained models' in error_msg:
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'message': 'Training results exist but no models were saved.'
+            }), 404
+        else:
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 400
+
     except Exception as e:
         logger.error(f"❌ Error saving models: {e}")
         import traceback
         logger.error(traceback.format_exc())
+
+        # Check if it's the "all uploads failed" case
+        if 'All model uploads failed' in str(e):
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'failed_models': []
+            }), 500
+
         return jsonify({
             'success': False,
             'error': str(e),
@@ -3825,36 +3716,31 @@ def save_model(session_id):
         }), 500
 
 
+# ============================================================================
+# OLD IMPLEMENTATION - save_model (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/save-model/<session_id>', methods=['POST'])
+# def save_model(session_id):
+#     ... 189 lines of business logic moved to model_manager.save_models_to_storage()
+
+
 @bp.route('/list-models-database/<session_id>', methods=['GET'])
 def list_models_database(session_id):
     """
     List all trained models stored in Supabase Storage for a session.
-    
+
+    Refactored: Business logic moved to model_manager.get_models_list()
+
     Args:
         session_id: Training session ID
-        
+
     Returns:
         JSON response with list of models in Storage
     """
     try:
-        from utils.database import create_or_get_session_uuid
-        from utils.model_storage import list_session_models
-        
-        logger.info(f"📋 Listing models from Storage - session: {session_id}")
-        
-        # Get UUID for session
-        uuid_session_id = create_or_get_session_uuid(session_id)
-        if not uuid_session_id:
-            return jsonify({
-                'success': False,
-                'error': f'Session {session_id} not found'
-            }), 404
-        
-        # List models from Storage
-        models = list_session_models(str(uuid_session_id))
-        
-        logger.info(f"✅ Found {len(models)} model(s) in Storage for session {session_id}")
-        
+        # Call service layer
+        models = get_models_list(session_id)
+
         return jsonify({
             'success': True,
             'data': {
@@ -3863,7 +3749,14 @@ def list_models_database(session_id):
             },
             'session_id': session_id
         })
-        
+
+    except ValueError as e:
+        # Handle session not found error
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 404
+
     except Exception as e:
         logger.error(f"❌ Error listing models from Storage: {e}")
         import traceback
@@ -3875,10 +3768,20 @@ def list_models_database(session_id):
         }), 500
 
 
+# ============================================================================
+# OLD IMPLEMENTATION - list_models_database (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/list-models-database/<session_id>', methods=['GET'])
+# def list_models_database(session_id):
+#     ... 48 lines of business logic moved to model_manager.get_models_list()
+
+
 @bp.route('/download-model-h5/<session_id>', methods=['GET'])
 def download_model_h5(session_id):
     """
     Download a trained model file from Supabase Storage.
+
+    Refactored: Business logic moved to model_manager.download_model_file()
 
     Query Parameters:
         filename (optional): Specific model filename to download
@@ -3894,71 +3797,30 @@ def download_model_h5(session_id):
     try:
         from flask import request, send_file
         import io
-        from utils.database import create_or_get_session_uuid
-        from utils.model_storage import list_session_models, download_trained_model
 
         # Get filename from query parameter
         filename = request.args.get('filename')
 
-        logger.info(f"📥 Download request - session: {session_id}, filename: {filename or 'first .h5 model'}")
-
-        # Get UUID for session
-        uuid_session_id = create_or_get_session_uuid(session_id)
-        if not uuid_session_id:
-            return jsonify({
-                'success': False,
-                'error': f'Session {session_id} not found'
-            }), 404
-
-        # List available models
-        models = list_session_models(str(uuid_session_id))
-
-        if not models:
-            return jsonify({
-                'success': False,
-                'error': 'No models found for this session'
-            }), 404
-
-        # Find the model to download
-        target_model = None
-        if filename:
-            # Find specific model by filename
-            target_model = next((m for m in models if m['filename'] == filename), None)
-            if not target_model:
-                return jsonify({
-                    'success': False,
-                    'error': f'Model {filename} not found'
-                }), 404
-        else:
-            # Default: download first .h5 model
-            h5_models = [m for m in models if m['format'] == 'h5']
-            if not h5_models:
-                return jsonify({
-                    'success': False,
-                    'error': 'No .h5 models found for this session'
-                }), 404
-            target_model = h5_models[0]
-
-        logger.info(f"📥 Downloading model: {target_model['filename']}")
-
-        # Download model from Storage
-        file_data = download_trained_model(
-            session_id=str(uuid_session_id),
-            file_path=target_model['storage_path']
-        )
+        # Call service layer
+        file_data, file_name = download_model_file(session_id, filename)
 
         # Create file-like object from bytes
         file_obj = io.BytesIO(file_data)
-
-        logger.info(f"✅ Model downloaded successfully: {target_model['filename']}")
 
         # Send file as attachment
         return send_file(
             file_obj,
             as_attachment=True,
-            download_name=target_model['filename'],
+            download_name=file_name,
             mimetype='application/octet-stream'
         )
+
+    except ValueError as e:
+        # Handle validation errors (session not found, no models, model not found)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 404
 
     except Exception as e:
         logger.error(f"❌ Error downloading model: {e}")
@@ -3969,6 +3831,14 @@ def download_model_h5(session_id):
             'error': str(e),
             'message': 'Failed to download model from Storage'
         }), 500
+
+
+# ============================================================================
+# OLD IMPLEMENTATION - download_model_h5 (to be removed in Phase 6)
+# ============================================================================
+# @bp.route('/download-model-h5/<session_id>', methods=['GET'])
+# def download_model_h5(session_id):
+#     ... 93 lines of business logic moved to model_manager.download_model_file()
 
 
 @bp.route('/session-name-change', methods=['POST'])
