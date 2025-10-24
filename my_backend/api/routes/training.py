@@ -53,6 +53,7 @@ from services.training.upload_manager import (
 
 # Refactoring Phase 6: Import dataset generation and model training service functions
 from services.training.dataset_generator import generate_violin_plots_for_session
+from services.training.training_orchestrator import run_model_training_async
 
 # Configure logging
 logging.basicConfig(
@@ -1794,6 +1795,8 @@ def train_models(session_id):
     """
     Train models with user-specified parameters.
     This is phase 2 of the training workflow.
+    
+    Refactored: Business logic moved to training_orchestrator.run_model_training_async()
     """
     try:
         data = request.json
@@ -1803,29 +1806,18 @@ def train_models(session_id):
         # Extract model parameters
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
-
-        # logger.info(f"Training models for session {session_id}")
-        # logger.info(f"Model parameters: {model_parameters}")
-
-        import threading
-        from services.training.middleman_runner import ModernMiddlemanRunner
-        from flask import current_app
-
+        
         # Get SocketIO instance
+        from flask import current_app
         socketio_instance = current_app.extensions.get('socketio')
-
-        # Create runner
-        runner = ModernMiddlemanRunner()
-        if socketio_instance:
-            runner.set_socketio(socketio_instance)
-
+        
         # Normalize activation function to lowercase for backend compatibility
         # Frontend sends: ReLU, Tanh, Sigmoid, etc.
         # Backend expects: relu, tanh, sigmoid, etc.
         actf = model_parameters.get('ACTF')
         if actf:
             actf = actf.lower()
-
+        
         # Prepare full model configuration
         model_config = {
             'MODE': model_parameters.get('MODE', 'Linear'),
@@ -1840,277 +1832,22 @@ def train_models(session_id):
             'random_dat': not training_split.get('shuffle', True)
         }
         
-        # Run training in background thread
-        def run_training_async():
-            try:
-                logger.info(f"🚀 TRAINING THREAD STARTED for session {session_id}")
-                logger.info(f"Model config: {model_config}")
-                result = runner.run_training_script(session_id, model_config)
-                logger.info(f"✅ runner.run_training_script completed with success={result.get('success')}")
-                
-                if result['success']:
-                    # logger.info(f"Training completed successfully for session {session_id}")
-                    
-                    # Save training results to database
-                    try:
-                        from utils.database import get_supabase_client, create_or_get_session_uuid
-                        from utils.supabase_client import get_supabase_admin_client
-                        import json
-                        import numpy as np
-                        import pandas as pd
-                        from datetime import datetime
-
-                        # Use admin client for training results INSERT to avoid timeout
-                        # Admin client uses service_role key which has statement_timeout = '0' (unlimited)
-                        supabase = get_supabase_admin_client()
-                        uuid_session_id = create_or_get_session_uuid(session_id)
-                        
-                        # Check if we got a valid UUID
-                        if not uuid_session_id:
-                            logger.error(f"Failed to get UUID for session {session_id}")
-                            # Try once more after a short delay
-                            import time
-                            time.sleep(1)
-                            uuid_session_id = create_or_get_session_uuid(session_id)
-                            
-                            if not uuid_session_id:
-                                logger.error(f"Failed to get UUID for session {session_id} after retry")
-                                return jsonify({
-                                    'success': False,
-                                    'error': 'Failed to save training results - session mapping error',
-                                    'message': 'Please try training again'
-                                }), 500
-                        
-                        # Extract and clean results from training
-                        training_results = result.get('results', {})
-                        
-                        # Helper function to clean non-serializable objects
-                        def clean_for_json(obj):
-                            # Check for custom MDL class
-                            if hasattr(obj, '__class__') and obj.__class__.__name__ == 'MDL':
-                                # Convert MDL object to dict with its attributes
-                                return {
-                                    'MODE': getattr(obj, 'MODE', 'Dense'),
-                                    'LAY': getattr(obj, 'LAY', None),
-                                    'N': getattr(obj, 'N', None),
-                                    'EP': getattr(obj, 'EP', None),
-                                    'ACTF': getattr(obj, 'ACTF', None),
-                                    'K': getattr(obj, 'K', None),
-                                    'KERNEL': getattr(obj, 'KERNEL', None),
-                                    'C': getattr(obj, 'C', None),
-                                    'EPSILON': getattr(obj, 'EPSILON', None)
-                                }
-                            # Check numpy array first before other checks
-                            elif isinstance(obj, np.ndarray):
-                                return obj.tolist()
-                            elif isinstance(obj, (pd.Timestamp, datetime)):
-                                return obj.isoformat()
-                            elif isinstance(obj, (np.int64, np.int32)):
-                                return int(obj)
-                            elif isinstance(obj, (np.float64, np.float32)):
-                                return float(obj)
-                            elif isinstance(obj, (np.integer)):
-                                return int(obj)
-                            elif isinstance(obj, (np.floating)):
-                                return float(obj)
-                            elif isinstance(obj, dict):
-                                return {k: clean_for_json(v) for k, v in obj.items()}
-                            elif isinstance(obj, (list, tuple)):
-                                return [clean_for_json(item) for item in obj]
-                            # Check for NaN after numpy types since pd.isna might fail on arrays
-                            elif obj is None:
-                                return None
-                            else:
-                                try:
-                                    if pd.isna(obj):
-                                        return None
-                                except (ValueError, TypeError):
-                                    pass
-                                
-                                # Special handling for ML models and scalers - serialize to base64
-                                try:
-                                    # Check if it's a sklearn scaler or transformer
-                                    if (hasattr(obj, 'fit') and hasattr(obj, 'transform')) or \
-                                       (hasattr(obj, 'predict') and hasattr(obj, 'fit')) or \
-                                       (hasattr(obj, '__class__') and 'sklearn' in str(obj.__class__.__module__)):
-                                        import pickle
-                                        import base64
-                                        # Serialize model/scaler to bytes
-                                        model_bytes = pickle.dumps(obj)
-                                        # Encode to base64 for JSON storage
-                                        model_b64 = base64.b64encode(model_bytes).decode('utf-8')
-                                        return {
-                                            '_model_type': 'serialized_model',
-                                            '_model_class': obj.__class__.__name__,
-                                            '_model_data': model_b64
-                                        }
-                                except Exception as e:
-                                    logger.warning(f"Could not serialize model/scaler: {e}")
-                                    pass
-                                
-                                # Try to convert unknown objects to string as last resort
-                                try:
-                                    import json
-                                    json.dumps(obj)
-                                    return obj
-                                except (TypeError, ValueError):
-                                    return str(obj)
-                        
-                        # Clean the results for JSON serialization
-                        # Get metrics from multiple possible locations
-                        evaluation_metrics = result.get('evaluation_metrics', {})
-                        if not evaluation_metrics:
-                            evaluation_metrics = training_results.get('evaluation_metrics', {})
-                        if not evaluation_metrics:
-                            evaluation_metrics = training_results.get('metrics', {})
-                        
-                        # IMPORTANT: Save ALL training data for plotting
-                        # This includes the trained model, test data, scalers, etc.
-                        cleaned_results = clean_for_json({
-                            'model_type': model_config.get('MODE', 'Dense'),
-                            'parameters': model_config,
-                            'metrics': evaluation_metrics,
-                            'training_split': training_split,
-                            'dataset_count': result.get('dataset_count', 0),
-                            'evaluation_metrics': evaluation_metrics,
-                            'metadata': training_results.get('metadata', {}),
-                            # Add full training results for plotting
-                            'trained_model': training_results.get('trained_model'),
-                            'train_data': training_results.get('train_data', {}),
-                            'val_data': training_results.get('val_data', {}),
-                            'test_data': training_results.get('test_data', {}),
-                            'scalers': training_results.get('scalers', {}),
-                            'input_features': training_results.get('metadata', {}).get('input_features', []),
-                            'output_features': training_results.get('metadata', {}).get('output_features', [])
-                        })
-                        
-                        # Prepare results data for Storage upload
-                        # NEW APPROACH: Upload to Storage bucket instead of JSONB column
-                        # This solves timeout issues with large training results (>100MB)
-
-                        try:
-                            from utils.training_storage import upload_training_results
-
-                            # Upload results to Storage (NO TIMEOUT - can handle up to 5GB)
-                            logger.info(f"📤 Uploading training results to storage for session {uuid_session_id}...")
-                            storage_result = upload_training_results(
-                                session_id=uuid_session_id,
-                                results=cleaned_results,
-                                compress=True  # Compress for 70-90% size reduction
-                            )
-                            logger.info(f"✅ Storage upload complete: {storage_result['file_size'] / 1024 / 1024:.2f}MB")
-
-                            # Save metadata to database (FAST - only ~1KB, no timeout)
-                            training_data = {
-                                'session_id': uuid_session_id,
-                                'status': 'completed',
-                                'results_file_path': storage_result['file_path'],
-                                'file_size_bytes': storage_result['file_size'],
-                                'compressed': storage_result['compressed'],
-                                'results_metadata': storage_result['metadata'],
-                                'results': None  # Deprecated field - leave NULL for new results
-                            }
-
-                            supabase.table('training_results').insert(training_data).execute()
-                            logger.info(f"✅ Training metadata saved to database for session {uuid_session_id}")
-
-                        except Exception as storage_error:
-                            logger.error(f"❌ Failed to save training results: {storage_error}")
-                            import traceback
-                            logger.error(traceback.format_exc())
-
-                            # Fallback: Try to save at least the metadata without full results
-                            try:
-                                logger.warning("Attempting fallback: saving metadata only...")
-                                fallback_data = {
-                                    'session_id': uuid_session_id,
-                                    'status': 'failed_storage',
-                                    'results_metadata': storage_result.get('metadata', {}) if 'storage_result' in locals() else {},
-                                    'results': None
-                                }
-                                supabase.table('training_results').insert(fallback_data).execute()
-                                logger.warning("Fallback save successful - metadata only")
-                            except Exception as fallback_error:
-                                logger.error(f"Fallback save also failed: {fallback_error}")
-
-                            raise storage_error  # Re-raise original error
-                        
-                        # Save violin plots if available
-                        if result.get('violin_plots'):
-                            try:
-                                # Check if violin_plots is a dictionary
-                                violin_plots = result.get('violin_plots')
-                                if isinstance(violin_plots, dict):
-                                    # Save each violin plot separately
-                                    for plot_name, plot_data in violin_plots.items():
-                                        # Extract just the base64 part if it includes data URI prefix
-                                        if isinstance(plot_data, str) and plot_data.startswith('data:image'):
-                                            # Keep the full data URI for display
-                                            base64_data = plot_data
-                                        else:
-                                            base64_data = plot_data
-                                        
-                                        viz_data = {
-                                            'session_id': uuid_session_id,
-                                            'plot_type': 'violin',
-                                            'plot_name': plot_name,
-                                            'dataset_name': plot_name.replace('_distribution', '').replace('_plot', ''),
-                                            'model_name': model_config.get('MODE', 'Linear'),
-                                            'plot_data_base64': base64_data,  # The base64 encoded image with data URI
-                                            'metadata': {
-                                                'dataset_count': result.get('dataset_count', 0),
-                                                'generated_during': 'model_training',
-                                                'created_at': datetime.now().isoformat()
-                                            }
-                                        }
-                                        supabase.table('training_visualizations').insert(viz_data).execute()
-                                    logger.info(f"Violin plots saved for session {uuid_session_id}")
-                                else:
-                                    logger.warning(f"Violin plots not in expected format: {type(violin_plots)}")
-                            except Exception as viz_error:
-                                logger.error(f"Failed to save violin plots: {str(viz_error)}")
-                                import traceback
-                                logger.error(traceback.format_exc())
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to save training results: {str(e)}")
-                    
-                    if socketio_instance:
-                        # Don't send full results as they may contain non-serializable objects
-                        # Only send essential information
-                        socketio_instance.emit('training_completed', {
-                            'session_id': session_id,
-                            'status': 'completed',
-                            'message': 'Training completed successfully'
-                        }, room=session_id)
-                else:
-                    logger.error(f"Training failed: {result.get('error')}")
-                    if socketio_instance:
-                        socketio_instance.emit('training_error', {
-                            'session_id': session_id,
-                            'status': 'failed',
-                            'error': result.get('error', 'Unknown error')
-                        }, room=session_id)
-                        
-            except Exception as e:
-                logger.error(f"Async training error: {str(e)}")
-                if socketio_instance:
-                    socketio_instance.emit('training_error', {
-                        'session_id': session_id,
-                        'status': 'failed',
-                        'error': str(e)
-                    }, room=session_id)
-        
         # Track training run usage
         from flask import g
         increment_training_count(g.user_id)
         logger.info(f"Tracked training run for user {g.user_id}")
-
-        # Start training in background
-        training_thread = threading.Thread(target=run_training_async)
+        
+        # Start training in background using orchestrator service
+        import threading
+        from services.training.training_orchestrator import run_model_training_async
+        
+        training_thread = threading.Thread(
+            target=run_model_training_async,
+            args=(session_id, model_config, training_split, socketio_instance)
+        )
         training_thread.daemon = True
         training_thread.start()
-
+        
         return jsonify({
             'success': True,
             'message': f'Model training started for session {session_id}',
