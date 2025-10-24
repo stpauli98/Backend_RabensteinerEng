@@ -708,7 +708,6 @@ def finalize_session_endpoint():
 
 
 # OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
-# @bp.route('/finalize-session', methods=['POST'])
 # def finalize_session():
 #     ... 45 lines of business logic moved to session_manager.finalize_session()
 
@@ -804,7 +803,6 @@ def get_session_endpoint(session_id):
 
 
 # OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
-# @bp.route('/session/<session_id>', methods=['GET'])
 # def get_session(session_id):
 #     ... 58 lines of business logic moved to session_manager.get_session_info()
 
@@ -872,7 +870,6 @@ def get_session_from_database_endpoint(session_id):
 
 
 # OLD CODE - Phase 4 Part 2 Refactoring - DELETE IN PHASE 6
-# @bp.route('/session/<session_id>/database', methods=['GET'])
 # def get_session_from_database(session_id):
 #     ... 90 lines - complex aggregation kept in endpoint for now
 
@@ -941,13 +938,6 @@ def init_session():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# ============================================================================
-# OLD IMPLEMENTATION - init_session (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/init-session', methods=['POST'])
-# def init_session():
-#     ... 60 lines of business logic moved to session_manager.initialize_session()
-
 @bp.route('/save-time-info', methods=['POST'])
 def save_time_info_endpoint():
     """
@@ -987,14 +977,6 @@ def save_time_info_endpoint():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# ============================================================================
-# OLD IMPLEMENTATION - save_time_info_endpoint (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/save-time-info', methods=['POST'])
-# def save_time_info_endpoint():
-#     ... 52 lines of business logic moved to session_manager.save_time_info_data()
-
-
 @bp.route('/create-database-session', methods=['POST'])
 def create_database_session_endpoint():
     """
@@ -1021,14 +1003,6 @@ def create_database_session_endpoint():
     except Exception as e:
         logger.error(f"Error creating database session: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-# ============================================================================
-# OLD IMPLEMENTATION - create_database_session (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/create-database-session', methods=['POST'])
-# def create_database_session():
-#     ... 15 lines of business logic moved to session_manager.create_database_session()
 
 
 @bp.route('/get-session-uuid/<session_id>', methods=['GET'])
@@ -1069,13 +1043,6 @@ def get_session_uuid_endpoint(session_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# ============================================================================
-# OLD IMPLEMENTATION - get_session_uuid (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/get-session-uuid/<session_id>', methods=['GET'])
-# def get_session_uuid(session_id):
-#     ... 37 lines of business logic moved to session_manager.get_session_uuid()
-
 @bp.route('/save-zeitschritte', methods=['POST'])
 def save_zeitschritte_endpoint():
     """
@@ -1115,13 +1082,6 @@ def save_zeitschritte_endpoint():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# ============================================================================
-# OLD IMPLEMENTATION - save_zeitschritte_endpoint (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/save-zeitschritte', methods=['POST'])
-# def save_zeitschritte_endpoint():
-#     ... 53 lines of business logic moved to session_manager.save_zeitschritte_data()
-
 @bp.route('/session/<session_id>/delete', methods=['POST'])
 def delete_session_endpoint(session_id):
     """
@@ -1152,7 +1112,6 @@ def delete_session_endpoint(session_id):
 
 
 # OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# @bp.route('/session/<session_id>/delete', methods=['POST'])
 # def delete_session(session_id):
 #     ... 160 lines of business logic moved to session_manager.delete_session()
 
@@ -1179,7 +1138,6 @@ def get_zeitschritte_endpoint(session_id):
 
 
 # OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# @bp.route('/get-zeitschritte/<session_id>', methods=['GET'])
 # def get_zeitschritte(session_id):
 #     ... 40 lines of business logic moved to session_manager.get_zeitschritte_data()
 
@@ -1212,7 +1170,6 @@ def get_time_info_endpoint(session_id):
 
 
 # OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# @bp.route('/get-time-info/<session_id>', methods=['GET'])
 # def get_time_info(session_id):
 #     ... 37 lines of business logic moved to session_manager.get_time_info_data()
 
@@ -1254,7 +1211,6 @@ def get_csv_files_endpoint(session_id):
 
 
 # OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# @bp.route('/csv-files/<session_id>', methods=['GET'])
 # def get_csv_files(session_id):
 #     ... 44 lines of business logic moved to session_manager.get_csv_files_for_session()
 
@@ -1526,9 +1482,7 @@ def get_plot_variables(session_id):
 
 
 # PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
-# @bp.route('/plot-variables/<session_id>', methods=['GET'])
 # def get_plot_variables(session_id):
-#     ... 60 lines of business logic moved to Visualizer.get_available_variables()
 
 
 @bp.route('/visualizations/<session_id>', methods=['GET'])
@@ -1564,7 +1518,6 @@ def get_training_visualizations(session_id):
 
 
 # PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
-# @bp.route('/visualizations/<session_id>', methods=['GET'])
 # def get_training_visualizations(session_id):
 #     ... 48 lines of business logic moved to Visualizer.get_session_visualizations()
 
@@ -1636,7 +1589,6 @@ def generate_plot():
 
 
 # PHASE 1: OLD CODE - TO BE DELETED IN PHASE 6
-# @bp.route('/generate-plot', methods=['POST'])
 # def generate_plot():
 #     ... 320 lines of business logic moved to Visualizer.generate_custom_plot()
 
@@ -1924,14 +1876,11 @@ def delete_all_sessions_endpoint():
 
 
 # OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# @bp.route('/delete-all-sessions', methods=['POST'])
 # def delete_all_sessions():
 #     ... 217 lines of business logic moved to session_manager.delete_all_sessions()
 
 
-# ============================================================================
 # EVALUATION TABLES API ENDPOINTS
-# ============================================================================
 
 @bp.route('/evaluation-tables/<session_id>', methods=['GET'])
 def get_evaluation_tables(session_id):
@@ -2166,9 +2115,7 @@ def save_evaluation_tables(session_id):
         }), 500
 
 
-# ============================================================================
 # SCALER MANAGEMENT API ENDPOINTS
-# ============================================================================
 
 @bp.route('/scalers/<session_id>', methods=['GET'])
 def get_scalers(session_id):
@@ -2202,7 +2149,6 @@ def get_scalers(session_id):
 
 
 # PHASE 2: OLD CODE - TO BE DELETED IN PHASE 6
-# @bp.route('/scalers/<session_id>', methods=['GET'])
 # def get_scalers(session_id):
 #     ... 55 lines of business logic moved to scaler_manager.get_session_scalers()
 
@@ -2237,7 +2183,6 @@ def download_scalers_as_save_files(session_id):
 
 
 # PHASE 2: OLD CODE - TO BE DELETED IN PHASE 6
-# @bp.route('/scalers/<session_id>/download', methods=['GET'])
 # def download_scalers_as_save_files(session_id):
 #     ... 73 lines of business logic moved to scaler_manager.create_scaler_download_package()
 
@@ -2287,162 +2232,6 @@ def scale_input_data(session_id):
             'error': str(e),
             'message': 'Failed to scale input data'
         }), 500
-
-
-# ============================================================================
-# OLD IMPLEMENTATION - scale_input_data (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/scale-data/<session_id>', methods=['POST'])
-# def scale_input_data(session_id):
-#     """
-#     Scale input data using saved scalers (Skalierung Eingabedaten speichern).
-#     Takes raw input data and returns scaled data ready for model prediction.
-#     """
-#     try:
-#         from utils.database import get_supabase_client, create_or_get_session_uuid
-#         import numpy as np
-#         import pandas as pd
-#         import pickle
-#         import base64
-#
-#         # Get request data
-#         data = request.json
-#         if not data:
-#             return jsonify({'success': False, 'error': 'No data provided'}), 400
-#
-#         input_data = data.get('input_data')
-#         if input_data is None:
-#             return jsonify({'success': False, 'error': 'input_data field is required'}), 400
-#
-#         # Convert input_data to numpy array
-#         try:
-#             if isinstance(input_data, list):
-#                 input_array = np.array(input_data)
-#             elif isinstance(input_data, dict):
-#                 # Assume it's a pandas DataFrame-like structure
-#                 input_array = np.array(list(input_data.values())).T
-#             else:
-#                 input_array = np.array(input_data)
-#         except Exception as e:
-#             return jsonify({
-#                 'success': False,
-#                 'error': f'Failed to convert input_data to array: {str(e)}'
-#             }), 400
-#
-#         # Get training results from Storage or legacy JSONB
-#         from utils.training_storage import fetch_training_results_with_storage
-#
-#         training_results = fetch_training_results_with_storage(session_id)
-#
-#         if not training_results:
-#             return jsonify({
-#                 'success': False,
-#                 'error': f'No training results found for session {session_id}'
-#             }), 404
-#         scalers = training_results.get('scalers', {})
-#         input_scalers = scalers.get('input', {})
-#
-#         if not input_scalers:
-#             return jsonify({
-#                 'success': False,
-#                 'error': f'No input scalers found for session {session_id}'
-#             }), 404
-#
-#         # Helper function to deserialize scalers
-#         def deserialize_scaler(scaler_data):
-#             """Convert serialized scaler back to usable object"""
-#             if scaler_data is None:
-#                 return None
-#             elif isinstance(scaler_data, dict) and '_model_type' in scaler_data:
-#                 # Deserialize pickled scaler
-#                 try:
-#                     model_b64 = scaler_data['_model_data']
-#                     model_bytes = base64.b64decode(model_b64)
-#                     scaler = pickle.loads(model_bytes)
-#                     return scaler
-#                 except Exception as e:
-#                     logger.error(f"Error deserializing scaler: {str(e)}")
-#                     return None
-#             else:
-#                 return scaler_data
-#
-#         # Scale the input data
-#         scaled_data = input_array.copy()
-#         scaling_info = {}
-#
-#         for i in range(input_array.shape[1]):
-#             if str(i) in input_scalers:
-#                 scaler = deserialize_scaler(input_scalers[str(i)])
-#                 if scaler is not None:
-#                     try:
-#                         # Scale the column
-#                         original_data = input_array[:, i].reshape(-1, 1)
-#                         scaled_column = scaler.transform(original_data)
-#                         scaled_data[:, i] = scaled_column.flatten()
-#
-#                         scaling_info[f'feature_{i}'] = {
-#                             'scaled': True,
-#                             'original_range': [float(np.min(original_data)), float(np.max(original_data))],
-#                             'scaled_range': [float(np.min(scaled_column)), float(np.max(scaled_column))],
-#                             'feature_range': scaler.feature_range
-#                         }
-#                     except Exception as e:
-#                         logger.error(f"Error scaling feature {i}: {str(e)}")
-#                         scaling_info[f'feature_{i}'] = {'scaled': False, 'error': str(e)}
-#                 else:
-#                     scaling_info[f'feature_{i}'] = {'scaled': False, 'reason': 'no_scaler'}
-#             else:
-#                 scaling_info[f'feature_{i}'] = {'scaled': False, 'reason': 'scaler_not_found'}
-#
-#         # Optionally save scaled data
-#         save_scaled = data.get('save_scaled', False)
-#         saved_file_path = None
-#
-#         if save_scaled:
-#             try:
-#                 import os
-#                 from datetime import datetime
-#
-#                 # Create scaled data directory if it doesn't exist
-#                 scaled_dir = f"temp_uploads/scaled_data_{session_id}"
-#                 os.makedirs(scaled_dir, exist_ok=True)
-#
-#                 # Save as CSV
-#                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-#                 file_name = f"scaled_input_data_{timestamp}.csv"
-#                 file_path = os.path.join(scaled_dir, file_name)
-#
-#                 # Create DataFrame and save
-#                 scaled_df = pd.DataFrame(scaled_data, columns=[f'feature_{i}' for i in range(scaled_data.shape[1])])
-#                 scaled_df.to_csv(file_path, index=False)
-#                 saved_file_path = file_path
-#
-#                 logger.info(f"Scaled data saved to: {file_path}")
-#
-#             except Exception as e:
-#                 logger.error(f"Error saving scaled data: {str(e)}")
-#
-#         return jsonify({
-#             'success': True,
-#             'session_id': session_id,
-#             'scaled_data': scaled_data.tolist(),
-#             'scaling_info': scaling_info,
-#             'metadata': {
-#                 'original_shape': input_array.shape,
-#                 'scaled_shape': scaled_data.shape,
-#                 'features_scaled': sum(1 for info in scaling_info.values() if info.get('scaled', False)),
-#                 'total_features': len(scaling_info),
-#                 'saved_file_path': saved_file_path
-#             }
-#         })
-#
-#     except Exception as e:
-#         logger.error(f"Error scaling data for session {session_id}: {str(e)}")
-#         return jsonify({
-#             'success': False,
-#             'error': str(e),
-#             'message': 'Failed to scale input data'
-#         }), 500
 
 
 def cleanup_incomplete_uploads(upload_base_dir: str, max_age_hours: int = 24) -> int:
@@ -2564,14 +2353,6 @@ def save_model(session_id):
         }), 500
 
 
-# ============================================================================
-# OLD IMPLEMENTATION - save_model (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/save-model/<session_id>', methods=['POST'])
-# def save_model(session_id):
-#     ... 189 lines of business logic moved to model_manager.save_models_to_storage()
-
-
 @bp.route('/list-models-database/<session_id>', methods=['GET'])
 def list_models_database(session_id):
     """
@@ -2614,14 +2395,6 @@ def list_models_database(session_id):
             'error': str(e),
             'message': 'Failed to list models from Storage'
         }), 500
-
-
-# ============================================================================
-# OLD IMPLEMENTATION - list_models_database (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/list-models-database/<session_id>', methods=['GET'])
-# def list_models_database(session_id):
-#     ... 48 lines of business logic moved to model_manager.get_models_list()
 
 
 @bp.route('/download-model-h5/<session_id>', methods=['GET'])
@@ -2681,14 +2454,6 @@ def download_model_h5(session_id):
         }), 500
 
 
-# ============================================================================
-# OLD IMPLEMENTATION - download_model_h5 (to be removed in Phase 6)
-# ============================================================================
-# @bp.route('/download-model-h5/<session_id>', methods=['GET'])
-# def download_model_h5(session_id):
-#     ... 93 lines of business logic moved to model_manager.download_model_file()
-
-
 @bp.route('/session-name-change', methods=['POST'])
 def change_session_name_endpoint():
     """
@@ -2731,6 +2496,5 @@ def change_session_name_endpoint():
 
 
 # OLD CODE - Phase 4 Refactoring - DELETE IN PHASE 6
-# @bp.route('/session-name-change', methods=['POST'])
 # def change_session_name():
 #     ... 73 lines of business logic moved to session_manager.update_session_name()
