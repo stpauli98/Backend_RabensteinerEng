@@ -8,7 +8,10 @@ import tempfile
 
 import numpy as np
 import pandas as pd
-from flask import Blueprint, request, Response, jsonify, send_file, current_app
+from flask import Blueprint, request, Response, jsonify, send_file, current_app, g
+from middleware.auth import require_auth
+from middleware.subscription import require_subscription, check_processing_limit
+from utils.usage_tracking import increment_processing_count, update_storage_usage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -360,6 +363,9 @@ def _emit_progress_update(upload_id, step, progress, message):
                 logger.error(f"Fallback emit also failed: {fallback_error}")
 
 @bp.route("/api/dataProcessingMain/upload-chunk", methods=["POST"])
+@require_auth
+@require_subscription
+@check_processing_limit
 def upload_chunk():
     try:
         logger.info(f"Processing chunk {request.form.get('chunkIndex')}/{request.form.get('totalChunks')}")
@@ -483,6 +489,20 @@ def upload_chunk():
             df_clean = clean_data(df, value_column, params, _emit_progress_update, upload_id)
             _emit_progress_update(upload_id, 'cleaned', PROGRESS_CLEANED, f'Data cleaning completed. Processing {len(df_clean)} rows...')
 
+            # Track processing usage
+            try:
+                increment_processing_count(g.user_id)
+                logger.info(f"✅ Tracked processing for user {g.user_id}")
+                
+                # Track storage usage
+                file_size_mb = total_size / (1024 * 1024)
+                update_storage_usage(g.user_id, file_size_mb)
+                logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to track processing usage: {str(e)}")
+                # Don't fail the processing if tracking fails
+
+
             def generate():
                 class CustomJSONEncoder(json.JSONEncoder):
                     def default(self, obj):
@@ -522,7 +542,8 @@ def upload_chunk():
                 
                 _emit_progress_update(upload_id, 'complete', PROGRESS_COMPLETE, f'Processing completed! Generated {len(df_clean)} data points.')
                 yield json.dumps({"status": "complete"}, cls=CustomJSONEncoder) + "\n"
-                        
+
+            # Track processing usage
             return Response(generate(), mimetype="application/x-ndjson")
         
 
@@ -550,7 +571,9 @@ def prepare_save():
         logger.info(f"Preparing to save file: {file_name} with {len(rows)} rows")
 
         try:
-            safe_file_name = os.path.basename(file_name).replace(" ", "_")
+            # Remove existing .csv extension to avoid duplication
+            base_name = file_name.replace('.csv', '').replace('.CSV', '')
+            safe_file_name = f"{os.path.basename(base_name).replace(' ', '_')}.csv"
             file_path = secure_path_join(tempfile.gettempdir(), safe_file_name)
         except ValueError as e:
             logger.error(f"Invalid filename: {file_name}")

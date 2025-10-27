@@ -6,12 +6,15 @@ import gzip
 import traceback
 import logging
 import tempfile
-import csv 
+import csv
 from io import StringIO
 from datetime import datetime
 import time
-from flask import request, jsonify, Response, send_file, Blueprint
+from flask import request, jsonify, Response, send_file, Blueprint, g
 from flask_socketio import emit
+from middleware.auth import require_auth
+from middleware.subscription import require_subscription, check_processing_limit
+from utils.usage_tracking import increment_processing_count, update_storage_usage
 
 bp = Blueprint('first_processing', __name__)
 
@@ -275,6 +278,9 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/upload_chunk', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def upload_chunk():
     """
     Endpoint za prihvat i obradu CSV podataka u delovima (chunks).
@@ -390,7 +396,24 @@ def upload_chunk():
                 if len(final_lines) > 2:
                     logger.info(f"Final content third line: '{final_lines[2]}'")
 
-                return process_csv(full_content, tss, offset, mode, intrpl_max, upload_id)
+                result = process_csv(full_content, tss, offset, mode, intrpl_max, upload_id)
+
+                # Track processing and storage usage
+                try:
+                    increment_processing_count(g.user_id)
+                    logger.info(f"✅ Tracked processing for user {g.user_id}")
+
+                    # Track storage usage
+                    file_size_bytes = len(full_content.encode('utf-8'))
+                    file_size_mb = file_size_bytes / (1024 * 1024)
+                    update_storage_usage(g.user_id, file_size_mb)
+                    logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+                except Exception as e:
+                    logger.error(f"⚠️ Failed to track processing usage: {str(e)}")
+                    # Don't fail the processing if tracking fails
+
+
+                return result
                 
             except Exception as e:
                 for chunk_file in chunks_sorted:

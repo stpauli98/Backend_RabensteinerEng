@@ -8,11 +8,14 @@ import csv
 import logging
 import traceback
 from io import StringIO
-from flask import request, jsonify, send_file, Blueprint
+from flask import request, jsonify, send_file, Blueprint, g
 from flask_socketio import emit
 import json
 from services.adjustments.cleanup import cleanup_old_files
 from core.extensions import socketio
+from middleware.auth import require_auth
+from middleware.subscription import require_subscription, check_processing_limit
+from utils.usage_tracking import increment_processing_count, update_storage_usage
 
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 
@@ -275,6 +278,9 @@ def get_time_column(df):
     return None
 
 @bp.route('/upload-chunk', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def upload_chunk():
     """
     Endpoint za prihvat pojedinačnih chunkova.
@@ -358,6 +364,15 @@ def upload_chunk():
             
             try:
                 result = analyse_data(final_path, upload_id)
+
+                # Track storage usage
+                try:
+                    file_size_bytes = len(combined_content.encode('utf-8'))
+                    file_size_mb = file_size_bytes / (1024 * 1024)
+                    update_storage_usage(g.user_id, file_size_mb)
+                    logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+                except Exception as e:
+                    logger.error(f"⚠️ Failed to track storage usage: {str(e)}")
 
                 row_count = 0
                 if result and 'info_df' in result and len(result['info_df']) > 0:
@@ -704,6 +719,8 @@ def analyse_data(file_path, upload_id=None):
         raise
 
 @bp.route('/adjust-data-chunk', methods=['POST'])
+@require_auth
+@require_subscription
 def adjust_data():
     try:
         global adjustment_chunks
@@ -811,6 +828,9 @@ def adjust_data():
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/adjustdata/complete', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def complete_adjustment():
     """
     Ovaj endpoint se poziva kada su svi chunkovi poslani.
@@ -1112,6 +1132,23 @@ def complete_adjustment():
             'completion',
             'finalization'
         )
+
+        # Track processing usage
+        try:
+            increment_processing_count(g.user_id)
+            logger.info(f"✅ Tracked processing for user {g.user_id}")
+            
+            # Track storage usage - calculate total size from dataframes
+            total_size_bytes = sum(
+                df.memory_usage(deep=True).sum() 
+                for df in dataframes.values()
+            )
+            file_size_mb = total_size_bytes / (1024 * 1024)
+            update_storage_usage(g.user_id, file_size_mb)
+            logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to track processing usage: {str(e)}")
+            # Don't fail the processing if tracking fails
 
         return jsonify({
             "success": True,
@@ -1451,6 +1488,8 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
         raise
 
 @bp.route('/prepare-save', methods=['POST'])
+@require_auth
+@require_subscription
 def prepare_save():
     try:
         try:
@@ -1492,6 +1531,8 @@ def prepare_save():
         return jsonify({"error": str(e)}), 500
 
 @bp.route('/download/<file_id>', methods=['GET'])
+@require_auth
+@require_subscription
 def download_file(file_id):
     try:
         if file_id not in temp_files:

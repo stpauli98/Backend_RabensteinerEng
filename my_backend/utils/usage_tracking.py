@@ -98,7 +98,9 @@ def increment_processing_count(user_id: str) -> bool:
             current_count = response.data[0].get('processing_jobs_count', 0)
 
             supabase.table('usage_tracking') \
-                .update({'processing_jobs_count': current_count + 1}) \
+                .update({
+                    'processing_jobs_count': current_count + 1
+                }) \
                 .eq('id', usage_id) \
                 .execute()
 
@@ -121,7 +123,7 @@ def increment_processing_count(user_id: str) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Created new usage tracking record for user {user_id}")
+            logger.info(f"Created new usage tracking record for user {user_id} with processing_count: 1")
 
         return True
 
@@ -210,14 +212,16 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
 
         if response.data and len(response.data) > 0:
             usage_id = response.data[0]['id']
+            current_storage_gb = response.data[0].get('storage_used_gb', 0)
             storage_gb = storage_mb / 1024
+            new_storage_gb = current_storage_gb + storage_gb
 
             supabase.table('usage_tracking') \
-                .update({'storage_used_gb': storage_gb}) \
+                .update({'storage_used_gb': new_storage_gb}) \
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Updated storage usage for user {user_id}: {storage_gb:.2f} GB ({storage_mb} MB)")
+            logger.info(f"Updated storage usage for user {user_id}: {current_storage_gb:.4f} GB -> {new_storage_gb:.4f} GB (added {storage_gb:.4f} GB / {storage_mb:.2f} MB)")
         else:
             storage_gb = storage_mb / 1024
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,

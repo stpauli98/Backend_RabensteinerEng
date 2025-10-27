@@ -46,3 +46,12 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Backup files
+*.bak
+*.backup
+
+# Upload directories
+my_backend/uploads/
+my_backend/chunk_uploads/
+my_backend/temp_uploads/

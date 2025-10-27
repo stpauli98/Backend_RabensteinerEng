@@ -7,9 +7,12 @@ import csv
 import time
 from io import StringIO
 from datetime import datetime
-from flask import Blueprint, request, jsonify, send_file, current_app
+from flask import Blueprint, request, jsonify, send_file, current_app, g
 import pandas as pd
 from flask_socketio import join_room
+from middleware.auth import require_auth
+from middleware.subscription import require_subscription, check_processing_limit
+from utils.usage_tracking import increment_processing_count, update_storage_usage
 
 def get_socketio():
     return current_app.extensions['socketio']
@@ -248,6 +251,7 @@ def convert_to_utc(df, date_column, timezone='UTC'):
         raise
 
 @bp.route('/upload-chunk', methods=['POST'])
+@require_auth
 def upload_chunk():
     try:
         if 'fileChunk' not in request.files:
@@ -324,6 +328,9 @@ def upload_chunk():
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/finalize-upload', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def finalize_upload():
     try:
         data = request.get_json(force=True, silent=True)
@@ -349,6 +356,7 @@ def finalize_upload():
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/cancel-upload', methods=['POST'])
+@require_auth
 def cancel_upload():
     try:
         data = request.get_json(force=True, silent=True)
@@ -573,7 +581,23 @@ def upload_files(file_content, params):
             'status': 'completed',
             'message': 'Data processing completed'
         }, room=upload_id)
-            
+
+        # Track operations (processing) and storage usage
+        try:
+            # Increment operations count (replaces upload count)
+            increment_processing_count(g.user_id)
+            logger.info(f"✅ Tracked operation (processing) for user {g.user_id}")
+
+            # Calculate file size in MB from file_content
+            file_size_bytes = len(file_content.encode('utf-8'))
+            file_size_mb = file_size_bytes / (1024 * 1024)
+
+            update_storage_usage(g.user_id, file_size_mb)
+            logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to track usage: {str(e)}")
+            # Don't fail the upload if tracking fails
+
         return jsonify({"data": data_list, "fullData": data_list})
     except Exception as e:
         socketio.emit('upload_progress', {
@@ -586,6 +610,7 @@ def upload_files(file_content, params):
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/prepare-save', methods=['POST'])
+@require_auth
 def prepare_save():
     try:
         data = request.json
@@ -620,6 +645,7 @@ def prepare_save():
         return jsonify({"error": str(e)}), 500
 
 @bp.route('/download/<file_id>', methods=['GET'])
+@require_auth
 def download_file(file_id):
     try:
         if file_id not in temp_files:

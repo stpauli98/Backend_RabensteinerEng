@@ -60,28 +60,29 @@ def get_user_usage(user_id: str, access_token: str) -> dict:
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
-            .gte('period_start', period_start.isoformat()) \
-            .maybe_single() \
+            .gte('period_start', period_start.date().isoformat()) \
+            .order('period_start', desc=True) \
+            .limit(1) \
             .execute()
 
-        if response and response.data:
-            return response.data
+        if response and response.data and len(response.data) > 0:
+            return response.data[0]
 
         logger.info(f"No usage record for user {user_id} in current period")
         return {
             'uploads_count': 0,
-            'processing_count': 0,
+            'processing_jobs_count': 0,
             'training_runs_count': 0,
-            'storage_used_mb': 0
+            'storage_used_gb': 0
         }
 
     except Exception as e:
         logger.error(f"Error fetching usage: {str(e)}")
         return {
             'uploads_count': 0,
-            'processing_count': 0,
+            'processing_jobs_count': 0,
             'training_runs_count': 0,
-            'storage_used_mb': 0
+            'storage_used_gb': 0
         }
 
 

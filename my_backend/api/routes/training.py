@@ -1435,6 +1435,8 @@ def get_training_status(session_id: str):
 
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
 @require_auth
+@require_subscription
+@check_processing_limit
 def generate_datasets(session_id):
     """
     Generate datasets and violin plots WITHOUT training models.
@@ -1492,6 +1494,8 @@ def generate_datasets(session_id):
 
 @bp.route('/train-models/<session_id>', methods=['POST'])
 @require_auth
+@require_subscription
+@check_training_limit
 def train_models(session_id):
     """
     Train models with user-specified parameters.
