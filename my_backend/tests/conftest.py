@@ -1,391 +1,281 @@
 """
-Pytest configuration and shared fixtures for cloud.py tests
+Pytest configuration and fixtures for backend tests.
 
-This file provides:
-- Shared fixtures for all test files
-- Mock configurations
-- Test data generators
-- Cleanup utilities
+This module provides common fixtures used across all test modules.
 """
 
 import pytest
 import os
 import sys
-import tempfile
-import shutil
-from pathlib import Path
+from io import BytesIO, StringIO
+from unittest.mock import Mock, MagicMock, patch
+from datetime import datetime
+import pandas as pd
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-
-# ==================== SESSION FIXTURES ====================
-
-@pytest.fixture(scope='session')
-def test_data_dir():
-    """Create temporary directory for test data files"""
-    temp_dir = tempfile.mkdtemp(prefix='cloud_test_data_')
-    yield temp_dir
-    shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-@pytest.fixture(scope='session')
-def chunk_storage_dir():
-    """Create temporary directory for chunk storage during tests"""
-    temp_dir = tempfile.mkdtemp(prefix='cloud_chunks_')
-    yield temp_dir
-    shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-# ==================== MODULE FIXTURES ====================
-
-@pytest.fixture(scope='module')
-def mock_chunk_dir(chunk_storage_dir):
-    """Mock CHUNK_DIR to use test directory"""
-    from api.routes import cloud
-    original_chunk_dir = cloud.CHUNK_DIR
-    cloud.CHUNK_DIR = chunk_storage_dir
-    yield chunk_storage_dir
-    cloud.CHUNK_DIR = original_chunk_dir
-
-
-# ==================== FUNCTION FIXTURES ====================
-
-@pytest.fixture
-def clean_environment():
-    """Ensure clean test environment before and after each test"""
-    # Clean before test
-    from api.routes.cloud import chunk_uploads, temp_files
-    chunk_uploads.clear()
-    temp_files.clear()
-    
-    yield
-    
-    # Clean after test
-    chunk_uploads.clear()
-    temp_files.clear()
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 
 @pytest.fixture
-def mock_logger():
-    """Mock logger to suppress log output during tests"""
-    import logging
-    from unittest.mock import MagicMock
-    
-    logger = logging.getLogger('api.routes.cloud')
-    original_handlers = logger.handlers[:]
-    logger.handlers = [MagicMock()]
-    
-    yield logger
-    
-    logger.handlers = original_handlers
-
-
-# ==================== HELPER FUNCTIONS ====================
-
-def create_csv_file(data_dict, filename, sep=';'):
-    """Helper function to create CSV file from dictionary
-    
-    Args:
-        data_dict: Dictionary with column names as keys and lists as values
-        filename: Path to save the CSV file
-        sep: CSV separator (default ';')
+def app():
+    """
+    Create Flask app for testing.
     
     Returns:
-        Path to created file
+        Flask application instance configured for testing
     """
-    import pandas as pd
-    df = pd.DataFrame(data_dict)
-    df.to_csv(filename, sep=sep, index=False)
-    return filename
-
-
-def create_chunked_file(file_path, chunk_size=5*1024*1024):
-    """Helper function to split file into chunks
+    from flask import Flask
     
-    Args:
-        file_path: Path to file to chunk
-        chunk_size: Size of each chunk in bytes (default 5MB)
-    
-    Returns:
-        List of chunk file paths
-    """
-    chunks = []
-    chunk_index = 0
-    
-    with open(file_path, 'rb') as f:
-        while True:
-            chunk_data = f.read(chunk_size)
-            if not chunk_data:
-                break
-            
-            chunk_path = f"{file_path}.chunk{chunk_index}"
-            with open(chunk_path, 'wb') as chunk_file:
-                chunk_file.write(chunk_data)
-            
-            chunks.append(chunk_path)
-            chunk_index += 1
-    
-    return chunks
-
-
-# ==================== PYTEST CONFIGURATION ====================
-
-def pytest_configure(config):
-    """Configure pytest markers"""
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "unit: marks tests as unit tests"
-    )
-    config.addinivalue_line(
-        "markers", "performance: marks tests as performance tests"
-    )
-
-
-def pytest_collection_modifyitems(config, items):
-    """Automatically mark tests based on their location/name"""
-    for item in items:
-        # Mark slow tests
-        if 'slow' in item.nodeid or 'large_file' in item.nodeid:
-            item.add_marker(pytest.mark.slow)
-        
-        # Mark integration tests
-        if 'Endpoint' in item.nodeid or 'integration' in item.nodeid:
-            item.add_marker(pytest.mark.integration)
-        
-        # Mark unit tests
-        if 'Test' in item.nodeid and 'Endpoint' not in item.nodeid:
-            item.add_marker(pytest.mark.unit)
-        
-        # Mark performance tests
-        if 'performance' in item.nodeid.lower():
-            item.add_marker(pytest.mark.performance)
-
-
-# ==================== DOCKER SUPPORT ====================
-
-@pytest.fixture(scope='session')
-def docker_available():
-    """Check if Docker is available for integration tests"""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ['docker', '--version'],
-            capture_output=True,
-            timeout=5
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
-
-@pytest.fixture(scope='session')
-def docker_app_url(docker_available):
-    """Start Flask app in Docker container for integration tests
-    
-    Only runs if Docker is available and --docker flag is passed
-    """
-    if not docker_available:
-        pytest.skip("Docker not available")
-    
-    # This would start the Docker container
-    # Implementation depends on your Docker setup
-    yield "http://localhost:8080"
-    
-    # Cleanup: stop Docker container
-    pass
-
-
-# ==================== ENV CONFIGURATION ====================
-
-@pytest.fixture(autouse=True)
-def setup_test_environment(monkeypatch):
-    """Setup test environment variables"""
-    monkeypatch.setenv('FLASK_ENV', 'testing')
-    monkeypatch.setenv('TESTING', 'True')
-    
-    # Mock Supabase credentials if needed
-    monkeypatch.setenv('SUPABASE_URL', 'https://test.supabase.co')
-    monkeypatch.setenv('SUPABASE_KEY', 'test-key')
-
-
-# ==================== DATA VALIDATORS ====================
-
-def validate_regression_response(data):
-    """Validate structure of regression response data
-    
-    Args:
-        data: Response data dictionary
-    
-    Returns:
-        bool: True if valid
-    
-    Raises:
-        AssertionError: If structure is invalid
-    """
-    required_keys = [
-        'x_values', 'y_values', 'predicted_y',
-        'upper_bound', 'lower_bound',
-        'filtered_x', 'filtered_y',
-        'equation', 'removed_points'
-    ]
-    
-    for key in required_keys:
-        assert key in data, f"Missing required key: {key}"
-    
-    # Validate types
-    assert isinstance(data['x_values'], list)
-    assert isinstance(data['y_values'], list)
-    assert isinstance(data['equation'], str)
-    assert isinstance(data['removed_points'], int)
-    
-    # Validate lengths match
-    assert len(data['x_values']) == len(data['y_values'])
-    assert len(data['filtered_x']) == len(data['filtered_y'])
-    
-    return True
-
-
-def validate_interpolation_response(response_data):
-    """Validate structure of interpolation streaming response
-    
-    Args:
-        response_data: List of parsed NDJSON lines
-    
-    Returns:
-        bool: True if valid
-    """
-    assert len(response_data) > 0, "No data in response"
-    
-    # First message should be metadata
-    meta = response_data[0]
-    assert meta['type'] == 'meta'
-    assert 'total_rows' in meta
-    assert 'total_chunks' in meta
-    
-    # Last message should be completion
-    last = response_data[-1]
-    assert last['type'] == 'complete'
-    assert last['success'] is True
-
-    return True
-
-
-# ==================== TRAINING ENDPOINT FIXTURES ====================
-
-@pytest.fixture
-def client():
-    """Create Flask test client"""
-    from app import app
+    app = Flask(__name__)
     app.config['TESTING'] = True
-    with app.test_client() as client:
-        yield client
+    app.config['SECRET_KEY'] = 'test-secret-key'
+    app.config['UPLOAD_EXPIRY_SECONDS'] = 1800
+    
+    # Mock extensions
+    app.extensions = {'socketio': MagicMock()}
+    
+    return app
 
 
 @pytest.fixture
-def test_session_id():
-    """Provide a test session ID for endpoint testing (UUID format)"""
-    import uuid
-    return str(uuid.uuid4())
+def client(app):
+    """
+    Create test client.
+    
+    Args:
+        app: Flask application fixture
+        
+    Returns:
+        Flask test client
+    """
+    return app.test_client()
 
 
 @pytest.fixture
-def test_file_id():
-    """Provide a test file ID for CSV file operations (UUID format)"""
-    import uuid
-    return str(uuid.uuid4())
+def mock_socketio():
+    """
+    Mock SocketIO instance.
+    
+    Returns:
+        Mocked SocketIO object
+    """
+    mock = MagicMock()
+    mock.emit = MagicMock()
+    return mock
 
 
 @pytest.fixture
-def test_upload_id():
-    """Provide a test upload ID for chunked upload operations"""
-    import uuid
-    return str(uuid.uuid4())
+def mock_auth(monkeypatch):
+    """
+    Mock authentication middleware.
+    
+    Bypasses authentication for testing.
+    """
+    def mock_require_auth(f):
+        """Passthrough decorator."""
+        return f
+    
+    # This would need to be adjusted based on actual middleware location
+    # monkeypatch.setattr('middleware.auth.require_auth', mock_require_auth)
+    return mock_require_auth
+
+
+@pytest.fixture
+def mock_subscription(monkeypatch):
+    """
+    Mock subscription middleware.
+    
+    Bypasses subscription checks for testing.
+    """
+    def mock_require_subscription(f):
+        return f
+    
+    def mock_check_processing_limit(f):
+        return f
+    
+    return mock_require_subscription, mock_check_processing_limit
+
+
+@pytest.fixture
+def sample_csv_content():
+    """
+    Sample CSV data for testing.
+    
+    Returns:
+        CSV string with datetime and value columns
+    """
+    return """datetime,value
+2024-01-01 10:00:00,100.5
+2024-01-01 11:00:00,101.2
+2024-01-01 12:00:00,102.0
+2024-01-01 13:00:00,103.5
+2024-01-01 14:00:00,104.1"""
+
+
+@pytest.fixture
+def sample_csv_semicolon():
+    """
+    Sample CSV with semicolon delimiter.
+    
+    Returns:
+        CSV string with semicolon delimiter
+    """
+    return """datetime;value
+2024-01-01 10:00:00;100.5
+2024-01-01 11:00:00;101.2"""
+
+
+@pytest.fixture
+def sample_csv_german_format():
+    """
+    Sample CSV with German date format.
+    
+    Returns:
+        CSV string with dd.mm.YYYY HH:MM format
+    """
+    return """datum,wert
+01.01.2024 10:00,100.5
+01.01.2024 11:00,101.2
+01.01.2024 12:00,102.0"""
+
+
+@pytest.fixture
+def sample_csv_separate_datetime():
+    """
+    Sample CSV with separate date and time columns.
+    
+    Returns:
+        CSV string with date, time, and value columns
+    """
+    return """date,time,value
+2024-01-01,10:00:00,100.5
+2024-01-01,11:00:00,101.2
+2024-01-01,12:00:00,102.0"""
+
+
+@pytest.fixture
+def sample_dataframe():
+    """
+    Sample pandas DataFrame for testing.
+    
+    Returns:
+        DataFrame with datetime and value columns
+    """
+    return pd.DataFrame({
+        'datetime': pd.to_datetime([
+            '2024-01-01 10:00:00',
+            '2024-01-01 11:00:00',
+            '2024-01-01 12:00:00'
+        ]),
+        'value': [100.5, 101.2, 102.0]
+    })
+
+
+@pytest.fixture
+def upload_chunk_data():
+    """
+    Sample data for chunk upload testing.
+    
+    Returns:
+        Dictionary with upload chunk parameters
+    """
+    return {
+        'uploadId': 'test-upload-123',
+        'chunkIndex': '0',
+        'totalChunks': '3',
+        'delimiter': ',',
+        'selected_columns': '{"column1": "datetime", "column2": "value"}',
+        'timezone': 'UTC',
+        'dropdown_count': '2',
+        'hasHeader': 'ja',
+        'fileChunk': (BytesIO(b'datetime,value\n2024-01-01 10:00:00,100.5'), 'test.csv')
+    }
+
+
+@pytest.fixture
+def mock_flask_request():
+    """
+    Mock Flask request object.
+    
+    Returns:
+        Mocked request object
+    """
+    mock = MagicMock()
+    mock.form = {}
+    mock.files = {}
+    mock.json = {}
+    return mock
+
+
+@pytest.fixture
+def mock_flask_g():
+    """
+    Mock Flask g object.
+    
+    Returns:
+        Mocked g object with user_id
+    """
+    mock = MagicMock()
+    mock.user_id = 'test-user-123'
+    return mock
 
 
 @pytest.fixture(autouse=True)
-def mock_supabase_client(monkeypatch):
-    """Mock Supabase client for testing without actual database calls
-
-    This fixture is autouse=True, so it runs for all tests automatically
+def reset_state():
     """
-    from unittest.mock import MagicMock, Mock
-    import uuid
+    Reset any global state before each test.
+    
+    This ensures tests are isolated and don't affect each other.
+    """
+    # This will be important when we have state managers
+    yield
+    # Cleanup after test
 
-    # Create mock client
-    mock_client = MagicMock()
 
-    # Mock table operations
-    def mock_table(table_name):
-        mock_tbl = MagicMock()
+@pytest.fixture
+def temp_csv_file(tmp_path):
+    """
+    Create temporary CSV file for testing.
+    
+    Args:
+        tmp_path: pytest's temporary directory fixture
+        
+    Returns:
+        Path to temporary CSV file
+    """
+    csv_file = tmp_path / "test.csv"
+    csv_file.write_text("""datetime,value
+2024-01-01 10:00:00,100.5
+2024-01-01 11:00:00,101.2""")
+    return csv_file
 
-        # Mock select operations
-        mock_select = MagicMock()
-        mock_select.eq.return_value = mock_select
-        mock_select.execute.return_value = MagicMock(data=[])
-        mock_tbl.select.return_value = mock_select
 
-        # Mock insert operations
-        mock_insert = MagicMock()
-        mock_insert.execute.return_value = MagicMock(
-            data=[{'id': str(uuid.uuid4()), 'session_id': str(uuid.uuid4())}]
-        )
-        mock_tbl.insert.return_value = mock_insert
-
-        # Mock update operations
-        mock_update = MagicMock()
-        mock_update.eq.return_value = mock_update
-        mock_update.execute.return_value = MagicMock(data=[])
-        mock_tbl.update.return_value = mock_update
-
-        # Mock delete operations
-        mock_delete = MagicMock()
-        mock_delete.eq.return_value = mock_delete
-        mock_delete.execute.return_value = MagicMock(data=[])
-        mock_tbl.delete.return_value = mock_delete
-
-        # Mock upsert operations
-        mock_upsert = MagicMock()
-        mock_upsert.execute.return_value = MagicMock(
-            data=[{'id': str(uuid.uuid4())}]
-        )
-        mock_tbl.upsert.return_value = mock_upsert
-
-        return mock_tbl
-
-    mock_client.table = mock_table
-
-    # Mock storage operations
-    mock_storage = MagicMock()
-    mock_bucket = MagicMock()
-    mock_bucket.upload.return_value = {'path': 'test/path'}
-    mock_bucket.download.return_value = b'test data'
-    mock_bucket.remove.return_value = {'message': 'success'}
-    mock_storage.from_.return_value = mock_bucket
-    mock_client.storage = mock_storage
-
-    # Patch get_supabase_client function
-    def mock_get_supabase():
-        return mock_client
-
-    # Try multiple import paths
-    try:
-        import utils.database
-        monkeypatch.setattr(utils.database, 'get_supabase_client', mock_get_supabase)
-    except (ImportError, AttributeError):
-        pass
-
-    try:
-        from services import supabase_client
-        monkeypatch.setattr(supabase_client, 'supabase', mock_client)
-        monkeypatch.setattr(supabase_client, 'get_supabase_client', mock_get_supabase)
-    except (ImportError, AttributeError):
-        pass
-
-    return mock_client
+@pytest.fixture
+def supported_date_formats():
+    """
+    List of supported date formats for testing.
+    
+    Returns:
+        List of datetime format strings
+    """
+    return [
+        '%Y-%m-%dT%H:%M:%S%z',
+        '%Y-%m-%dT%H:%M%z',
+        '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%d %H:%M:%S',
+        '%d.%m.%Y %H:%M',
+        '%Y-%m-%d %H:%M',
+        '%d.%m.%Y %H:%M:%S',
+        '%d.%m.%Y %H:%M:%S.%f',
+        '%Y/%m/%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S',
+        '%Y/%m/%d',
+        '%d/%m/%Y',
+        '%d-%m-%Y %H:%M:%S',
+        '%d-%m-%Y %H:%M',
+        '%Y/%m/%d %H:%M',
+        '%d/%m/%Y %H:%M',
+        '%d-%m-%Y',
+        '%H:%M:%S',
+        '%H:%M'
+    ]

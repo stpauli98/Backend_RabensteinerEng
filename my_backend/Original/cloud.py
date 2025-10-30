@@ -3,13 +3,21 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from datetime import datetime as dat
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 import base64
 from io import StringIO, BytesIO
 import json
 import os
 import sys
+import logging
+from middleware.auth import require_auth
+from middleware.subscription import require_subscription, check_processing_limit
+from utils.usage_tracking import increment_processing_count, update_storage_usage
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {
@@ -107,6 +115,9 @@ def interpolate_data(df1, df2, x_col, y_col, max_time_span):
         raise
 
 @app.route('/clouddata', methods=['POST', 'OPTIONS'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def clouddata():
     if request.method == 'OPTIONS':
         response = app.make_default_options_response()
@@ -378,6 +389,23 @@ def _process_data():
                     print(f"Error in polynomial regression: {str(e)}")
                     return jsonify({'error': f'Error in polynomial regression: {str(e)}'}), 500
 
+            # Track operations (processing) and storage usage
+            try:
+                # Increment operations count (replaces upload count)
+                increment_processing_count(g.user_id)
+                logger.info(f"✅ Tracked operation (cloud processing) for user {g.user_id}")
+
+                # Calculate file sizes in MB
+                temp_size_mb = len(temp_data) / (1024 * 1024) if temp_data else 0
+                load_size_mb = len(load_data) / (1024 * 1024) if load_data else 0
+                total_size_mb = temp_size_mb + load_size_mb
+
+                update_storage_usage(g.user_id, total_size_mb)
+                logger.info(f"✅ Tracked storage for user {g.user_id}: {total_size_mb:.2f} MB")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to track usage: {str(e)}")
+                # Don't fail the operation if tracking fails
+
             # Send response
             print("Sending response:", {'success': True, 'data': result_data})
             return jsonify({'success': True, 'data': result_data})
@@ -399,6 +427,9 @@ def _process_data():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/interpolate', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def interpolate():
     try:
         print("\nReceived request to /interpolate")
@@ -484,6 +515,23 @@ def interpolate():
         print("Sample of chart data being sent:")
         print(chart_data[:5])  # Print first 5 points for debugging
 
+        # Track operations (processing) and storage usage
+        try:
+            # Increment operations count
+            increment_processing_count(g.user_id)
+            logger.info(f"✅ Tracked operation (interpolation) for user {g.user_id}")
+
+            # Calculate file size in MB from uploaded file
+            load_file.stream.seek(0)  # Reset stream position
+            file_content = load_file.stream.read()
+            file_size_mb = len(file_content) / (1024 * 1024)
+
+            update_storage_usage(g.user_id, file_size_mb)
+            logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to track usage: {str(e)}")
+            # Don't fail the operation if tracking fails
+
         return jsonify({
             'success': True,
             'data': {
@@ -493,7 +541,7 @@ def interpolate():
                 'removed_points': 0
             }
         })
-        
+
     except Exception as e:
         print(f"Error in interpolation endpoint: {str(e)}")
         print("Full error details:", e)

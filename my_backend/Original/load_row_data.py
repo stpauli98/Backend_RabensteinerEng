@@ -8,6 +8,18 @@ import pytz
 app = Flask(__name__)
 CORS(app)
 
+# Definiere die unterstützten Datumsformate
+date_formats = [
+    "%Y-%m-%d %H:%M:%S",     # 2022-01-01 00:00:00
+    "%d.%m.%Y %H:%M:%S",     # 31.12.2022 00:00:00
+    "%Y-%m-%d %H:%M",        # 2022-01-01 00:00
+    "%d.%m.%Y %H:%M",        # 31.12.2022 00:00
+    "%Y-%m-%d",              # 2022-01-01
+    "%d.%m.%Y",              # 31.12.2022
+    "%d/%m/%Y %H:%M:%S",     # 31/12/2022 00:00:00
+    "%Y/%m/%d %H:%M:%S",     # 2022/12/31 00:00:00
+    "%d-%m-%Y %H:%M:%S",     # 31-12-2022 00:00:00
+]
 
 def validate_delimiter(file_content, delimiter):
     """Überprüft, ob der Delimiter für den angegebenen CSV-Inhalt korrekt ist"""
@@ -202,20 +214,6 @@ def create_column_mapping(df, selected_columns):
     print("Spalten nach Umbenennung:", df.columns.tolist())
     
     return mapping
-
-
-# Definiere die unterstützten Datumsformate
-date_formats = [
-    "%Y-%m-%d %H:%M:%S",     # 2022-01-01 00:00:00
-    "%d.%m.%Y %H:%M:%S",     # 31.12.2022 00:00:00
-    "%Y-%m-%d %H:%M",        # 2022-01-01 00:00
-    "%d.%m.%Y %H:%M",        # 31.12.2022 00:00
-    "%Y-%m-%d",              # 2022-01-01
-    "%d.%m.%Y",              # 31.12.2022
-    "%d/%m/%Y %H:%M:%S",     # 31/12/2022 00:00:00
-    "%Y/%m/%d %H:%M:%S",     # 2022/12/31 00:00:00
-    "%d-%m-%Y %H:%M:%S",     # 31-12-2022 00:00:00
-]
 
 
 @app.route('/upload', methods=['POST'])

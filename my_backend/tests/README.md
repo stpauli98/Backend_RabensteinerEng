@@ -1,229 +1,192 @@
-# Backend API Test Suite
+# Backend Tests
 
-Kompletan test suite za sve Backend API endpoint-e.
+Comprehensive test suite za load_data.py refaktoring.
 
-## 📁 Struktura
+## Setup
 
-```
-tests/
-├── conftest.py                          # Pytest konfiguracija i fixtures
-├── test_cloud.py                        # Cloud API testovi
-├── test_training_endpoints.py           # Training API testovi ✅ NEW (41/42 passing - 97.6%)
-├── fixtures/                            # Test data
-│   ├── sample_temperature.csv
-│   ├── sample_load.csv
-│   └── sample_load_with_gaps.csv
-├── FINAL_TEST_RESULTS.md                # Finalni rezultati Training API testova
-├── TRAINING_TESTS_RESULTS.md            # Detaljni rezultati (initial run)
-└── README.md                            # Ova dokumentacija
-```
-
-## 🎯 Test Coverage Overview
-
-| Test File | Endpoints | Pass Rate | Status |
-|-----------|-----------|-----------|--------|
-| **test_training_endpoints.py** | 37 | 97.6% (41/42) | ✅ **Production Ready** |
-| **test_cloud.py** | ~15 | TBD | ⏳ In Progress |
-
-## 🧪 Vrste testova
-
-### 1. **Training API Testovi** ✅
-**File:** `test_training_endpoints.py`
-**Coverage:** 37 unique endpoints across 13 categories
-**Success Rate:** 97.6% (41/42 tests passing)
-
-**Categories:**
-- Training Core Operations (7 endpoints)
-- Model Management (5 endpoints)
-- Session Management (7 endpoints)
-- CSV File Management (6 endpoints)
-- Upload/Chunked Upload (3 endpoints)
-- Scalers, Time Info, Zeitschritte, Plotting, etc.
-
-**Features:**
-- UUID-based session IDs
-- Comprehensive Supabase mocking
-- Flexible status code validation
-- Auto-use fixtures for clean tests
-
-### 2. **Cloud API Testovi**
-
-#### Unit testovi (funkcije)
-- ✅ `calculate_bounds()` - Testiranje tolerancija
-- ✅ `interpolate_data()` - Testiranje interpolacije
-- ✅ Constant vs Dependent tolerance
-- ✅ Negativne vrednosti i edge cases
-
-#### Integration testovi (endpointi)
-- ✅ `POST /upload-chunk` - Chunk upload flow
-- ✅ `POST /complete` - Kompletiranje chunked upload-a
-- ✅ `POST /clouddata` - Direktan upload i procesiranje
-- ✅ `POST /interpolate-chunked` - Interpolacija sa streaming-om
-- ✅ `POST /prepare-save` - Priprema fajla za download
-- ✅ `GET /download/<file_id>` - Download fajla
-
-### 3. **Edge case testovi**
-- ✅ Duplicate timestamps
-- ✅ No matching timestamps
-- ✅ NaN vrednosti
-- ✅ Tolerancije van opsega
-- ✅ Empty data after cleaning
-- ✅ Invalid chunk indices
-
-### 4. **Performance testovi**
-- ✅ Veliki fajlovi (10000+ rows)
-- ✅ Streaming response (20000+ rows)
-- ✅ Memory usage during chunk processing
-
-## 🚀 Pokretanje testova
-
-### Svi testovi
-```bash
-pytest
-```
-
-### Samo unit testovi
-```bash
-pytest -m unit
-```
-
-### Samo integration testovi
-```bash
-pytest -m integration
-```
-
-### Bez slow testova
-```bash
-pytest -m "not slow"
-```
-
-### Sa coverage report-om
-```bash
-pytest --cov=api.routes.cloud --cov-report=html
-```
-
-### Verbose output
-```bash
-pytest -v
-```
-
-## 🐳 Docker testiranje
-
-### Build Docker image
-```bash
-docker build -t my_backend -f Dockerfile.optimized .
-```
-
-### Run testovi u Docker-u
-```bash
-docker run --rm my_backend pytest
-```
-
-### Run sa coverage u Docker-u
-```bash
-docker run --rm my_backend pytest --cov=api.routes.cloud --cov-report=term-missing
-```
-
-## 📊 Coverage cilj
-
-**Cilj: >85% code coverage**
-
-Trenutno pokriveni endpointi:
-- ✅ `/upload-chunk` 
-- ✅ `/complete`
-- ✅ `/clouddata`
-- ✅ `/interpolate-chunked`
-- ✅ `/prepare-save`
-- ✅ `/download/<file_id>`
-
-Pokrivene funkcije:
-- ✅ `calculate_bounds()`
-- ✅ `interpolate_data()`
-- ✅ `_process_data_frames()`
-- ✅ `get_chunk_dir()`
-
-## 🔧 Instalacija dependencies
+### 1. Instalacija Dependencies
 
 ```bash
+# Koristi virtual environment (preporučeno)
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# ili
+venv\Scripts\activate  # Windows
+
+# Instaliraj test dependencies
+pip install -r requirements-test.txt
+
+# Instaliraj main dependencies
 pip install -r requirements.txt
 ```
 
-Potrebni paketi za testiranje:
-- `pytest==8.3.4`
-- `pytest-cov==6.0.0`
-- `pytest-flask==1.3.0`
-- `pytest-mock==3.14.0`
+### 2. Pokretanje Testova
 
-## 📝 Pisanje novih testova
-
-### Test pattern
-```python
-class TestNewFeature:
-    """Test description"""
-    
-    def test_success_case(self, client):
-        """Test successful operation"""
-        response = client.post('/endpoint', json={...})
-        assert response.status_code == 200
-        assert response.get_json()['success'] is True
-    
-    def test_error_case(self, client):
-        """Test error handling"""
-        response = client.post('/endpoint', json={...})
-        assert response.status_code == 400
-        assert 'error' in response.get_json()['data']
-```
-
-### Korišćenje fixtures
-```python
-def test_with_fixtures(client, sample_temp_df, upload_id):
-    """Test koristi postojeće fixtures"""
-    # sample_temp_df i upload_id su automatski dostupni
-    pass
-```
-
-## 🐛 Debug testova
-
-### Run sa pdb debugger-om
 ```bash
+# Svi testovi
+pytest
+
+# Sa verbose output
+pytest -v
+
+# Specifičan fajl
+pytest my_backend/tests/test_setup.py
+
+# Sa coverage reportom
+pytest --cov=my_backend --cov-report=html
+
+# Samo unit testovi
+pytest -m unit
+
+# Samo integration testovi
+pytest -m integration
+```
+
+### 3. Coverage Report
+
+```bash
+# Generiši HTML coverage report
+pytest --cov=my_backend --cov-report=html
+
+# Otvori report
+open htmlcov/index.html  # Mac
+xdg-open htmlcov/index.html  # Linux
+start htmlcov/index.html  # Windows
+```
+
+## Test Struktura
+
+```
+my_backend/tests/
+├── conftest.py              # Shared fixtures
+├── test_setup.py            # Framework validation tests
+├── fixtures/                # Test data files
+│   ├── sample_data.csv
+│   ├── sample_data_german.csv
+│   ├── sample_data_semicolon.csv
+│   └── sample_data_separate_datetime.csv
+├── api/
+│   └── routes/
+│       └── test_load_data.py     # (TODO: Route tests)
+├── core/
+│   └── state/
+│       └── test_upload_manager.py # (TODO: State manager tests)
+└── utils/
+    └── test_datetime_parser.py   # (TODO: Parser tests)
+```
+
+## Fixtures
+
+### Flask Fixtures
+- `app` - Flask app instance
+- `client` - Flask test client
+- `mock_socketio` - Mocked SocketIO
+- `mock_auth` - Bypasses auth
+- `mock_subscription` - Bypasses subscription checks
+
+### Data Fixtures
+- `sample_csv_content` - Basic CSV string
+- `sample_csv_semicolon` - Semicolon delimited
+- `sample_csv_german_format` - German date format
+- `sample_csv_separate_datetime` - Date/time in separate columns
+- `sample_dataframe` - Pandas DataFrame
+- `supported_date_formats` - List of 19 supported formats
+
+### Upload Fixtures
+- `upload_chunk_data` - Sample chunk upload data
+- `temp_csv_file` - Temporary CSV file
+
+## Progress
+
+### ✅ FAZA 1 DAN 1: Test Framework Setup
+- [x] Test directories created
+- [x] pytest.ini configured
+- [x] conftest.py with fixtures
+- [x] Sample test data files
+- [x] Setup validation tests
+
+### 🔄 FAZA 1 DAN 2-3: Helper Function Tests
+- [ ] Date/time utility tests
+- [ ] CSV parsing tests
+- [ ] Validation tests
+
+### ⏸️ FAZA 1 DAN 4-5: Route Handler Tests
+- [ ] /upload-chunk tests
+- [ ] /finalize-upload tests
+- [ ] /cancel-upload tests
+- [ ] Integration tests
+
+## Tips
+
+### Debugging Failed Tests
+```bash
+# Stop at first failure
+pytest -x
+
+# Show local variables on failure
+pytest -l
+
+# Enter debugger on failure
 pytest --pdb
 ```
 
-### Show print statements
+### Watch Mode
 ```bash
-pytest -s
+# Install pytest-watch
+pip install pytest-watch
+
+# Auto-run tests on file changes
+ptw
 ```
 
-### Run single test
+### Parallel Execution
 ```bash
-pytest tests/test_cloud.py::TestUploadChunkEndpoint::test_valid_chunk_upload
+# Install pytest-xdist
+pip install pytest-xdist
+
+# Run tests in parallel
+pytest -n auto
 ```
 
-## ⚠️ Poznati problemi
+## Next Steps
 
-1. **Streaming responses** - Potreban custom parser za NDJSON
-2. **Chunk cleanup** - Autocleanup može failovati na Windows-u
-3. **Large files** - Performance testovi su označeni sa `@pytest.mark.slow`
+1. **Dan 2:** Implementirati test_helpers.py
+   - test_clean_time()
+   - test_detect_delimiter()
+   - test_clean_file_content()
+   - test_check_date_format()
+   
+2. **Dan 3:** Implementirati test_parsing.py
+   - test_parse_datetime_column()
+   - test_parse_datetime()
+   - test_convert_to_utc()
 
-## 📈 CI/CD Integration
+3. **Dan 4-5:** Implementirati test_routes.py
+   - Route handler tests
+   - Integration tests
 
-### GitHub Actions example
-```yaml
-- name: Run tests
-  run: |
-    pip install -r requirements.txt
-    pytest --cov=api.routes.cloud --cov-report=xml
-    
-- name: Upload coverage
-  uses: codecov/codecov-action@v3
-  with:
-    file: ./coverage.xml
+## Troubleshooting
+
+### Import Errors
+```python
+# Ako imaš import errors, dodaj path u conftest.py:
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 ```
 
-## 🎯 Sledeci koraci
+### Coverage Not Working
+```bash
+# Provjeri da li je .coveragerc konfiguran
+# Ili koristi --cov-config=pytest.ini
+```
 
-- [ ] Dodati parametrizovane testove za različite REG/TR kombinacije
-- [ ] E2E testovi sa pravim frontend pozivima
-- [ ] Load testing sa locust/k6
-- [ ] Security testovi (SQL injection, XSS)
-- [ ] Mutation testing sa mutpy
+### Slow Tests
+```bash
+# Mark slow tests
+@pytest.mark.slow
+def test_expensive_operation():
+    pass
+
+# Skip slow tests
+pytest -m "not slow"
+```
