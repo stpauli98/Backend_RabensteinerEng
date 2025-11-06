@@ -211,19 +211,7 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
         """
         params = [limit]
 
-    try:
-        response = supabase.rpc('execute_sql', {
-            'sql_query': sessions_query,
-            'params': params
-        }).execute()
-
-        if response.data:
-            return _format_sessions_response(response.data)
-
-    except Exception as e:
-        logger.warning(f"Complex query failed, using fallback: {str(e)}")
-
-    # Fallback query - also filter by user_id
+    # Use direct query approach (execute_sql RPC not available in Supabase)
     sessions_response = supabase.table('session_mappings').select(
         'string_session_id, uuid_session_id, created_at'
     ).order('created_at', desc=True).limit(limit).execute()
@@ -691,13 +679,14 @@ def save_time_info_data(session_id: str, time_info: Dict) -> bool:
     return True
 
 
-def save_zeitschritte_data(session_id: str, zeitschritte: Dict) -> bool:
+def save_zeitschritte_data(session_id: str, zeitschritte: Dict, user_id: str = None) -> bool:
     """
     Save zeitschritte for a session.
 
     Args:
         session_id: Session identifier
         zeitschritte: Zeitschritte dictionary
+        user_id: User ID (required for creating new sessions)
 
     Returns:
         bool: True if successful

@@ -393,14 +393,15 @@ def save_time_info(session_id: str, time_info: dict) -> bool:
             raise
         raise DatabaseError(f"Error saving time_info: {str(e)}")
 
-def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
+def save_zeitschritte(session_id: str, zeitschritte: dict, user_id: str = None) -> bool:
     """
     Save zeitschritte information to the zeitschritte table.
-    
+
     Args:
         session_id: ID of the session (can be string or UUID)
         zeitschritte: Dictionary containing zeitschritte information
-        
+        user_id: User ID (required for creating new sessions)
+
     Returns:
         bool: True if successful, False otherwise
     """
@@ -414,7 +415,7 @@ def save_zeitschritte(session_id: str, zeitschritte: dict) -> bool:
             database_session_id = session_id
         except (ValueError, TypeError):
             logger.info(f"Converting string session_id {session_id} to UUID format for zeitschritte")
-            database_session_id = create_or_get_session_uuid(session_id)
+            database_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
             if not database_session_id:
                 logger.error(f"Failed to convert session_id {session_id} to UUID for zeitschritte")
                 return False

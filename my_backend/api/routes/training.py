@@ -973,7 +973,7 @@ def save_zeitschritte_endpoint():
         session_id = data['sessionId']
         zeitschritte = data['zeitschritte']
 
-        save_zeitschritte_data(session_id, zeitschritte)
+        save_zeitschritte_data(session_id, zeitschritte, user_id=g.user_id)
 
         return jsonify({'success': True, 'message': 'Zeitschritte saved successfully'})
 
