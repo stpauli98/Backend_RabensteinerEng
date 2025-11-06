@@ -32,7 +32,7 @@ def prepare_data_for_training(
         from utils.database import get_supabase_client, create_or_get_session_uuid
         
         supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
+        uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
         
         results_response = supabase.table('training_results').select('*').eq(
             'session_id', uuid_session_id

@@ -527,8 +527,10 @@ class ResultsGenerator:
                 return False
             
             from utils.database import create_or_get_session_uuid
-            
-            uuid_session_id = create_or_get_session_uuid(session_id)
+
+            # Note: This function should receive user_id from caller for proper validation
+            # For now, uses None for backward compatibility (to be fixed in caller chain)
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
             if not uuid_session_id:
                 logger.error(f"Could not get UUID for session {session_id}")
                 return False

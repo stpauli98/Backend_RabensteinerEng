@@ -78,6 +78,7 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 class DatabaseError(Exception):
     """Base exception for database operations"""
@@ -99,19 +100,51 @@ class ConfigurationError(DatabaseError):
     """Raised when configuration is invalid"""
     pass
 
-def get_supabase_client() -> Client:
+def get_supabase_client(use_service_role: bool = False) -> Client:
     """
     Get the Supabase client instance.
-    
+
+    Args:
+        use_service_role: If True, always use service_role key (bypasses RLS).
+                         If False, uses user JWT when available for RLS enforcement.
+
     Returns:
         Client: Supabase client instance
     """
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        logger.warning("Supabase URL or key not found in environment variables. Database features will be disabled.")
+    if not SUPABASE_URL:
+        logger.warning("Supabase URL not found in environment variables. Database features will be disabled.")
         return None
-        
+
     try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Check if we're in a Flask request context with authenticated user
+        from flask import g, has_request_context
+
+        # Determine which key to use
+        if use_service_role:
+            # Use service_role key to bypass RLS
+            if not SUPABASE_SERVICE_ROLE_KEY:
+                logger.error("SUPABASE_SERVICE_ROLE_KEY not found! Falling back to anon key.")
+                api_key = SUPABASE_KEY
+            else:
+                logger.debug("Using service_role key for database operations (bypasses RLS)")
+                api_key = SUPABASE_SERVICE_ROLE_KEY
+        else:
+            # Use anon key for user-scoped operations
+            if not SUPABASE_KEY:
+                logger.warning("SUPABASE_KEY not found in environment variables.")
+                return None
+            api_key = SUPABASE_KEY
+
+        # Create the client with the appropriate key
+        client = create_client(SUPABASE_URL, api_key)
+
+        # Only set user session if NOT using service_role AND user is authenticated
+        if not use_service_role and has_request_context() and hasattr(g, 'access_token') and g.access_token:
+            # Use user's JWT token for RLS enforcement by setting session
+            logger.debug(f"Setting user session context with JWT for user {g.user_id}")
+            client.auth.set_session(access_token=g.access_token, refresh_token='')
+
+        return client
     except Exception as e:
         logger.error(f"Error creating Supabase client: {str(e)}")
         return None
@@ -148,19 +181,25 @@ def retry_database_operation(operation_func, max_retries=3, initial_delay=1.0):
     
     return None
 
-def create_or_get_session_uuid(session_id: str) -> str:
+def create_or_get_session_uuid(session_id: str, user_id: str = None) -> str:
     """
     Create or get UUID for a session from the session_mappings table.
 
+    SECURITY: Validates session ownership when user_id is provided.
+
     Args:
         session_id: The string-based session ID from the frontend.
+        user_id: The user ID to associate with the session (REQUIRED for creating new sessions).
+                For existing sessions, validates that session belongs to this user.
 
     Returns:
         str: The UUID of the session.
-        
+
     Raises:
         ValidationError: If session_id is invalid
         SessionNotFoundError: If session cannot be created
+        ValueError: If user_id is not provided when creating a new session
+        PermissionError: If session exists but doesn't belong to the user
     """
     if not validate_session_id(session_id):
         raise ValidationError(f"Invalid session_id format: {session_id}")
@@ -169,15 +208,31 @@ def create_or_get_session_uuid(session_id: str) -> str:
         logger.info(f"Session ID {session_id} is already a UUID, returning as-is")
         return session_id
 
-    supabase = get_supabase_client()
+    # Use service_role to bypass RLS for session creation/lookup
+    supabase = get_supabase_client(use_service_role=True)
     if not supabase:
         raise ConfigurationError("Supabase client not available")
 
     def check_existing_mapping():
-        response = supabase.table('session_mappings').select('uuid_session_id').eq('string_session_id', session_id).execute()
+        # Join with sessions table to get user_id for ownership validation
+        response = supabase.table('session_mappings')\
+            .select('uuid_session_id, sessions!inner(user_id)')\
+            .eq('string_session_id', session_id)\
+            .execute()
+
         if response.data and len(response.data) > 0:
             uuid_session_id = response.data[0]['uuid_session_id']
-            logger.info(f"Found existing mapping for {session_id}: {uuid_session_id}")
+            session_owner = response.data[0]['sessions']['user_id']
+
+            # SECURITY: Validate ownership if user_id is provided
+            if user_id and session_owner != user_id:
+                logger.warning(
+                    f"🚨 SECURITY: User {user_id} attempted to access session {session_id} "
+                    f"owned by {session_owner}"
+                )
+                raise PermissionError(f'Session {session_id} does not belong to user')
+
+            logger.info(f"Found existing mapping for {session_id}: {uuid_session_id} (owner: {session_owner})")
             return uuid_session_id
         return None
     
@@ -191,8 +246,16 @@ def create_or_get_session_uuid(session_id: str) -> str:
     
     logger.info(f"No existing mapping found for {session_id}, will create a new one.")
 
+    # Validate user_id is provided for new sessions
+    if not user_id:
+        raise ValueError("user_id is required when creating a new session")
+
     def create_new_session_mapping():
-        session_response = supabase.table('sessions').insert({}).execute()
+        # Include user_id when creating session
+        session_data = {
+            'user_id': user_id
+        }
+        session_response = supabase.table('sessions').insert(session_data).execute()
         
         if getattr(session_response, 'error', None):
             raise DatabaseError(f"Error creating new session: {session_response.error}")
@@ -210,7 +273,7 @@ def create_or_get_session_uuid(session_id: str) -> str:
         if getattr(mapping_response, 'error', None):
             raise DatabaseError(f"Error creating session mapping: {mapping_response.error}")
 
-        logger.info(f"Created new session and mapping for {session_id}: {new_uuid_session_id}")
+        logger.info(f"Created new session for user {user_id} with mapping {session_id}: {new_uuid_session_id}")
         return new_uuid_session_id
     
     new_uuid = retry_database_operation(
@@ -867,31 +930,119 @@ def _prepare_file_batch_data(database_session_id: str, files_list: list) -> list
     
     return batch_data
 
+def _batch_upsert_files(supabase, database_session_id: str, batch_data: list) -> list:
+    """
+    Perform smart UPSERT of file data - INSERT new, UPDATE existing, DELETE removed.
+
+    Args:
+        supabase: Supabase client
+        database_session_id: UUID format session ID
+        batch_data: List of file data to upsert
+
+    Returns:
+        list: List of successfully upserted file UUIDs
+    """
+    if not batch_data:
+        return []
+
+    try:
+        # 1. Fetch existing files for this session
+        logger.info(f"Fetching existing files for session {database_session_id}")
+        existing_response = supabase.table("files").select("*").eq("session_id", database_session_id).execute()
+        existing_files = {f['file_name']: f for f in (existing_response.data or [])}
+        logger.info(f"Found {len(existing_files)} existing files in database")
+
+        # 2. Prepare data for INSERT, UPDATE, DELETE operations
+        new_file_names = {item['file_name'] for item in batch_data}
+        files_to_insert = []
+        files_to_update = []
+        files_to_delete = []
+        upserted_uuids = []
+
+        # 3. Classify each file
+        for file_data in batch_data:
+            file_name = file_data['file_name']
+            if file_name in existing_files:
+                # File exists - UPDATE with existing UUID
+                existing_file = existing_files[file_name]
+                file_data['id'] = existing_file['id']  # Keep existing UUID
+                files_to_update.append(file_data)
+                upserted_uuids.append(existing_file['id'])
+                logger.info(f"File {file_name} exists - will UPDATE")
+            else:
+                # New file - INSERT
+                files_to_insert.append(file_data)
+                logger.info(f"File {file_name} is new - will INSERT")
+
+        # 4. Identify files to DELETE (exist in DB but not in new data)
+        for file_name, existing_file in existing_files.items():
+            if file_name not in new_file_names:
+                files_to_delete.append(existing_file['id'])
+                logger.info(f"File {file_name} removed - will DELETE")
+
+        # 5. Execute INSERT operations
+        if files_to_insert:
+            logger.info(f"Inserting {len(files_to_insert)} new files")
+            insert_response = supabase.table("files").insert(files_to_insert).execute()
+            if hasattr(insert_response, 'error') and insert_response.error:
+                raise DatabaseError(f"Batch file insert failed: {insert_response.error}")
+            inserted_uuids = [item['id'] for item in insert_response.data if 'id' in item]
+            upserted_uuids.extend(inserted_uuids)
+            logger.info(f"Successfully inserted {len(inserted_uuids)} new files")
+
+        # 6. Execute UPDATE operations
+        if files_to_update:
+            logger.info(f"Updating {len(files_to_update)} existing files")
+            for file_data in files_to_update:
+                file_id = file_data.pop('id')  # Remove ID from data, use it in eq()
+                update_response = supabase.table("files").update(file_data).eq("id", file_id).execute()
+                if hasattr(update_response, 'error') and update_response.error:
+                    logger.error(f"Failed to update file {file_data.get('file_name')}: {update_response.error}")
+                else:
+                    logger.info(f"Successfully updated file {file_data.get('file_name')}")
+
+        # 7. Execute DELETE operations
+        if files_to_delete:
+            logger.info(f"Deleting {len(files_to_delete)} removed files")
+            for file_id in files_to_delete:
+                delete_response = supabase.table("files").delete().eq("id", file_id).execute()
+                if hasattr(delete_response, 'error') and delete_response.error:
+                    logger.error(f"Failed to delete file {file_id}: {delete_response.error}")
+                else:
+                    logger.info(f"Successfully deleted file {file_id}")
+
+        logger.info(f"UPSERT completed: {len(files_to_insert)} inserted, {len(files_to_update)} updated, {len(files_to_delete)} deleted")
+        return upserted_uuids
+
+    except Exception as e:
+        raise DatabaseError(f"Batch file upsert failed: {str(e)}")
+
 def _batch_insert_files(supabase, batch_data: list) -> list:
     """
+    DEPRECATED: Use _batch_upsert_files instead.
     Perform batch insertion of file data.
-    
+
     Args:
         supabase: Supabase client
         batch_data: List of file data to insert
-        
+
     Returns:
         list: List of successfully inserted file UUIDs
     """
     if not batch_data:
         return []
-    
+
     try:
         logger.info(f"Performing batch insert of {len(batch_data)} files")
         response = supabase.table("files").insert(batch_data).execute()
-        
+
         if hasattr(response, 'error') and response.error:
             raise DatabaseError(f"Batch file insert failed: {response.error}")
-            
+
         inserted_uuids = [item['id'] for item in response.data if 'id' in item]
         logger.info(f"Successfully inserted {len(inserted_uuids)} files in batch")
         return inserted_uuids
-        
+
     except Exception as e:
         raise DatabaseError(f"Batch file insert failed: {str(e)}")
 
@@ -920,16 +1071,16 @@ def _save_files_to_database(database_session_id: str, session_id: str, metadata:
     try:
         batch_data = _prepare_file_batch_data(database_session_id, metadata['files'])
         if not batch_data:
-            logger.warning("No valid file data to insert")
+            logger.warning("No valid file data to upsert")
             return True
-        
-        inserted_uuids = _batch_insert_files(supabase, batch_data)
-        if not inserted_uuids:
-            logger.error("Batch file insertion failed - no files were inserted")
+
+        upserted_uuids = _batch_upsert_files(supabase, database_session_id, batch_data)
+        if not upserted_uuids:
+            logger.error("Batch file upsert failed - no files were processed")
             return False
         
         uuid_map = {}
-        for data, uuid_val in zip(batch_data, inserted_uuids):
+        for data, uuid_val in zip(batch_data, upserted_uuids):
             file_name = data.get('file_name', '')
             if file_name:
                 uuid_map[file_name] = {
@@ -965,8 +1116,8 @@ def _save_files_to_database(database_session_id: str, session_id: str, metadata:
         
         if not upload_success:
             logger.warning("Some file uploads failed, but metadata was saved successfully")
-        
-        logger.info(f"Batch file operation completed: {len(inserted_uuids)} files metadata saved")
+
+        logger.info(f"Batch file UPSERT completed: {len(upserted_uuids)} files metadata saved")
         return True
         
     except Exception as e:
@@ -1015,13 +1166,14 @@ def _finalize_session(database_session_id: str, n_dat: int = None, file_count: i
         logger.error(f"Error updating sessions table: {str(e)}")
         return False
 
-def update_session_name(session_id: str, session_name: str) -> bool:
+def update_session_name(session_id: str, session_name: str, user_id: str = None) -> bool:
     """
     Update session name in the sessions table.
 
     Args:
         session_id: ID of the session (can be string or UUID)
         session_name: New name for the session
+        user_id: User ID to validate session ownership (required for security)
 
     Returns:
         bool: True if successful, False otherwise
@@ -1030,6 +1182,7 @@ def update_session_name(session_id: str, session_name: str) -> bool:
         ValidationError: If input parameters are invalid
         ConfigurationError: If Supabase client is not available
         SessionNotFoundError: If session cannot be found
+        PermissionError: If session doesn't belong to the user
         DatabaseError: If database operations fail
     """
     if not validate_session_id(session_id):
@@ -1056,10 +1209,17 @@ def update_session_name(session_id: str, session_name: str) -> bool:
     logger.info(f"Updating session name for {database_session_id} to: {session_name}")
 
     try:
-        existing = supabase.table("sessions").select("id").eq("id", database_session_id).execute()
+        # Validate session ownership if user_id provided
+        session_query = supabase.table("sessions").select("id, user_id").eq("id", database_session_id)
+        existing = session_query.execute()
 
         if not existing.data or len(existing.data) == 0:
             raise SessionNotFoundError(f"Session {database_session_id} not found")
+
+        # Verify session belongs to user (if user_id provided)
+        if user_id and existing.data[0].get('user_id') != user_id:
+            logger.warning(f"User {user_id} attempted to rename session {database_session_id} owned by {existing.data[0].get('user_id')}")
+            raise PermissionError(f"Session {session_id} does not belong to user")
 
         response = supabase.table("sessions").update({
             "session_name": session_name,

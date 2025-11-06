@@ -328,7 +328,7 @@ class ModernMiddlemanRunner:
             True if valid, False otherwise
         """
         try:
-            uuid_session_id = create_or_get_session_uuid(session_id)
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
             
             response = self.supabase.table('sessions').select('id').eq('id', uuid_session_id).execute()
             
@@ -364,7 +364,7 @@ class ModernMiddlemanRunner:
     def _save_error_to_database(self, session_id: str, error_message: str, error_traceback: str):
         """Save error information to database"""
         try:
-            uuid_session_id = create_or_get_session_uuid(session_id)
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
             
             error_data = {
                 'session_id': uuid_session_id,

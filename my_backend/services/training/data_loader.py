@@ -36,7 +36,9 @@ class DataLoader:
             uuid.UUID(session_id)
             return session_id
         except (ValueError, TypeError):
-            uuid_session_id = create_or_get_session_uuid(session_id)
+            # Note: This class method should receive user_id for proper validation
+            # For now, uses None for backward compatibility (to be fixed in caller chain)
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
             if not uuid_session_id:
                 raise ValueError(f"Could not get UUID for session {session_id}")
             return uuid_session_id

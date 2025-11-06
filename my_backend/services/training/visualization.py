@@ -383,7 +383,7 @@ class Visualizer:
             logger.error(f"Error saving plots to storage: {str(e)}")
             return False
 
-    def get_available_variables(self, session_id: str) -> Dict:
+    def get_available_variables(self, session_id: str, user_id: str = None) -> Dict:
         """
         Get available input and output variables for plotting from session data.
 
@@ -419,7 +419,7 @@ class Visualizer:
 
             if not input_variables and not output_variables:
                 supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id)
+                uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
                 file_response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
 
                 if file_response.data:
@@ -449,12 +449,13 @@ class Visualizer:
                 'output_variables': ['Predicted_Load']
             }
 
-    def get_session_visualizations(self, session_id: str) -> Dict:
+    def get_session_visualizations(self, session_id: str, user_id: str = None) -> Dict:
         """
         Get training visualizations (violin plots) for a session.
 
         Args:
             session_id: Session identifier
+            user_id: User ID for ownership validation (required for security)
 
         Returns:
             dict: {
@@ -462,12 +463,15 @@ class Visualizer:
                 'metadata': dict,
                 'created_at': str
             }
+
+        Raises:
+            PermissionError: If session doesn't belong to the user
         """
         try:
             from utils.database import get_supabase_client, create_or_get_session_uuid
 
             supabase = get_supabase_client()
-            uuid_session_id = create_or_get_session_uuid(session_id)
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
 
             response = supabase.table('training_visualizations').select('*').eq('session_id', uuid_session_id).execute()
 

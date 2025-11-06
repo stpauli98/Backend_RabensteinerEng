@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 UPLOAD_BASE_DIR = os.getenv('UPLOAD_BASE_DIR', 'uploads/file_uploads')
 
 
-def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict) -> Dict:
+def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict, user_id: str = None) -> Dict:
     """
     Initialize a new upload session.
 
@@ -36,6 +36,7 @@ def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict) -> 
         session_id: Unique session identifier
         time_info: Time information dictionary
         zeitschritte: Zeitschritte dictionary
+        user_id: User ID to associate with the session (required for creating new sessions)
 
     Returns:
         dict: {
@@ -68,7 +69,7 @@ def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict) -> 
 
     try:
         from utils.database import create_or_get_session_uuid
-        session_uuid = create_or_get_session_uuid(session_id)
+        session_uuid = create_or_get_session_uuid(session_id, user_id)
         if session_uuid:
             from api.routes.training import save_session_to_supabase
             success = save_session_to_supabase(session_id)
@@ -153,36 +154,67 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
     if not supabase:
         raise Exception('Database connection not available')
 
-    sessions_query = """
-    SELECT
-        sm.string_session_id as session_id,
-        s.session_name,
-        s.created_at,
-        s.updated_at,
-        s.finalized,
-        s.file_count,
-        s.n_dat,
-        (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id) as actual_file_count,
-        (SELECT COUNT(*) FROM zeitschritte z WHERE z.session_id = s.id) as zeitschritte_count,
-        (SELECT COUNT(*) FROM time_info ti WHERE ti.session_id = s.id) as time_info_count,
-        (SELECT json_agg(
-            json_build_object(
-                'id', f.id,
-                'type', f.type,
-                'file_name', f.file_name,
-                'bezeichnung', f.bezeichnung
-            )
-        ) FROM files f WHERE f.session_id = s.id) as files_info
-    FROM session_mappings sm
-    JOIN sessions s ON sm.uuid_session_id = s.id
-    ORDER BY s.created_at DESC
-    LIMIT %s
-    """
+    # Build SQL query with conditional user_id filter
+    if user_id:
+        sessions_query = """
+        SELECT
+            sm.string_session_id as session_id,
+            s.session_name,
+            s.created_at,
+            s.updated_at,
+            s.finalized,
+            s.file_count,
+            s.n_dat,
+            (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id) as actual_file_count,
+            (SELECT COUNT(*) FROM zeitschritte z WHERE z.session_id = s.id) as zeitschritte_count,
+            (SELECT COUNT(*) FROM time_info ti WHERE ti.session_id = s.id) as time_info_count,
+            (SELECT json_agg(
+                json_build_object(
+                    'id', f.id,
+                    'type', f.type,
+                    'file_name', f.file_name,
+                    'bezeichnung', f.bezeichnung
+                )
+            ) FROM files f WHERE f.session_id = s.id) as files_info
+        FROM session_mappings sm
+        JOIN sessions s ON sm.uuid_session_id = s.id
+        WHERE s.user_id = %s
+        ORDER BY s.created_at DESC
+        LIMIT %s
+        """
+        params = [user_id, limit]
+    else:
+        sessions_query = """
+        SELECT
+            sm.string_session_id as session_id,
+            s.session_name,
+            s.created_at,
+            s.updated_at,
+            s.finalized,
+            s.file_count,
+            s.n_dat,
+            (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id) as actual_file_count,
+            (SELECT COUNT(*) FROM zeitschritte z WHERE z.session_id = s.id) as zeitschritte_count,
+            (SELECT COUNT(*) FROM time_info ti WHERE ti.session_id = s.id) as time_info_count,
+            (SELECT json_agg(
+                json_build_object(
+                    'id', f.id,
+                    'type', f.type,
+                    'file_name', f.file_name,
+                    'bezeichnung', f.bezeichnung
+                )
+            ) FROM files f WHERE f.session_id = s.id) as files_info
+        FROM session_mappings sm
+        JOIN sessions s ON sm.uuid_session_id = s.id
+        ORDER BY s.created_at DESC
+        LIMIT %s
+        """
+        params = [limit]
 
     try:
         response = supabase.rpc('execute_sql', {
             'sql_query': sessions_query,
-            'params': [limit]
+            'params': params
         }).execute()
 
         if response.data:
@@ -191,6 +223,7 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
     except Exception as e:
         logger.warning(f"Complex query failed, using fallback: {str(e)}")
 
+    # Fallback query - also filter by user_id
     sessions_response = supabase.table('session_mappings').select(
         'string_session_id, uuid_session_id, created_at'
     ).order('created_at', desc=True).limit(limit).execute()
@@ -200,8 +233,17 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
         session_uuid = session_mapping['uuid_session_id']
         session_id = session_mapping['string_session_id']
 
-        session_response = supabase.table('sessions').select('*').eq('id', session_uuid).execute()
-        session_details = session_response.data[0] if session_response.data else {}
+        # Filter by user_id if provided
+        session_query = supabase.table('sessions').select('*').eq('id', session_uuid)
+        if user_id:
+            session_query = session_query.eq('user_id', user_id)
+        session_response = session_query.execute()
+
+        # Skip this session if it doesn't belong to the user
+        if not session_response.data:
+            continue
+
+        session_details = session_response.data[0]
 
         files_response = supabase.table('files').select(
             'id, type, file_name, bezeichnung'
@@ -299,22 +341,24 @@ def get_session_info(session_id: str) -> Dict:
     return metadata
 
 
-def get_session_from_database(session_id: str) -> Dict:
+def get_session_from_database(session_id: str, user_id: str = None) -> Dict:
     """
     Get session information from Supabase database.
 
     Args:
         session_id: Session identifier (string format like session_XXX_YYY)
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         dict: Session data from database
 
     Raises:
         ValueError: If session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found in database')
 
@@ -328,12 +372,13 @@ def get_session_from_database(session_id: str) -> Dict:
     return response.data[0]
 
 
-def delete_session(session_id: str) -> Dict:
+def delete_session(session_id: str, user_id: str = None) -> Dict:
     """
     Delete a session and all associated data.
 
     Args:
         session_id: Session identifier
+        user_id: User ID to validate session ownership (required for security)
 
     Returns:
         dict: {
@@ -344,15 +389,29 @@ def delete_session(session_id: str) -> Dict:
 
     Raises:
         ValueError: If session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
     import shutil
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    # Get UUID with ownership validation (will raise PermissionError if not owner)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
     supabase = get_supabase_client()
+
+    # Note: Ownership already validated by create_or_get_session_uuid above
+    if user_id:
+        session_response = supabase.table('sessions').select('user_id').eq('id', str(uuid_session_id)).execute()
+        if not session_response.data or len(session_response.data) == 0:
+            raise ValueError(f'Session {session_id} not found')
+
+        session_owner = session_response.data[0].get('user_id')
+        if session_owner != user_id:
+            logger.warning(f"User {user_id} attempted to delete session {session_id} owned by {session_owner}")
+            raise PermissionError(f'Session {session_id} does not belong to user')
+
     deleted_files = 0
     deleted_db_records = 0
 
@@ -555,13 +614,14 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
     return result
 
 
-def update_session_name(session_id: str, new_name: str) -> Dict:
+def update_session_name(session_id: str, new_name: str, user_id: str = None) -> Dict:
     """
     Update session name in the database.
 
     Args:
         session_id: Session identifier
         new_name: New session name
+        user_id: User ID to validate session ownership (required for security)
 
     Returns:
         dict: {
@@ -572,6 +632,7 @@ def update_session_name(session_id: str, new_name: str) -> Dict:
 
     Raises:
         ValueError: If validation fails or session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import update_session_name as db_update_session_name
     from utils.database import ValidationError, SessionNotFoundError
@@ -593,7 +654,7 @@ def update_session_name(session_id: str, new_name: str) -> Dict:
         raise ValueError('sessionName too long (max 255 characters)')
 
     try:
-        result = db_update_session_name(session_id, new_name)
+        result = db_update_session_name(session_id, new_name, user_id)
         return {
             'session_id': session_id,
             'session_name': new_name,
@@ -660,22 +721,24 @@ def save_zeitschritte_data(session_id: str, zeitschritte: Dict) -> bool:
     return True
 
 
-def get_time_info_data(session_id: str) -> Dict:
+def get_time_info_data(session_id: str, user_id: str = None) -> Dict:
     """
     Get time information for a session.
 
     Args:
         session_id: Session identifier
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         dict: Time info data
 
     Raises:
         ValueError: If session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
@@ -689,22 +752,24 @@ def get_time_info_data(session_id: str) -> Dict:
     return response.data[0]
 
 
-def get_zeitschritte_data(session_id: str) -> Dict:
+def get_zeitschritte_data(session_id: str, user_id: str = None) -> Dict:
     """
     Get zeitschritte for a session.
 
     Args:
         session_id: Session identifier
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         dict: Zeitschritte data
 
     Raises:
         ValueError: If session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
@@ -718,23 +783,25 @@ def get_zeitschritte_data(session_id: str) -> Dict:
     return response.data[0]
 
 
-def get_csv_files_for_session(session_id: str, file_type: str = None) -> List[Dict]:
+def get_csv_files_for_session(session_id: str, file_type: str = None, user_id: str = None) -> List[Dict]:
     """
     Get list of CSV files for a session from database.
 
     Args:
         session_id: Session identifier
         file_type: Optional filter for file type ('input' or 'output')
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         List of file dictionaries
 
     Raises:
         ValueError: If session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
@@ -750,22 +817,24 @@ def get_csv_files_for_session(session_id: str, file_type: str = None) -> List[Di
     return response.data if response.data else []
 
 
-def get_session_status(session_id: str) -> Dict:
+def get_session_status(session_id: str, user_id: str = None) -> Dict:
     """
     Get detailed status of a training session.
 
     Args:
         session_id: Session identifier
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         dict: Session status information
 
     Raises:
         ValueError: If session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid, get_supabase_client
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
@@ -804,7 +873,7 @@ def get_session_status(session_id: str) -> Dict:
     }
 
 
-def get_upload_status(session_id: str) -> Dict:
+def get_upload_status(session_id: str, user_id: str = None) -> Dict:
     """
     Get upload progress status for a session.
 
@@ -815,6 +884,7 @@ def get_upload_status(session_id: str) -> Dict:
 
     Args:
         session_id: Session identifier (UUID or string ID)
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         dict: {
@@ -825,6 +895,7 @@ def get_upload_status(session_id: str) -> Dict:
 
     Raises:
         ValueError: If session not found (404)
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import get_supabase_client, create_or_get_session_uuid
     import uuid as uuid_lib
@@ -839,7 +910,7 @@ def get_upload_status(session_id: str) -> Dict:
 
     supabase = get_supabase_client()
     if supabase:
-        session_uuid = create_or_get_session_uuid(string_session_id)
+        session_uuid = create_or_get_session_uuid(string_session_id, user_id=user_id)
         if not session_uuid:
             raise ValueError('Session mapping not found')
 
@@ -905,26 +976,28 @@ def get_upload_status(session_id: str) -> Dict:
     }
 
 
-def create_database_session(session_id: str, session_name: str = None) -> str:
+def create_database_session(session_id: str, session_name: str = None, user_id: str = None) -> str:
     """
     Create a new session in Supabase database and return UUID.
 
     Args:
         session_id: String session identifier
         session_name: Optional session name
+        user_id: User ID to associate with the session (REQUIRED for new sessions)
 
     Returns:
         str: UUID session identifier
 
     Raises:
-        ValueError: If session creation fails
+        ValueError: If session creation fails or user_id not provided
+        PermissionError: If session exists but doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid
 
     if not session_id:
         raise ValueError('Missing session ID')
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
 
     if not uuid_session_id:
         raise ValueError('Failed to create session in database')
@@ -938,22 +1011,24 @@ def create_database_session(session_id: str, session_name: str = None) -> str:
     return str(uuid_session_id)
 
 
-def get_session_uuid(session_id: str) -> str:
+def get_session_uuid(session_id: str, user_id: str = None) -> str:
     """
     Get UUID for a session identifier.
 
     Args:
         session_id: String session identifier
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         str: UUID session identifier
 
     Raises:
         ValueError: If session not found
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
 
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')

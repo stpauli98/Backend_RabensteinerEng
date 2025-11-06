@@ -411,7 +411,9 @@ def create_csv_file_record(session_id: str, file_data: Dict) -> Dict:
     """
     from utils.database import get_supabase_client, create_or_get_session_uuid
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    # Note: This function should receive user_id from caller for proper validation
+    # For now, uses None for backward compatibility (to be fixed in caller chain)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
@@ -473,13 +475,17 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
         'numerische_datenpunkte', 'numerischer_anteil', 'datenform',
         'datenanpassung', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
         'zeitschrittweite_min', 'skalierung', 'skalierung_max', 'skalierung_min',
-        'zeithorizont_start', 'zeithorizont_end', 'type'
+        'zeithorizont_start', 'zeithorizont_end', 'zeitschrittweite_transferierten_daten',
+        'offset_transferierten_daten', 'mittelwertbildung_uber_den_zeithorizont',
+        'utc_min', 'utc_max', 'type'
     ]
 
     numeric_fields = [
         'min', 'max', 'offset', 'datenpunkte', 'numerische_datenpunkte',
         'numerischer_anteil', 'zeitschrittweite', 'zeitschrittweite_mittelwert',
-        'zeitschrittweite_min', 'skalierung_max', 'skalierung_min'
+        'zeitschrittweite_min', 'skalierung_max', 'skalierung_min',
+        'zeithorizont_start', 'zeithorizont_end', 'zeitschrittweite_transferierten_daten',
+        'offset_transferierten_daten'
     ]
 
     update_data = {}

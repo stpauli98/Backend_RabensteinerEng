@@ -10,6 +10,7 @@ def register_blueprints(app):
     from api.routes.adjustments import bp as adjustmentsOfData_bp
     from api.routes.training import bp as training_bp
     from api.routes.auth_example import auth_example_bp
+    from api.routes.stripe_routes import stripe_bp
 
     app.register_blueprint(data_processing_bp)
     app.register_blueprint(load_row_data_bp, url_prefix='/api/loadRowData')
@@ -18,3 +19,4 @@ def register_blueprints(app):
     app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(auth_example_bp)
+    app.register_blueprint(stripe_bp)

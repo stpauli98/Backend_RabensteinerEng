@@ -58,7 +58,6 @@ def increment_upload_count(user_id: str) -> bool:
                     'period_end': period_end.isoformat(),
                     'uploads_count': 1,
                     'processing_jobs_count': 0,
-                    'operations_count': 0,
                     'training_runs_count': 0,
                     'storage_used_gb': 0
                 }) \
@@ -117,7 +116,6 @@ def increment_processing_count(user_id: str) -> bool:
                     'period_end': period_end.isoformat(),
                     'uploads_count': 0,
                     'processing_jobs_count': 1,
-                    'operations_count': 0,
                     'training_runs_count': 0,
                     'storage_used_gb': 0
                 }) \
@@ -174,7 +172,6 @@ def increment_training_count(user_id: str) -> bool:
                     'period_end': period_end.isoformat(),
                     'uploads_count': 0,
                     'processing_jobs_count': 0,
-                    'operations_count': 0,
                     'training_runs_count': 1,
                     'storage_used_gb': 0
                 }) \
@@ -235,7 +232,6 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
                     'period_end': period_end.isoformat(),
                     'uploads_count': 0,
                     'processing_jobs_count': 0,
-                    'operations_count': 0,
                     'training_runs_count': 0,
                     'storage_used_gb': storage_gb
                 }) \

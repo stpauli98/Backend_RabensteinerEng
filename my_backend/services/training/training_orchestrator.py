@@ -142,7 +142,7 @@ def save_training_results(
         logger.error(f"Failed to get UUID for session {session_id}")
         import time
         time.sleep(1)
-        uuid_session_id = create_or_get_session_uuid(session_id)
+        uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
 
         if not uuid_session_id:
             logger.error(f"Failed to get UUID for session {session_id} after retry")
@@ -192,6 +192,24 @@ def save_training_results(
 
         supabase.table('training_results').insert(training_data).execute()
         logger.info(f"✅ Training metadata saved to database for session {uuid_session_id}")
+
+        # Track storage usage for training results
+        try:
+            from utils.usage_tracking import update_storage_usage
+
+            # Get user_id from sessions table
+            session_response = supabase.table('sessions').select('user_id').eq('id', uuid_session_id).single().execute()
+            if session_response.data and session_response.data.get('user_id'):
+                user_id = session_response.data['user_id']
+                storage_mb = storage_result['file_size'] / (1024 * 1024)  # Convert bytes to MB
+
+                update_storage_usage(user_id, storage_mb)
+                logger.info(f"✅ Storage usage tracked: {storage_mb:.2f}MB for user {user_id}")
+            else:
+                logger.warning(f"⚠️ Could not track storage: No user_id found for session {uuid_session_id}")
+        except Exception as storage_tracking_error:
+            logger.error(f"❌ Failed to track storage usage: {storage_tracking_error}")
+            # Don't raise - storage tracking is not critical
 
     except Exception as storage_error:
         logger.error(f"❌ Failed to save training results: {storage_error}")
@@ -286,7 +304,7 @@ def run_model_training_async(
 
         if result['success']:
             try:
-                uuid_session_id = create_or_get_session_uuid(session_id)
+                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
                 training_results = result.get('results', {})
 
                 save_training_results(

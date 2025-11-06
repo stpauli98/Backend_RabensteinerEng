@@ -213,7 +213,9 @@ def get_data_for_violin_plots(session_id: str) -> Dict[str, Any]:
         from utils.database import get_supabase_client, create_or_get_session_uuid
         
         supabase = get_supabase_client()
-        uuid_session_id = create_or_get_session_uuid(session_id)
+        # Note: This function should receive user_id from caller for proper validation
+        # For now, uses None for backward compatibility (to be fixed in caller chain)
+        uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
         
         response = supabase.table('training_results').select('*').eq(
             'session_id', uuid_session_id

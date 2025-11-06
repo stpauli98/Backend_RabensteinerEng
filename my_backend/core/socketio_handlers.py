@@ -1,8 +1,7 @@
 """SocketIO event handlers"""
 import logging
 from flask_socketio import join_room, leave_room, emit
-from utils.database import get_supabase_client
-from services.training.training_api import create_or_get_session_uuid
+from utils.database import get_supabase_client, create_or_get_session_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +97,7 @@ def register_socketio_handlers(socketio):
             session_id = data.get('session_id')
             if session_id:
                 supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id)
+                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
                 
                 if uuid_session_id:
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
@@ -166,7 +165,7 @@ def register_socketio_handlers(socketio):
                 logger.info(f"Frontend requesting dataset status for session: {session_id}")
                 
                 supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id)
+                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
                 
                 if uuid_session_id:
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()

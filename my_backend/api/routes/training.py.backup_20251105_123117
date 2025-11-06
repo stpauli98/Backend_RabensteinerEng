@@ -603,26 +603,20 @@ def finalize_session_endpoint():
 def list_sessions():
     """
     List all available training sessions from Supabase database.
-
-    Filters sessions by authenticated user_id for data isolation.
-
+    
     Refactored: Business logic moved to session_manager.get_sessions_list()
     """
     try:
         limit = request.args.get('limit', 50, type=int)
-
-        # Get authenticated user_id from Flask g object (set by @require_auth)
-        user_id = g.user_id
-
-        # Filter sessions by user_id for data isolation
-        sessions = get_sessions_list(user_id=user_id, limit=limit)
-
+        
+        sessions = get_sessions_list(limit=limit)
+        
         return jsonify({
             'success': True,
             'sessions': sessions,
             'total_count': len(sessions)
         })
-
+        
     except Exception as e:
         logger.error(f"Error listing sessions: {str(e)}")
         return jsonify({
@@ -736,36 +730,9 @@ def get_session_from_database_endpoint(session_id):
             'n_dat': session_data.get('n_dat', 0),
             'finalized': session_data.get('finalized', False),
             'file_count': session_data.get('file_count', 0),
-            'files': [{
-                'id': f['id'],
-                'fileName': f['file_name'],
-                'bezeichnung': f.get('bezeichnung', ''),
-                'utcMin': f.get('utc_min', ''),
-                'utcMax': f.get('utc_max', ''),
-                'zeitschrittweite': f.get('zeitschrittweite', ''),
-                'min': f.get('min', ''),
-                'max': f.get('max', ''),
-                'offset': f.get('offset', ''),
-                'datenpunkte': f.get('datenpunkte', ''),
-                'numerischeDatenpunkte': f.get('numerische_datenpunkte', ''),
-                'numerischerAnteil': f.get('numerischer_anteil', ''),
-                'datenform': f.get('datenform', ''),
-                'zeithorizontStart': f.get('zeithorizont_start', ''),
-                'zeithorizontEnd': f.get('zeithorizont_end', ''),
-                'zeitschrittweiteTransferiertenDaten': f.get('zeitschrittweite_transferierten_daten', ''),
-                'offsetTransferiertenDaten': f.get('offset_transferierten_daten', ''),
-                'mittelwertbildungÜberDenZeithorizont': f.get('mittelwertbildung_uber_den_zeithorizont', 'nein'),
-                'datenanpassung': f.get('datenanpassung', ''),
-                'zeitschrittweiteMinValue': f.get('zeitschrittweite_min', ''),
-                'zeitschrittweiteAvgValue': f.get('zeitschrittweite_mittelwert', ''),
-                'skalierung': f.get('skalierung', 'nein'),
-                'skalierungMax': f.get('skalierung_max', ''),
-                'skalierungMin': f.get('skalierung_min', ''),
-                'storagePath': f.get('storage_path', ''),
-                'type': f.get('type', 'input'),
-                'createdAt': f.get('created_at', ''),
-                'updatedAt': f.get('updated_at', '')
-            } for f in (files_response.data or [])],
+            'files': [{'id': f['id'], 'fileName': f['file_name'], 'bezeichnung': f['bezeichnung'], 
+                      'min': f['min'], 'max': f['max'], 'datenpunkte': f['datenpunkte'], 'type': f['type']} 
+                     for f in (files_response.data or [])],
             'timeInfo': {k: (time_info_response.data[0] if time_info_response.data else {}).get(k, False if k != 'zeitzone' else 'UTC') 
                         for k in ['jahr', 'monat', 'woche', 'tag', 'feiertag', 'zeitzone', 'category_data']},
             'zeitschritte': {k: (zeitschritte_response.data[0] if zeitschritte_response.data else {}).get(k, '') 
@@ -989,17 +956,12 @@ def save_zeitschritte_endpoint():
 def delete_session_endpoint(session_id):
     """
     Refactored: Business logic moved to session_manager.delete_session()
-
+    
     Delete a specific session and all its files from local storage and Supabase database.
-    Validates that the session belongs to the authenticated user.
     """
     try:
-        # Get authenticated user_id from Flask g object (set by @require_auth)
-        user_id = g.user_id
-
-        # Delete session with user_id validation
-        result = delete_session(session_id, user_id=user_id)
-
+        result = delete_session(session_id)
+        
         if result.get('warnings'):
             return jsonify({
                 'success': True,
@@ -1011,9 +973,7 @@ def delete_session_endpoint(session_id):
                 'success': True,
                 'message': result['message']
             })
-
-    except PermissionError as e:
-        return jsonify({'success': False, 'error': str(e)}), 403
+        
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 404
     except Exception as e:
@@ -1252,15 +1212,12 @@ def get_training_results(session_id):
     Get training results for a session.
     Checks both UUID and string session IDs.
     NEW: Downloads full results from Storage bucket if available.
-
-    SECURITY: Validates session ownership before returning results
     """
     try:
         from utils.database import get_supabase_client, create_or_get_session_uuid
         from utils.training_storage import download_training_results
         supabase = get_supabase_client()
 
-        # Get authenticated user_id and validate ownership
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
@@ -1317,12 +1274,6 @@ def get_training_results(session_id):
                 'count': 0
             }), 200
 
-    except PermissionError as e:
-        logger.warning(f"Permission denied for user {g.user_id} accessing session {session_id}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 403
     except Exception as e:
         logger.error(f"Error getting training results for {session_id}: {str(e)}")
         import traceback
@@ -1349,15 +1300,10 @@ def get_plot_variables(session_id):
     """
     Get available input and output variables for plotting
     Refactored: business logic moved to Visualizer.get_available_variables()
-
-    SECURITY: Validates session ownership before returning variables
     """
     try:
-        # Get authenticated user_id from Flask g object (set by @require_auth)
-        user_id = g.user_id
-
         visualizer = Visualizer()
-        variables = visualizer.get_available_variables(session_id, user_id=user_id)
+        variables = visualizer.get_available_variables(session_id)
 
         return jsonify({
             'success': True,
@@ -1366,9 +1312,6 @@ def get_plot_variables(session_id):
             'output_variables': variables['output_variables']
         })
 
-    except PermissionError as e:
-        logger.warning(f"Permission denied for user {g.user_id} accessing session {session_id}")
-        return jsonify({'success': False, 'error': str(e)}), 403
     except Exception as e:
         logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
         return jsonify({
@@ -1387,15 +1330,10 @@ def get_training_visualizations(session_id):
     """
     Get training visualizations (violin plots) for a session
     Refactored: business logic moved to Visualizer.get_session_visualizations()
-
-    SECURITY: Validates session ownership before returning visualizations
     """
     try:
-        # Get authenticated user_id from Flask g object (set by @require_auth)
-        user_id = g.user_id
-
         visualizer = Visualizer()
-        viz_data = visualizer.get_session_visualizations(session_id, user_id=user_id)
+        viz_data = visualizer.get_session_visualizations(session_id)
 
         if not viz_data.get('plots'):
             return jsonify({
@@ -1412,9 +1350,6 @@ def get_training_visualizations(session_id):
             'message': viz_data['message']
         })
 
-    except PermissionError as e:
-        logger.warning(f"Permission denied for user {g.user_id} accessing session {session_id}")
-        return create_error_response(str(e), 403)
     except Exception as e:
         logger.error(f"Error retrieving visualizations for {session_id}: {str(e)}")
         return create_error_response(f'Failed to retrieve training visualizations: {str(e)}', 500)
@@ -1487,8 +1422,9 @@ def generate_plot():
 
 
 
-@bp.route('/status/<session_id>', methods=['GET'])
 @require_auth
+@bp.route('/status/<session_id>', methods=['GET'])
+@bp.route('/session-status/<session_id>', methods=['GET'])
 def get_training_status(session_id: str):
     """
     Get training status for a session
@@ -1501,14 +1437,12 @@ def get_training_status(session_id: str):
     """
     try:
         from utils.database import get_supabase_client, create_or_get_session_uuid
-        supabase = get_supabase_client(use_service_role=True)
+        supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
-        logger.info(f"training_results query returned {len(results_response.data) if results_response.data else 0} results for session {session_id}")
 
         logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
-        logger.info(f"training_logs query returned {len(logs_response.data) if logs_response.data else 0} results for session {session_id}")
 
         if results_response.data and len(results_response.data) > 0:
             result_data = results_response.data[0]
@@ -1550,7 +1484,6 @@ def get_training_status(session_id: str):
                 'message': 'No training found for this session'
             }
 
-        logger.info(f"Returning status for {session_id}: {status.get('status')} - {status.get('message')}")
         return jsonify(status)
 
     except Exception as e:
@@ -2275,10 +2208,9 @@ def download_model_h5(session_id):
 def change_session_name_endpoint():
     """
     Refactored: Business logic moved to session_manager.update_session_name()
-
+    
     Update session name in the database.
-    Validates that the session belongs to the authenticated user.
-
+    
     Request body:
     {
         "sessionId": "...",
@@ -2293,11 +2225,7 @@ def change_session_name_endpoint():
         session_id = data.get('sessionId')
         session_name = data.get('sessionName')
 
-        # Get authenticated user_id from Flask g object (set by @require_auth)
-        user_id = g.user_id
-
-        # Update session name with user_id validation
-        result = update_session_name(session_id, session_name, user_id=user_id)
+        result = update_session_name(session_id, session_name)
 
         return create_success_response(
             data={
@@ -2307,8 +2235,6 @@ def change_session_name_endpoint():
             message=result['message']
         )
 
-    except PermissionError as e:
-        return create_error_response(str(e), 403)
     except ValueError as e:
         logger.warning(f"Validation error: {str(e)}")
         return create_error_response(str(e), 400)

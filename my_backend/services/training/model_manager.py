@@ -67,7 +67,7 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
     return extract_models_info(training_results)
 
 
-def save_models_to_storage(session_id: str) -> Dict:
+def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
     """
     Save trained models from training results to Supabase Storage.
 
@@ -76,6 +76,7 @@ def save_models_to_storage(session_id: str) -> Dict:
 
     Args:
         session_id: Training session ID
+        user_id: User ID for ownership validation (required for security)
 
     Returns:
         dict: {
@@ -87,6 +88,7 @@ def save_models_to_storage(session_id: str) -> Dict:
 
     Raises:
         ValueError: If session not found, no training results, or no models
+        PermissionError: If session doesn't belong to the user
     """
     from utils.database import create_or_get_session_uuid
     from utils.training_storage import fetch_training_results_with_storage
@@ -94,7 +96,7 @@ def save_models_to_storage(session_id: str) -> Dict:
 
     logger.info(f"📦 Saving models to storage - session: {session_id}")
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
@@ -192,7 +194,7 @@ def save_models_to_storage(session_id: str) -> Dict:
     }
 
 
-def get_models_list(session_id: str) -> List[Dict]:
+def get_models_list(session_id: str, user_id: str = None) -> List[Dict]:
     """
     List all trained models stored in Supabase Storage for a session.
 
@@ -210,7 +212,7 @@ def get_models_list(session_id: str) -> List[Dict]:
 
     logger.info(f"📋 Listing models from Storage - session: {session_id}")
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
@@ -241,7 +243,7 @@ def download_model_file(session_id: str, filename: str = None) -> Tuple[bytes, s
 
     logger.info(f"📥 Download request - session: {session_id}, filename: {filename or 'first .h5 model'}")
 
-    uuid_session_id = create_or_get_session_uuid(session_id)
+    uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
