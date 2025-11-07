@@ -1629,14 +1629,24 @@ def train_models(session_id):
     """
     Train models with user-specified parameters.
     This is phase 2 of the training workflow.
-    
+
     Refactored: Business logic moved to training_orchestrator.run_model_training_async()
     """
     try:
         data = request.json
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
-        
+
+        # Convert UUID session_id to temporary string session_id if needed
+        # This ensures training uses the same session_id as dataset generation
+        original_session_id = session_id
+        temporary_session_id = get_string_id_from_uuid(session_id)
+        if temporary_session_id:
+            session_id = temporary_session_id
+            logger.info(f"✅ Converted UUID session {original_session_id} to temporary session {session_id}")
+        else:
+            logger.warning(f"⚠️ Could not find temporary session_id for UUID {session_id}, using original")
+
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
         

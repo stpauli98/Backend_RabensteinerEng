@@ -61,17 +61,25 @@ class ModernMiddlemanRunner:
             
             data_loader = DataLoader(self.supabase)
             
+            session_data = data_loader.load_session_data(session_id)
+
             if found_files:
                 input_files = [f for f in found_files if "Leistung" in f]
                 output_files = [f for f in found_files if "Temp" in f]
             else:
-                session_data = data_loader.load_session_data(session_id)
                 input_files, output_files = data_loader.prepare_file_paths(session_id)
             
             logger.info(f"📍 Step 2: Loading CSV data from {len(input_files)} input files and {len(output_files)} output files")
 
             i_dat = {}
             o_dat = {}
+
+            # Create mapping of file names to metadata
+            files_metadata = {}
+            for file_info in session_data.get('files', []):
+                base_name = file_info['file_name'].replace('.csv', '')
+                files_metadata[base_name] = file_info
+                logger.info(f"   Loaded metadata for '{base_name}': type={file_info['type']}, zeithorizont={file_info.get('zeithorizont_start')}-{file_info.get('zeithorizont_end')}")
 
             for file_path in input_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
@@ -81,7 +89,8 @@ class ModernMiddlemanRunner:
                     if len(parts) > 2 and parts[0] == 'session':
                         file_name = '_'.join(parts[3:])
                 i_dat[file_name] = df
-                
+                logger.info(f"   📊 Loaded input file '{file_name}': shape={df.shape}, columns={list(df.columns[:3])}")
+
             for file_path in output_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
                 file_name = file_path.split('/')[-1].replace('.csv', '')
@@ -90,6 +99,7 @@ class ModernMiddlemanRunner:
                     if len(parts) > 2 and parts[0] == 'session':
                         file_name = '_'.join(parts[3:])
                 o_dat[file_name] = df
+                logger.info(f"   📊 Loaded output file '{file_name}': shape={df.shape}, columns={list(df.columns[:3])}")
             
             from services.training.data_loader import load, transf
             from services.training.config import MTS
@@ -155,9 +165,15 @@ class ModernMiddlemanRunner:
                 }
             
             for key in i_dat_inf.index:
+                # Get time horizon from database metadata
+                metadata = files_metadata.get(key, {})
+                th_start = int(metadata.get('zeithorizont_start', -1))
+                th_end = int(metadata.get('zeithorizont_end', 0))
+                logger.info(f"   Input file '{key}': th_strt={th_start}, th_end={th_end}")
+                
                 i_dat_inf.loc[key, "spec"] = "Historische Daten"
-                i_dat_inf.loc[key, "th_strt"] = -1
-                i_dat_inf.loc[key, "th_end"] = 0
+                i_dat_inf.loc[key, "th_strt"] = th_start
+                i_dat_inf.loc[key, "th_end"] = th_end
                 i_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
                 i_dat_inf.loc[key, "avg"] = False
                 i_dat_inf.loc[key, "scal"] = True
@@ -165,9 +181,15 @@ class ModernMiddlemanRunner:
                 i_dat_inf.loc[key, "scal_min"] = 0
             
             for key in o_dat_inf.index:
+                # Get time horizon from database metadata
+                metadata = files_metadata.get(key, {})
+                th_start = int(metadata.get('zeithorizont_start', 0))
+                th_end = int(metadata.get('zeithorizont_end', 1))
+                logger.info(f"   Output file '{key}': th_strt={th_start}, th_end={th_end}")
+                
                 o_dat_inf.loc[key, "spec"] = "Historische Daten"
-                o_dat_inf.loc[key, "th_strt"] = 0
-                o_dat_inf.loc[key, "th_end"] = 1
+                o_dat_inf.loc[key, "th_strt"] = th_start
+                o_dat_inf.loc[key, "th_end"] = th_end
                 o_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
                 o_dat_inf.loc[key, "avg"] = False
                 o_dat_inf.loc[key, "scal"] = True
@@ -178,16 +200,101 @@ class ModernMiddlemanRunner:
             i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
             o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
             logger.info(f"📍 Step 5 complete: Transformations applied")
-            
+
+            # Validate zeithorizont values before proceeding
+            logger.info(f"📍 Step 6: Validating zeithorizont configuration")
+            max_zeithorizont_span = 0
+            zeithorizont_details = []
+
+            for key in i_dat_inf.index:
+                th_start = i_dat_inf.loc[key, "th_strt"]
+                th_end = i_dat_inf.loc[key, "th_end"]
+                span = abs(th_end - th_start)
+                max_zeithorizont_span = max(max_zeithorizont_span, span)
+                zeithorizont_details.append(f"Input '{key}': {th_start}h to {th_end}h (span: {span}h)")
+
+            for key in o_dat_inf.index:
+                th_start = o_dat_inf.loc[key, "th_strt"]
+                th_end = o_dat_inf.loc[key, "th_end"]
+                span = abs(th_end - th_start)
+                max_zeithorizont_span = max(max_zeithorizont_span, span)
+                zeithorizont_details.append(f"Output '{key}': {th_start}h to {th_end}h (span: {span}h)")
+
+            logger.info(f"   Zeithorizont configuration:")
+            for detail in zeithorizont_details:
+                logger.info(f"      {detail}")
+            logger.info(f"   Maximum zeithorizont span: {max_zeithorizont_span}h")
+
+            # Maximum safe zeithorizont span is 6 hours (empirically determined)
+            MAX_SAFE_ZEITHORIZONT_HOURS = 6
+
+            if max_zeithorizont_span > MAX_SAFE_ZEITHORIZONT_HOURS:
+                error_msg = (
+                    f"Zeithorizont span ({max_zeithorizont_span}h) exceeds maximum safe limit ({MAX_SAFE_ZEITHORIZONT_HOURS}h). "
+                    f"Large zeithorizont values cause interpolation to request data outside available range, "
+                    f"resulting in empty training arrays. Please reduce zeithorizont to {MAX_SAFE_ZEITHORIZONT_HOURS} hours or less."
+                )
+                logger.error(f"❌ VALIDATION FAILED: {error_msg}")
+                raise ValueError(error_msg)
+
+            logger.info(f"   ✅ Zeithorizont validation passed (span: {max_zeithorizont_span}h <= {MAX_SAFE_ZEITHORIZONT_HOURS}h)")
+            logger.info(f"📍 Step 6 complete: Validation successful")
+
             utc_strt = i_dat_inf["utc_min"].min()
             utc_end = i_dat_inf["utc_max"].max()
-            
+
             if not o_dat_inf.empty:
                 utc_strt = max(utc_strt, o_dat_inf["utc_min"].min())
                 utc_end = min(utc_end, o_dat_inf["utc_max"].max())
-            
-            utc_strt = utc_strt + pd.Timedelta(hours=1.5)
-            
+
+            # Dynamic offset calculation based on zeithorizont values
+            # Find minimum zeithorizont_start to determine safe offset
+            min_th_start = min(
+                i_dat_inf["th_strt"].min(),
+                o_dat_inf["th_strt"].min() if not o_dat_inf.empty else 0
+            )
+
+            # If zeithorizont looks backward (negative), offset start time forward
+            # Otherwise, use minimal offset to avoid edge cases
+            logger.info(f"   🔍 DEBUG: utc_strt BEFORE offset: {utc_strt} (type: {type(utc_strt)})")
+            logger.info(f"   🔍 DEBUG: min_th_start: {min_th_start}")
+
+            if min_th_start < 0:
+                offset_hours = abs(min_th_start) + 0.5  # Add 0.5 hour safety margin
+                logger.info(f"   Applying dynamic offset: {offset_hours} hours (based on zeithorizont {min_th_start})")
+                utc_strt = utc_strt + pd.Timedelta(hours=offset_hours)
+                logger.info(f"   ✅ AFTER OFFSET: utc_strt = {utc_strt}")
+            else:
+                # Minimal offset for forward-looking zeithorizont
+                logger.info(f"   Applying minimal offset: 0.5 hours (zeithorizont >= 0)")
+                utc_strt = utc_strt + pd.Timedelta(hours=0.5)
+                logger.info(f"   ✅ AFTER OFFSET: utc_strt = {utc_strt}")
+
+            # Adjust utc_end backward for forward-looking zeithorizont
+            # This prevents requesting data beyond available range
+            max_th_end = max(
+                i_dat_inf["th_end"].max(),
+                o_dat_inf["th_end"].max() if not o_dat_inf.empty else 0
+            )
+
+            logger.info(f"   🔍 DEBUG: utc_end BEFORE offset: {utc_end}")
+            logger.info(f"   🔍 DEBUG: max_th_end: {max_th_end}")
+
+            if max_th_end > 0:
+                offset_hours_end = max_th_end + 0.5  # Add 0.5 hour safety margin
+                logger.info(f"   Applying backward offset to utc_end: {offset_hours_end} hours (based on zeithorizont {max_th_end})")
+                utc_end = utc_end - pd.Timedelta(hours=offset_hours_end)
+                logger.info(f"   ✅ AFTER OFFSET: utc_end = {utc_end}")
+            else:
+                logger.info(f"   No backward offset needed: zeithorizont_end <= 0")
+
+            # Validate that we have enough data after adjustments
+            adjusted_data_span_hours = (utc_end - utc_strt).total_seconds() / 3600
+            logger.info(f"   📊 Adjusted data span: {adjusted_data_span_hours:.1f} hours")
+
+            if adjusted_data_span_hours < 1:
+                raise ValueError(f"Insufficient data after zeithorizont adjustments: only {adjusted_data_span_hours:.1f} hours available")
+
             mdl_config = None
             if model_params:
                 mode_mapping = {

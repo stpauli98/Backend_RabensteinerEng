@@ -58,6 +58,21 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"      Starting main time loop: {total_iterations} iterations expected")
+    logger.info(f"      Time range: {utc_strt} to {utc_end}")
+    logger.info(f"      Input files: {list(i_dat.keys())}")
+    logger.info(f"      Output files: {list(o_dat.keys())}")
+
+    # Log data ranges
+    for key in i_dat.keys():
+        logger.info(f"      Input '{key}': data from {i_dat[key].iloc[0, 0]} to {i_dat[key].iloc[-1, 0]}")
+    for key in o_dat.keys():
+        logger.info(f"      Output '{key}': data from {o_dat[key].iloc[0, 0]} to {o_dat[key].iloc[-1, 0]}")
+
+    # Log zeithorizont windows
+    for key in i_dat_inf.index:
+        logger.info(f"      Input '{key}': zeithorizont {i_dat_inf.loc[key, 'th_strt']} to {i_dat_inf.loc[key, 'th_end']}")
+    for key in o_dat_inf.index:
+        logger.info(f"      Output '{key}': zeithorizont {o_dat_inf.loc[key, 'th_strt']} to {o_dat_inf.loc[key, 'th_end']}")
 
     import time
     loop_start_time = time.time()
@@ -68,11 +83,12 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
             break
 
         iteration_count += 1
-        if iteration_count % 100 == 0:
+        if iteration_count % 10000 == 0:
             elapsed = time.time() - loop_start_time
             progress = (iteration_count / total_iterations * 100) if total_iterations > 0 else 0
             logger.info(f"      Progress: {iteration_count}/{total_iterations} ({progress:.1f}%) - {elapsed:.1f}s elapsed")
-        
+
+
         prog_1 = (utc_ref - utc_strt) / (utc_end - utc_strt) * 100
         
         df_int_i = pd.DataFrame()
@@ -123,8 +139,16 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         for i1 in range(len(utc_th)):
                             idx1 = utc_idx_pre(i_dat[key], utc_th[i1])
                             idx2 = utc_idx_post(i_dat[key], utc_th[i1])
-                            
+
                             if idx1 is None or idx2 is None:
+                                if iteration_count <= 5:
+                                    logger.warning(f"      ❌ Interpolation failed at iteration {iteration_count}")
+                                    logger.warning(f"         utc_ref: {utc_ref}")
+                                    logger.warning(f"         File: {key}")
+                                    logger.warning(f"         Requested timestamp: {utc_th[i1]}")
+                                    logger.warning(f"         Data range: {i_dat[key].iloc[0, 0]} to {i_dat[key].iloc[-1, 0]}")
+                                    logger.warning(f"         Zeithorizont window: {utc_th_strt} to {utc_th_end}")
+                                    logger.warning(f"         idx1={idx1}, idx2={idx2}")
                                 error = True
                                 break
                             
@@ -200,6 +224,14 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             idx2 = utc_idx_post(o_dat[key], utc_th[i1])
                             
                             if idx1 is None or idx2 is None:
+                                if iteration_count <= 5:
+                                    logger.warning(f"      ❌ Interpolation failed at iteration {iteration_count}")
+                                    logger.warning(f"         utc_ref: {utc_ref}")
+                                    logger.warning(f"         File: {key} (OUTPUT)")
+                                    logger.warning(f"         Requested timestamp: {utc_th[i1]}")
+                                    logger.warning(f"         Data range: {o_dat[key].iloc[0, 0]} to {o_dat[key].iloc[-1, 0]}")
+                                    logger.warning(f"         Zeithorizont window: {utc_th_strt} to {utc_th_end}")
+                                    logger.warning(f"         idx1={idx1}, idx2={idx2}")
                                 error = True
                                 break
                             
