@@ -226,22 +226,34 @@ def customer_portal():
         user_id = g.user_id
         user_email = g.user_email
 
+        logger.info(f"🔍 Creating portal session for user {user_id} ({user_email})")
+
         # Get Stripe customer ID
         customer_id = get_or_create_stripe_customer(user_id, user_email)
+        logger.info(f"✅ Got Stripe customer ID: {customer_id}")
 
         # Create portal session
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+        logger.info(f"🌐 Using frontend URL: {frontend_url}")
 
         portal_session = stripe.billing_portal.Session.create(
             customer=customer_id,
             return_url=f'{frontend_url}/pricing',
         )
 
-        logger.info(f"✅ Created portal session for user {user_id}")
+        logger.info(f"✅ Created portal session for user {user_id}: {portal_session.url}")
 
         return jsonify({'url': portal_session.url}), 200
 
+    except stripe.error.InvalidRequestError as e:
+        logger.error(f"❌ Stripe InvalidRequestError: {str(e)}")
+        logger.error(f"⚠️ Hint: Check if Stripe Customer Portal is activated in Dashboard")
+        return jsonify({'error': 'Customer portal not configured. Please contact support.'}), 500
+
     except Exception as e:
         logger.error(f"❌ Error creating portal session: {str(e)}")
+        logger.error(f"🔍 Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"📊 Traceback: {traceback.format_exc()}")
         # SECURITY FIX: Don't expose internal error details to client
         return jsonify({'error': 'Failed to open customer portal. Please try again or contact support.'}), 500
