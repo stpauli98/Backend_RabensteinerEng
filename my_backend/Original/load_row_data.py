@@ -335,46 +335,116 @@ def upload_files():
             
             try:
                 print("Versuche flexibles Datum-Parsing...")
-                
+
                 # Säubere die Datumsspalte
                 df["Datum"] = df["Datum"].str.strip()
                 print(f"Datumswerte: {df['Datum'].unique()}")
-                
-                # Liste der zu versuchenden Datumsformate
-                date_formats = [
-                    "%Y-%m-%d %H:%M:%S",     # 2022-01-01 00:00:00
-                    "%d.%m.%Y %H:%M:%S",     # 31.12.2022 00:00:00
-                    "%Y-%m-%d %H:%M",        # 2022-01-01 00:00
-                    "%d.%m.%Y %H:%M",        # 31.12.2022 00:00
-                    "%Y-%m-%d",              # 2022-01-01
-                    "%d.%m.%Y",              # 31.12.2022
-                    "%d/%m/%Y %H:%M:%S",     # 31/12/2022 00:00:00
-                    "%Y/%m/%d %H:%M:%S",     # 2022/12/31 00:00:00
-                    "%d-%m-%Y %H:%M:%S",     # 31-12-2022 00:00:00
-                ]
-                
-                success = False
-                for date_format in date_formats:
-                    try:
-                        print(f"Versuche Format: {date_format}")
-                        df["UTC"] = pd.to_datetime(df["Datum"], format=date_format, errors='raise')
-                        success = True
-                        print(f"Format {date_format} erfolgreich!")
-                        break
-                    except ValueError:
-                        continue
-                
-                if not success:
-                    print("Kein Format hat funktioniert, versuche automatische Erkennung...")
-                    df["UTC"] = pd.to_datetime(df["Datum"], errors='raise')
-                
+
+                # Check if we have a separate Zeit column
+                has_separate_time = "Zeit" in df.columns
+                print(f"Separate Zeit column: {has_separate_time}")
+
+                if has_separate_time:
+                    # Clean Zeit column
+                    df["Zeit"] = df["Zeit"].str.strip()
+                    print(f"Zeitwerte: {df['Zeit'].unique()[:5]}")  # Show first 5 time values
+
+                    # Extract date-only formats for parsing (strip time if present in Datum column)
+                    date_only_formats = [
+                        "%Y-%m-%d",              # 2022-01-01
+                        "%d.%m.%Y",              # 31.12.2022
+                        "%d/%m/%Y",              # 31/12/2022
+                        "%d-%m-%Y",              # 31-12-2022
+                        "%Y/%m/%d",              # 2022/12/31
+                    ]
+
+                    # Try to parse date part only
+                    date_success = False
+                    parsed_date_col = None
+
+                    # First, try to extract date part if Datum contains datetime
+                    if any(sep in df["Datum"].iloc[0] for sep in [' ', 'T']):
+                        # Split by space or T to get date part only
+                        print("Datum column contains datetime, extracting date part...")
+                        df["DateOnly"] = df["Datum"].str.split(' ').str[0].str.split('T').str[0]
+                        parsed_date_col = "DateOnly"
+                    else:
+                        parsed_date_col = "Datum"
+
+                    # Parse date part
+                    for date_format in date_only_formats:
+                        try:
+                            print(f"Versuche Datum-Format: {date_format}")
+                            df["ParsedDate"] = pd.to_datetime(df[parsed_date_col], format=date_format, errors='raise')
+                            date_success = True
+                            print(f"Datum-Format {date_format} erfolgreich!")
+                            break
+                        except ValueError:
+                            continue
+
+                    if not date_success:
+                        print("Versuche automatische Datumserkennung...")
+                        df["ParsedDate"] = pd.to_datetime(df[parsed_date_col], errors='raise')
+
+                    # Parse time part and combine with date
+                    print("Kombiniere Datum und Zeit...")
+                    df["ParsedTime"] = pd.to_datetime(df["Zeit"], format='%H:%M:%S', errors='coerce').dt.time
+
+                    # Check for failed time parsing
+                    if df["ParsedTime"].isna().any():
+                        # Try alternative time format
+                        df["ParsedTime"] = pd.to_datetime(df["Zeit"], format='%H:%M', errors='coerce').dt.time
+
+                    if df["ParsedTime"].isna().any():
+                        print(f"Problematische Zeitwerte: {df.loc[df['ParsedTime'].isna(), 'Zeit'].unique()}")
+                        raise ValueError("Ungültiges Zeitformat in Zeit-Spalte")
+
+                    # Combine date and time
+                    df["UTC"] = pd.to_datetime(
+                        df["ParsedDate"].dt.strftime('%Y-%m-%d') + ' ' +
+                        df["ParsedTime"].astype(str),
+                        format='%Y-%m-%d %H:%M:%S'
+                    )
+
+                    print(f"Datum und Zeit erfolgreich kombiniert: {df['UTC'].iloc[0]} (Beispiel)")
+
+                else:
+                    # Original logic for single datetime column
+                    # Liste der zu versuchenden Datumsformate
+                    date_formats = [
+                        "%Y-%m-%d %H:%M:%S",     # 2022-01-01 00:00:00
+                        "%d.%m.%Y %H:%M:%S",     # 31.12.2022 00:00:00
+                        "%Y-%m-%d %H:%M",        # 2022-01-01 00:00
+                        "%d.%m.%Y %H:%M",        # 31.12.2022 00:00
+                        "%Y-%m-%d",              # 2022-01-01
+                        "%d.%m.%Y",              # 31.12.2022
+                        "%d/%m/%Y %H:%M:%S",     # 31/12/2022 00:00:00
+                        "%Y/%m/%d %H:%M:%S",     # 2022/12/31 00:00:00
+                        "%d-%m-%Y %H:%M:%S",     # 31-12-2022 00:00:00
+                    ]
+
+                    success = False
+                    for date_format in date_formats:
+                        try:
+                            print(f"Versuche Format: {date_format}")
+                            df["UTC"] = pd.to_datetime(df["Datum"], format=date_format, errors='raise')
+                            success = True
+                            print(f"Format {date_format} erfolgreich!")
+                            break
+                        except ValueError:
+                            continue
+
+                    if not success:
+                        print("Kein Format hat funktioniert, versuche automatische Erkennung...")
+                        df["UTC"] = pd.to_datetime(df["Datum"], errors='raise')
+
+                    print(f"Datum erfolgreich geparst: {df['UTC'].iloc[0]} (Beispiel)")
+
                 # Prüfe auf NaT (Not a Time) Werte
                 if df["UTC"].isna().any():
                     print("Einige Datumsangaben konnten nicht geparst werden")
-                    print(f"Problematische Werte: {df.loc[df['UTC'].isna(), 'Datum'].unique()}")
+                    print(f"Problematische Werte: {df.loc[df['UTC'].isna(), 'UTC'].unique()}")
                     raise ValueError("Ungültiges Datumsformat gefunden")
-                    
-                print(f"Datum erfolgreich geparst: {df['UTC'].iloc[0]} (Beispiel)")
 
                 # Lokalisiere die Uhrzeit in UTC
                 print("Lokalisiere die Uhrzeit in UTC...")

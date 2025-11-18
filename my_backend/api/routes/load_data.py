@@ -1297,10 +1297,20 @@ def _process_datetime_columns(
             # Clean time columns
             df[time_column] = df[time_column].apply(clean_time)
             df[date_column] = df[date_column].apply(clean_time)
-            
+
+            # Extract date-only part if date_column contains datetime with dummy time
+            # Check if date column contains time separator (space or 'T')
+            sample_date = str(df[date_column].iloc[0])
+            if ' ' in sample_date or 'T' in sample_date:
+                logger.info(f"Date column contains datetime, extracting date part only. Sample: {sample_date}")
+                # Split by space or 'T' to get only date part
+                df['date_only'] = df[date_column].astype(str).str.split(' ').str[0].str.split('T').str[0]
+            else:
+                df['date_only'] = df[date_column].astype(str)
+
             # Combine date + time
             df['datetime'] = (
-                df[date_column].astype(str) + ' ' + 
+                df['date_only'] + ' ' +
                 df[time_column].astype(str)
             )
             
