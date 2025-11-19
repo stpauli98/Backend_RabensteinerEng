@@ -707,20 +707,20 @@ def detect_delimiter(file_content: str, sample_lines: int = 3) -> str:
 def clean_time(time_str: Any) -> Any:
     """
     Clean time string by removing invalid characters.
-    
-    Keeps only numbers and time separators (: - + . T and space).
+
+    Keeps only numbers and time separators (: - + . T / and space).
     Example: '00:00:00.000Kdd' -> '00:00:00.000'
-    
+
     Args:
         time_str: Time string to clean
-        
+
     Returns:
         Cleaned time string
     """
     if not isinstance(time_str, str):
         return time_str
-    
-    cleaned = ''.join(c for c in str(time_str) if c.isdigit() or c in ':-+.T ')
+
+    cleaned = ''.join(c for c in str(time_str) if c.isdigit() or c in ':-+.T/ ')
     return cleaned
 
 def clean_file_content(file_content: str, delimiter: str) -> str:
@@ -967,26 +967,26 @@ def upload_chunk() -> Tuple[Response, int]:
 def finalize_upload() -> Tuple[Response, int]:
     """
     Finalize chunked upload and process the complete file.
-    
+
     Verifies all chunks are received and triggers processing.
-    
+
     Expected JSON body:
         - uploadId: Unique upload identifier
-        
+
     Returns:
         JSON response with processed data or error
     """
     try:
         data = request.get_json(force=True, silent=True)
-        
+
         if not data or 'uploadId' not in data:
             return jsonify({"error": "uploadId is required"}), 400
-            
+
         upload_id = data['uploadId']
-        
+
         if upload_id not in chunk_storage:
             return jsonify({"error": "Upload not found or already processed"}), 404
-            
+
         if chunk_storage[upload_id]['received_chunks'] != chunk_storage[upload_id]['total_chunks']:
             remaining = chunk_storage[upload_id]['total_chunks'] - chunk_storage[upload_id]['received_chunks']
             return jsonify({
@@ -994,9 +994,10 @@ def finalize_upload() -> Tuple[Response, int]:
                 "received": chunk_storage[upload_id]['received_chunks'],
                 "total": chunk_storage[upload_id]['total_chunks']
             }), 400
-            
+
         return process_chunks(upload_id)
     except Exception as e:
+        logging.error(f"Exception in finalize_upload: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/cancel-upload', methods=['POST'])
@@ -1042,12 +1043,12 @@ def cancel_upload() -> Tuple[Response, int]:
 def process_chunks(upload_id: str) -> Tuple[Response, int]:
     """
     Process and decode uploaded file chunks.
-    
+
     Combines chunks, attempts decoding with multiple encodings, and triggers file processing.
-    
+
     Args:
         upload_id: Unique identifier for the upload
-        
+
     Returns:
         JSON response from upload_files() processing
     """
@@ -1059,13 +1060,13 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
             'status': 'processing',
             'message': 'Processing file data...'
         }, room=upload_id)
-        
+
         upload_data = chunk_storage[upload_id]
         chunks = [upload_data['chunks'][i] for i in range(upload_data['total_chunks'])]
-        
+
         encodings = SUPPORTED_ENCODINGS
         full_content = None
-        
+
         for encoding in encodings:
             try:
                 decoded_chunks = [chunk.decode(encoding) for chunk in chunks]
@@ -1073,7 +1074,7 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
                 break
             except UnicodeDecodeError:
                 continue
-        
+
         if full_content is None:
             error = EncodingError(
                 reason="Could not decode file content with any supported encoding",
@@ -1091,17 +1092,18 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
         params = upload_data['parameters']
         params['uploadId'] = upload_id
         del chunk_storage[upload_id]
-        
+
         socketio.emit('upload_progress', {
             'uploadId': upload_id,
             'progress': 100,
             'status': 'completed',
             'message': 'File processing completed'
         }, room=upload_id)
-        
+
         return upload_files(full_content, params)
     except LoadDataException as e:
         # Handle custom exceptions
+        logging.error(f"LoadDataException in process_chunks: {str(e)}", exc_info=True)
         from flask import has_app_context
         if has_app_context():
             return jsonify(e.to_dict()), 400
@@ -1313,7 +1315,7 @@ def _process_datetime_columns(
                 df['date_only'] + ' ' +
                 df[time_column].astype(str)
             )
-            
+
             # Try parsing
             success, parsed_dates, err = parse_datetime_column(df, 'datetime')
             
@@ -1424,7 +1426,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
     try:
         socketio = get_socketio()
         upload_id = params.get('uploadId')
-        
+
         # Emit progress: Parsing CSV
         socketio.emit('upload_progress', {
             'uploadId': upload_id,
@@ -1432,19 +1434,19 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             'status': 'processing',
             'message': 'Parsing CSV data...'
         }, room=upload_id)
-        
+
         # Step 1: Validate and extract parameters
         try:
             validated_params = _validate_and_extract_params(params, file_content)
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
-        
+
         # Step 2: Parse CSV to DataFrame
         try:
             df = _parse_csv_to_dataframe(file_content, validated_params)
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
-        
+
         # Step 3: Process datetime columns
         try:
             df = _process_datetime_columns(df, validated_params)
