@@ -8,7 +8,7 @@ import logging
 import tempfile
 import csv
 from io import StringIO
-from datetime import datetime
+import datetime
 import time
 from flask import request, jsonify, Response, send_file, Blueprint, g
 from flask_socketio import emit
@@ -48,8 +48,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=None):
     """
     Obradjuje CSV sadržaj te vraća rezultat kao gzip-komprimiran JSON odgovor.
-    Koristi vektorizirane Pandas operacije za bolju performansu.
-    
+    IDENTIČNA LOGIKA KAO U ORIGINALNOM data_prep_1.py FAJLU.
+
     Args:
         upload_id: Optional upload ID for Socket.IO progress tracking
     """
@@ -65,33 +65,28 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 }, room=upload_id)
             except Exception as e:
                 logger.error(f"Error emitting progress: {e}")
-    
+
+    def is_numeric(value):
+        """Check if value is numeric"""
+        try:
+            float(value)
+            return True
+        except (ValueError, TypeError):
+            return False
+
     try:
         emit_progress('parsing', 10, 'Parsing CSV data...')
-        
+
         try:
             lines = file_content.strip().split('\n')
             logger.info(f"Total lines in CSV: {len(lines)}")
             emit_progress('parsing', 20, f'Loaded {len(lines)} lines from CSV')
-            
+
             if len(lines) > 0:
                 header = lines[0]
                 logger.info(f"Header: '{header}'")
                 logger.info(f"Header fields: {header.split(';')}")
-            
-            problem_line_num = 264270
-            if len(lines) > problem_line_num:
-                problem_line = lines[problem_line_num - 1]
-                logger.info(f"Line {problem_line_num}: '{problem_line}'")
-                logger.info(f"Line {problem_line_num} fields: {problem_line.split(';')}")
-                logger.info(f"Line {problem_line_num} field count: {len(problem_line.split(';'))}")
-                
-                for offset in [-2, -1, 1, 2]:
-                    check_line_num = problem_line_num + offset
-                    if 0 <= check_line_num - 1 < len(lines):
-                        check_line = lines[check_line_num - 1]
-                        logger.info(f"Line {check_line_num}: '{check_line}' (fields: {len(check_line.split(';'))})")
-            
+
             emit_progress('parsing', 30, 'Parsing CSV with pandas...')
             try:
                 df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True, on_bad_lines='skip')
@@ -101,173 +96,343 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 logger.error(f"Even with on_bad_lines='skip', pandas failed: {str(pandas_error)}")
                 import csv
                 try:
-                    df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True, 
+                    df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True,
                                    quoting=csv.QUOTE_NONE, on_bad_lines='skip')
                     logger.info(f"Successfully parsed CSV with QUOTE_NONE, {len(df)} rows")
                 except Exception as final_error:
                     logger.error(f"All parsing attempts failed: {str(final_error)}")
                     raise pandas_error
-            
+
             df.columns = df.columns.str.strip()
-            
+
             if len(df.columns) < 2:
                 raise ValueError(f"CSV must have at least 2 columns, found {len(df.columns)}: {list(df.columns)}")
-            
+
             utc_col_name = df.columns[0]
             value_col_name = df.columns[1]
             logger.info(f"Using columns: UTC='{utc_col_name}', Value='{value_col_name}'")
-            
-            df = df.rename(columns={utc_col_name: 'UTC'})
-            
+
             emit_progress('preprocessing', 50, 'Converting data types...')
-            df['UTC'] = pd.to_datetime(df['UTC'], format='%Y-%m-%d %H:%M:%S')
+
+            # Validate that values can be converted to numeric
+            non_numeric = df[value_col_name].apply(lambda x: not is_numeric(x))
+            if non_numeric.any():
+                logger.info(f"Found non-numeric values in {value_col_name}: {df[value_col_name][non_numeric].head()}")
+
             df[value_col_name] = pd.to_numeric(df[value_col_name], errors='coerce')
-            
+
             initial_count = len(df)
-            df = df.dropna(subset=['UTC', value_col_name])
+            df = df.dropna(subset=[utc_col_name, value_col_name])
             final_count = len(df)
-            
+
             if initial_count != final_count:
                 logger.info(f"Removed {initial_count - final_count} rows with invalid data")
-                
+
         except Exception as e:
             logger.error(f"Error parsing CSV data: {str(e)}")
             return jsonify({"error": f"CSV parsing failed: {str(e)}"}), 400
-        
-        df = df.drop_duplicates(subset=['UTC']).sort_values('UTC').reset_index(drop=True)
-        
+
+        # VORBEREITUNG DER ROHDATEN (matching original logic)
+        # Duplikate in den Rohdaten löschen
+        df = df.drop_duplicates(subset=[utc_col_name]).reset_index(drop=True)
+
+        # Rohdaten nach UTC ordnen
+        df = df.sort_values(by=[utc_col_name])
+
+        # Reset des Indexes in den Rohdaten
+        df = df.reset_index(drop=True)
+
         if df.empty:
-            return jsonify({"error": "Nema valjanih vremenskih oznaka"}), 400
-            
-        time_min_raw = df['UTC'].iloc[0]
-        time_max_raw = df['UTC'].iloc[-1]
-        
-        time_min_base = time_min_raw.replace(second=0, microsecond=0)
-        
-        logger.info(f"Applying offset of {offset} minutes to {time_min_base}")
-        time_min = time_min_base + pd.Timedelta(minutes=int(offset))
-        logger.info(f"Resulting start time: {time_min}")
-        
-        time_range = pd.date_range(
-            start=time_min,
-            end=time_max_raw,
-            freq=f'{int(tss)}min'
+            return jsonify({"error": "Keine Daten gefunden"}), 400
+
+        # ZEITGRENZEN (matching original logic)
+        # Convert UTC to datetime objects
+        df[utc_col_name] = pd.to_datetime(df[utc_col_name], format='%Y-%m-%d %H:%M:%S')
+
+        time_min_raw = df[utc_col_name].iloc[0].to_pydatetime()
+        time_max_raw = df[utc_col_name].iloc[-1].to_pydatetime()
+
+        logger.info(f"Time range: {time_min_raw} to {time_max_raw}")
+
+        # KONTINUIERLICHER ZEITSTEMPEL (matching original logic)
+        # Offset der unteren Zeitgrenze in der Rohdaten
+        offset_strt = datetime.timedelta(
+            minutes=time_min_raw.minute,
+            seconds=time_min_raw.second,
+            microseconds=time_min_raw.microsecond
         )
-        
-        df_utc = pd.DataFrame({'UTC': time_range})
-        
+
+        # Realer Offset in den aufbereiteten Daten [min]
+        # Ensure positive offset within TSS range
+        normalized_offset = abs(offset) % tss if offset >= 0 else 0
+
+        # Untere Zeitgrenze in den aufbereiteten Daten
+        time_min = time_min_raw - offset_strt
+        if normalized_offset > 0:
+            # Add offset to align with the requested time grid
+            time_min += datetime.timedelta(minutes=normalized_offset)
+
+        logger.info(f"Applying offset of {normalized_offset} minutes to {time_min_raw}")
+        logger.info(f"Resulting start time: {time_min}")
+
+        # Generate continuous timestamp (matching original logic)
+        time_list = []
+        current_time = time_min
+
+        while current_time <= time_max_raw:
+            time_list.append(current_time)
+            current_time += datetime.timedelta(minutes=tss)
+
+        if not time_list:
+            return jsonify({"error": "Keine gültigen Zeitpunkte generiert"}), 400
+
+        logger.info(f"Generated {len(time_list)} time points")
+        logger.info(f"First timestamp: {time_list[0]}")
+        logger.info(f"Last timestamp: {time_list[-1]}")
+
         emit_progress('processing', 60, f'Starting {mode_input} processing...')
-        
+
+        # Convert df to format matching original (for easier index access)
+        df_dict = df.to_dict('list')
+
+        # Zähler für den Durchlauf der Rohdaten
+        i_raw = 0
+
+        # Initialisierung der Liste mit den aufbereiteten Messwerten
+        value_list = []
+
+        # METHODE: MITTELWERTBILDUNG (matching original logic)
         if mode_input == "mean":
             emit_progress('processing', 65, 'Calculating mean values...')
-            df.set_index('UTC', inplace=True)
-            
-            df_resampled = df[value_col_name].resample(
-                rule=f'{int(tss)}min',
-                origin=time_min,
-                closed='right',
-                label='right'
-            ).mean().to_frame()
-            
-            df_resampled = df_resampled[df_resampled.index >= time_min]
-            
-            df_resampled.reset_index(inplace=True)
-            
+
+            # Schleife durchläuft alle Zeitschritte des kontinuierlichen Zeitstempels
+            for i in range(0, len(time_list)):
+
+                # Zeitgrenzen für die Mittelwertbildung (Untersuchungsraum)
+                time_int_min = time_list[i] - datetime.timedelta(minutes=tss/2)
+                time_int_max = time_list[i] + datetime.timedelta(minutes=tss/2)
+
+                # Berücksichtigung angrenzender Untersuchungsräume
+                if i > 0:
+                    i_raw -= 1
+                if i > 0 and df[utc_col_name].iloc[i_raw].to_pydatetime() < time_int_min:
+                    i_raw += 1
+
+                # Initialisierung der Liste mit den Messwerten im Untersuchungsraum
+                value_int_list = []
+
+                # Auflistung numerischer Messwerte im Untersuchungsraum
+                while (i_raw < len(df) and
+                       df[utc_col_name].iloc[i_raw].to_pydatetime() <= time_int_max and
+                       df[utc_col_name].iloc[i_raw].to_pydatetime() >= time_int_min):
+                    if is_numeric(df[value_col_name].iloc[i_raw]):
+                        value_int_list.append(float(df[value_col_name].iloc[i_raw]))
+                    i_raw += 1
+
+                # Mittelwertbildung über die numerischen Messwerte im Untersuchungsraum
+                if len(value_int_list) > 0:
+                    import statistics
+                    value_list.append(statistics.mean(value_int_list))
+                else:
+                    value_list.append("nan")
+
+        # METHODE: LINEARE INTERPOLATION (matching original logic)
         elif mode_input == "intrpl":
             emit_progress('processing', 65, 'Starting interpolation...')
-            df.set_index("UTC", 
-                        inplace = True)
-            
-            df_resampled = pd.merge_asof(
-                            df_utc,
-                            df.reset_index(),
-                            left_on     ='UTC',
-                            right_on    ='UTC',
-                            direction   ='nearest',
-                            tolerance   = pd.Timedelta(minutes = tss/2)
-                            )
-            
-            df_resampled.set_index("UTC", 
-                        inplace = True)
-            
-            df_before_interp = df_resampled.copy()
-            
-            actual_measurements = df_before_interp[~df_before_interp[value_col_name].isna()]
-            
-            if len(actual_measurements) > 1:
-                measurement_times = actual_measurements.index.to_list()
-                
-                time_diffs = np.diff(measurement_times) / pd.Timedelta(minutes=1)
-                
-                large_gaps = np.where(time_diffs > float(intrpl_max))[0]
-                
-                logger.info(f"Found {len(large_gaps)} large measurement gaps exceeding {intrpl_max} minutes")
-                
-                for gap_idx in large_gaps:
-                    gap_start = measurement_times[gap_idx]
-                    gap_end = measurement_times[gap_idx + 1]
-                    
-                    max_interp_time = gap_start + pd.Timedelta(minutes=float(intrpl_max))
-                    
-                    no_interp_mask = ((df_resampled.index > max_interp_time) & 
-                                      (df_resampled.index < gap_end))
-                    
-                    if no_interp_mask.any():
-                        logger.info(f"Preventing interpolation for {no_interp_mask.sum()} points in gap between "
-                                   f"{gap_start} and {gap_end} (beyond {intrpl_max} minutes)")
-            
-            df_resampled = df_resampled.interpolate(method = "time",
-                                                   limit = int(intrpl_max/tss))
-            
-            df_resampled.reset_index(inplace=True)
-            
-        elif mode_input in ["nearest", "nearest (mean)"]:
-            emit_progress('processing', 65, f'Processing {mode_input}...')
-            df.set_index('UTC', inplace=True)
-            
-            if mode_input == "nearest":
-                    df_resampled = pd.merge_asof(
-                        df_utc,
-                        df.reset_index(),
-                        left_on='UTC',
-                        right_on='UTC',
-                        direction='nearest',
-                        tolerance=pd.Timedelta(minutes=tss/2)
-                    )
-            else:
-                    if df.index.name != 'UTC':
-                        if 'UTC' in df.columns:
-                            df.set_index('UTC', inplace=True)
+
+            # Zähler für den Durchlauf der Rohdaten
+            i_raw = 0
+
+            # Richtung des Schleifendurchlaufs
+            direct = 1
+
+            # Schleife durchläuft alle Zeitschritte des kontinuierlichen Zeitstempels
+            for i in range(0, len(time_list)):
+
+                # Schleife durchläuft die Rohdaten von vorne bis hinten zur Auffindung des nachfolgenden Wertes
+                if direct == 1:
+
+                    loop = True
+                    while i_raw < len(df) and loop == True:
+
+                        # Der aktuelle Zeitpunkt in den Rohdaten liegt nach dem aktuellen Zeitpunkt
+                        # im kontinuierlichen Zeitstempel oder ist mit diesem identisch.
+                        if df[utc_col_name].iloc[i_raw].to_pydatetime() >= time_list[i]:
+
+                            # Der aktuelle Zeitpunkt in den Rohdaten liegt nach dem aktuellen Zeitpunkt
+                            # im kontinuierlichen Zeitstempel oder ist mit diesem identisch und der
+                            # dazugehörige Messwert ist numerisch
+                            if is_numeric(df[value_col_name].iloc[i_raw]):
+
+                                # UTC und Messwert vom nachfolgenden Wert übernehmen
+                                time_next = df[utc_col_name].iloc[i_raw].to_pydatetime()
+                                value_next = float(df[value_col_name].iloc[i_raw])
+                                loop = False
+
+                            else:
+                                # Zähler aktuallisieren, wenn Messwert nicht numerisch
+                                i_raw += 1
+
                         else:
-                            df.index.name = 'UTC'
-                    
-                    resampled = df[value_col_name].resample(
-                        rule=f'{int(tss)}min',
-                        origin=time_min,
-                        closed='right',
-                        label='right'
-                    ).mean()
-                    
-                    mask = resampled.index >= time_min
-                    resampled = resampled[mask]
-                    
-                    df_resampled = pd.DataFrame({'UTC': resampled.index, value_col_name: resampled.values})
-        
+                            # Zähler aktuallisieren, wenn der aktuelle Zeitpunkt in den Rohdaten vor dem aktuellen
+                            # Zeitpunkt im kontinuierlichen Zeitstempel liegt.
+                            i_raw += 1
+
+                    # Die gesamten Rohdaten wurden durchlaufen und es wurde kein gültiger Messwert gefunden
+                    if i_raw + 1 > len(df):
+                        value_list.append("nan")
+
+                        # Zähler für die Rohdaten auf Null setzen und Schleifenrichtung festlegen
+                        i_raw = 0
+                        direct = 1
+                    else:
+                        # Schleifenrichtung umdrehen
+                        direct = -1
+
+                # Finden des vorangegangenen Wertes
+                if direct == -1:
+
+                    loop = True
+                    while i_raw >= 0 and loop == True:
+
+                        # Der aktuelle Zeitpunkt in den Rohdaten liegt vor dem aktuellen Zeitpunkt
+                        # im kontinuierlichen Zeitstempel oder ist mit diesem identisch.
+                        if df[utc_col_name].iloc[i_raw].to_pydatetime() <= time_list[i]:
+
+                            # Der aktuelle Zeitpunkt in den Rohdaten liegt vor dem aktuellen Zeitpunkt
+                            # im kontinuierlichen Zeitstempel oder ist mit diesem identisch und der
+                            # dazugehörige Messwert ist numerisch
+                            if is_numeric(df[value_col_name].iloc[i_raw]):
+
+                                # UTC und Messwert vom vorangegangenen Wert übernehmen
+                                time_prior = df[utc_col_name].iloc[i_raw].to_pydatetime()
+                                value_prior = float(df[value_col_name].iloc[i_raw])
+                                loop = False
+                            else:
+                                # Zähler aktuallisieren, wenn Messwert nicht numerisch
+                                i_raw -= 1
+                        else:
+                            # Zähler aktuallisieren, wenn der aktuelle Zeitpunkt in den Rohdaten nach dem aktuellen
+                            # Zeitpunkt im kontinuierlichen Zeitstempel liegt.
+                            i_raw -= 1
+
+                    # Die gesamten Rohdaten wurden durchlaufen und es wurde kein gültiger Messwert gefunden
+                    if i_raw < 0:
+                        value_list.append("nan")
+
+                        # Zähler für die Rohdaten auf Null setzen und Schleifenrichtung festlegen
+                        i_raw = 0
+                        direct = 1
+
+                    # Es wurde ein gültige Messwerte vor dem aktuellen Zeitpunkt im kontinuierlichen Zeitstempel und nach diesem gefunden
+                    else:
+                        delta_time = time_next - time_prior
+
+                        # Zeitabstand zwischen den entsprechenden Messwerten in den Rohdaten [sec]
+                        delta_time_sec = delta_time.total_seconds()
+                        delta_value = value_prior - value_next
+
+                        # Zeitpunkte fallen zusammen oder gleichbleibender Messwert - Keine lineare Interpolation notwendig
+                        if delta_time_sec == 0 or (delta_value == 0 and delta_time_sec <= intrpl_max*60):
+                            value_list.append(value_prior)
+
+                        # Zeitabstand zu groß - Keine lineare Interpolation möglich
+                        elif delta_time_sec > intrpl_max*60:
+                            value_list.append("nan")
+
+                        # Lineare Interpolation
+                        else:
+                            delta_time_prior_sec = (time_list[i] - time_prior).total_seconds()
+                            value_list.append(value_prior - delta_value/delta_time_sec*delta_time_prior_sec)
+
+                        direct = 1
+
+        # METHODE: ZEITLICH NÄCHSTLIEGENDER MESSWERT (matching original logic)
+        elif mode_input == "nearest" or mode_input == "nearest (mean)":
+            emit_progress('processing', 65, f'Processing {mode_input}...')
+
+            i_raw = 0  # Reset index counter
+
+            # Schleife durchläuft alle Zeitschritte des kontinuierlichen Zeitstempels
+            for i in range(0, len(time_list)):
+                try:
+                    # Zeitgrenzen für die Untersuchung (Untersuchungsraum)
+                    time_int_min = time_list[i] - datetime.timedelta(minutes=tss/2)
+                    time_int_max = time_list[i] + datetime.timedelta(minutes=tss/2)
+
+                    # Find values within the time window
+                    value_int_list = []
+                    delta_time_int_list = []
+
+                    # Scan through data points within the time window
+                    while i_raw < len(df):
+                        current_time = df[utc_col_name].iloc[i_raw].to_pydatetime()
+
+                        if current_time > time_int_max:
+                            break
+
+                        if current_time >= time_int_min:
+                            if is_numeric(df[value_col_name].iloc[i_raw]):
+                                value_int_list.append(float(df[value_col_name].iloc[i_raw]))
+                                delta_time_int_list.append(abs((time_list[i] - current_time).total_seconds()))
+
+                        i_raw += 1
+
+                    # If we've moved past the window, back up to catch potential values in the next window
+                    if i_raw > 0:
+                        i_raw -= 1
+
+                    # Process values based on mode
+                    if value_int_list:
+                        if mode_input == "nearest":
+                            # Find the value with minimum time difference
+                            min_time = min(delta_time_int_list)
+                            min_idx = delta_time_int_list.index(min_time)
+                            value_list.append(value_int_list[min_idx])
+                        else:  # nearest (mean)
+                            # Find all values with the minimum time difference
+                            import statistics
+                            min_time = min(delta_time_int_list)
+                            nearest_values = [
+                                value_int_list[idx]
+                                for idx, delta in enumerate(delta_time_int_list)
+                                if abs(delta - min_time) < 0.001  # Small tolerance for float comparison
+                            ]
+                            value_list.append(statistics.mean(nearest_values))
+                    else:
+                        value_list.append("nan")
+
+                except Exception as e:
+                    logger.error(f"Error processing time step {i}: {str(e)}")
+                    value_list.append("nan")
+
+        # DATENRAHMEN MIT DEN AUFBEREITETEN DATEN
+        logger.info(f"Length of time_list: {len(time_list)}")
+        logger.info(f"Length of value_list: {len(value_list)}")
+
         emit_progress('finalizing', 85, 'Converting results to JSON...')
-        result = df_resampled.apply(
+
+        # Create result dataframe
+        result_df = pd.DataFrame({"UTC": time_list, value_col_name: value_list})
+
+        # Format UTC column to desired format
+        result_df['UTC'] = result_df['UTC'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
+
+        # Convert to list of dicts
+        result = result_df.apply(
             lambda row: {
-                "UTC": row["UTC"].strftime("%Y-%m-%d %H:%M:%S"),
+                "UTC": row["UTC"],
                 value_col_name: clean_for_json(row[value_col_name])
             },
             axis=1
         ).tolist()
-        
+
         emit_progress('finalizing', 95, 'Compressing data...')
         result_json = json.dumps(result)
         compressed_data = gzip.compress(result_json.encode('utf-8'))
-        
+
         emit_progress('complete', 100, f'Processing complete! Generated {len(result)} data points.')
-        
+
         response = Response(compressed_data)
         response.headers['Content-Encoding'] = 'gzip'
         response.headers['Content-Type'] = 'application/json'
@@ -457,7 +622,7 @@ def prepare_save():
             writer.writerow(row)
         temp_file.close()
 
-        file_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        file_id = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         temp_files[file_id] = {
             'path': temp_file.name,
             'fileName': file_name or f"data_{file_id}.csv",
