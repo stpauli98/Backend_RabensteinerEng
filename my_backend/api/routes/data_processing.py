@@ -5,10 +5,12 @@ import math
 import os
 import re
 import tempfile
+import time
 
 import numpy as np
 import pandas as pd
-from flask import Blueprint, request, Response, jsonify, send_file, current_app, g
+from flask import Blueprint, request, Response, jsonify, send_file, g
+from core.extensions import socketio
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit
 from utils.usage_tracking import increment_processing_count, update_storage_usage
@@ -24,17 +26,141 @@ MAX_FILE_SIZE = 100 * 1024 * 1024
 ALLOWED_EXTENSIONS = {'.csv', '.txt'}
 MAX_CHUNK_SIZE = 10 * 1024 * 1024
 
-PROGRESS_COMBINING = 65
-PROGRESS_PROCESSING = 70
-PROGRESS_CLEANING_START = 75
-PROGRESS_CLEANED = 85
-PROGRESS_STREAMING_START = 90
-PROGRESS_COMPLETE = 100
+# Progress faze za data processing
+# 0-10%   → chunk_assembly
+# 10-15%  → parsing
+# 15-25%  → preprocessing
+# 25-85%  → cleaning (GLAVNA FAZA - 7 koraka)
+# 85-95%  → finalizing
+# 95-100% → streaming
 
 STREAMING_CHUNK_SIZE = 50000
 TOTAL_CLEANING_STEPS = 7
-CLEANING_PROGRESS_RANGE = 10
-STREAMING_PROGRESS_RANGE = 8
+
+
+class ProgressTracker:
+    """
+    Progress tracking sa ETA po koraku (Opcija 3).
+    ETA se računa samo za trenutni korak - precizno i stabilno.
+    """
+
+    def __init__(self, upload_id, total_items=None, file_size_bytes=None, total_chunks=None):
+        self.upload_id = upload_id
+        self.start_time = time.time()
+        self.phase_start_times = {}
+        self.phase_durations = {}
+
+        self.file_size_bytes = file_size_bytes
+        self.total_chunks = total_chunks
+        self.total_items = total_items
+
+        self.last_emit_time = 0
+        self.emit_interval = 0.5  # Emit svakih 500ms
+
+        # Per-step ETA tracking
+        self.current_step_start = None
+        self.current_step_rows = 0
+        self.current_step_processed = 0
+        self.min_calibration_rows = 1000  # Čekaj 1000 redova za stabilnu procjenu
+
+        # Step tracking za frontend
+        self.current_step = 0
+        self.total_steps = 0
+
+    def start_phase(self, phase_name):
+        """Označi početak nove faze procesiranja"""
+        self.phase_start_times[phase_name] = time.time()
+
+    def end_phase(self, phase_name):
+        """Završi fazu i snimi stvarno vrijeme trajanja"""
+        if phase_name in self.phase_start_times:
+            duration = time.time() - self.phase_start_times[phase_name]
+            self.phase_durations[phase_name] = duration
+            logger.info(f"Phase '{phase_name}' completed in {duration:.2f}s")
+
+    def start_step(self, total_rows):
+        """Započni novi cleaning korak"""
+        self.current_step_start = time.time()
+        self.current_step_rows = total_rows
+        self.current_step_processed = 0
+
+    def update_step_progress(self, processed_rows):
+        """Ažuriraj napredak trenutnog koraka"""
+        self.current_step_processed = processed_rows
+
+    def calculate_step_eta(self):
+        """
+        Izračunaj ETA samo za TRENUTNI korak.
+        Vraća broj sekundi ili None ako još nema dovoljno podataka.
+        """
+        if not self.current_step_start or self.current_step_rows == 0:
+            return None
+
+        elapsed = time.time() - self.current_step_start
+        remaining_rows = self.current_step_rows - self.current_step_processed
+
+        # Čekaj minimalni broj redova za kalibraciju
+        if self.current_step_processed < self.min_calibration_rows:
+            return None
+
+        if self.current_step_processed > 0:
+            time_per_row = elapsed / self.current_step_processed
+            eta = remaining_rows * time_per_row
+            return max(0, int(eta))
+
+        return None
+
+    def emit(self, step, progress, message, eta_seconds=None, force=False):
+        """Šalje progress update"""
+        current_time = time.time()
+
+        if not force and (current_time - self.last_emit_time) < self.emit_interval:
+            return
+
+        payload = {
+            'uploadId': self.upload_id,
+            'step': step,
+            'progress': int(progress),
+            'message': message
+        }
+
+        # Dodaj currentStep i totalSteps za cleaning fazu
+        if step == 'cleaning' and self.total_steps > 0:
+            payload['currentStep'] = self.current_step
+            payload['totalSteps'] = self.total_steps
+
+        # Dodaj ETA ako je proslijeđen ili izračunaj za trenutni korak
+        if eta_seconds is not None:
+            payload['eta'] = eta_seconds
+            payload['etaFormatted'] = self.format_time(eta_seconds)
+        elif step == 'cleaning':
+            step_eta = self.calculate_step_eta()
+            if step_eta is not None:
+                payload['eta'] = step_eta
+                payload['etaFormatted'] = f"~{self.format_time(step_eta)}"
+
+        try:
+            socketio.emit('processing_progress', payload, room=self.upload_id)
+            self.last_emit_time = current_time
+            eta_text = f" (ETA: {payload.get('etaFormatted', '-')})" if 'etaFormatted' in payload else ""
+            step_info = f" [{self.current_step}/{self.total_steps}]" if self.total_steps > 0 else ""
+            logger.info(f"Progress: {progress}%{step_info} - {message}{eta_text}")
+        except Exception as e:
+            logger.error(f"Error emitting progress: {e}")
+
+    @staticmethod
+    def format_time(seconds):
+        """Formatira sekunde u čitljiv format"""
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes}m {secs}s"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}m"
 
 def secure_path_join(base_dir, user_input):
     """Safely join paths preventing directory traversal attacks"""
@@ -139,29 +265,97 @@ def safe_error_response(error_msg, status_code=500, error_type=None):
     else:
         return jsonify({"error": "A processing error occurred. Please check your input and try again."}), status_code
 
-def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None):
-    logger.info("Starting data cleaning with parameters: %s", params)
-    current_step = 0
+def clean_data(df, value_column, params, tracker=None):
+    """
+    Čisti podatke prema zadanim parametrima sa per-step ETA praćenjem.
 
-    def emit_cleaning_progress(step_name, removed_count=None):
-        nonlocal current_step
-        current_step += 1
-        if emit_progress_func and upload_id:
-            progress = PROGRESS_CLEANING_START + (current_step / TOTAL_CLEANING_STEPS) * CLEANING_PROGRESS_RANGE
-            message = f"Step {current_step}/{TOTAL_CLEANING_STEPS}: {step_name}"
+    Args:
+        df: DataFrame sa podacima
+        value_column: Naziv kolone sa vrijednostima
+        params: Parametri čišćenja
+        tracker: ProgressTracker instanca za praćenje napretka
+    """
+    logger.info("Starting data cleaning with parameters: %s", params)
+    total_rows = len(df)
+
+    # Izračunaj koje korake ćemo izvršiti
+    active_steps = []
+    if params.get("eqMax"):
+        active_steps.append(("eqMax", "Uklanjanje mjernih kvarova"))
+    if params.get("elMax") is not None:
+        active_steps.append(("elMax", "Uklanjanje vrijednosti iznad praga"))
+    if params.get("elMin") is not None:
+        active_steps.append(("elMin", "Uklanjanje vrijednosti ispod praga"))
+    if params.get("radioValueNull") == "ja":
+        active_steps.append(("radioValueNull", "Uklanjanje nula vrijednosti"))
+    if params.get("radioValueNotNull") == "ja":
+        active_steps.append(("radioValueNotNull", "Uklanjanje ne-numeričkih vrijednosti"))
+    if params.get("chgMax") and params.get("lgMax"):
+        active_steps.append(("chgMax", "Uklanjanje outliera"))
+    if params.get("gapMax"):
+        active_steps.append(("gapMax", "Popunjavanje praznina"))
+
+    total_active_steps = len(active_steps) if active_steps else 1
+    current_step_index = 0
+
+    # Postavi total_steps u tracker za frontend
+    if tracker:
+        tracker.total_steps = total_active_steps
+
+    # Emit frekvencija - svakih ~2% koraka ili min 500 redova
+    emit_frequency = max(500, total_rows // 50)
+
+    def start_step(step_name):
+        """Započni novi korak i resetiraj ETA tracking"""
+        nonlocal current_step_index
+        current_step_index += 1
+        if tracker:
+            tracker.current_step = current_step_index
+            tracker.start_step(total_rows)
+            # Cleaning faza: 25-90% (65% range), ravnomjerno podijeljeno po koracima
+            progress = 25 + ((current_step_index - 1) / total_active_steps) * 65
+            message = step_name
+            tracker.emit('cleaning', progress, message, force=True)
+
+    def update_progress(step_name, iteration_in_step):
+        """Ažuriraj progress unutar koraka - sa per-step ETA"""
+        if tracker:
+            tracker.update_step_progress(iteration_in_step)
+
+            # Emit na emit_frequency interval
+            if iteration_in_step % emit_frequency == 0 and iteration_in_step > 0:
+                # Progress unutar cleaning faze (25-90%)
+                step_progress = iteration_in_step / total_rows
+                base_progress = 25 + ((current_step_index - 1) / total_active_steps) * 65
+                step_range = 65 / total_active_steps
+                progress = base_progress + (step_progress * step_range)
+                progress = min(progress, 90)
+
+                # Poruka je samo naziv koraka - frontend ima currentStep/totalSteps
+                tracker.emit('cleaning', progress, step_name)
+
+    def emit_step_complete(step_name, removed_count=None):
+        """Emit kada je korak završen"""
+        if tracker:
+            progress = 25 + (current_step_index / total_active_steps) * 65
+            progress = min(progress, 90)
+            message = f"{step_name} ✓"
             if removed_count is not None:
-                message += f" - Removed: {removed_count} values"
-            logger.info(f"Emitting progress: {progress}% - {step_name}")
-            emit_progress_func(upload_id, 'cleaning', progress, f'{message}...')
-    
+                message += f" ({removed_count} uklonjeno)"
+            tracker.emit('cleaning', progress, message, force=True)
+
     df["UTC"] = pd.to_datetime(df["UTC"], format="%Y-%m-%d %H:%M:%S")
 
+    # === KORAK 1: EQ_MAX ===
     if params.get("eqMax"):
-        emit_cleaning_progress("Removing measurement failures")
+        step_name = "Uklanjanje mjernih kvarova"
+        start_step(step_name)
         logger.info("Removing measurement failures (identical consecutive values)")
         eq_max = float(params["eqMax"])
         frm = 0
+        removed_count = 0
         for i in range(1, len(df)):
+            update_progress(step_name, i)
             if df.iloc[i-1][value_column] == df.iloc[i][value_column] and frm == 0:
                 idx_strt = i-1
                 frm = 1
@@ -171,6 +365,7 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                 if frm_width >= eq_max:
                     for i_frm in range(idx_strt, idx_end+1):
                         df.iloc[i_frm, df.columns.get_loc(value_column)] = np.nan
+                        removed_count += 1
                 frm = 0
             elif i == len(df)-1 and frm == 1:
                 idx_end = i
@@ -178,71 +373,94 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                 if frm_width >= eq_max:
                     for i_frm in range(idx_strt, idx_end+1):
                         df.iloc[i_frm, df.columns.get_loc(value_column)] = np.nan
+                        removed_count += 1
+        emit_step_complete(step_name, removed_count)
 
+    # === KORAK 2: EL_MAX ===
     if params.get("elMax") is not None:
+        step_name = "Uklanjanje vrijednosti iznad praga"
+        start_step(step_name)
         logger.info("Removing values above upper threshold")
         el_max = float(params["elMax"])
-        values_to_remove = 0
+        removed_count = 0
         for i in range(len(df)):
+            update_progress(step_name, i)
             try:
                 if float(df.iloc[i][value_column]) > el_max:
                     df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                    values_to_remove += 1
+                    removed_count += 1
             except:
                 df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                values_to_remove += 1
-        emit_cleaning_progress("Removing values above upper threshold", values_to_remove)
+                removed_count += 1
+        emit_step_complete(step_name, removed_count)
 
+    # === KORAK 3: EL_MIN ===
     if params.get("elMin") is not None:
+        step_name = "Uklanjanje vrijednosti ispod praga"
+        start_step(step_name)
         logger.info("Removing values below lower threshold")
         el_min = float(params["elMin"])
-        values_to_remove = 0
+        removed_count = 0
         for i in range(len(df)):
+            update_progress(step_name, i)
             try:
                 if float(df.iloc[i][value_column]) < el_min:
                     df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                    values_to_remove += 1
+                    removed_count += 1
             except:
                 df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                values_to_remove += 1
-        emit_cleaning_progress("Removing values below lower threshold", values_to_remove)
+                removed_count += 1
+        emit_step_complete(step_name, removed_count)
 
+    # === KORAK 4: RADIO_VALUE_NULL ===
     if params.get("radioValueNull") == "ja":
+        step_name = "Uklanjanje nula vrijednosti"
+        start_step(step_name)
         logger.info("Removing null values")
-        values_to_remove = 0
+        removed_count = 0
         for i in range(len(df)):
+            update_progress(step_name, i)
             if df.iloc[i][value_column] == 0:
                 df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                values_to_remove += 1
-        emit_cleaning_progress("Removing null values", values_to_remove)
+                removed_count += 1
+        emit_step_complete(step_name, removed_count)
 
+    # === KORAK 5: RADIO_VALUE_NOT_NULL ===
     if params.get("radioValueNotNull") == "ja":
+        step_name = "Uklanjanje ne-numeričkih vrijednosti"
+        start_step(step_name)
         logger.info("Removing non-numeric values")
-        values_to_remove = 0
+        removed_count = 0
         for i in range(len(df)):
+            update_progress(step_name, i)
             try:
                 float(df.iloc[i][value_column])
                 if math.isnan(float(df.iloc[i][value_column])) == True:
                     df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                    values_to_remove += 1
+                    removed_count += 1
             except:
                 df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                values_to_remove += 1
-        emit_cleaning_progress("Removing non-numeric values", values_to_remove)
+                removed_count += 1
+        emit_step_complete(step_name, removed_count)
 
+    # === KORAK 6: CHG_MAX + LG_MAX ===
     if params.get("chgMax") and params.get("lgMax"):
-        emit_cleaning_progress("Removing outliers")
+        step_name = "Uklanjanje outliera"
+        start_step(step_name)
         logger.info("Removing outliers")
         chg_max = float(params["chgMax"])
         lg_max = float(params["lgMax"])
         frm = 0
+        removed_count = 0
         for i in range(1, len(df)):
+            update_progress(step_name, i)
             if pd.isna(df.iloc[i][value_column]) and frm == 0:
                 pass
             elif pd.isna(df.iloc[i][value_column]) and frm == 1:
                 idx_end = i-1
                 for i_frm in range(idx_strt, idx_end+1):
                     df.iloc[i_frm, df.columns.get_loc(value_column)] = np.nan
+                    removed_count += 1
                 frm = 0
             elif pd.isna(df.iloc[i-1][value_column]):
                 pass
@@ -256,16 +474,22 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                     idx_end = i-1
                     for i_frm in range(idx_strt, idx_end+1):
                         df.iloc[i_frm, df.columns.get_loc(value_column)] = np.nan
+                        removed_count += 1
                     frm = 0
                 elif frm == 1 and (df.iloc[i]["UTC"] - df.iloc[idx_strt]["UTC"]).total_seconds() / 60 > lg_max:
                     frm = 0
+        emit_step_complete(step_name, removed_count)
 
+    # === KORAK 7: GAP_MAX ===
     if params.get("gapMax"):
-        emit_cleaning_progress("Filling measurement gaps")
+        step_name = "Popunjavanje praznina"
+        start_step(step_name)
         logger.info("Filling measurement gaps")
         gap_max = float(params["gapMax"])
         frm = 0
+        filled_count = 0
         for i in range(1, len(df)):
+            update_progress(step_name, i)
             if pd.isna(df.iloc[i][value_column]) and frm == 0:
                 idx_strt = i
                 frm = 1
@@ -278,8 +502,11 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
                     for i_frm in range(idx_strt, idx_end+1):
                         gap_min = (df.iloc[i_frm]["UTC"] - df.iloc[idx_strt-1]["UTC"]).total_seconds() / 60
                         df.iloc[i_frm, df.columns.get_loc(value_column)] = float(df.iloc[idx_strt-1][value_column]) + gap_min*dif_min
+                        filled_count += 1
                 frm = 0
+        emit_step_complete(step_name, filled_count)
 
+    # === POST-VALIDACIJA ===
     if params.get("elMin") is not None:
         el_min = float(params["elMin"])
         final_violations_min = (df[value_column] < el_min).sum()
@@ -288,7 +515,7 @@ def clean_data(df, value_column, params, emit_progress_func=None, upload_id=None
         if final_violations_min > 0:
             logger.info(f"Removing {final_violations_min} interpolated values below elMin threshold")
             df.loc[df[value_column] < el_min, value_column] = np.nan
-    
+
     if params.get("elMax") is not None:
         el_max = float(params["elMax"])
         final_violations_max = (df[value_column] > el_max).sum()
@@ -335,38 +562,18 @@ def _combine_chunks_efficiently(upload_dir, total_chunks):
             os.unlink(temp_file.name)
         raise
 
-def _emit_progress_update(upload_id, step, progress, message):
-    """Emit progress update via Socket.IO"""
-    if upload_id:
-        try:
-            from app import socketio
-            logger.info(f"Emitting Socket.IO progress: {progress}% - {step} - {message} to room: {upload_id}")
-            socketio.emit('processing_progress', {
-                'uploadId': upload_id,
-                'step': step,
-                'progress': progress,
-                'message': message
-            }, room=upload_id)
-        except Exception as e:
-            logger.error(f"Error emitting progress: {e}")
-            try:
-                socketio = current_app.extensions.get('socketio')
-                if socketio:
-                    logger.info(f"Fallback: Emitting Socket.IO progress via current_app: {progress}% - {step} - {message}")
-                    socketio.emit('processing_progress', {
-                        'uploadId': upload_id,
-                        'step': step,
-                        'progress': progress,
-                        'message': message
-                    }, room=upload_id)
-            except Exception as fallback_error:
-                logger.error(f"Fallback emit also failed: {fallback_error}")
 
 @bp.route("/api/dataProcessingMain/upload-chunk", methods=["POST"])
 @require_auth
 @require_subscription
 @check_processing_limit
 def upload_chunk():
+    """
+    Endpoint za prihvat i obradu CSV podataka u dijelovima (chunks).
+    Koristi ProgressTracker za real-time praćenje napretka sa ETA kalkulacijom.
+    """
+    tracker = None
+
     try:
         logger.info(f"Processing chunk {request.form.get('chunkIndex')}/{request.form.get('totalChunks')}")
 
@@ -378,7 +585,7 @@ def upload_chunk():
         upload_id = request.form["uploadId"]
         chunk_index = int(request.form["chunkIndex"])
         total_chunks = int(request.form["totalChunks"])
-        
+
         if 'fileChunk' not in request.files:
             logger.error("No fileChunk in request.files")
             return safe_error_response("No file chunk provided", 400)
@@ -394,7 +601,7 @@ def upload_chunk():
         except ValueError as e:
             logger.error(f"File validation failed: {e}")
             return safe_error_response(str(e), 400, 'validation')
-        
+
         if chunk_size == 0:
             logger.error("Received empty chunk")
             return jsonify({"error": "Empty chunk received"}), 400
@@ -405,19 +612,74 @@ def upload_chunk():
         except ValueError as e:
             logger.error(f"Invalid upload_id: {upload_id}")
             return safe_error_response("Invalid upload identifier", 400, 'security')
+
         chunk_path = os.path.join(upload_dir, f"chunk_{chunk_index:04d}.part")
-        
+
         with open(chunk_path, "wb") as f:
             f.write(chunk)
 
         if chunk_index < total_chunks - 1:
             return jsonify({"status": "chunk received", "chunkIndex": chunk_index})
 
-        logger.info("Starting to combine all chunks")
-        _emit_progress_update(upload_id, 'combining', PROGRESS_COMBINING, 'Combining uploaded chunks...')
+        # === ZADNJI CHUNK PRIMLJEN - PROVJERI DA LI SU SVI CHUNKOVI NA DISKU ===
+        # Kod paralelnog uploada, zadnji chunk može stići prije ostalih
+        missing_chunks = []
+        for i in range(total_chunks):
+            part_path = os.path.join(upload_dir, f"chunk_{i:04d}.part")
+            if not os.path.exists(part_path):
+                missing_chunks.append(i)
+
+        if missing_chunks:
+            # Kod paralelnog uploada, zadnji chunk može stići prije ostalih
+            # Čekaj kratko da ostali chunkovi stignu
+            import time as time_module
+            max_wait = 5  # sekundi
+            wait_interval = 0.2  # sekundi
+            waited = 0
+
+            while waited < max_wait and missing_chunks:
+                time_module.sleep(wait_interval)
+                waited += wait_interval
+                # Provjeri ponovo
+                missing_chunks = [
+                    i for i in range(total_chunks)
+                    if not os.path.exists(os.path.join(upload_dir, f"chunk_{i:04d}.part"))
+                ]
+
+            if missing_chunks:
+                logger.error(f"Timeout waiting for chunks: {missing_chunks}")
+                return jsonify({
+                    "error": "Missing chunks after timeout",
+                    "missingChunks": missing_chunks
+                }), 400
+
+            logger.info(f"All chunks arrived after {waited:.1f}s wait")
+
+        # === SVI CHUNK-OVI PRIMLJENI - POČINJE PROCESIRANJE ===
+        logger.info("All chunks received, starting processing...")
+
+        # Izračunaj ukupnu veličinu fajla
+        total_file_size = sum(
+            os.path.getsize(os.path.join(upload_dir, f"chunk_{i:04d}.part"))
+            for i in range(total_chunks)
+            if os.path.exists(os.path.join(upload_dir, f"chunk_{i:04d}.part"))
+        )
+
+        # Inicijaliziraj ProgressTracker
+        tracker = ProgressTracker(
+            upload_id=upload_id,
+            file_size_bytes=total_file_size,
+            total_chunks=total_chunks
+        )
+
+        # === FAZA 1: CHUNK ASSEMBLY (0-10%) ===
+        tracker.start_phase('chunk_assembly')
+        tracker.emit('chunk_assembly', 0, f'Spajam {total_chunks} chunk-ova...', force=True)
 
         try:
             combined_file_path, total_size = _combine_chunks_efficiently(upload_dir, total_chunks)
+            tracker.end_phase('chunk_assembly')
+            tracker.emit('chunk_assembly', 10, 'Chunk-ovi uspješno spojeni ✓', force=True)
         except (FileNotFoundError, ValueError) as e:
             logger.error(f"Chunk combination failed: {e}")
             for i in range(total_chunks):
@@ -431,7 +693,7 @@ def upload_chunk():
             if "exceeds" in str(e):
                 return safe_error_response("File too large", 413, 'validation')
             else:
-                return jsonify({"error": f"Missing chunk file"}), 400
+                return jsonify({"error": "Missing chunk file"}), 400
 
         if total_size == 0:
             logger.error("No data in combined chunks")
@@ -439,34 +701,48 @@ def upload_chunk():
             return jsonify({"error": "No data in combined chunks"}), 400
 
         try:
-            _emit_progress_update(upload_id, 'processing', PROGRESS_PROCESSING, 'Processing combined data...')
+            # === FAZA 2: PARSING (10-15%) ===
+            tracker.start_phase('parsing')
+            tracker.emit('parsing', 10, 'Učitavanje CSV podataka...', force=True)
+
             with open(combined_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
             os.unlink(combined_file_path)
             lines = content.splitlines()
-            
+
+            tracker.emit('parsing', 12, f'Učitano {len(lines)} linija iz CSV-a')
+
             if len(lines) < 2:
                 logger.error("File has less than 2 lines")
                 return jsonify({"error": "Invalid file format"}), 400
 
             separator = ";" if ";" in lines[0] else ","
             header = lines[0].split(separator)
-            
+
             if len(header) < 2:
                 logger.error("Invalid header format")
                 return jsonify({"error": "Invalid header format"}), 400
-                
+
             value_column = header[1].strip()
             data = [line.split(separator) for line in lines[1:] if line.strip()]
-            
+
             if not data:
                 logger.error("No data rows found")
                 return jsonify({"error": "No data rows found"}), 400
 
+            tracker.end_phase('parsing')
+            tracker.emit('parsing', 15, f'Parsiranje završeno - {len(data)} redova ✓', force=True)
+
+            # === FAZA 3: PREPROCESSING (15-25%) ===
+            tracker.start_phase('preprocessing')
+            tracker.emit('preprocessing', 15, 'Konverzija tipova podataka...')
+
             df = pd.DataFrame(data, columns=["UTC", value_column])
             df[value_column] = df[value_column].replace('', np.nan)
             df[value_column] = pd.to_numeric(df[value_column].str.replace(",", "."), errors='coerce')
+
+            tracker.emit('preprocessing', 20, 'Validacija parametara...')
 
             raw_params = {
                 "eqMax": request.form.get("eqMax"),
@@ -485,23 +761,35 @@ def upload_chunk():
                 logger.error(f"Parameter validation failed: {e}")
                 return safe_error_response(str(e), 400, 'validation')
 
-            _emit_progress_update(upload_id, 'cleaning', PROGRESS_CLEANING_START, f'Cleaning data with {len(df)} rows...')
-            df_clean = clean_data(df, value_column, params, _emit_progress_update, upload_id)
-            _emit_progress_update(upload_id, 'cleaned', PROGRESS_CLEANED, f'Data cleaning completed. Processing {len(df_clean)} rows...')
+            tracker.end_phase('preprocessing')
+            tracker.emit('preprocessing', 25, f'Priprema završena - {len(df)} redova spremno za čišćenje ✓', force=True)
+
+            # === FAZA 4: CLEANING (25-85%) ===
+            tracker.start_phase('cleaning')
+            tracker.emit('cleaning', 25, f'Započinjem čišćenje podataka ({len(df)} redova)...', force=True)
+
+            df_clean = clean_data(df, value_column, params, tracker)
+
+            tracker.end_phase('cleaning')
+            tracker.emit('cleaning', 90, f'Čišćenje završeno - {len(df_clean)} redova ✓', force=True)
+
+            # Resetiraj step tracking za ostale faze (finalizing, streaming)
+            tracker.current_step = 0
+            tracker.total_steps = 0
 
             # Track processing usage
             try:
                 increment_processing_count(g.user_id)
                 logger.info(f"✅ Tracked processing for user {g.user_id}")
-                
-                # Track storage usage
+
                 file_size_mb = total_size / (1024 * 1024)
                 update_storage_usage(g.user_id, file_size_mb)
                 logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
             except Exception as e:
                 logger.error(f"⚠️ Failed to track processing usage: {str(e)}")
-                # Don't fail the processing if tracking fails
 
+            # Kreiraj closure za tracker da ga generator može koristiti
+            tracker_ref = tracker
 
             def generate():
                 class CustomJSONEncoder(json.JSONEncoder):
@@ -509,43 +797,63 @@ def upload_chunk():
                         if isinstance(obj, pd.Timestamp):
                             return obj.strftime('%Y-%m-%d %H:%M:%S')
                         return super().default(obj)
-                
-                _emit_progress_update(upload_id, 'streaming', PROGRESS_STREAMING_START, f'Starting to stream {len(df_clean)} processed rows...')
-                
+
+                # === FAZA 5: STREAMING (90-100%) ===
+                tracker_ref.start_phase('streaming')
+                tracker_ref.emit('streaming', 90, f'Započinjem streaming {len(df_clean)} redova...', force=True)
+
                 yield json.dumps({"total_rows": len(df_clean)}, cls=CustomJSONEncoder) + "\n"
-                
+
                 chunk_size = STREAMING_CHUNK_SIZE
+                total_chunks_to_stream = (len(df_clean) // chunk_size) + 1
+                streaming_start_time = time.time()
+
                 for i in range(0, len(df_clean), chunk_size):
-                    chunk_progress = PROGRESS_STREAMING_START + ((i / len(df_clean)) * STREAMING_PROGRESS_RANGE)
-                    _emit_progress_update(upload_id, 'streaming', chunk_progress, f'Streaming chunk {i//chunk_size + 1}/{(len(df_clean)//chunk_size) + 1}...')
+                    # Progress 90-99%
+                    chunk_progress = 90 + ((i / len(df_clean)) * 9)
+                    current_chunk = (i // chunk_size) + 1
+
+                    # Izračunaj ETA za streaming
+                    streaming_eta = None
+                    if current_chunk > 1:
+                        elapsed = time.time() - streaming_start_time
+                        chunks_done = current_chunk - 1
+                        chunks_remaining = total_chunks_to_stream - current_chunk + 1
+                        time_per_chunk = elapsed / chunks_done
+                        streaming_eta = int(chunks_remaining * time_per_chunk)
+
+                    tracker_ref.emit('streaming', chunk_progress,
+                                    f'Streaming chunk {current_chunk}/{total_chunks_to_stream}...',
+                                    eta_seconds=streaming_eta)
+
                     chunk = df_clean.iloc[i:i + chunk_size].copy()
                     chunk.loc[:, 'UTC'] = chunk['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                    
+
                     if i == 0:
                         logger.info("First 10 rows of processed data:")
                         logger.info(chunk.head(10).to_string())
-                    
+
                     chunk_data = []
                     for _, row in chunk.iterrows():
                         utc_value = row['UTC']
                         if isinstance(utc_value, pd.Timestamp):
                             utc_value = utc_value.strftime('%Y-%m-%d %H:%M:%S')
-                            
+
                         record = {
                             'UTC': utc_value,
                             value_column: row[value_column] if pd.notnull(row[value_column]) else None
                         }
                         chunk_data.append(record)
-                    
+
                     for record in chunk_data:
                         yield json.dumps(record, cls=CustomJSONEncoder) + "\n"
-                
-                _emit_progress_update(upload_id, 'complete', PROGRESS_COMPLETE, f'Processing completed! Generated {len(df_clean)} data points.')
+
+                tracker_ref.end_phase('streaming')
+                tracker_ref.emit('complete', 100,
+                               f'Procesiranje uspješno završeno! 🎉 Generirano {len(df_clean)} podataka.', force=True)
                 yield json.dumps({"status": "complete"}, cls=CustomJSONEncoder) + "\n"
 
-            # Track processing usage
             return Response(generate(), mimetype="application/x-ndjson")
-        
 
         except Exception as e:
             logger.error(f"Error processing data: {str(e)}")
