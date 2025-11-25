@@ -86,6 +86,211 @@ SUPPORTED_DATE_FORMATS: List[str] = [
 # Encoding Options
 SUPPORTED_ENCODINGS: List[str] = ['utf-8', 'utf-16', 'utf-16le', 'utf-16be', 'latin1', 'cp1252']
 
+# Streaming Configuration
+STREAMING_CHUNK_SIZE: int = 50000
+
+
+# ============================================================================
+# ProgressTracker Class - Real-time progress tracking with per-step ETA
+# ============================================================================
+
+class ProgressTracker:
+    """
+    Progress tracking sa ETA za SVE faze procesiranja.
+    
+    ETA se računa na osnovu:
+    - Veličine fajla (bytes) za procjenu ukupnog vremena
+    - Broja redova kada postane poznat
+    - Real-time mjerenja za streaming fazu
+    
+    PAYLOAD koji se šalje na frontend:
+    {
+        'uploadId': str,           # ID uploada za WebSocket room
+        'step': str,               # Naziv trenutne faze (validating, parsing, datetime, utc, build, streaming, complete, error)
+        'progress': int,           # Progress percentage (0-100)
+        'message': str,            # Poruka za prikaz korisniku
+        'status': str,             # Status (processing, completed, error)
+        'currentStep': int,        # Redni broj trenutnog koraka (1-5)
+        'totalSteps': int,         # Ukupan broj koraka (5)
+        'eta': int,                # ETA u sekundama
+        'etaFormatted': str        # ETA formatiran (npr. "2m 30s")
+    }
+    
+    Benchmark vremena po fazi (za 100k redova / ~5MB):
+    - validation: ~0.1s
+    - parsing: ~0.5s
+    - datetime: ~0.8s
+    - utc: ~0.2s
+    - build: ~1.0s
+    - streaming: ~5-10s (zavisi od chunk size)
+    """
+    
+    # Benchmark koeficijenti (sekunde po MB)
+    PHASE_TIME_PER_MB = {
+        'validation': 0.02,
+        'parsing': 0.10,
+        'datetime': 0.15,
+        'utc': 0.04,
+        'build': 0.20,
+        'streaming': 1.0  # Ovo se računa real-time
+    }
+    
+    def __init__(self, upload_id: str, socketio=None, file_size_bytes: int = 0):
+        self.upload_id = upload_id
+        self.socketio = socketio
+        self.start_time = time.time()
+        self.phase_start_times: Dict[str, float] = {}
+        self.phase_durations: Dict[str, float] = {}
+        
+        # File size za procjenu ETA
+        self.file_size_bytes = file_size_bytes
+        self.file_size_mb = file_size_bytes / (1024 * 1024) if file_size_bytes > 0 else 1
+        
+        # Procijenjeno ukupno vrijeme na osnovu veličine fajla
+        self.estimated_total_time = self._estimate_total_time()
+
+        self.last_emit_time = 0
+        self.emit_interval = 0.3  # Emit svakih 300ms za smooth ETA
+
+        # Step tracking za frontend
+        self.current_step = 0
+        self.total_steps = 0
+        
+        # Broj redova (postavlja se nakon parsiranja)
+        self.total_rows = 0
+    
+    def _estimate_total_time(self) -> float:
+        """Procijeni ukupno vrijeme na osnovu veličine fajla"""
+        total = 0
+        for phase, time_per_mb in self.PHASE_TIME_PER_MB.items():
+            total += time_per_mb * self.file_size_mb
+        return max(total, 2.0)  # Minimum 2 sekunde
+    
+    def set_total_rows(self, rows: int) -> None:
+        """Postavi broj redova i ažuriraj procjenu vremena"""
+        self.total_rows = rows
+        streaming_time = rows * 0.00005
+        self.estimated_total_time = (
+            self.PHASE_TIME_PER_MB['validation'] * self.file_size_mb +
+            self.PHASE_TIME_PER_MB['parsing'] * self.file_size_mb +
+            self.PHASE_TIME_PER_MB['datetime'] * self.file_size_mb +
+            self.PHASE_TIME_PER_MB['utc'] * self.file_size_mb +
+            self.PHASE_TIME_PER_MB['build'] * self.file_size_mb +
+            streaming_time
+        )
+
+    def start_phase(self, phase_name: str) -> None:
+        """Označi početak nove faze procesiranja"""
+        self.phase_start_times[phase_name] = time.time()
+
+    def end_phase(self, phase_name: str) -> None:
+        """Završi fazu i snimi stvarno vrijeme trajanja"""
+        if phase_name in self.phase_start_times:
+            duration = time.time() - self.phase_start_times[phase_name]
+            self.phase_durations[phase_name] = duration
+
+    def calculate_eta_for_progress(self, current_progress: float) -> int:
+        """
+        Izračunaj ETA na osnovu trenutnog progresa i procijenjenog ukupnog vremena.
+        
+        Za brze faze koristi procijenjeno vrijeme bazirano na veličini fajla,
+        za sporije faze (kad je proteklo >1s) koristi linearnu ekstrapolaciju.
+        
+        Args:
+            current_progress: Trenutni progress (0-100)
+            
+        Returns:
+            ETA u sekundama
+        """
+        if current_progress <= 0:
+            return int(self.estimated_total_time)
+        
+        if current_progress >= 100:
+            return 0
+        
+        elapsed = time.time() - self.start_time
+        remaining_progress = 100 - current_progress
+        
+        # Ako je proteklo više od 1 sekunde, koristi linearnu ekstrapolaciju
+        # (pouzdanija jer ima više podataka)
+        if elapsed > 1.0:
+            time_per_percent = elapsed / current_progress
+            eta_seconds = int(remaining_progress * time_per_percent)
+        else:
+            # Za brze faze koristi procijenjeno vrijeme bazirano na file size
+            eta_seconds = int(self.estimated_total_time * remaining_progress / 100)
+        
+        # Ograniči na razumne vrijednosti
+        return max(0, min(eta_seconds, 3600))  # Max 1 sat
+
+    def emit(self, step: str, progress: float, message: str, eta_seconds: Optional[int] = None, force: bool = False) -> None:
+        """
+        Šalje progress update preko WebSocket-a.
+        
+        Args:
+            step: Naziv faze (validating, parsing, datetime, utc, build, streaming, complete, error)
+            progress: Procenat (0-100)
+            message: Poruka za korisnika
+            eta_seconds: ETA u sekundama (opciono, ako nije proslijeđeno pokušava izračunati)
+            force: Ignoriši rate limiting
+        """
+        current_time = time.time()
+
+        # Rate limiting - ne šalje češće od emit_interval osim ako je force=True
+        if not force and (current_time - self.last_emit_time) < self.emit_interval:
+            return
+
+        payload = {
+            'uploadId': self.upload_id,
+            'step': step,
+            'progress': int(progress),
+            'message': message,
+            'status': 'processing' if step != 'complete' else 'completed'
+        }
+
+        # Dodaj currentStep i totalSteps ako su postavljeni
+        if self.total_steps > 0:
+            payload['currentStep'] = self.current_step
+            payload['totalSteps'] = self.total_steps
+
+        # Dodaj ETA
+        if eta_seconds is not None:
+            # Eksplicitno proslijeđena ETA (npr. za streaming)
+            payload['eta'] = eta_seconds
+            payload['etaFormatted'] = self.format_time(eta_seconds)
+        else:
+            # Izračunaj ETA na osnovu ukupnog progresa
+            progress_eta = self.calculate_eta_for_progress(progress)
+            payload['eta'] = progress_eta
+            payload['etaFormatted'] = self.format_time(progress_eta)
+
+        try:
+            if self.socketio:
+                self.socketio.emit('upload_progress', payload, room=self.upload_id)
+            self.last_emit_time = current_time
+            
+            # Samo jedan log sa ključnim informacijama
+            logger.info(f"[ETA] step={step}, progress={int(progress)}%, eta={payload.get('etaFormatted', 'N/A')}")
+            
+        except Exception as e:
+            logger.error(f"[EMIT ERROR] {e}")
+
+    @staticmethod
+    def format_time(seconds: Optional[int]) -> str:
+        """Formatira sekunde u čitljiv format"""
+        if seconds is None:
+            return "Procjenjujem..."
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes}m {secs}s"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}m"
+
 
 # ============================================================================
 # DateTimeParser Class - Consolidated datetime parsing logic
@@ -1406,7 +1611,8 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
     3. Process datetime columns (separate or combined)
     4. Convert timezone to UTC
     5. Build output dataframe with UTC timestamps and values
-    6. Track usage metrics
+    6. Stream results via NDJSON with progress tracking
+    7. Track usage metrics
     
     Args:
         file_content: Raw CSV file content as string
@@ -1421,87 +1627,180 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             - has_header: Whether CSV has header row
             
     Returns:
-        JSON response with processed data arrays or error
+        NDJSON streaming response with processed data or JSON error
     """
     try:
         socketio = get_socketio()
         upload_id = params.get('uploadId')
+        
+        file_size_bytes = len(file_content.encode('utf-8'))
+        logger.info(f"[UPLOAD] START upload_id={upload_id}, size={file_size_bytes/1024/1024:.2f}MB")
+        
+        # Initialize ProgressTracker for granular progress with file size for ETA
+        tracker = ProgressTracker(upload_id, socketio, file_size_bytes=file_size_bytes)
+        tracker.total_steps = 5  # Validation, Parsing, DateTime, UTC, Streaming
 
-        # Emit progress: Parsing CSV
-        socketio.emit('upload_progress', {
-            'uploadId': upload_id,
-            'progress': 60,
-            'status': 'processing',
-            'message': 'Parsing CSV data...'
-        }, room=upload_id)
-
-        # Step 1: Validate and extract parameters
+        # Step 1: Validate and extract parameters (5-15%)
+        tracker.current_step = 1
+        tracker.start_phase('validation')
+        tracker.emit('validating', 5, 'Validiere Parameter...', force=True)
+        
         try:
             validated_params = _validate_and_extract_params(params, file_content)
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
+        
+        tracker.end_phase('validation')
+        tracker.emit('validating', 15, 'Parameter validiert ✓', force=True)
 
-        # Step 2: Parse CSV to DataFrame
+        # Step 2: Parse CSV to DataFrame (15-40%)
+        tracker.current_step = 2
+        tracker.start_phase('parsing')
+        tracker.emit('parsing', 15, 'Parse CSV Daten...', force=True)
+        
         try:
             df = _parse_csv_to_dataframe(file_content, validated_params)
+            total_rows = len(df)
+            tracker.set_total_rows(total_rows)
+            tracker.emit('parsing', 40, f'CSV geparsed: {total_rows:,} Zeilen ✓', force=True)
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
+        
+        tracker.end_phase('parsing')
 
-        # Step 3: Process datetime columns
+        # Step 3: Process datetime columns (40-60%)
+        tracker.current_step = 3
+        tracker.start_phase('datetime')
+        tracker.emit('datetime', 40, 'Verarbeite Datum/Zeit Spalten...', force=True)
+        
         try:
             df = _process_datetime_columns(df, validated_params)
+            tracker.emit('datetime', 60, 'Datum/Zeit verarbeitet ✓', force=True)
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
         
-        # Step 4: Convert to UTC
+        tracker.end_phase('datetime')
+        
+        # Step 4: Convert to UTC (60-75%)
+        tracker.current_step = 4
+        tracker.start_phase('utc')
+        tracker.emit('utc', 60, f'Konvertiere zu UTC ({validated_params["timezone"]})...', force=True)
+        
         try:
-            socketio.emit('upload_progress', {
-                'uploadId': upload_id,
-                'progress': 80,
-                'status': 'processing',
-                'message': 'Converting to UTC...'
-            }, room=upload_id)
-            
             df = convert_to_utc(df, 'datetime', validated_params['timezone'])
+            tracker.emit('utc', 75, 'UTC Konvertierung abgeschlossen ✓', force=True)
         except LoadDataException as e:
-            socketio.emit('upload_progress', {
-                'uploadId': upload_id,
-                'progress': 0,
-                'status': 'error',
-                'message': f'Error: {e.message}'
-            }, room=upload_id)
-            
+            tracker.emit('error', 0, f'Fehler: {e.message}', force=True)
             return jsonify(e.to_dict()), 400
         
-        # Step 5: Build result data structure
+        tracker.end_phase('utc')
+        
+        # Step 5: Build result DataFrame for streaming (75-80%)
+        tracker.start_phase('build')
+        tracker.emit('build', 75, 'Erstelle Ergebnis DataFrame...', force=True)
+        
         try:
-            data_list = _build_result_dataframe(df, validated_params)
-        except LoadDataException as e:
-            return jsonify(e.to_dict()), 400
+            value_column = validated_params['value_column']
+            value_column_name = validated_params['value_column_name']
+            
+            if not value_column or value_column not in df.columns:
+                raise ValueError("Datum, Wert 1 oder Wert 2 nicht ausgewählt")
+            
+            result_df = pd.DataFrame()
+            result_df['UTC'] = df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+            final_value_column = value_column_name if value_column_name else value_column
+            result_df[final_value_column] = df[value_column].apply(
+                lambda x: str(x) if pd.notnull(x) else ""
+            )
+            
+            result_df.dropna(subset=['UTC'], inplace=True)
+            result_df.sort_values('UTC', inplace=True)
+            result_df.reset_index(drop=True, inplace=True)
+            
+            total_rows = len(result_df)
+            tracker.emit('build', 80, f'Ergebnis erstellt: {total_rows:,} Zeilen ✓', force=True)
+        except Exception as e:
+            tracker.emit('error', 0, f'Fehler: {str(e)}', force=True)
+            return jsonify({"error": str(e)}), 400
         
-        # Emit progress: Completed
-        socketio.emit('upload_progress', {
-            'uploadId': upload_id,
-            'progress': 100,
-            'status': 'completed',
-            'message': 'Data processing completed'
-        }, room=upload_id)
+        tracker.end_phase('build')
         
-        # Step 6: Track usage metrics
+        # Track usage metrics before streaming
         try:
             increment_processing_count(g.user_id)
-            logger.info(f"✅ Tracked operation (processing) for user {g.user_id}")
             
             file_size_bytes = len(file_content.encode('utf-8'))
             file_size_mb = file_size_bytes / (1024 * 1024)
             
             update_storage_usage(g.user_id, file_size_mb)
-            logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
         except Exception as e:
-            logger.error(f"⚠️ Failed to track usage: {str(e)}")
-            # Don't fail the upload if tracking fails
+            pass  # Don't fail upload if tracking fails
         
-        return jsonify({"data": data_list, "fullData": data_list})
+        # Step 6: Stream results via NDJSON (80-100%)
+        tracker.current_step = 5
+        tracker_ref = tracker
+        
+        def generate():
+            """Generator za streaming NDJSON sa progress trackingom"""
+            nonlocal tracker_ref
+            
+            # Stream in chunks with progress tracking
+            chunk_size = STREAMING_CHUNK_SIZE
+            total_chunks_to_stream = (total_rows // chunk_size) + 1
+            streaming_start_time = time.time()
+            
+            # Procjena streaming vremena za prvi chunk (0.00005s po redu)
+            estimated_streaming_time = int(total_rows * 0.00005)
+            
+            if tracker_ref:
+                tracker_ref.start_phase('streaming')
+                tracker_ref.emit('streaming', 80, f'Starte Streaming von {total_rows:,} Zeilen...', eta_seconds=estimated_streaming_time, force=True)
+            
+            # Send metadata first
+            headers = result_df.columns.tolist()
+            yield json.dumps({"total_rows": total_rows, "headers": headers}) + "\n"
+            
+            for i in range(0, total_rows, chunk_size):
+                chunk_progress = 80 + ((i / total_rows) * 19)  # 80-99%
+                current_chunk = (i // chunk_size) + 1
+                
+                # Calculate ETA for streaming
+                if current_chunk == 1:
+                    # Prvi chunk - koristi procjenu baziranu na broju redova
+                    streaming_eta = estimated_streaming_time
+                else:
+                    # Ostali chunk-ovi - koristi linearnu ekstrapolaciju
+                    elapsed = time.time() - streaming_start_time
+                    chunks_done = current_chunk - 1
+                    chunks_remaining = total_chunks_to_stream - current_chunk + 1
+                    time_per_chunk = elapsed / chunks_done
+                    streaming_eta = int(chunks_remaining * time_per_chunk)
+                
+                if tracker_ref:
+                    tracker_ref.emit('streaming', chunk_progress,
+                                   f'Streaming Chunk {current_chunk}/{total_chunks_to_stream}...',
+                                   eta_seconds=streaming_eta)
+                
+                # Stream each row in this chunk
+                chunk = result_df.iloc[i:i + chunk_size]
+                
+                for _, row in chunk.iterrows():
+                    record = {
+                        "UTC": row['UTC'],
+                        final_value_column: row[final_value_column]
+                    }
+                    yield json.dumps(record) + "\n"
+            
+            # Complete
+            if tracker_ref:
+                tracker_ref.end_phase('streaming')
+                tracker_ref.emit('complete', 100,
+                               f'Verarbeitung erfolgreich abgeschlossen! 🎉 {total_rows:,} Zeilen generiert.', force=True)
+            
+            yield json.dumps({"status": "complete"}) + "\n"
+        
+        return Response(generate(), mimetype="application/x-ndjson")
         
     except LoadDataException as e:
         socketio = get_socketio()
