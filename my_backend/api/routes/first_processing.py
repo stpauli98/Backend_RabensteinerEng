@@ -28,43 +28,33 @@ logger = logging.getLogger(__name__)
 temp_files = {}
 
 class ProgressTracker:
-    """Real-time progress tracking sa ETA kalkulacijom"""
+    """
+    Progress tracking sa ETA po koraku (Per-step ETA).
+    ETA se računa samo za trenutni korak - precizno i stabilno.
+    """
 
     def __init__(self, upload_id, total_items=None, file_size_bytes=None, total_chunks=None):
         self.upload_id = upload_id
         self.start_time = time.time()
         self.phase_start_times = {}
-        self.phase_durations = {}  # Stvarno vrijeme završenih faza
+        self.phase_durations = {}
 
-        # File metadata za inicijalnu ETA procjenu
-        self.file_size_bytes = file_size_bytes  # Ukupna veličina fajla
-        self.total_chunks = total_chunks  # Broj chunk-ova
+        self.file_size_bytes = file_size_bytes
+        self.total_chunks = total_chunks
+        self.total_items = total_items
 
-        self.total_items = total_items  # Ukupan broj iteracija (len(time_list))
-        self.processed_items = 0
         self.last_emit_time = 0
-        self.emit_interval = 0.5  # Emit minimum svakih 500ms
+        self.emit_interval = 0.5  # Emit svakih 500ms
 
-        # Kontinuirana rekalibracija sa EWMA
-        self.processing_start_time = None
-        self.processing_start_items = 0
-        self.processing_history = []  # (timestamp, items_processed) za moving average
-        self.history_window = 500      # Zadnjih 500 iteracija za prosječnu brzinu
-        self.min_calibration_samples = 20  # RANO STARTOVANJE - samo 20 iteracija!
+        # Per-step ETA tracking
+        self.current_step_start = None
+        self.current_step_rows = 0
+        self.current_step_processed = 0
+        self.min_calibration_rows = 1000  # Čekaj 1000 redova za stabilnu procjenu
 
-        # EWMA (Exponential Weighted Moving Average)
-        self.ewma_time_per_item = None  # Eksponencijalno ponderisan prosjek
-        self.ewma_alpha = 0.15  # Faktor glađenja (0.1-0.2 optimal)
-
-        # Trend detection
-        self.trend_window = 200  # Koristi zadnjih 200 za trend analizu
-        self.detected_trend = 0  # % promjene brzine (+ = ubrzava, - = usporava)
-
-        self.last_eta_sent = None
-        self.eta_send_interval = 5.0
-
-        # NE koristimo file-size procjenu jer nije tačna
-        # Čekamo stvarne podatke iz processing faze
+        # Step tracking za frontend
+        self.current_step = 0
+        self.total_steps = 0
 
     def start_phase(self, phase_name):
         """Označi početak nove faze procesiranja"""
@@ -77,137 +67,46 @@ class ProgressTracker:
             self.phase_durations[phase_name] = duration
             logger.info(f"Phase '{phase_name}' completed in {duration:.2f}s")
 
-    def start_processing_phase(self):
-        """Pokreni mjerenje vremena za processing fazu"""
-        self.processing_start_time = time.time()
-        self.processing_start_items = self.processed_items
-        # Reset history za čistu kalibraciju
-        self.processing_history = []
+    def start_step(self, total_rows):
+        """Započni novi korak - resetiraj ETA tracking za ovaj korak"""
+        self.current_step_start = time.time()
+        self.current_step_rows = total_rows
+        self.current_step_processed = 0
 
-    def calculate_eta(self, current_progress=None):
-        """
-        ADITIVNI ETA SISTEM - UVIJEK sabiramo SVE preostale faze:
-        ETA = Processing_Remaining + Finalization_Remaining + Compression_Remaining
+    def update_step_progress(self, processed_count):
+        """Ažuriraj broj obrađenih redova u trenutnom koraku"""
+        self.current_step_processed = processed_count
 
-        Svaka faza:
-        - Ako je u toku: mjeri stvarnu brzinu i ekstrapolira
-        - Ako nije počela: procjenjuje na osnovu prethodnih faza
-        
-        RANO (0-37%): Vraća "calculating" jer nemamo podatke o brzini
+    def calculate_step_eta(self):
         """
-        # === 100% ZAVRŠENO ===
-        if current_progress and current_progress >= 100:
+        Izračunaj ETA samo za TRENUTNI korak.
+        Vraća None ako nema dovoljno podataka za procjenu.
+        """
+        if not self.current_step_start or self.current_step_rows == 0:
+            return None
+
+        elapsed = time.time() - self.current_step_start
+        processed = self.current_step_processed
+
+        # Čekaj min_calibration_rows prije nego počneš davati ETA
+        if processed < self.min_calibration_rows:
+            return None
+
+        remaining = self.current_step_rows - processed
+        if remaining <= 0:
             return 0
 
+        # Linearno predviđanje
+        time_per_row = elapsed / processed
+        eta_seconds = int(remaining * time_per_row)
+
+        return eta_seconds
+
+    def emit(self, step, progress, message, eta_seconds=None, force=False):
+        """Šalje progress update"""
         current_time = time.time()
 
-        # === RANE FAZE (0-37%) - NEMA PODATAKA ZA PROCJENU ===
-        # Prije processing faze nemamo nikakve podatke o brzini obrade
-        if not self.processing_start_time or not self.total_items:
-            # Još nismo u processing fazi - ne možemo procijeniti
-            return "calculating"
-
-        # === PROVJERI DA LI SMO U KALIBRACIJI ===
-        # Ako procesiranje traje ali još nema dovoljno podataka, vrati "calculating"
-        items_processed = self.processed_items - self.processing_start_items
-        remaining_items = self.total_items - self.processed_items
-
-        # Processing je aktivan ali još nemamo 50 iteracija za stabilnu procjenu
-        if items_processed < 50 and remaining_items > 0:
-            return "calculating"
-
-        eta_components = []  # Lista (phase_name, eta_seconds)
-
-        # === 1. PROCESSING FAZA (37-86%) ===
-        processing_eta = 0
-        processing_complete = False
-
-        if items_processed >= 50:
-            processing_elapsed = current_time - self.processing_start_time
-            time_per_item = processing_elapsed / items_processed
-
-            if remaining_items > 0:
-                # JOŠ UVIJEK PROCESIRAMO
-                processing_eta = remaining_items * time_per_item
-                eta_components.append(('processing', processing_eta))
-            else:
-                # SVI ITEMS OBRAĐENI
-                processing_complete = True
-                # Snimi ukupno vrijeme processing faze
-                if 'processing' not in self.phase_durations:
-                    self.phase_durations['processing'] = processing_elapsed
-
-        # === 2. FINALIZATION FAZA (86-95%) ===
-        finalization_eta = 0
-        finalization_start = self.phase_start_times.get('finalizing')
-
-        if current_progress and current_progress >= 95:
-            # Finalization završena, ne dodajemo
-            pass
-        elif finalization_start and current_progress and current_progress >= 86:
-            # Finalization u toku - mjeri stvarnu brzinu
-            finalization_elapsed = current_time - finalization_start
-            finalization_progress = (current_progress - 86) / 9  # 86-95% = 9% range
-
-            if finalization_progress > 0.05:  # Barem 5% progresa
-                estimated_total = finalization_elapsed / finalization_progress
-                finalization_eta = estimated_total - finalization_elapsed
-                eta_components.append(('finalization', finalization_eta))
-            else:
-                # Prerano za mjerenje, koristi procjenu
-                processing_time = self.phase_durations.get('processing', 0)
-                finalization_eta = processing_time * 0.15  # 15% od processing vremena
-                eta_components.append(('finalization_est', finalization_eta))
-        else:
-            # Finalization nije počela - procijeni
-            processing_time = self.phase_durations.get('processing', 0)
-            if processing_time > 0:
-                finalization_eta = processing_time * 0.15  # 15% od processing vremena
-                eta_components.append(('finalization_est', finalization_eta))
-
-        # === 3. COMPRESSION FAZA (95-100%) ===
-        compression_eta = 0
-        compression_start = self.phase_start_times.get('compression')
-
-        if current_progress and current_progress >= 100:
-            # Compression završena
-            pass
-        elif compression_start and current_progress and current_progress >= 95:
-            # Compression u toku - mjeri stvarnu brzinu
-            compression_elapsed = current_time - compression_start
-            compression_progress = (current_progress - 95) / 5  # 95-100% = 5% range
-
-            if compression_progress > 0.05:  # Barem 5% progresa
-                estimated_total = compression_elapsed / compression_progress
-                compression_eta = estimated_total - compression_elapsed
-                eta_components.append(('compression', compression_eta))
-            else:
-                # Prerano za mjerenje, fiksna procjena
-                compression_eta = 2  # Fiksno 2 sekunde
-                eta_components.append(('compression_est', compression_eta))
-        else:
-            # Compression nije počela - fiksna procjena
-            compression_eta = 2  # Fiksno 2 sekunde
-            eta_components.append(('compression_est', compression_eta))
-
-        # === SABERI SVE KOMPONENTE ===
-        total_eta = sum(eta for _, eta in eta_components)
-
-        # Detaljno logovanje
-        if eta_components and (not hasattr(self, '_last_log_time') or current_time - self._last_log_time > 5):
-            self._last_log_time = current_time
-            components_str = " + ".join(f"{name}={eta:.1f}s" for name, eta in eta_components)
-            logger.info(
-                f"ETA [{current_progress:.0f}%]: {components_str} = {total_eta:.1f}s total"
-            )
-
-        return max(0, int(total_eta)) if eta_components else None
-
-    def emit(self, step, progress, message, force=False):
-        """Šalje progress update sa ETA kalkulacijom od 0% do 100%"""
-        current_time = time.time()
-
-        # Rate limiting - ne šalji previše često osim ako nije force
+        # Rate limiting
         if not force and (current_time - self.last_emit_time) < self.emit_interval:
             return
 
@@ -218,34 +117,26 @@ class ProgressTracker:
             'message': message
         }
 
-        # Izračunaj ETA ZA SVE FAZE (od 0% do 100%)
-        eta_seconds = self.calculate_eta(progress)
+        # Dodaj currentStep i totalSteps za processing fazu
+        if step == 'processing' and self.total_steps > 0:
+            payload['currentStep'] = self.current_step
+            payload['totalSteps'] = self.total_steps
 
-        # Rukuj sa "calculating" statusom ili numeričkom ETA
-        if eta_seconds == "calculating":
-            # U fazi kalibracije - šalji "Procjenjujem..."
-            payload['eta'] = "calculating"
-            payload['etaFormatted'] = "Procjenjujem..."
-            self.last_eta_sent = current_time
-        elif eta_seconds is not None:
-            # Normalna numerička ETA - šalji periodički
-            should_send_eta = (
-                self.last_eta_sent is None or
-                (current_time - self.last_eta_sent) >= self.eta_send_interval or
-                force or
-                progress >= 100  # Uvijek šalji ETA=0 na 100%
-            )
-
-            if should_send_eta:
-                payload['eta'] = eta_seconds
-                payload['etaFormatted'] = self.format_time(eta_seconds)
-                self.last_eta_sent = current_time
+        # Dodaj ETA ako je proslijeđena ili izračunaj za trenutni step
+        if eta_seconds is not None:
+            payload['eta'] = eta_seconds
+            payload['etaFormatted'] = self.format_time(eta_seconds)
+        else:
+            # Pokušaj izračunati ETA za trenutni korak
+            step_eta = self.calculate_step_eta()
+            if step_eta is not None:
+                payload['eta'] = step_eta
+                payload['etaFormatted'] = self.format_time(step_eta)
 
         try:
             socketio.emit('processing_progress', payload, room=self.upload_id)
             self.last_emit_time = current_time
-            # Loguj sa ETA ako je prisutna
-            eta_text = f" (ETA: {payload['etaFormatted']})" if 'etaFormatted' in payload else ""
+            eta_text = f" (ETA: {payload.get('etaFormatted', 'N/A')})" if 'eta' in payload else ""
             logger.info(f"Progress: {progress}% - {message}{eta_text}")
         except Exception as e:
             logger.error(f"Error emitting progress: {e}")
@@ -253,6 +144,8 @@ class ProgressTracker:
     @staticmethod
     def format_time(seconds):
         """Formatira sekunde u čitljiv format"""
+        if seconds is None:
+            return "Procjenjujem..."
         if seconds < 60:
             return f"{seconds}s"
         elif seconds < 3600:
@@ -449,12 +342,13 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         logger.info(f"First timestamp: {time_list[0]}")
         logger.info(f"Last timestamp: {time_list[-1]}")
 
-        # === FAZA 3: PROCESSING (37-86%) ===
+        # === FAZA 3: PROCESSING (37-90%) ===
         if tracker:
             tracker.start_phase('processing')
-            tracker.total_items = len(time_list)  # Postavi total za granularni tracking
-            tracker.start_processing_phase()  # Pokreni mjerenje brzine
-            tracker.emit('processing', 37, f'Započinjem {mode_input} procesiranje...')
+            tracker.total_steps = 1  # Processing ima samo 1 korak
+            tracker.current_step = 1
+            tracker.start_step(len(time_list))  # Započni step sa ukupnim brojem vremenskih tačaka
+            tracker.emit('processing', 37, f'Započinjem {mode_input} procesiranje...', force=True)
 
         # Convert df to format matching original (for easier index access)
         df_dict = df.to_dict('list')
@@ -465,6 +359,9 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         # Initialisierung der Liste mit den aufbereiteten Messwerten
         value_list = []
 
+        # Emit frekvencija - svakih ~2% koraka ili min 500 redova
+        emit_frequency = max(500, len(time_list) // 50)
+
         # METHODE: MITTELWERTBILDUNG (matching original logic)
         if mode_input == "mean":
             if tracker:
@@ -472,10 +369,10 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
 
             # Schleife durchläuft alle Zeitschritte des kontinuierlichen Zeitstempels
             for i in range(0, len(time_list)):
-                # Granularni progress update (30-85% range)
-                if tracker and i % max(1, len(time_list) // 50) == 0:  # Update svakih ~2%
-                    progress = 37 + (i / len(time_list)) * 49  # Map to 37-86%
-                    tracker.processed_items = i
+                # Granularni progress update (37-90% range)
+                if tracker and i % emit_frequency == 0 and i > 0:
+                    tracker.update_step_progress(i)
+                    progress = 37 + (i / len(time_list)) * 53  # Map to 37-90%
                     tracker.emit('processing', progress, f'Procesiranje: {i}/{len(time_list)} vremenskih tačaka')
 
                 # Zeitgrenzen für die Mittelwertbildung (Untersuchungsraum)
@@ -519,10 +416,10 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
 
             # Schleife durchläuft alle Zeitschritte des kontinuierlichen Zeitstempels
             for i in range(0, len(time_list)):
-                # Granularni progress update (30-85% range)
-                if tracker and i % max(1, len(time_list) // 50) == 0:  # Update svakih ~2%
-                    progress = 37 + (i / len(time_list)) * 49  # Map to 37-86%
-                    tracker.processed_items = i
+                # Granularni progress update (37-90% range)
+                if tracker and i % emit_frequency == 0 and i > 0:
+                    tracker.update_step_progress(i)
+                    progress = 37 + (i / len(time_list)) * 53  # Map to 37-90%
                     tracker.emit('processing', progress, f'Interpolacija: {i}/{len(time_list)} tačaka')
 
                 # Schleife durchläuft die Rohdaten von vorne bis hinten zur Auffindung des nachfolgenden Wertes
@@ -632,10 +529,10 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
 
             # Schleife durchläuft alle Zeitschritte des kontinuierlichen Zeitstempels
             for i in range(0, len(time_list)):
-                # Granularni progress update (30-85% range)
-                if tracker and i % max(1, len(time_list) // 50) == 0:  # Update svakih ~2%
-                    progress = 37 + (i / len(time_list)) * 49  # Map to 37-86%
-                    tracker.processed_items = i
+                # Granularni progress update (37-90% range)
+                if tracker and i % emit_frequency == 0 and i > 0:
+                    tracker.update_step_progress(i)
+                    progress = 37 + (i / len(time_list)) * 53  # Map to 37-90%
                     tracker.emit('processing', progress, f'{mode_input}: {i}/{len(time_list)} tačaka')
 
                 try:
@@ -694,13 +591,11 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         logger.info(f"Length of value_list: {len(value_list)}")
 
         if tracker:
-            tracker.emit('processing', 86, 'Procesiranje završeno ✓', force=True)
-            tracker.end_phase('processing')  # Snimi stvarno vrijeme processing faze
-
-        # === FAZA 4: FINALIZING (85-95%) ===
-        if tracker:
-            tracker.start_phase('finalizing')
-            tracker.emit('finalizing', 87, 'Konverzija rezultata u JSON format...')
+            tracker.emit('processing', 90, 'Procesiranje završeno ✓', force=True)
+            tracker.end_phase('processing')
+            # Resetiraj step tracking za streaming fazu
+            tracker.current_step = 0
+            tracker.total_steps = 0
 
         # Create result dataframe
         result_df = pd.DataFrame({"UTC": time_list, value_col_name: value_list})
@@ -708,37 +603,64 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         # Format UTC column to desired format
         result_df['UTC'] = result_df['UTC'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
 
-        if tracker:
-            tracker.emit('finalizing', 92, 'Formatiranje podataka...')
+        # Kreiraj closure za tracker da ga generator može koristiti
+        tracker_ref = tracker
+        total_rows = len(result_df)
 
-        # Convert to list of dicts
-        result = result_df.apply(
-            lambda row: {
-                "UTC": row["UTC"],
-                value_col_name: clean_for_json(row[value_col_name])
-            },
-            axis=1
-        ).tolist()
+        def generate():
+            """Generator za streaming NDJSON sa progress trackingom"""
+            STREAMING_CHUNK_SIZE = 50000
 
-        if tracker:
-            tracker.emit('finalizing', 95, 'Finalizacija završena ✓')
-            tracker.end_phase('finalizing')  # Snimi stvarno vrijeme finalizing faze
+            # === FAZA 4: STREAMING (90-100%) ===
+            if tracker_ref:
+                tracker_ref.start_phase('streaming')
+                tracker_ref.emit('streaming', 90, f'Započinjem streaming {total_rows} redova...', force=True)
 
-        # === FAZA 5: COMPRESSION (95-100%) ===
-        if tracker:
-            tracker.start_phase('compression')
-            tracker.emit('compression', 96, 'Kompresija podataka...')
+            # Pošalji ukupan broj redova kao prvi chunk
+            yield json.dumps({"total_rows": total_rows}) + "\n"
 
-        result_json = json.dumps(result)
-        compressed_data = gzip.compress(result_json.encode('utf-8'))
+            chunk_size = STREAMING_CHUNK_SIZE
+            total_chunks_to_stream = (total_rows // chunk_size) + 1
+            streaming_start_time = time.time()
 
-        if tracker:
-            tracker.emit('complete', 100, f'Procesiranje uspješno završeno! 🎉 Generirano {len(result)} vremenskih tačaka.', force=True)
+            for i in range(0, total_rows, chunk_size):
+                # Progress 90-99%
+                chunk_progress = 90 + ((i / total_rows) * 9)
+                current_chunk = (i // chunk_size) + 1
 
-        response = Response(compressed_data)
-        response.headers['Content-Encoding'] = 'gzip'
-        response.headers['Content-Type'] = 'application/json'
-        return response
+                # Izračunaj ETA za streaming
+                streaming_eta = None
+                if current_chunk > 1:
+                    elapsed = time.time() - streaming_start_time
+                    chunks_done = current_chunk - 1
+                    chunks_remaining = total_chunks_to_stream - current_chunk + 1
+                    time_per_chunk = elapsed / chunks_done
+                    streaming_eta = int(chunks_remaining * time_per_chunk)
+
+                if tracker_ref:
+                    tracker_ref.emit('streaming', chunk_progress,
+                                    f'Streaming chunk {current_chunk}/{total_chunks_to_stream}...',
+                                    eta_seconds=streaming_eta)
+
+                # Dohvati chunk podataka
+                chunk = result_df.iloc[i:i + chunk_size]
+
+                # Konvertuj svaki red u JSON i yield
+                for _, row in chunk.iterrows():
+                    record = {
+                        "UTC": row['UTC'],
+                        value_col_name: clean_for_json(row[value_col_name])
+                    }
+                    yield json.dumps(record) + "\n"
+
+            if tracker_ref:
+                tracker_ref.end_phase('streaming')
+                tracker_ref.emit('complete', 100,
+                               f'Procesiranje uspješno završeno! 🎉 Generirano {total_rows} vremenskih tačaka.', force=True)
+
+            yield json.dumps({"status": "complete"}) + "\n"
+
+        return Response(generate(), mimetype="application/x-ndjson")
     except Exception as e:
         error_msg = f"Error processing CSV: {str(e)}"
         logger.error(error_msg)
