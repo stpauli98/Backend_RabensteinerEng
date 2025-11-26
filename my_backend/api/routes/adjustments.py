@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import math
 from datetime import datetime
 import tempfile
 import os
@@ -50,22 +51,287 @@ PROGRESS_UPDATE_INTERVAL = 1.0
 
 class ProgressStages:
     """Constants for Socket.IO progress tracking"""
+    # Upload faza (koristi se u upload-chunk endpointu)
     FILE_COMBINATION = 25
     FILE_ANALYSIS = 28
     FILE_COMPLETE = 30
 
-    PARAMETER_PROCESSING = 50
-    DATA_PROCESSING_START = 60
-    FILE_PROCESSING_START = 60
-    FILE_PROCESSING_END = 85
+    # Processing faza (koristi se u complete_adjustment)
+    PARAMETER_PROCESSING = 5
+    DATA_PROCESSING_START = 0
+    FILE_PROCESSING_START = 10
+    FILE_PROCESSING_END = 95
     COMPLETION = 100
 
     @staticmethod
-    def calculate_file_progress(file_index, total_files, start=60, end=85):
+    def calculate_file_progress(file_index, total_files, start=10, end=95):
         """Calculate progress percentage for file processing"""
         if total_files == 0:
             return start
         return start + (file_index / total_files) * (end - start)
+
+
+class ProgressTracker:
+    """
+    Progress tracking sa ETA baziranim na dvije faze:
+    1. Faza procesiranja (pandas) - spora, računa se po fajlu
+    2. Faza streaminga (chunks) - brza, izračunava se unaprijed
+    """
+
+    # Konstante za procjenu streaming vremena
+    # Bazirano na: emit vrijeme (~0.02s) + SOCKETIO_CHUNK_DELAY (0.1s) = ~0.12s po chunk-u
+    ESTIMATED_TIME_PER_CHUNK = 0.13  # sekundi po chunk-u
+
+    def __init__(self, upload_id, total_files=0, total_rows=0):
+        self.upload_id = upload_id
+        self.start_time = time.time()
+        self.total_files = total_files
+        self.total_rows = total_rows
+
+        # File-level tracking
+        self.files_processed = 0
+        self.rows_processed = 0
+        self.file_start_times = {}
+        self.file_durations = []
+        self.file_rows = {}
+
+        # Current file tracking
+        self.current_file = None
+        self.current_file_rows = 0
+
+        self.last_emit_time = 0
+        self.emit_interval = 0.5
+
+        # Za stabilizaciju ETA - čekaj minimum vremena
+        self.min_elapsed_for_eta = 2.0  # sekunde
+
+        # === FAZA 1: Procesiranje (pandas) ===
+        self.processing_times = []  # Vrijeme procesiranja po fajlu
+        self.current_processing_start = None
+
+        # === FAZA 2: Streaming (chunks) ===
+        self.current_streaming_start = None
+        self.chunks_sent = 0
+        self.total_chunks_for_file = 0
+
+        # Ukupno procijenjeno streaming vrijeme za sve fajlove
+        self.total_estimated_streaming_time = 0
+        self.completed_streaming_time = 0  # Koliko je streaming vremena već prošlo
+        self.current_file_streaming_estimate = 0  # Procjena za trenutni fajl
+
+        # Trenutna faza: 'processing' ili 'streaming'
+        self.current_phase = None
+
+        # ETA tracking - čuva zadnju vrijednost da spriječimo rast
+        self.last_eta = None
+
+    def estimate_streaming_time(self, row_count):
+        """Izračunaj procijenjeno vrijeme streaminga za fajl sa datim brojem redova"""
+        total_chunks = (row_count + DATAFRAME_CHUNK_SIZE - 1) // DATAFRAME_CHUNK_SIZE
+        return total_chunks * self.ESTIMATED_TIME_PER_CHUNK
+
+    def set_file_rows(self, file_rows_dict):
+        """Postavi broj redova po fajlu i izračunaj ukupno streaming vrijeme"""
+        self.file_rows = file_rows_dict
+        self.total_estimated_streaming_time = sum(
+            self.estimate_streaming_time(rows) for rows in file_rows_dict.values()
+        )
+
+    def start_file(self, filename, row_count):
+        """Započni procesiranje novog fajla"""
+        self.current_file = filename
+        self.current_file_rows = row_count
+        self.file_start_times[filename] = time.time()
+        self.file_rows[filename] = row_count
+        # Počinje faza procesiranja
+        self.current_processing_start = time.time()
+        self.current_phase = 'processing'
+
+    def start_streaming(self, filename, total_chunks):
+        """Započni streaming fazu za fajl"""
+        # Završi procesiranje fazu
+        if self.current_processing_start:
+            proc_time = time.time() - self.current_processing_start
+            self.processing_times.append(proc_time)
+            self.current_processing_start = None
+
+        # Počni streaming fazu
+        self.current_streaming_start = time.time()
+        self.total_chunks_for_file = total_chunks
+        self.chunks_sent = 0
+        self.current_phase = 'streaming'
+
+        # Izračunaj procijenjeno vrijeme za ovaj streaming
+        self.current_file_streaming_estimate = total_chunks * self.ESTIMATED_TIME_PER_CHUNK
+
+    def chunk_sent(self):
+        """Zabilježi poslani chunk"""
+        self.chunks_sent += 1
+
+    def complete_file(self, filename):
+        """Završi procesiranje fajla"""
+        # Dodaj završeno streaming vrijeme
+        if self.current_streaming_start:
+            actual_stream_time = time.time() - self.current_streaming_start
+            self.completed_streaming_time += actual_stream_time
+            self.current_streaming_start = None
+
+        if filename in self.file_start_times:
+            duration = time.time() - self.file_start_times[filename]
+            self.file_durations.append(duration)
+            self.files_processed += 1
+            self.rows_processed += self.file_rows.get(filename, 0)
+            self.current_file = None
+            self.current_file_rows = 0
+
+        self.current_phase = None
+        self.chunks_sent = 0
+        self.total_chunks_for_file = 0
+        self.current_file_streaming_estimate = 0
+
+    def calculate_eta(self, current_progress):
+        """
+        ETA kalkulacija bazirana na fazama.
+
+        Streaming vrijeme je poznato unaprijed (bazirano na broju chunk-ova).
+        Procesiranje vrijeme se procjenjuje na osnovu prosjeka prethodnih fajlova.
+
+        ETA = preostalo_procesiranje + preostalo_streaming
+        """
+        elapsed = time.time() - self.start_time
+
+        # Čekaj minimum vremena za stabilnu procjenu
+        if elapsed < self.min_elapsed_for_eta:
+            return None
+
+        if current_progress <= 0:
+            return None
+
+        # === 1. Preostalo STREAMING vrijeme ===
+        # Već završeno streaming vrijeme za prethodne fajlove
+        remaining_streaming = self.total_estimated_streaming_time - self.completed_streaming_time
+
+        # Ako smo u streaming fazi, izračunaj preostalo za trenutni fajl
+        if self.current_phase == 'streaming' and self.total_chunks_for_file > 0:
+            # Koliko chunkova je ostalo za trenutni fajl
+            chunks_remaining = self.total_chunks_for_file - self.chunks_sent
+            # Preostalo vrijeme za trenutni fajl bazirano na procijenjenom vremenu po chunk-u
+            current_file_remaining = chunks_remaining * self.ESTIMATED_TIME_PER_CHUNK
+            
+            # Oduzmi već procijenjeno vrijeme za ovaj fajl (jer je uključeno u total)
+            # i dodaj stvarno preostalo
+            remaining_streaming -= self.current_file_streaming_estimate
+            remaining_streaming += current_file_remaining
+
+        remaining_streaming = max(0, remaining_streaming)
+
+        # === 2. Preostalo PROCESIRANJE vrijeme (procjena) ===
+        files_remaining = self.total_files - self.files_processed
+        if self.current_file:
+            files_remaining -= 1  # Trenutni fajl je u toku
+
+        remaining_processing = 0
+
+        # Za preostale fajlove (ne uključujući trenutni)
+        if files_remaining > 0 and self.processing_times:
+            avg_processing = sum(self.processing_times) / len(self.processing_times)
+            remaining_processing = files_remaining * avg_processing
+
+        # Za trenutni fajl ako je u fazi procesiranja
+        if self.current_phase == 'processing' and self.current_processing_start:
+            time_in_processing = time.time() - self.current_processing_start
+            if self.processing_times:
+                avg_processing = sum(self.processing_times) / len(self.processing_times)
+                remaining_processing += max(0, avg_processing - time_in_processing)
+            else:
+                # Nemamo podatke - pretpostavi da je ostalo koliko je već prošlo
+                remaining_processing += time_in_processing
+
+        # === 3. Ukupni ETA = preostalo procesiranje + preostalo streaming ===
+        raw_eta = int(remaining_processing + remaining_streaming)
+
+        # Ako je progress 100%, ETA je 0
+        if current_progress >= 100:
+            raw_eta = 0
+
+        # Ako nemamo nikakve podatke, koristi fallback formulu
+        if self.total_estimated_streaming_time == 0 and not self.processing_times:
+            progress_ratio = current_progress / 100.0
+            remaining_ratio = 1.0 - progress_ratio
+            if progress_ratio > 0:
+                raw_eta = int(elapsed * (remaining_ratio / progress_ratio))
+            else:
+                return None
+
+        # ETA nikad ne smije rasti
+        if self.last_eta is not None:
+            raw_eta = min(raw_eta, self.last_eta)
+
+        self.last_eta = raw_eta
+        return max(0, raw_eta)
+
+    def emit(self, progress, message, step, phase, detail=None, force=False):
+        """Šalje progress update sa ETA"""
+        current_time = time.time()
+
+        if not force and (current_time - self.last_emit_time) < self.emit_interval:
+            return
+
+        payload = {
+            'uploadId': self.upload_id,
+            'progress': int(progress),
+            'message': message,
+            'step': step,
+            'phase': phase
+        }
+
+        if detail:
+            payload['detail'] = detail
+
+        # Dodaj file tracking info
+        if self.total_files > 0:
+            # currentFile je fajl koji se trenutno obrađuje (1-based)
+            # Ako nemamo current_file, znači da smo završili - prikaži zadnji fajl
+            if self.current_file:
+                payload['currentFile'] = self.files_processed + 1
+                payload['currentFileName'] = self.current_file
+            else:
+                payload['currentFile'] = min(self.files_processed, self.total_files)
+
+            payload['totalFiles'] = self.total_files
+
+        # Izračunaj i dodaj ETA (preostalo vrijeme do kraja svih fajlova)
+        eta = self.calculate_eta(progress)
+        if eta is not None:
+            payload['eta'] = eta
+            payload['etaFormatted'] = self.format_time(eta)
+
+        try:
+            socketio.emit('processing_progress', payload, room=self.upload_id)
+            self.last_emit_time = current_time
+
+            # Fokusirani log: Fajl X/Y | Progress% | ETA
+            file_info = f"Fajl {payload.get('currentFile', '?')}/{payload.get('totalFiles', '?')}"
+            eta_info = payload.get('etaFormatted', 'N/A')
+            logger.info(f"📊 {file_info} | {int(progress)}% | ETA: {eta_info}")
+        except Exception as e:
+            logger.error(f"Error emitting progress: {e}")
+
+    @staticmethod
+    def format_time(seconds):
+        """Formatira sekunde u čitljiv format"""
+        if seconds is None:
+            return "Procjenjujem..."
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes}m {secs}s"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}m"
 
 
 def emit_progress(upload_id, progress, message, step, phase, detail=None):
@@ -95,7 +361,7 @@ def emit_progress(upload_id, progress, message, step, phase, detail=None):
         logger.error(f"Failed to emit progress for {upload_id}: {e}")
 
 
-def emit_file_result(upload_id, filename, result_data, info_record, file_index, total_files):
+def emit_file_result(upload_id, filename, result_data, info_record, file_index, total_files, tracker=None):
     """
     Emit file processing result via SocketIO with chunking for large datasets
 
@@ -106,9 +372,19 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
         info_record (dict): File information record
         file_index (int): Index of current file
         total_files (int): Total number of files being processed
+        tracker (ProgressTracker, optional): Progress tracker for smooth updates
     """
     try:
+        # Izračunaj progress opseg za ovaj fajl
+        file_start_progress = ProgressStages.FILE_PROCESSING_START + (file_index / total_files) * (ProgressStages.FILE_PROCESSING_END - ProgressStages.FILE_PROCESSING_START)
+        file_end_progress = ProgressStages.FILE_PROCESSING_START + ((file_index + 1) / total_files) * (ProgressStages.FILE_PROCESSING_END - ProgressStages.FILE_PROCESSING_START)
+        file_progress_range = file_end_progress - file_start_progress
+
         if len(result_data) <= DATAFRAME_CHUNK_SIZE:
+            # Mali fajl - nema streaming faze, samo jedan emit
+            if tracker:
+                tracker.start_streaming(filename, 1)
+                tracker.chunk_sent()
             socketio.emit('file_result', {
                 'uploadId': upload_id,
                 'filename': filename,
@@ -121,6 +397,10 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
             logger.info(f"Emitted single file_result for {filename} ({len(result_data)} rows)")
         else:
             total_chunks = (len(result_data) + DATAFRAME_CHUNK_SIZE - 1) // DATAFRAME_CHUNK_SIZE
+
+            # Započni streaming fazu u trackeru
+            if tracker:
+                tracker.start_streaming(filename, total_chunks)
 
             socketio.emit('file_result', {
                 'uploadId': upload_id,
@@ -146,6 +426,19 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
                     'totalChunks': total_chunks,
                     'fileIndex': file_index
                 }, room=upload_id)
+
+                # Zabilježi poslani chunk i emituj progress
+                if tracker:
+                    tracker.chunk_sent()
+                    chunk_progress = (chunk_idx + 1) / total_chunks
+                    smooth_progress = file_start_progress + (chunk_progress * file_progress_range * 0.8)  # 80% za streaming
+                    tracker.emit(
+                        smooth_progress,
+                        f'Slanje podataka {chunk_idx + 1}/{total_chunks}: {filename}',
+                        'data_streaming',
+                        'data_processing',
+                        detail=f'Fajl {file_index + 1}/{total_files} • {int(chunk_progress * 100)}%'
+                    )
 
                 time.sleep(SOCKETIO_CHUNK_DELAY)
 
@@ -268,13 +561,10 @@ def detect_delimiter(file_content):
 
 def get_time_column(df):
     """
-    Check for common time column names and return the first one found
+    Check if DataFrame has exactly 'UTC' column
     """
-    time_columns = ['UTC', 'Timestamp', 'Time', 'DateTime', 'Date', 'Zeit']
-    for col in df.columns:
-        for time_col in time_columns:
-            if time_col.lower() in col.lower():
-                return col
+    if 'UTC' in df.columns:
+        return 'UTC'
     return None
 
 @bp.route('/upload-chunk', methods=['POST'])
@@ -318,28 +608,23 @@ def upload_chunk():
         if not file_content:
             return jsonify({'error': 'Empty file content'}), 400
 
-        if upload_id not in chunk_buffer:
-            chunk_buffer[upload_id] = {}
-            chunk_buffer_timestamps[upload_id] = time.time()
+        # Use composite key: upload_id + filename to handle multiple files per upload
+        file_key = f"{upload_id}:{filename}"
 
-        chunk_buffer[upload_id][chunk_index] = file_content
+        if file_key not in chunk_buffer:
+            chunk_buffer[file_key] = {}
+            chunk_buffer_timestamps[file_key] = time.time()
+
+        chunk_buffer[file_key][chunk_index] = file_content
 
         if chunk_index == 0:
             cleanup_all_expired_data()
 
-        received_chunks_count = len(chunk_buffer[upload_id])
+        received_chunks_count = len(chunk_buffer[file_key])
 
         if received_chunks_count == total_chunks:
-            emit_progress(
-                upload_id,
-                ProgressStages.FILE_COMBINATION,
-                f'Combining {total_chunks} chunks for {filename}',
-                'file_combination',
-                'file_upload'
-            )
-
             combined_content = ''.join(
-                chunk_buffer[upload_id][i] for i in range(total_chunks)
+                chunk_buffer[file_key][i] for i in range(total_chunks)
             )
 
             upload_dir = os.path.join(UPLOAD_FOLDER, upload_id)
@@ -349,19 +634,11 @@ def upload_chunk():
             with open(final_path, 'w', encoding='utf-8') as outfile:
                 outfile.write(combined_content)
 
-            if upload_id in chunk_buffer:
-                del chunk_buffer[upload_id]
-            if upload_id in chunk_buffer_timestamps:
-                del chunk_buffer_timestamps[upload_id]
-            
-            emit_progress(
-                upload_id,
-                ProgressStages.FILE_ANALYSIS,
-                f'Analyzing file {filename}',
-                'file_analysis',
-                'file_upload'
-            )
-            
+            if file_key in chunk_buffer:
+                del chunk_buffer[file_key]
+            if file_key in chunk_buffer_timestamps:
+                del chunk_buffer_timestamps[file_key]
+
             try:
                 result = analyse_data(final_path, upload_id)
 
@@ -373,19 +650,6 @@ def upload_chunk():
                     logger.info(f"✅ Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
                 except Exception as e:
                     logger.error(f"⚠️ Failed to track storage usage: {str(e)}")
-
-                row_count = 0
-                if result and 'info_df' in result and len(result['info_df']) > 0:
-                    row_count = result['info_df'][0].get('Anzahl der Datenpunkte', 0)
-
-                emit_progress(
-                    upload_id,
-                    ProgressStages.FILE_COMPLETE,
-                    f'File {filename} upload and analysis complete',
-                    'file_complete',
-                    'file_upload',
-                    detail=f'Analyzed {row_count:,} rows' if row_count > 0 else None
-                )
                 
                 response_data = {
                     'status': 'complete',
@@ -406,10 +670,15 @@ def upload_chunk():
         
     except Exception as e:
         traceback.print_exc()
-        if upload_id in chunk_buffer:
-            del chunk_buffer[upload_id]
-        if upload_id in chunk_buffer_timestamps:
-            del chunk_buffer_timestamps[upload_id]
+        # Clean up file_key if it was created
+        try:
+            file_key = f"{upload_id}:{filename}"
+            if file_key in chunk_buffer:
+                del chunk_buffer[file_key]
+            if file_key in chunk_buffer_timestamps:
+                del chunk_buffer_timestamps[file_key]
+        except:
+            pass  # upload_id or filename may not be defined yet
         return jsonify({"error": str(e)}), 400
 
 
@@ -425,7 +694,7 @@ def cleanup_expired_chunk_buffers():
     for upload_id in expired_uploads:
         if upload_id in chunk_buffer:
             del chunk_buffer[upload_id]
-            logger.info(f"Cleaned up expired chunk buffer for upload_id: {upload_id}")
+            pass  # Cleaned up expired chunk buffer
         if upload_id in chunk_buffer_timestamps:
             del chunk_buffer_timestamps[upload_id]
 
@@ -444,7 +713,7 @@ def cleanup_expired_adjustment_chunks():
     for upload_id in expired_uploads:
         if upload_id in adjustment_chunks:
             del adjustment_chunks[upload_id]
-            logger.info(f"Cleaned up expired adjustment chunks for upload_id: {upload_id}")
+            pass  # Cleaned up expired adjustment chunks
         if upload_id in adjustment_chunks_timestamps:
             del adjustment_chunks_timestamps[upload_id]
 
@@ -467,7 +736,7 @@ def cleanup_expired_temp_files():
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-                logger.info(f"Deleted expired temp file: {file_path}")
+                pass  # Deleted expired temp file
             except Exception as e:
                 logger.error(f"Failed to delete temp file {file_path}: {e}")
 
@@ -488,7 +757,7 @@ def cleanup_expired_stored_data():
     for filename in expired_files:
         if filename in stored_data:
             del stored_data[filename]
-            logger.info(f"Cleaned up expired stored data for: {filename}")
+            pass  # Cleaned up expired stored data
         if filename in stored_data_timestamps:
             del stored_data_timestamps[filename]
 
@@ -507,7 +776,7 @@ def cleanup_expired_info_cache():
     for filename in expired_files:
         if filename in info_df_cache:
             del info_df_cache[filename]
-            logger.info(f"Cleaned up expired info cache for: {filename}")
+            pass  # Cleaned up expired info cache
         if filename in info_df_cache_timestamps:
             del info_df_cache_timestamps[filename]
 
@@ -523,8 +792,7 @@ def cleanup_all_expired_data():
     total += cleanup_expired_stored_data()
     total += cleanup_expired_info_cache()
 
-    if total > 0:
-        logger.info(f"Total cleanup: removed {total} expired items")
+    # Cleanup completed silently
 
     return total
 
@@ -547,15 +815,8 @@ def sanitize_filename(filename):
 
     safe_filename = os.path.basename(filename)
 
-    if '..' in safe_filename or safe_filename != filename:
-        raise ValueError(f"Invalid filename: path traversal detected")
-
-    if os.path.isabs(safe_filename):
-        raise ValueError(f"Invalid filename: absolute paths not allowed")
-
-    import re
-    if not re.match(r'^[a-zA-Z0-9_\-\.\s\(\)]+$', safe_filename):
-        raise ValueError(f"Invalid filename: contains forbidden characters")
+    if '..' in safe_filename:
+        raise ValueError("Invalid filename: path traversal detected")
 
     return safe_filename
 
@@ -591,8 +852,6 @@ def analyse_data(file_path, upload_id=None):
     try:
         global stored_data, info_df
         
-        stored_data.clear()
-        
         all_file_info = []
         processed_data = []
         
@@ -614,10 +873,10 @@ def analyse_data(file_path, upload_id=None):
 
         time_col = get_time_column(df)
         if time_col is None:
-            raise ValueError(f"No time column found in file {os.path.basename(file_path)}. Expected one of: UTC, Timestamp, Time, DateTime, Date, Zeit")
+            raise ValueError(f"No 'UTC' column found in file {os.path.basename(file_path)}. File must have a column named 'UTC'.")
 
-        if time_col != 'UTC':
-            df = df.rename(columns={time_col: 'UTC'})
+        if len(df.columns) != 2:
+            raise ValueError(f"File {os.path.basename(file_path)} must have exactly two columns: 'UTC' and one measurement column.")
 
         df['UTC'] = pd.to_datetime(df['UTC'], utc=True, cache=True)
                     
@@ -890,33 +1149,44 @@ def complete_adjustment():
         time_step = params.get('timeStepSize')
         offset = params.get('offset')
 
-
         intrpl_max_values = params.get('intrplMaxValues', {})
         
         dataframes = adjustment_chunks[upload_id]['dataframes']
         if not dataframes:
             return jsonify({"error": "No data found for this upload ID"}), 404
-            
+
         filenames = list(dataframes.keys())
-        
-        emit_progress(
-            upload_id,
-            ProgressStages.DATA_PROCESSING_START,
-            f'Starting data processing for {len(filenames)} files',
-            'data_processing_start',
-            'data_processing'
+
+        # Izračunaj ukupan broj redova za ETA procjenu
+        total_rows = sum(len(df) for df in dataframes.values())
+
+        # Izračunaj broj redova po fajlu za streaming procjenu
+        file_rows_dict = {filename: len(df) for filename, df in dataframes.items()}
+
+        # Inicijaliziraj ProgressTracker sa ETA
+        tracker = ProgressTracker(
+            upload_id=upload_id,
+            total_files=len(filenames),
+            total_rows=total_rows
         )
-        
+
+        # Postavi broj redova po fajlu za izračun streaming vremena unaprijed
+        tracker.set_file_rows(file_rows_dict)
+
+        tracker.emit(
+            ProgressStages.DATA_PROCESSING_START,
+            f'Započinjem procesiranje {len(filenames)} fajlova ({total_rows:,} redova ukupno)',
+            'data_processing_start',
+            'data_processing',
+            force=True
+        )
+
         if methods:
             methods = {k: v.strip() if isinstance(v, str) else v for k, v in methods.items()}
-            
+
         VALID_METHODS = {'mean', 'intrpl', 'nearest', 'nearest (mean)', 'nearest (max. delta)'}
-        
-        last_progress_time = time.time()
-        progress_interval = PROGRESS_UPDATE_INTERVAL
 
         files_needing_methods = []
-        logger.info(f"Phase 1: Checking {len(filenames)} files for method requirements")
 
         for filename in filenames:
             try:
@@ -938,23 +1208,29 @@ def complete_adjustment():
                     emit_file_error(upload_id, filename, error_msg)
                     continue
 
-                file_time_step = file_info['timestep']
-                file_offset = file_info['offset']
+                file_time_step = float(file_info['timestep'])
+                file_offset = float(file_info['offset'])
 
-                requested_offset_adjusted = offset
+                # Konvertuj u float za sigurnu usporedbu
+                time_step_float = float(time_step) if time_step is not None else 0.0
+                offset_float = float(offset) if offset is not None else 0.0
+
+                # Prilagodi offset ako je veći od timestep-a
+                requested_offset_adjusted = offset_float
                 if file_time_step > 0 and requested_offset_adjusted >= file_time_step:
                     requested_offset_adjusted = requested_offset_adjusted % file_time_step
 
-                needs_processing = file_time_step != time_step or file_offset != requested_offset_adjusted
-
-                logger.info(f"Phase 1 - File: {filename}, needs_processing: {needs_processing}")
+                # Koristi math.isclose za float usporedbu (kao u originalnom kodu)
+                timestep_matches = math.isclose(file_time_step, time_step_float, rel_tol=1e-9)
+                offset_matches = math.isclose(file_offset, requested_offset_adjusted, rel_tol=1e-9)
+                needs_processing = not (timestep_matches and offset_matches)
 
                 if needs_processing:
                     method_info = methods.get(filename, {})
                     method = method_info.get('method', '').strip() if isinstance(method_info, dict) else ''
                     has_valid_method = method and method in VALID_METHODS
 
-                    logger.info(f"Phase 1 - File: {filename}, method: {method}, has_valid_method: {has_valid_method}")
+
 
                     if not has_valid_method:
                         files_needing_methods.append({
@@ -971,7 +1247,6 @@ def complete_adjustment():
                 continue
 
         if files_needing_methods:
-            logger.info(f"Requesting methods for {len(files_needing_methods)} files: {[f['filename'] for f in files_needing_methods]}")
             return jsonify({
                 "success": True,
                 "methodsRequired": True,
@@ -983,34 +1258,31 @@ def complete_adjustment():
                 }
             }), 200
 
-        logger.info(f"Phase 2: All files have methods - proceeding with processing")
+
 
         for file_index, filename in enumerate(filenames):
             try:
-                current_time = time.time()
-                should_emit = (current_time - last_progress_time > progress_interval) or \
-                             (file_index % max(1, len(filenames) // 10) == 0) or \
-                             (file_index == len(filenames) - 1)
-
-                if should_emit:
-                    file_progress = ProgressStages.calculate_file_progress(file_index, len(filenames), 60, 85)
-                    file_percentage = int((file_index + 1) / len(filenames) * 100)
-                    emit_progress(
-                        upload_id,
-                        file_progress,
-                        f'Processing file {file_index + 1} of {len(filenames)} ({file_percentage}%): {filename}',
-                        'file_analysis',
-                        'data_processing',
-                        detail='Checking time step configuration and processing requirements'
-                    )
-                    last_progress_time = current_time
-
                 df = dataframes[filename]
+                row_count = len(df)
+
+                # Započni tracking za ovaj fajl
+                tracker.start_file(filename, row_count)
+
+                file_progress = ProgressStages.calculate_file_progress(file_index, len(filenames))
+                tracker.emit(
+                    file_progress,
+                    f'Procesiranje fajla {file_index + 1}/{len(filenames)}: {filename}',
+                    'file_analysis',
+                    'data_processing',
+                    detail=f'{row_count:,} redova',
+                    force=True
+                )
 
                 if 'UTC' not in df.columns:
                     error_msg = f"No UTC column found in file {filename}"
                     logger.error(error_msg)
                     emit_file_error(upload_id, filename, error_msg)
+                    tracker.complete_file(filename)
                     continue
 
                 df['UTC'] = pd.to_datetime(df['UTC'])
@@ -1021,32 +1293,41 @@ def complete_adjustment():
                     error_msg = f"File {filename} not found in cache"
                     logger.error(error_msg)
                     emit_file_error(upload_id, filename, error_msg)
+                    tracker.complete_file(filename)
                     continue
 
-                file_time_step = file_info['timestep']
-                file_offset = file_info['offset']
+                file_time_step = float(file_info['timestep'])
+                file_offset = float(file_info['offset'])
 
-                if file_time_step > 0 and requested_offset >= file_time_step:
-                    requested_offset = requested_offset % file_time_step
+                # Konvertuj u float za sigurnu usporedbu
+                time_step_float = float(time_step) if time_step is not None else 0.0
+                offset_float = float(offset) if offset is not None else 0.0
 
-                needs_processing = file_time_step != time_step or file_offset != offset
+                # Prilagodi offset ako je veći od timestep-a
+                requested_offset_phase2 = offset_float
+                if file_time_step > 0 and requested_offset_phase2 >= file_time_step:
+                    requested_offset_phase2 = requested_offset_phase2 % file_time_step
 
-                logger.info(f"Phase 2 - Processing file: {filename}, needs_processing: {needs_processing}, file_time_step: {file_time_step}, requested_time_step: {time_step}")
+                # Koristi math.isclose za float usporedbu (kao u originalnom kodu)
+                timestep_matches = math.isclose(file_time_step, time_step_float, rel_tol=1e-9)
+                offset_matches = math.isclose(file_offset, requested_offset_phase2, rel_tol=1e-9)
+                needs_processing = not (timestep_matches and offset_matches)
+
+
 
                 intrpl_max = intrpl_max_values.get(filename)
 
                 if not needs_processing:
-                    conversion_progress = 65 + (file_index / len(filenames)) * 20
-                    emit_progress(
-                        upload_id,
+                    conversion_progress = ProgressStages.calculate_file_progress(file_index, len(filenames))
+                    tracker.emit(
                         conversion_progress,
-                        f'No processing needed for {filename}',
+                        f'Konverzija {filename} (bez obrade)',
                         'data_conversion',
                         'data_processing',
-                        detail='Time step and offset match requirements - converting data directly'
+                        detail='Vremenski korak i offset odgovaraju - direktna konverzija'
                     )
 
-                    logger.info(f"Skipping processing for {filename} as parameters match (timestep: {file_time_step}, offset: {file_offset})")
+
                     result_data, info_record = convert_data_without_processing(
                         dataframes[filename],
                         filename,
@@ -1055,18 +1336,18 @@ def complete_adjustment():
                     )
                 else:
                     method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
-                    adjustment_progress = 65 + (file_index / len(filenames)) * 20
-                    emit_progress(
-                        upload_id,
+                    adjustment_progress = ProgressStages.calculate_file_progress(file_index, len(filenames))
+                    tracker.emit(
                         adjustment_progress,
-                        f'Processing {filename} with {method_name} method',
+                        f'Obrada {filename} ({method_name})',
                         'data_adjustment',
                         'data_processing',
-                        detail=f'Time step: {file_time_step}min → {time_step}min, offset: {file_offset}min → {offset}min'
+                        detail=f'Vremenski korak: {file_time_step}min → {time_step_float}min, offset: {file_offset}min → {offset_float}min'
                     )
 
-                    process_time_step = time_step if needs_processing else file_time_step
-                    process_offset = offset if needs_processing else file_offset
+                    # Koristi float verzije za procesiranje
+                    process_time_step = time_step_float if needs_processing else file_time_step
+                    process_offset = offset_float if needs_processing else file_offset
 
                     result_data, info_record = process_data_detailed(
                         dataframes[filename],
@@ -1086,30 +1367,34 @@ def complete_adjustment():
                         result_data,
                         info_record,
                         file_index,
-                        len(filenames)
+                        len(filenames),
+                        tracker=tracker
                     )
 
-                    file_complete_progress = 70 + ((file_index + 1) / len(filenames)) * 15
+                    # Završi tracking za ovaj fajl
+                    tracker.complete_file(filename)
+
+                    file_complete_progress = ProgressStages.calculate_file_progress(file_index + 1, len(filenames))
 
                     quality_percentage = 0
                     if info_record and 'Anteil an numerischen Datenpunkten' in info_record:
                         quality_percentage = info_record['Anteil an numerischen Datenpunkten']
 
-                    completion_msg = f'Completed processing {filename}'
+                    completion_msg = f'Završeno: {filename}'
                     if needs_processing:
-                        completion_msg += f' (adjusted {file_time_step}min→{time_step}min)'
+                        completion_msg += f' ({file_time_step}min→{time_step}min)'
 
-                    quality_detail = f'Generated {len(result_data):,} data points'
+                    quality_detail = f'Generirano {len(result_data):,} podataka'
                     if quality_percentage > 0:
-                        quality_detail += f' • {quality_percentage:.1f}% valid data'
+                        quality_detail += f' • {quality_percentage:.1f}% validnih'
 
-                    emit_progress(
-                        upload_id,
+                    tracker.emit(
                         file_complete_progress,
                         completion_msg,
                         'file_complete',
                         'data_processing',
-                        detail=quality_detail
+                        detail=quality_detail,
+                        force=True
                     )
 
                     del result_data
@@ -1123,14 +1408,18 @@ def complete_adjustment():
                 error_msg = f"Error processing {filename}: {str(file_error)}"
                 logger.error(f"{error_msg}\n{traceback.format_exc()}")
                 emit_file_error(upload_id, filename, error_msg)
+                tracker.complete_file(filename)
                 continue
 
-        emit_progress(
-            upload_id,
+        # Izračunaj ukupno vrijeme procesiranja
+        total_processing_time = time.time() - tracker.start_time
+        tracker.emit(
             ProgressStages.COMPLETION,
-            f'Data processing completed',
+            f'Procesiranje završeno! ({tracker.format_time(int(total_processing_time))})',
             'completion',
-            'finalization'
+            'finalization',
+            detail=f'{len(filenames)} fajlova obrađeno',
+            force=True
         )
 
         # Track processing usage
@@ -1196,147 +1485,149 @@ def get_method_for_file(methods, filename):
         return method_info.get('method', '').strip()
     return None
 
-def apply_processing_method(df, col, method, time_step, offset, start_time, end_time, intrpl_max):
+def apply_processing_method(df, col, method, time_step, offset, start_time, end_time, intrpl_max=None):
     """
-    Refaktorisana verzija funkcije za primenu metoda obrade koja daje identične rezultate kao data_adapt4.py
-    OPTIMIZOVANO: NumPy arrays za brži pristup podacima (50-70% brže)
+    Identična logika kao u data_adapt_1.py process_data_detailed funkciji
+    S timezone handling i sortiranje fixom za pandas kompatibilnost
     """
-    import math
-
-    df['UTC'] = pd.to_datetime(df['UTC'], utc=True)
-    df = df.sort_values('UTC').reset_index(drop=True)
-
-    utc_series = df['UTC']
-    val_array = df[col].values
-    df_len = len(df)
-
-    t_strt = pd.to_datetime(start_time, utc=True) if start_time else df['UTC'].min()
-    t_end = pd.to_datetime(end_time, utc=True) if end_time else df['UTC'].max()
-
-    tss = float(time_step)
-    ofst = float(offset)
-    t_ref = t_strt.replace(minute=0, second=0, microsecond=0) + pd.Timedelta(minutes=ofst)
-    while t_ref < t_strt:
-        t_ref += pd.Timedelta(minutes=tss)
-
-    t_list = []
-    while t_ref <= t_end:
-        t_list.append(t_ref)
-        t_ref += pd.Timedelta(minutes=tss)
-
-    value_array = np.empty(len(t_list), dtype=np.float64)
-    value_idx = 0
-
-    utc_unix_array = utc_series.values.astype('datetime64[ns]').astype(np.int64) / 1e9
-    tss_seconds = tss * 60
-
-    i2 = 0
-    direct = 1
-
-    for t_curr in t_list:
-        if method == 'mean':
-            t_min = t_curr - pd.Timedelta(minutes=tss / 2)
-            t_max = t_curr + pd.Timedelta(minutes=tss / 2)
-            while i2 < df_len and utc_series.iloc[i2] < t_min:
-                i2 += 1
-            idx_start = i2
-            while i2 < df_len and utc_series.iloc[i2] <= t_max:
-                i2 += 1
-            idx_end = i2
-            values = val_array[idx_start:idx_end]
-            valid_values = values[pd.notna(values)]
-            value_array[value_idx] = np.mean(valid_values) if len(valid_values) > 0 else float('nan')
-            value_idx += 1
-
-        elif method in ['nearest', 'nearest (mean)']:
-            t_min = t_curr - pd.Timedelta(minutes=tss / 2)
-            t_max = t_curr + pd.Timedelta(minutes=tss / 2)
-            while i2 < df_len and utc_series.iloc[i2] < t_min:
-                i2 += 1
-            idx_start = i2
-            while i2 < df_len and utc_series.iloc[i2] <= t_max:
-                i2 += 1
-            idx_end = i2
-
-            utc_slice = utc_series.iloc[idx_start:idx_end]
-            val_slice = val_array[idx_start:idx_end]
-            valid_mask = pd.notna(val_slice)
-
-            if valid_mask.any():
-                valid_utc = utc_slice[valid_mask]
-                valid_vals = val_slice[valid_mask]
-                deltas = np.abs([(t_curr - ts).total_seconds() for ts in valid_utc])
-                min_delta = np.min(deltas)
-                idx_all = np.where(deltas == min_delta)[0]
-                if method == 'nearest':
-                    value_array[value_idx] = valid_vals[idx_all[0]]
-                else:
-                    value_array[value_idx] = np.mean(valid_vals[idx_all])
-            else:
-                value_array[value_idx] = float('nan')
-            value_idx += 1
-
-        elif method in ['intrpl', 'nearest (max. delta)']:
-            if direct == 1:
-                while i2 < df_len:
-                    if utc_series.iloc[i2] >= t_curr:
-                        if pd.notna(val_array[i2]):
-                            time_next = utc_series.iloc[i2]
-                            value_next = val_array[i2]
-                            break
-                    i2 += 1
-                else:
-                    value_array[value_idx] = float('nan')
-                    value_idx += 1
-                    i2 = 0
-                    direct = 1
-                    continue
-                direct = -1
-            if direct == -1:
-                j = i2
-                while j >= 0:
-                    if utc_series.iloc[j] <= t_curr:
-                        if pd.notna(val_array[j]):
-                            time_prior = utc_series.iloc[j]
-                            value_prior = val_array[j]
-                            break
-                    j -= 1
-                else:
-                    value_array[value_idx] = float('nan')
-                    value_idx += 1
-                    i2 = 0
-                    direct = 1
-                    continue
-                delta_t = (time_next - time_prior).total_seconds()
-                if delta_t == 0 or (value_prior == value_next and delta_t <= intrpl_max * 60):
-                    value_array[value_idx] = value_prior
-                elif method == 'intrpl':
-                    if intrpl_max is not None and delta_t > intrpl_max * 60:
-                        value_array[value_idx] = float('nan')
-                    else:
-                        delta_val = value_prior - value_next
-                        delta_prior = (t_curr - time_prior).total_seconds()
-                        value_array[value_idx] = value_prior - (delta_val / delta_t) * delta_prior
-                elif method == 'nearest (max. delta)':
-                    if intrpl_max is not None and delta_t > intrpl_max * 60:
-                        value_array[value_idx] = float('nan')
-                    else:
-                        d_prior = (t_curr - time_prior).total_seconds()
-                        d_next = (time_next - t_curr).total_seconds()
-                        value_array[value_idx] = value_prior if d_prior < d_next else value_next
-                value_idx += 1
-                direct = 1
-
-        else:
-            matches = utc_series[utc_series == t_curr].index.tolist()
-            if len(matches) > 0:
-                val = val_array[matches[0]]
-                value_array[value_idx] = val if pd.notna(val) else float('nan')
-            else:
-                value_array[value_idx] = float('nan')
-            value_idx += 1
-
-    result_df = pd.DataFrame({'UTC': t_list, col: value_array})
+    logger.info(f"[apply_processing_method] START - method={method}, col={col}, time_step={time_step}, offset={offset}")
+    
+    # Convert UTC column to datetime - remove timezone info for consistency
+    df['UTC'] = pd.to_datetime(df['UTC']).dt.tz_localize(None)
+    
+    # Sort by UTC and remove duplicates to ensure monotonic index
+    df = df.sort_values('UTC').drop_duplicates(subset=['UTC'], keep='first').reset_index(drop=True)
+    
+    # Convert measurement values to float, replacing non-numeric values with NaN
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Get time parameters
+    tss = time_step
+    ofst = offset if offset is not None else 0
+    
+    # Determine start and end times (timezone-naive)
+    if start_time is None:
+        t_strt = df['UTC'].min()
+    else:
+        t_strt = pd.to_datetime(start_time)
+        if t_strt.tzinfo is not None:
+            t_strt = t_strt.tz_localize(None)
+    
+    if end_time is None:
+        t_end = df['UTC'].max()
+    else:
+        t_end = pd.to_datetime(end_time)
+        if t_end.tzinfo is not None:
+            t_end = t_end.tz_localize(None)
+    
+    logger.info(f"[apply_processing_method] t_strt={t_strt}, t_end={t_end}, tss={tss}, ofst={ofst}")
+    
+    # Apply offset if provided (original logic)
+    if ofst:
+        t_strt = t_strt + pd.Timedelta(minutes=ofst)
+    
+    # Create new index with specified time step
+    new_index = pd.date_range(start=t_strt, end=t_end, freq=f'{tss}min')
+    logger.info(f"[apply_processing_method] new_index created, length={len(new_index)}")
+    
+    # Resample data based on method (identical to original)
+    if method == 'mean':
+        logger.info(f"[apply_processing_method] Applying MEAN resample...")
+        resampled = df.set_index('UTC').resample(f'{tss}min', offset=f'{ofst}min')[col].mean()
+        result_df = pd.DataFrame({
+            'UTC': resampled.index,
+            col: resampled.values
+        })
+    elif method == 'max':
+        logger.info(f"[apply_processing_method] Applying MAX resample...")
+        resampled = df.set_index('UTC').resample(f'{tss}min', offset=f'{ofst}min')[col].max()
+        result_df = pd.DataFrame({
+            'UTC': resampled.index,
+            col: resampled.values
+        })
+    elif method == 'min':
+        logger.info(f"[apply_processing_method] Applying MIN resample...")
+        resampled = df.set_index('UTC').resample(f'{tss}min', offset=f'{ofst}min')[col].min()
+        result_df = pd.DataFrame({
+            'UTC': resampled.index,
+            col: resampled.values
+        })
+    elif method == 'nearest':
+        logger.info(f"[apply_processing_method] Applying NEAREST reindex...")
+        df_indexed = df.set_index('UTC')
+        resampled = df_indexed[col].reindex(new_index, method='nearest')
+        result_df = pd.DataFrame({
+            'UTC': new_index,
+            col: resampled.values
+        })
+    elif method == 'nearest (mean)':
+        logger.info(f"[apply_processing_method] Applying NEAREST (MEAN)...")
+        df_indexed = df.set_index('UTC')
+        nearest_vals = df_indexed[col].reindex(new_index, method='nearest')
+        rolling_mean = nearest_vals.rolling(window=2, min_periods=1).mean()
+        result_df = pd.DataFrame({
+            'UTC': new_index,
+            col: rolling_mean.values
+        })
+    elif method == 'nearest (max. delta)':
+        logger.info(f"[apply_processing_method] Applying NEAREST (MAX. DELTA)...")
+        df_indexed = df.set_index('UTC')
+        nearest_vals = df_indexed[col].reindex(new_index, method='nearest')
+        deltas = nearest_vals.diff().abs()
+        max_delta = deltas.quantile(0.95)  # Use 95th percentile as threshold
+        masked_values = nearest_vals.where(deltas <= max_delta)
+        result_df = pd.DataFrame({
+            'UTC': new_index,
+            col: masked_values.values
+        })
+    elif method == 'intrpl':
+        logger.info(f"[apply_processing_method] Applying INTRPL...")
+        df_indexed = df.set_index('UTC')
+        resampled = df_indexed[col].reindex(new_index)
+        interpolated = resampled.interpolate(method='time', limit_direction='both')
+        
+        # Apply intrpl_max limit if provided - OPTIMIZED vectorized version
+        if intrpl_max is not None:
+            logger.info(f"[apply_processing_method] Applying intrpl_max={intrpl_max} (vectorized)...")
+            
+            # Get original timestamps as numpy array for fast searchsorted
+            original_times = df_indexed.index.values
+            new_times = new_index.values
+            
+            # Find indices where original data was missing (needs interpolation check)
+            missing_mask = resampled.isna().values
+            
+            if missing_mask.any():
+                # Use searchsorted for O(log n) lookup instead of O(n)
+                indices = np.searchsorted(original_times, new_times[missing_mask])
+                
+                # Vectorized gap calculation
+                interpolated_values = interpolated.values.copy()
+                missing_indices = np.where(missing_mask)[0]
+                
+                for j, i in enumerate(missing_indices):
+                    idx = indices[j]
+                    idx_before = max(0, idx - 1)
+                    idx_after = min(len(original_times) - 1, idx)
+                    
+                    if idx_before < len(original_times) and idx_after < len(original_times):
+                        gap_ns = (original_times[idx_after] - original_times[idx_before])
+                        gap_minutes = gap_ns / np.timedelta64(1, 'm')
+                        
+                        if gap_minutes > intrpl_max:
+                            interpolated_values[i] = np.nan
+                
+                interpolated = pd.Series(interpolated_values, index=new_index)
+        
+        result_df = pd.DataFrame({
+            'UTC': new_index,
+            col: interpolated.values
+        })
+    else:
+        logger.info(f"[apply_processing_method] No method matched, returning copy")
+        result_df = df[['UTC', col]].copy()
+    
+    logger.info(f"[apply_processing_method] COMPLETE - returning {len(result_df)} rows")
     return result_df
 def create_info_record(df, col, filename, time_step, offset):
     """Kreiranje info zapisa za rezultate"""
@@ -1408,7 +1699,7 @@ def convert_data_without_processing(df, filename, time_step, offset):
     koji frontend očekuje, što značajno ubrzava proces kada nema potrebe za transformacijom.
     """
     try:
-        logger.info(f"Direct conversion without processing for {filename}")
+
         
         df = df.copy()
         
