@@ -27,12 +27,13 @@ import threading
 from io import StringIO
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
-from flask import Blueprint, request, jsonify, send_file, current_app, g, Response
+from flask import Blueprint, request, jsonify, send_file, current_app, g, Response, redirect
 import pandas as pd
 from flask_socketio import join_room
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit
 from utils.usage_tracking import increment_processing_count, update_storage_usage
+from utils.storage_service import storage_service
 from api.routes.exceptions import (
     MissingParameterError,
     InvalidParameterError,
@@ -1746,26 +1747,30 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             total_rows = len(result_df)
             tracker.emit('saving', 85, f'Ergebnis erstellt: {total_rows:,} Zeilen ✓', force=True)
             
-            # Save to temp file instead of streaming
-            tracker.emit('saving', 90, 'Speichere Datei...', force=True)
-            
-            file_id = f"{upload_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', encoding='utf-8')
-            
-            # Write CSV with semicolon delimiter
-            result_df.to_csv(temp_file.name, sep=';', index=False)
-            temp_file.close()
-            
-            # Store file info for later download
-            temp_files[file_id] = {
-                'path': temp_file.name,
-                'fileName': f"processed_{upload_id}.csv",
-                'timestamp': time.time(),
-                'totalRows': total_rows,
-                'headers': result_df.columns.tolist()
-            }
-            
-            tracker.emit('saving', 95, 'Datei gespeichert ✓', force=True)
+            # Save to Supabase Storage for persistent access on Cloud Run
+            tracker.emit('saving', 90, 'Speichere Datei in Cloud Storage...', force=True)
+
+            # Convert DataFrame to CSV string
+            csv_content = result_df.to_csv(sep=';', index=False)
+
+            # Upload to Supabase Storage
+            user_id = g.user_id
+            file_id = storage_service.upload_csv(
+                user_id=user_id,
+                csv_content=csv_content,
+                original_filename=f"processed_{upload_id}.csv",
+                metadata={
+                    'totalRows': total_rows,
+                    'headers': result_df.columns.tolist(),
+                    'uploadId': upload_id
+                }
+            )
+
+            if not file_id:
+                raise ValueError("Failed to upload file to storage")
+
+            logger.info(f"[STORAGE] Uploaded file to Supabase Storage: {file_id}")
+            tracker.emit('saving', 95, 'Datei in Cloud Storage gespeichert ✓', force=True)
             
             # Generate preview (first 100 rows)
             preview_rows = min(100, total_rows)
@@ -1879,40 +1884,46 @@ def prepare_save() -> Tuple[Response, int]:
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@bp.route('/download/<file_id>', methods=['GET'])
+@bp.route('/download/<path:file_id>', methods=['GET'])
 @require_auth
 def download_file(file_id: str) -> Response:
     """
-    Download prepared CSV file.
-    
+    Download prepared CSV file from Supabase Storage.
+
+    Returns either a redirect to signed URL or the file content directly.
+
     Args:
-        file_id: File identifier from prepare_save
-        
+        file_id: File identifier from upload_files (format: user_id/file_id)
+
     Returns:
-        CSV file download or error response
+        CSV file download or redirect to signed URL
     """
     try:
-        if file_id not in temp_files:
-            return jsonify({"error": "File not found"}), 404
-        file_info = temp_files[file_id]
-        file_path = file_info['path']
-        if not os.path.exists(file_path):
-            return jsonify({"error": "File not found"}), 404
+        # Get signed URL from Supabase Storage (valid for 1 hour)
+        signed_url = storage_service.get_download_url(file_id, expires_in=3600)
 
-        download_name = file_info['fileName']
-        return send_file(
-            file_path,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype='text/csv'
-        )
+        if signed_url:
+            # Redirect to signed URL for direct download
+            logger.info(f"[DOWNLOAD] Redirecting to signed URL for file: {file_id}")
+            return redirect(signed_url)
+
+        # Fallback: try to download content directly and serve it
+        csv_content = storage_service.download_csv(file_id)
+
+        if csv_content:
+            # Create response with CSV content
+            response = Response(
+                csv_content,
+                mimetype='text/csv',
+                headers={
+                    'Content-Disposition': f'attachment; filename="processed_{file_id.split("/")[-1]}.csv"'
+                }
+            )
+            return response
+
+        logger.error(f"[DOWNLOAD] File not found in storage: {file_id}")
+        return jsonify({"error": "File not found"}), 404
+
     except Exception as e:
+        logger.error(f"[DOWNLOAD] Error downloading file {file_id}: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        # Clean up temporary file
-        if file_id in temp_files:
-            try:
-                os.unlink(file_info['path'])
-                del temp_files[file_id]
-            except Exception as ex:
-                logger.error(f"Failed to clean up temp file: {str(ex)}")
