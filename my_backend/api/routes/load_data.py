@@ -223,7 +223,7 @@ class ProgressTracker:
         # Ograniči na razumne vrijednosti
         return max(0, min(eta_seconds, 3600))  # Max 1 sat
 
-    def emit(self, step: str, progress: float, message: str, eta_seconds: Optional[int] = None, force: bool = False) -> None:
+    def emit(self, step: str, progress: float, message: str, eta_seconds: Optional[int] = None, force: bool = False, processed_rows: Optional[int] = None) -> None:
         """
         Šalje progress update preko WebSocket-a.
         
@@ -233,6 +233,7 @@ class ProgressTracker:
             message: Poruka za korisnika
             eta_seconds: ETA u sekundama (opciono, ako nije proslijeđeno pokušava izračunati)
             force: Ignoriši rate limiting
+            processed_rows: Broj obrađenih redova (opciono)
         """
         current_time = time.time()
 
@@ -245,7 +246,7 @@ class ProgressTracker:
             'step': step,
             'progress': int(progress),
             'message': message,
-            'status': 'processing' if step != 'complete' else 'completed'
+            'status': 'processing' if step not in ['complete', 'error'] else ('completed' if step == 'complete' else 'error')
         }
 
         # Dodaj currentStep i totalSteps ako su postavljeni
@@ -253,13 +254,17 @@ class ProgressTracker:
             payload['currentStep'] = self.current_step
             payload['totalSteps'] = self.total_steps
 
+        # Dodaj totalRows i processedRows ako su dostupni
+        if self.total_rows > 0:
+            payload['totalRows'] = self.total_rows
+        if processed_rows is not None:
+            payload['processedRows'] = processed_rows
+
         # Dodaj ETA
         if eta_seconds is not None:
-            # Eksplicitno proslijeđena ETA (npr. za streaming)
             payload['eta'] = eta_seconds
             payload['etaFormatted'] = self.format_time(eta_seconds)
         else:
-            # Izračunaj ETA na osnovu ukupnog progresa
             progress_eta = self.calculate_eta_for_progress(progress)
             payload['eta'] = progress_eta
             payload['etaFormatted'] = self.format_time(progress_eta)
@@ -269,8 +274,8 @@ class ProgressTracker:
                 self.socketio.emit('upload_progress', payload, room=self.upload_id)
             self.last_emit_time = current_time
             
-            # Samo jedan log sa ključnim informacijama
-            logger.info(f"[ETA] step={step}, progress={int(progress)}%, eta={payload.get('etaFormatted', 'N/A')}")
+            # Debug: log full payload
+            logger.info(f"[WS] emit payload: {payload}")
             
         except Exception as e:
             logger.error(f"[EMIT ERROR] {e}")
@@ -852,12 +857,31 @@ temp_files = _StateProxy(_upload_state, 'temp')
 
 def cleanup_old_uploads() -> None:
     """
-    Clean up old incomplete uploads that have expired.
+    Clean up old incomplete uploads and expired temp files.
     
     Removes upload chunks that haven't been active within UPLOAD_EXPIRY_SECONDS.
+    Also removes temp files older than 30 minutes.
     Should be called periodically to prevent memory leaks.
     """
     _upload_state.cleanup_expired_uploads()
+    
+    # Cleanup expired temp files (older than 30 minutes)
+    current_time = time.time()
+    expired_files = []
+    
+    for file_id, file_info in list(temp_files.items()):
+        if current_time - file_info.get('timestamp', 0) > 1800:  # 30 minutes
+            expired_files.append(file_id)
+    
+    for file_id in expired_files:
+        try:
+            file_path = temp_files[file_id].get('path')
+            if file_path and os.path.exists(file_path):
+                os.unlink(file_path)
+            del temp_files[file_id]
+            logger.info(f"[CLEANUP] Removed expired temp file: {file_id}")
+        except Exception as e:
+            logger.error(f"[CLEANUP] Failed to remove temp file {file_id}: {e}")
 
 
 
@@ -891,9 +915,11 @@ def check_date_format(sample_date: Any) -> Tuple[bool, Optional[Dict[str, str]]]
     
     return _datetime_parser.validate_format(sample_date)
 
-def detect_delimiter(file_content: str, sample_lines: int = 3) -> str:
+def detect_delimiter(file_content: str, sample_lines: int = 5) -> str:
     """
-    Detect CSV delimiter from file content.
+    Detect CSV delimiter from file content using consistency check.
+    
+    A proper delimiter should produce the same number of columns across all lines.
     
     Args:
         file_content: CSV file content as string
@@ -902,12 +928,27 @@ def detect_delimiter(file_content: str, sample_lines: int = 3) -> str:
     Returns:
         Detected delimiter character
     """
-    lines = file_content.splitlines()[:sample_lines]
-    counts = {d: sum(line.count(d) for line in lines) for d in SUPPORTED_DELIMITERS}
+    lines = [l for l in file_content.splitlines()[:sample_lines] if l.strip()]
     
-    if max(counts.values()) > 0:
-        return max(counts, key=counts.get)
-    return DEFAULT_DELIMITER
+    if not lines:
+        return DEFAULT_DELIMITER
+    
+    best_delimiter = DEFAULT_DELIMITER
+    best_score = -1
+    
+    for delimiter in SUPPORTED_DELIMITERS:
+        counts = [line.count(delimiter) + 1 for line in lines]
+        
+        if not counts or counts[0] < 2:
+            continue
+            
+        if len(set(counts)) == 1:
+            score = counts[0]
+            if score > best_score:
+                best_score = score
+                best_delimiter = delimiter
+    
+    return best_delimiter
 
 def clean_time(time_str: Any) -> Any:
     """
@@ -1139,23 +1180,9 @@ def upload_chunk() -> Tuple[Response, int]:
         chunk_storage[upload_id]['received_chunks'] += 1
         chunk_storage[upload_id]['last_activity'] = time.time()
         
-        progress_percentage = int((chunk_index + 1) / chunk_storage[upload_id]['total_chunks'] * 100)
-        socketio = get_socketio()
-        socketio.emit('upload_progress', {
-            'uploadId': upload_id,
-            'fileName': file_chunk.filename or 'unknown',
-            'progress': progress_percentage,
-            'status': 'uploading',
-            'message': f'Processing chunk {chunk_index + 1}/{chunk_storage[upload_id]["total_chunks"]}'
-        }, room=upload_id)
-        
-        if chunk_storage[upload_id]['received_chunks'] == chunk_storage[upload_id]['total_chunks']:
-            socketio.emit('upload_progress', {
-                'uploadId': upload_id,
-                'progress': 100,
-                'status': 'uploading',
-                'message': 'All chunks received, waiting for finalization...'
-            }, room=upload_id)
+        # Note: Frontend handles its own upload progress (0-95%)
+        # Backend ProgressTracker handles processing progress (5-100%) with status='processing'
+        # We don't emit progress here to avoid conflicts with frontend's chunk tracking
         
         return jsonify({
             "message": f"Chunk {chunk_index + 1}/{chunk_storage[upload_id]['total_chunks']} received",
@@ -1259,24 +1286,31 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
     """
     try:
         socketio = get_socketio()
-        socketio.emit('upload_progress', {
-            'uploadId': upload_id,
-            'progress': 50,
-            'status': 'processing',
-            'message': 'Processing file data...'
-        }, room=upload_id)
+        
+        # Note: Don't emit progress here - upload_files has its own ProgressTracker
+        # that handles all processing progress (5-100%)
 
         upload_data = chunk_storage[upload_id]
         chunks = [upload_data['chunks'][i] for i in range(upload_data['total_chunks'])]
-
-        encodings = SUPPORTED_ENCODINGS
+        
+        combined_bytes = b"".join(chunks)
+        
+        encodings = ['utf-8', 'latin1', 'cp1252', 'utf-16', 'utf-16le', 'utf-16be']
         full_content = None
 
         for encoding in encodings:
             try:
-                decoded_chunks = [chunk.decode(encoding) for chunk in chunks]
-                full_content = "".join(decoded_chunks)
-                break
+                decoded = combined_bytes.decode(encoding)
+                
+                first_line = decoded.split('\n')[0] if decoded else ''
+                
+                has_delimiter = any(d in first_line for d in [',', ';', '\t'])
+                printable_ratio = sum(1 for c in first_line[:200] if ord(c) < 256 and (c.isprintable() or c in '\n\r\t')) / max(len(first_line[:200]), 1)
+                
+                if has_delimiter and printable_ratio > 0.9:
+                    full_content = decoded
+                    break
+                    
             except UnicodeDecodeError:
                 continue
 
@@ -1293,21 +1327,13 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
             }, room=upload_id)
             return jsonify(error.to_dict()), 400
 
-        num_lines = len(full_content.split('\n'))
         params = upload_data['parameters']
         params['uploadId'] = upload_id
         del chunk_storage[upload_id]
 
-        socketio.emit('upload_progress', {
-            'uploadId': upload_id,
-            'progress': 100,
-            'status': 'completed',
-            'message': 'File processing completed'
-        }, room=upload_id)
-
+        # Don't emit 'completed' here - upload_files will handle progress from here
         return upload_files(full_content, params)
     except LoadDataException as e:
-        # Handle custom exceptions
         logging.error(f"LoadDataException in process_chunks: {str(e)}", exc_info=True)
         from flask import has_app_context
         if has_app_context():
@@ -1315,7 +1341,6 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
         else:
             raise
     except KeyError:
-        # Upload not found
         error = UploadNotFoundError(upload_id)
         from flask import has_app_context
         if has_app_context():
@@ -1323,7 +1348,6 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
         else:
             raise error
     except Exception as e:
-        # Unexpected errors
         logger.error(f"Unexpected error in process_chunks: {str(e)}", exc_info=True)
         from flask import has_app_context
         if has_app_context():
@@ -1611,7 +1635,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
     3. Process datetime columns (separate or combined)
     4. Convert timezone to UTC
     5. Build output dataframe with UTC timestamps and values
-    6. Stream results via NDJSON with progress tracking
+    6. Save to temp file and return metadata + preview
     7. Track usage metrics
     
     Args:
@@ -1627,7 +1651,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             - has_header: Whether CSV has header row
             
     Returns:
-        NDJSON streaming response with processed data or JSON error
+        JSON response with fileId, metadata, and preview (first 100 rows)
     """
     try:
         socketio = get_socketio()
@@ -1638,7 +1662,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         
         # Initialize ProgressTracker for granular progress with file size for ETA
         tracker = ProgressTracker(upload_id, socketio, file_size_bytes=file_size_bytes)
-        tracker.total_steps = 5  # Validation, Parsing, DateTime, UTC, Streaming
+        tracker.total_steps = 5  # Validation, Parsing, DateTime, UTC, Saving
 
         # Step 1: Validate and extract parameters (5-15%)
         tracker.current_step = 1
@@ -1695,9 +1719,10 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         
         tracker.end_phase('utc')
         
-        # Step 5: Build result DataFrame for streaming (75-80%)
-        tracker.start_phase('build')
-        tracker.emit('build', 75, 'Erstelle Ergebnis DataFrame...', force=True)
+        # Step 5: Build result DataFrame and save to temp file (75-100%)
+        tracker.current_step = 5
+        tracker.start_phase('saving')
+        tracker.emit('saving', 75, 'Erstelle Ergebnis DataFrame...', force=True)
         
         try:
             value_column = validated_params['value_column']
@@ -1719,14 +1744,49 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             result_df.reset_index(drop=True, inplace=True)
             
             total_rows = len(result_df)
-            tracker.emit('build', 80, f'Ergebnis erstellt: {total_rows:,} Zeilen ✓', force=True)
+            tracker.emit('saving', 85, f'Ergebnis erstellt: {total_rows:,} Zeilen ✓', force=True)
+            
+            # Save to temp file instead of streaming
+            tracker.emit('saving', 90, 'Speichere Datei...', force=True)
+            
+            file_id = f"{upload_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', encoding='utf-8')
+            
+            # Write CSV with semicolon delimiter
+            result_df.to_csv(temp_file.name, sep=';', index=False)
+            temp_file.close()
+            
+            # Store file info for later download
+            temp_files[file_id] = {
+                'path': temp_file.name,
+                'fileName': f"processed_{upload_id}.csv",
+                'timestamp': time.time(),
+                'totalRows': total_rows,
+                'headers': result_df.columns.tolist()
+            }
+            
+            tracker.emit('saving', 95, 'Datei gespeichert ✓', force=True)
+            
+            # Generate preview (first 100 rows)
+            preview_rows = min(100, total_rows)
+            preview_data = []
+            
+            # Add header row
+            preview_data.append(result_df.columns.tolist())
+            
+            # Add data rows
+            for _, row in result_df.head(preview_rows).iterrows():
+                preview_data.append([row['UTC'], row[final_value_column]])
+            
+            tracker.emit('complete', 100, f'Verarbeitung erfolgreich abgeschlossen! 🎉 {total_rows:,} Zeilen verarbeitet.', force=True)
+            
         except Exception as e:
             tracker.emit('error', 0, f'Fehler: {str(e)}', force=True)
             return jsonify({"error": str(e)}), 400
         
-        tracker.end_phase('build')
+        tracker.end_phase('saving')
         
-        # Track usage metrics before streaming
+        # Track usage metrics
         try:
             increment_processing_count(g.user_id)
             
@@ -1737,70 +1797,16 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         except Exception as e:
             pass  # Don't fail upload if tracking fails
         
-        # Step 6: Stream results via NDJSON (80-100%)
-        tracker.current_step = 5
-        tracker_ref = tracker
-        
-        def generate():
-            """Generator za streaming NDJSON sa progress trackingom"""
-            nonlocal tracker_ref
-            
-            # Stream in chunks with progress tracking
-            chunk_size = STREAMING_CHUNK_SIZE
-            total_chunks_to_stream = (total_rows // chunk_size) + 1
-            streaming_start_time = time.time()
-            
-            # Procjena streaming vremena za prvi chunk (0.00005s po redu)
-            estimated_streaming_time = int(total_rows * 0.00005)
-            
-            if tracker_ref:
-                tracker_ref.start_phase('streaming')
-                tracker_ref.emit('streaming', 80, f'Starte Streaming von {total_rows:,} Zeilen...', eta_seconds=estimated_streaming_time, force=True)
-            
-            # Send metadata first
-            headers = result_df.columns.tolist()
-            yield json.dumps({"total_rows": total_rows, "headers": headers}) + "\n"
-            
-            for i in range(0, total_rows, chunk_size):
-                chunk_progress = 80 + ((i / total_rows) * 19)  # 80-99%
-                current_chunk = (i // chunk_size) + 1
-                
-                # Calculate ETA for streaming
-                if current_chunk == 1:
-                    # Prvi chunk - koristi procjenu baziranu na broju redova
-                    streaming_eta = estimated_streaming_time
-                else:
-                    # Ostali chunk-ovi - koristi linearnu ekstrapolaciju
-                    elapsed = time.time() - streaming_start_time
-                    chunks_done = current_chunk - 1
-                    chunks_remaining = total_chunks_to_stream - current_chunk + 1
-                    time_per_chunk = elapsed / chunks_done
-                    streaming_eta = int(chunks_remaining * time_per_chunk)
-                
-                if tracker_ref:
-                    tracker_ref.emit('streaming', chunk_progress,
-                                   f'Streaming Chunk {current_chunk}/{total_chunks_to_stream}...',
-                                   eta_seconds=streaming_eta)
-                
-                # Stream each row in this chunk
-                chunk = result_df.iloc[i:i + chunk_size]
-                
-                for _, row in chunk.iterrows():
-                    record = {
-                        "UTC": row['UTC'],
-                        final_value_column: row[final_value_column]
-                    }
-                    yield json.dumps(record) + "\n"
-            
-            # Complete
-            if tracker_ref:
-                tracker_ref.end_phase('streaming')
-                tracker_ref.emit('complete', 100,
-                               f'Verarbeitung erfolgreich abgeschlossen! 🎉 {total_rows:,} Zeilen generiert.', force=True)
-            
-            yield json.dumps({"status": "complete"}) + "\n"
-        
-        return Response(generate(), mimetype="application/x-ndjson")
+        # Return metadata + preview instead of full data
+        return jsonify({
+            "success": True,
+            "message": "File processed successfully",
+            "fileId": file_id,
+            "totalRows": total_rows,
+            "headers": result_df.columns.tolist(),
+            "previewRowCount": preview_rows,
+            "preview": preview_data
+        }), 200
         
     except LoadDataException as e:
         socketio = get_socketio()
