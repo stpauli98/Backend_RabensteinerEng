@@ -19,7 +19,6 @@ Main endpoints:
 import os
 import tempfile
 import traceback
-import logging
 import json
 import csv
 import time
@@ -322,11 +321,8 @@ class ProgressTracker:
                 self.socketio.emit('upload_progress', payload, room=self.upload_id)
             self.last_emit_time = current_time
             
-            # Debug: log full payload
-            logger.info(f"[WS] emit payload: {payload}")
-            
-        except Exception as e:
-            logger.error(f"[EMIT ERROR] {e}")
+        except Exception:
+            pass
 
     @staticmethod
     def format_time(seconds: Optional[int]) -> str:
@@ -531,7 +527,6 @@ class DateTimeParser:
                         nonexistent='NaT'
                     )
                 except Exception as e:
-                    logger.error(f"Nicht unterstützte Zeitzone '{source_timezone}': {e}")
                     raise UnsupportedTimezoneError(
                         timezone=source_timezone,
                         original_exception=e
@@ -548,7 +543,6 @@ class DateTimeParser:
             return series
             
         except Exception as e:
-            logger.error(f"Error converting to UTC: {e}")
             raise
 
 
@@ -566,8 +560,6 @@ def get_socketio():
 
 bp = Blueprint('load_row_data', __name__)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # ============================================================================
 # MODULE STATE (TODO: Consider moving to proper state management)
@@ -741,7 +733,6 @@ class UploadStateManager:
             
             for upload_id in expired_ids:
                 del self._chunk_storage[upload_id]
-                logger.info(f"Cleaned up expired upload: {upload_id}")
         
         return len(expired_ids)
     
@@ -927,10 +918,8 @@ def cleanup_old_uploads() -> None:
             if file_path and os.path.exists(file_path):
                 os.unlink(file_path)
             del temp_files[file_id]
-            logger.info(f"[CLEANUP] Removed expired temp file: {file_id}")
-        except Exception as e:
-            logger.error(f"[CLEANUP] Failed to remove temp file {file_id}: {e}")
-
+        except Exception:
+            pass
 
 
 def _error_response(error_code: str, message: str, status_code: int = 400) -> Tuple[Response, int]:
@@ -1150,7 +1139,6 @@ def convert_to_utc(df: pd.DataFrame, date_column: str, timezone: str = 'UTC') ->
         raise
     except Exception as e:
         # Wrap other errors in TimezoneConversionError
-        logger.error(f"Error converting to UTC: {e}")
         raise TimezoneConversionError(
             from_tz=timezone,
             to_tz='UTC',
@@ -1277,7 +1265,6 @@ def finalize_upload() -> Tuple[Response, int]:
 
         return process_chunks(upload_id)
     except Exception as e:
-        logging.error(f"Exception in finalize_upload: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 400
 
 @bp.route('/cancel-upload', methods=['POST'])
@@ -1382,7 +1369,6 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
         # Don't emit 'completed' here - upload_files will handle progress from here
         return upload_files(full_content, params)
     except LoadDataException as e:
-        logging.error(f"LoadDataException in process_chunks: {str(e)}", exc_info=True)
         from flask import has_app_context
         if has_app_context():
             return jsonify(e.to_dict()), 400
@@ -1396,7 +1382,6 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
         else:
             raise error
     except Exception as e:
-        logger.error(f"Unexpected error in process_chunks: {str(e)}", exc_info=True)
         from flask import has_app_context
         if has_app_context():
             return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
@@ -1428,7 +1413,6 @@ def check_upload_status(upload_id: str) -> Tuple[Response, int]:
         })
         
     except Exception as e:
-        logger.error(f"Error checking upload status: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
 def _validate_and_extract_params(
@@ -1581,7 +1565,6 @@ def _process_datetime_columns(
             # Check if date column contains time separator (space or 'T')
             sample_date = str(df[date_column].iloc[0])
             if ' ' in sample_date or 'T' in sample_date:
-                logger.info(f"Date column contains datetime, extracting date part only. Sample: {sample_date}")
                 # Split by space or 'T' to get only date part
                 df['date_only'] = df[date_column].astype(str).str.split(' ').str[0].str.split('T').str[0]
             else:
@@ -1706,7 +1689,6 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         upload_id = params.get('uploadId')
         
         file_size_bytes = len(file_content.encode('utf-8'))
-        logger.info(f"[UPLOAD] START upload_id={upload_id}, size={file_size_bytes/1024/1024:.2f}MB")
         
         # Initialize ProgressTracker for granular progress with file size for ETA
         tracker = ProgressTracker(upload_id, socketio, file_size_bytes=file_size_bytes)
@@ -1816,7 +1798,6 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             if not file_id:
                 raise ValueError("Failed to upload file to storage")
 
-            logger.info(f"[STORAGE] Uploaded file to Supabase Storage: {file_id}")
             tracker.emit('saving', 95, 'Datei in Cloud Storage gespeichert ✓', force=True)
             
             # Generate preview (first 100 rows)
@@ -1872,7 +1853,6 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         return jsonify(e.to_dict()), 400
     except Exception as e:
         # Unexpected errors - log and return generic error
-        logger.error(f"Unexpected error in upload_files: {str(e)}", exc_info=True)
         socketio = get_socketio()
         socketio.emit('upload_progress', {
             'uploadId': params.get('uploadId'),
@@ -1903,24 +1883,14 @@ def prepare_save() -> Tuple[Response, int]:
         data = request.json
 
         if not data or 'data' not in data:
-            logger.error("[PREPARE-SAVE] No data received in request")
             return jsonify({"error": "No data received"}), 400
 
         data_wrapper = data['data']
         save_data = data_wrapper.get('data', [])
         file_name = data_wrapper.get('fileName', '')
 
-        logger.info(f"[PREPARE-SAVE] Received request - fileName: {file_name}")
-        logger.info(f"[PREPARE-SAVE] Data rows count: {len(save_data)}")
-
-        if save_data:
-            # Log first few rows for debugging
-            logger.info(f"[PREPARE-SAVE] Headers: {save_data[0] if save_data else 'N/A'}")
-            logger.info(f"[PREPARE-SAVE] First data row: {save_data[1] if len(save_data) > 1 else 'N/A'}")
-            logger.info(f"[PREPARE-SAVE] Last data row: {save_data[-1] if len(save_data) > 1 else 'N/A'}")
 
         if not save_data:
-            logger.error("[PREPARE-SAVE] Empty data array")
             return jsonify({"error": "Empty data"}), 400
 
         # Convert data array to CSV string
@@ -1930,11 +1900,9 @@ def prepare_save() -> Tuple[Response, int]:
             writer.writerow(row)
         csv_content = output.getvalue()
 
-        logger.info(f"[PREPARE-SAVE] CSV content size: {len(csv_content)} bytes")
 
         # Upload to Supabase Storage
         user_id = g.user_id
-        logger.info(f"[PREPARE-SAVE] Uploading to Supabase Storage for user: {user_id}")
 
         file_id = storage_service.upload_csv(
             user_id=user_id,
@@ -1948,11 +1916,8 @@ def prepare_save() -> Tuple[Response, int]:
         )
 
         if not file_id:
-            logger.error("[PREPARE-SAVE] Failed to upload to Supabase Storage")
             return jsonify({"error": "Failed to save file to storage"}), 500
 
-        logger.info(f"[PREPARE-SAVE] Successfully uploaded to Supabase Storage: {file_id}")
-        logger.info(f"[PREPARE-SAVE] Total rows saved: {len(save_data) - 1} (excluding header)")
 
         return jsonify({
             "message": "File prepared for download",
@@ -1961,8 +1926,6 @@ def prepare_save() -> Tuple[Response, int]:
         }), 200
 
     except Exception as e:
-        logger.error(f"[PREPARE-SAVE] Error: {str(e)}")
-        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -1986,23 +1949,17 @@ def merge_and_prepare() -> Tuple[Response, int]:
         data = request.json
 
         if not data:
-            logger.error("[MERGE] No data received in request")
             return jsonify({"error": "No data received"}), 400
 
         file_ids = data.get('fileIds', [])
         file_name = data.get('fileName', 'merged_data.csv')
 
-        logger.info(f"[MERGE] Request received - fileIds count: {len(file_ids)}")
-        logger.info(f"[MERGE] File IDs: {file_ids}")
-        logger.info(f"[MERGE] Target fileName: {file_name}")
 
         if not file_ids:
-            logger.error("[MERGE] No file IDs provided")
             return jsonify({"error": "No file IDs provided"}), 400
 
         if len(file_ids) == 1:
             # Single file - no merge needed, return same ID
-            logger.info(f"[MERGE] Single file, returning original ID: {file_ids[0]}")
             return jsonify({
                 "message": "Single file, no merge needed",
                 "fileId": file_ids[0],
@@ -2010,65 +1967,42 @@ def merge_and_prepare() -> Tuple[Response, int]:
             }), 200
 
         # Download and merge multiple files
-        logger.info(f"[MERGE] Downloading {len(file_ids)} files from Supabase Storage...")
 
         all_dataframes = []
         headers = None
 
         for i, file_id in enumerate(file_ids):
-            logger.info(f"[MERGE] Downloading file {i+1}/{len(file_ids)}: {file_id}")
 
             csv_content = storage_service.download_csv(file_id)
 
             if not csv_content:
-                logger.error(f"[MERGE] Failed to download file: {file_id}")
                 return jsonify({"error": f"Failed to download file: {file_id}"}), 404
 
-            logger.info(f"[MERGE] Downloaded file {file_id}, size: {len(csv_content)} bytes")
 
             # Parse CSV content
             df = pd.read_csv(StringIO(csv_content), sep=';')
-            logger.info(f"[MERGE] Parsed file {file_id}: {len(df)} rows, columns: {list(df.columns)}")
 
             if headers is None:
                 headers = list(df.columns)
-            else:
-                # Verify headers match
-                if list(df.columns) != headers:
-                    logger.warning(f"[MERGE] Headers mismatch in file {file_id}")
-                    logger.warning(f"[MERGE] Expected: {headers}")
-                    logger.warning(f"[MERGE] Got: {list(df.columns)}")
-
             all_dataframes.append(df)
 
         # Concatenate all dataframes
-        logger.info(f"[MERGE] Concatenating {len(all_dataframes)} dataframes...")
         merged_df = pd.concat(all_dataframes, ignore_index=True)
-        logger.info(f"[MERGE] Merged dataframe: {len(merged_df)} total rows")
 
         # Sort by UTC column if present
         if 'UTC' in merged_df.columns:
-            logger.info("[MERGE] Sorting by UTC column...")
             merged_df['UTC'] = pd.to_datetime(merged_df['UTC'], errors='coerce')
             merged_df = merged_df.sort_values('UTC')
             merged_df['UTC'] = merged_df['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
-            logger.info("[MERGE] Sorted by UTC")
 
         # Remove duplicates if any
-        original_count = len(merged_df)
         merged_df = merged_df.drop_duplicates()
-        if len(merged_df) < original_count:
-            logger.info(f"[MERGE] Removed {original_count - len(merged_df)} duplicate rows")
-
-        logger.info(f"[MERGE] Final merged dataframe: {len(merged_df)} rows")
 
         # Convert to CSV
         csv_content = merged_df.to_csv(sep=';', index=False)
-        logger.info(f"[MERGE] CSV content size: {len(csv_content)} bytes")
 
         # Upload merged file to Supabase Storage
         user_id = g.user_id
-        logger.info(f"[MERGE] Uploading merged file for user: {user_id}")
 
         merged_file_id = storage_service.upload_csv(
             user_id=user_id,
@@ -2083,26 +2017,17 @@ def merge_and_prepare() -> Tuple[Response, int]:
         )
 
         if not merged_file_id:
-            logger.error("[MERGE] Failed to upload merged file to Supabase Storage")
             return jsonify({"error": "Failed to save merged file"}), 500
 
-        logger.info(f"[MERGE] Successfully uploaded merged file: {merged_file_id}")
-        logger.info(f"[MERGE] Total rows in merged file: {len(merged_df)}")
 
         # Clean up: Delete individual source files after successful merge
-        logger.info(f"[MERGE] Cleaning up {len(file_ids)} source files...")
         deleted_count = 0
         for file_id in file_ids:
             try:
                 if storage_service.delete_file(file_id):
                     deleted_count += 1
-                    logger.info(f"[MERGE] Deleted source file: {file_id}")
-                else:
-                    logger.warning(f"[MERGE] Failed to delete source file: {file_id}")
-            except Exception as del_error:
-                logger.warning(f"[MERGE] Error deleting source file {file_id}: {del_error}")
-
-        logger.info(f"[MERGE] Cleanup complete: {deleted_count}/{len(file_ids)} source files deleted")
+            except Exception:
+                pass
 
         return jsonify({
             "message": "Files merged successfully",
@@ -2114,8 +2039,6 @@ def merge_and_prepare() -> Tuple[Response, int]:
         }), 200
 
     except Exception as e:
-        logger.error(f"[MERGE] Error: {str(e)}")
-        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -2134,26 +2057,19 @@ def download_file(file_id: str) -> Response:
         CSV file download or redirect to signed URL
     """
     try:
-        logger.info(f"[DOWNLOAD] Request received for file_id: {file_id}")
-        logger.info(f"[DOWNLOAD] User: {g.user_id}")
 
         # Get signed URL from Supabase Storage (valid for 1 hour)
-        logger.info(f"[DOWNLOAD] Requesting signed URL from Supabase Storage...")
         signed_url = storage_service.get_download_url(file_id, expires_in=3600)
 
         if signed_url:
             # Redirect to signed URL for direct download
-            logger.info(f"[DOWNLOAD] Got signed URL, redirecting...")
-            logger.info(f"[DOWNLOAD] Signed URL (first 100 chars): {signed_url[:100]}...")
             return redirect(signed_url)
 
-        logger.warning(f"[DOWNLOAD] No signed URL returned, trying direct download...")
 
         # Fallback: try to download content directly and serve it
         csv_content = storage_service.download_csv(file_id)
 
         if csv_content:
-            logger.info(f"[DOWNLOAD] Direct download successful, content size: {len(csv_content)} bytes")
             # Create response with CSV content
             response = Response(
                 csv_content,
@@ -2164,12 +2080,9 @@ def download_file(file_id: str) -> Response:
             )
             return response
 
-        logger.error(f"[DOWNLOAD] File not found in storage: {file_id}")
         return jsonify({"error": "File not found"}), 404
 
     except Exception as e:
-        logger.error(f"[DOWNLOAD] Error downloading file {file_id}: {e}")
-        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -2192,16 +2105,12 @@ def cleanup_files() -> Tuple[Response, int]:
         data = request.json
 
         if not data:
-            logger.error("[CLEANUP] No data received in request")
             return jsonify({"error": "No data received"}), 400
 
         file_ids = data.get('fileIds', [])
 
-        logger.info(f"[CLEANUP] Request received - fileIds count: {len(file_ids)}")
-        logger.info(f"[CLEANUP] File IDs: {file_ids}")
 
         if not file_ids:
-            logger.warning("[CLEANUP] No file IDs provided")
             return jsonify({"message": "No files to delete", "deletedCount": 0}), 200
 
         deleted_count = 0
@@ -2211,15 +2120,11 @@ def cleanup_files() -> Tuple[Response, int]:
             try:
                 if storage_service.delete_file(file_id):
                     deleted_count += 1
-                    logger.info(f"[CLEANUP] Deleted file: {file_id}")
                 else:
                     failed_ids.append(file_id)
-                    logger.warning(f"[CLEANUP] Failed to delete file: {file_id}")
             except Exception as del_error:
                 failed_ids.append(file_id)
-                logger.warning(f"[CLEANUP] Error deleting file {file_id}: {del_error}")
 
-        logger.info(f"[CLEANUP] Complete: {deleted_count}/{len(file_ids)} files deleted")
 
         return jsonify({
             "message": "Cleanup complete",
@@ -2229,6 +2134,4 @@ def cleanup_files() -> Tuple[Response, int]:
         }), 200
 
     except Exception as e:
-        logger.error(f"[CLEANUP] Error: {str(e)}")
-        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
