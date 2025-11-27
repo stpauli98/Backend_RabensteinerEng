@@ -10,11 +10,13 @@ import csv
 from io import StringIO
 import datetime
 import time
-from flask import request, jsonify, Response, send_file, Blueprint, g
+import threading
+from flask import request, jsonify, Response, send_file, Blueprint, g, redirect
 from core.extensions import socketio
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit
 from utils.usage_tracking import increment_processing_count, update_storage_usage
+from utils.storage_service import storage_service
 
 bp = Blueprint('first_processing', __name__)
 
@@ -24,8 +26,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Lock za sprječavanje race condition-a kod chunk processing-a
+upload_locks = {}
+upload_locks_lock = threading.Lock()
 
-temp_files = {}
+def get_upload_lock(upload_id: str) -> threading.Lock:
+    """Dobij ili kreiraj lock za specifični upload_id."""
+    with upload_locks_lock:
+        if upload_id not in upload_locks:
+            upload_locks[upload_id] = threading.Lock()
+        return upload_locks[upload_id]
+
+def cleanup_upload_lock(upload_id: str):
+    """Očisti lock nakon završetka upload-a."""
+    with upload_locks_lock:
+        if upload_id in upload_locks:
+            del upload_locks[upload_id]
+
 
 class ProgressTracker:
     """
@@ -713,10 +730,23 @@ def upload_chunk():
 
         logger.info(f"Saved chunk {chunk_index + 1}/{total_chunks} for upload {upload_id}")
 
-        received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) 
-                         if f.startswith(upload_id + "_")]
+        # Koristi lock da spriječiš race condition kad više chunk-ova završi istovremeno
+        upload_lock = get_upload_lock(upload_id)
+        
+        # Pokušaj dobiti lock - ako ne uspije odmah, netko drugi već procesira
+        if not upload_lock.acquire(blocking=False):
+            logger.info(f"Upload {upload_id} is already being processed by another thread")
+            return jsonify({"success": True, "message": "Chunk saved, processing in progress"}), 200
+        
+        lock_acquired = True  # Flag za praćenje da li imamo lock
+        try:
+            received_chunks = [f for f in os.listdir(UPLOAD_FOLDER) 
+                             if f.startswith(upload_id + "_")]
 
-        if len(received_chunks) == total_chunks:
+            if len(received_chunks) != total_chunks:
+                # Još nisu svi chunk-ovi stigli - finally će osloboditi lock
+                return jsonify({"success": True, "message": "Chunk saved"}), 200
+            
             logger.info(f"All chunks received for upload {upload_id}, processing...")
 
             # Izračunaj ukupnu veličinu fajla
@@ -837,6 +867,14 @@ def upload_chunk():
                     except:
                         pass
                 raise
+        finally:
+            # Oslobodi lock samo ako smo ga dobili
+            if lock_acquired:
+                try:
+                    upload_lock.release()
+                    cleanup_upload_lock(upload_id)
+                except RuntimeError:
+                    pass  # Lock već oslobođen
 
         return jsonify({
             "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
@@ -855,71 +893,162 @@ def upload_chunk():
         }), 400
 
 @bp.route('/prepare-save', methods=['POST'])
+@require_auth
 def prepare_save():
+    """
+    Prepare processed data for download.
+
+    Saves CSV data to Supabase Storage for persistent access on Cloud Run.
+    File will be automatically deleted after download.
+
+    Expected JSON body:
+        - data: Dict containing:
+            - data: Array of rows to save
+            - fileName: Optional filename
+
+    Returns:
+        JSON response with file ID for download
+    """
     try:
         data = request.json
         if not data or 'data' not in data:
             return jsonify({"error": "No data received"}), 400
+
         data_wrapper = data['data']
         save_data = data_wrapper.get('data', [])
         file_name = data_wrapper.get('fileName', '')
+
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
 
-        temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv')
-        writer = csv.writer(temp_file, delimiter=';')
+        # Convert data array to CSV string
+        output = StringIO()
+        writer = csv.writer(output, delimiter=';')
         for row in save_data:
             writer.writerow(row)
-        temp_file.close()
+        csv_content = output.getvalue()
 
-        file_id = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        temp_files[file_id] = {
-            'path': temp_file.name,
-            'fileName': file_name or f"data_{file_id}.csv",
-            'timestamp': time.time()
-        }
+        # Upload to Supabase Storage
+        user_id = g.user_id
 
-        return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
+        file_id = storage_service.upload_csv(
+            user_id=user_id,
+            csv_content=csv_content,
+            original_filename=file_name or "processed_data.csv",
+            metadata={
+                'totalRows': len(save_data) - 1,  # Exclude header
+                'source': 'first-processing-prepare-save'
+            }
+        )
+
+        if not file_id:
+            return jsonify({"error": "Failed to save file to storage"}), 500
+
+        logger.info(f"File prepared for download: {file_id}")
+
+        return jsonify({
+            "message": "File prepared for download",
+            "fileId": file_id,
+            "totalRows": len(save_data) - 1
+        }), 200
+
     except Exception as e:
         logger.error(f"Error in prepare_save: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-@bp.route('/download/<file_id>', methods=['GET'])
-def download_file(file_id):
-    try:
-        if file_id not in temp_files:
-            return jsonify({"error": "File not found"}), 404
-            
-        file_info = temp_files[file_id]
-        file_path = file_info['path']
-        
-        if not os.path.exists(file_path):
-            return jsonify({"error": "File not found"}), 404
+@bp.route('/download/<path:file_id>', methods=['GET'])
+@require_auth
+def download_file(file_id: str):
+    """
+    Get download URL for prepared CSV file from Supabase Storage.
 
-        download_name = file_info['fileName']
-        
-        response = send_file(
-            file_path,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype='text/csv'
-        )
-        
-        try:
-            os.unlink(file_info['path'])
-        except Exception as e:
-            logger.error(f"Error cleaning up temp file: {e}")
-        return response
+    Returns JSON with signed URL for frontend to use directly.
+    Automatically deletes the file after returning URL.
+
+    Args:
+        file_id: File identifier from prepare_save (format: user_id/file_id)
+
+    Returns:
+        JSON with downloadUrl for frontend to open directly
+    """
+    try:
+        logger.info(f"Download request for file: {file_id}")
+
+        # Get signed URL from Supabase Storage (valid for 1 hour)
+        signed_url = storage_service.get_download_url(file_id, expires_in=3600)
+
+        if signed_url:
+            logger.info(f"Generated signed URL for: {file_id}")
+
+            # NOTE: Ne brišemo fajl odmah - signed URL ima expiry time (1 sat)
+            # Fajlovi se automatski čiste putem Supabase Storage lifecycle policy
+            # ili scheduled cleanup job-om
+
+            # Return URL as JSON for frontend to use
+            return jsonify({
+                "success": True,
+                "downloadUrl": signed_url,
+                "fileId": file_id  # Vraćamo fileId za eventualno naknadno brisanje
+            }), 200
+
+        logger.warning(f"Signed URL failed for: {file_id}")
+        return jsonify({"error": "Failed to generate download URL"}), 500
 
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
-    finally:
-        if file_id in temp_files:
+
+
+@bp.route('/cleanup-files', methods=['POST'])
+@require_auth
+def cleanup_files():
+    """
+    Delete files from Supabase Storage after successful download.
+
+    This endpoint can be called by frontend to explicitly clean up files
+    if automatic deletion didn't work.
+
+    Expected JSON body:
+        - fileIds: Array of file IDs to delete (format: user_id/timestamp_uuid)
+
+    Returns:
+        JSON response with deletion results
+    """
+    try:
+        data = request.json
+
+        if not data:
+            return jsonify({"error": "No data received"}), 400
+
+        file_ids = data.get('fileIds', [])
+
+        if not file_ids:
+            return jsonify({"message": "No files to delete", "deletedCount": 0}), 200
+
+        deleted_count = 0
+        failed_ids = []
+
+        for file_id in file_ids:
             try:
-                os.unlink(temp_files[file_id])
-                del temp_files[file_id]
-            except Exception as ex:
-                logger.error(f"Error cleaning up temp file: {ex}")
+                if storage_service.delete_file(file_id):
+                    deleted_count += 1
+                    logger.info(f"Cleaned up file: {file_id}")
+                else:
+                    failed_ids.append(file_id)
+            except Exception as del_error:
+                logger.error(f"Failed to delete file {file_id}: {del_error}")
+                failed_ids.append(file_id)
+
+        return jsonify({
+            "message": "Cleanup complete",
+            "deletedCount": deleted_count,
+            "totalRequested": len(file_ids),
+            "failedIds": failed_ids
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in cleanup_files: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
