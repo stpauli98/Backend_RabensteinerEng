@@ -270,17 +270,18 @@ class ProgressTracker:
         # Ograniči na razumne vrijednosti
         return max(0, min(eta_seconds, 3600))  # Max 1 sat
 
-    def emit(self, step: str, progress: float, message: str, eta_seconds: Optional[int] = None, force: bool = False, processed_rows: Optional[int] = None) -> None:
+    def emit(self, step: str, progress: float, message_key: str, eta_seconds: Optional[int] = None, force: bool = False, processed_rows: Optional[int] = None, message_params: Optional[Dict[str, Any]] = None) -> None:
         """
-        Šalje progress update preko WebSocket-a.
-        
+        Šalje progress update preko WebSocket-a sa ključem za prevod.
+
         Args:
             step: Naziv faze (validating, parsing, datetime, utc, build, streaming, complete, error)
             progress: Procenat (0-100)
-            message: Poruka za korisnika
+            message_key: Ključ za prevod na frontendu (npr. 'validating_params', 'parsing_csv')
             eta_seconds: ETA u sekundama (opciono, ako nije proslijeđeno pokušava izračunati)
             force: Ignoriši rate limiting
             processed_rows: Broj obrađenih redova (opciono)
+            message_params: Dodatni parametri za poruku (npr. {'rowCount': 1000})
         """
         current_time = time.time()
 
@@ -292,9 +293,13 @@ class ProgressTracker:
             'uploadId': self.upload_id,
             'step': step,
             'progress': int(progress),
-            'message': message,
+            'messageKey': message_key,
             'status': 'processing' if step not in ['complete', 'error'] else ('completed' if step == 'complete' else 'error')
         }
+
+        # Dodaj parametre za poruku ako postoje
+        if message_params:
+            payload['messageParams'] = message_params
 
         # Dodaj currentStep i totalSteps ako su postavljeni
         if self.total_steps > 0:
@@ -320,7 +325,7 @@ class ProgressTracker:
             if self.socketio:
                 self.socketio.emit('upload_progress', payload, room=self.upload_id)
             self.last_emit_time = current_time
-            
+
         except Exception:
             pass
 
@@ -1697,7 +1702,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         # Step 1: Validate and extract parameters (5-15%)
         tracker.current_step = 1
         tracker.start_phase('validation')
-        tracker.emit('validating', 5, 'Validiere Parameter...', force=True)
+        tracker.emit('validating', 5, 'validating_params', force=True)
         
         try:
             validated_params = _validate_and_extract_params(params, file_content)
@@ -1705,18 +1710,18 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             return jsonify(e.to_dict()), 400
         
         tracker.end_phase('validation')
-        tracker.emit('validating', 15, 'Parameter validiert ✓', force=True)
+        tracker.emit('validating', 15, 'params_validated', force=True)
 
         # Step 2: Parse CSV to DataFrame (15-40%)
         tracker.current_step = 2
         tracker.start_phase('parsing')
-        tracker.emit('parsing', 15, 'Parse CSV Daten...', force=True)
+        tracker.emit('parsing', 15, 'parsing_csv', force=True)
         
         try:
             df = _parse_csv_to_dataframe(file_content, validated_params)
             total_rows = len(df)
             tracker.set_total_rows(total_rows)
-            tracker.emit('parsing', 40, f'CSV geparsed: {total_rows:,} Zeilen ✓', force=True)
+            tracker.emit('parsing', 40, 'csv_parsed', force=True, message_params={'rowCount': total_rows})
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
         
@@ -1725,11 +1730,11 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         # Step 3: Process datetime columns (40-60%)
         tracker.current_step = 3
         tracker.start_phase('datetime')
-        tracker.emit('datetime', 40, 'Verarbeite Datum/Zeit Spalten...', force=True)
+        tracker.emit('datetime', 40, 'processing_datetime', force=True)
         
         try:
             df = _process_datetime_columns(df, validated_params)
-            tracker.emit('datetime', 60, 'Datum/Zeit verarbeitet ✓', force=True)
+            tracker.emit('datetime', 60, 'datetime_processed', force=True)
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
         
@@ -1738,13 +1743,13 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         # Step 4: Convert to UTC (60-75%)
         tracker.current_step = 4
         tracker.start_phase('utc')
-        tracker.emit('utc', 60, f'Konvertiere zu UTC ({validated_params["timezone"]})...', force=True)
+        tracker.emit('utc', 60, 'converting_to_utc', force=True, message_params={'timezone': validated_params["timezone"]})
         
         try:
             df = convert_to_utc(df, 'datetime', validated_params['timezone'])
-            tracker.emit('utc', 75, 'UTC Konvertierung abgeschlossen ✓', force=True)
+            tracker.emit('utc', 75, 'utc_conversion_complete', force=True)
         except LoadDataException as e:
-            tracker.emit('error', 0, f'Fehler: {e.message}', force=True)
+            tracker.emit('error', 0, 'error_occurred', force=True, message_params={'error': e.message})
             return jsonify(e.to_dict()), 400
         
         tracker.end_phase('utc')
@@ -1752,7 +1757,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         # Step 5: Build result DataFrame and save to temp file (75-100%)
         tracker.current_step = 5
         tracker.start_phase('saving')
-        tracker.emit('saving', 75, 'Erstelle Ergebnis DataFrame...', force=True)
+        tracker.emit('saving', 75, 'creating_result_dataframe', force=True)
         
         try:
             value_column = validated_params['value_column']
@@ -1774,10 +1779,10 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             result_df.reset_index(drop=True, inplace=True)
             
             total_rows = len(result_df)
-            tracker.emit('saving', 85, f'Ergebnis erstellt: {total_rows:,} Zeilen ✓', force=True)
+            tracker.emit('saving', 85, 'result_created', force=True, message_params={'rowCount': total_rows})
             
             # Save to Supabase Storage for persistent access on Cloud Run
-            tracker.emit('saving', 90, 'Speichere Datei in Cloud Storage...', force=True)
+            tracker.emit('saving', 90, 'saving_to_cloud_storage', force=True)
 
             # Convert DataFrame to CSV string
             csv_content = result_df.to_csv(sep=';', index=False)
@@ -1798,7 +1803,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             if not file_id:
                 raise ValueError("Failed to upload file to storage")
 
-            tracker.emit('saving', 95, 'Datei in Cloud Storage gespeichert ✓', force=True)
+            tracker.emit('saving', 95, 'cloud_storage_saved', force=True)
             
             # Generate preview (first 100 rows)
             preview_rows = min(100, total_rows)
@@ -1811,10 +1816,10 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             for _, row in result_df.head(preview_rows).iterrows():
                 preview_data.append([row['UTC'], row[final_value_column]])
             
-            tracker.emit('complete', 100, f'Verarbeitung erfolgreich abgeschlossen! 🎉 {total_rows:,} Zeilen verarbeitet.', force=True)
+            tracker.emit('complete', 100, 'processing_complete', force=True, message_params={'rowCount': total_rows})
             
         except Exception as e:
-            tracker.emit('error', 0, f'Fehler: {str(e)}', force=True)
+            tracker.emit('error', 0, 'error_occurred', force=True, message_params={'error': str(e)})
             return jsonify({"error": str(e)}), 400
         
         tracker.end_phase('saving')

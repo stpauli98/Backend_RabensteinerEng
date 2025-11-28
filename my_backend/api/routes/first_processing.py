@@ -119,8 +119,18 @@ class ProgressTracker:
 
         return eta_seconds
 
-    def emit(self, step, progress, message, eta_seconds=None, force=False):
-        """Šalje progress update"""
+    def emit(self, step, progress, message_key, eta_seconds=None, force=False, message_params=None):
+        """
+        Šalje progress update sa ključem za prevod.
+
+        Args:
+            step: Faza procesiranja (chunk_assembly, parsing, processing, streaming, etc.)
+            progress: Procenat napretka (0-100)
+            message_key: Ključ za prevod na frontendu (npr. 'fp_parsing_start')
+            eta_seconds: ETA u sekundama (opciono)
+            force: Ignoriši rate limiting
+            message_params: Dodatni parametri za poruku (npr. {'count': 150, 'total': 1000})
+        """
         current_time = time.time()
 
         # Rate limiting
@@ -131,8 +141,13 @@ class ProgressTracker:
             'uploadId': self.upload_id,
             'step': step,
             'progress': int(progress),
-            'message': message
+            'messageKey': message_key,
+            'status': 'completed' if step == 'complete' else ('error' if step == 'error' else 'processing')
         }
+
+        # Dodaj parametre za poruku ako postoje
+        if message_params:
+            payload['messageParams'] = message_params
 
         # Dodaj currentStep i totalSteps za processing fazu
         if step == 'processing' and self.total_steps > 0:
@@ -154,7 +169,8 @@ class ProgressTracker:
             socketio.emit('processing_progress', payload, room=self.upload_id)
             self.last_emit_time = current_time
             eta_text = f" (ETA: {payload.get('etaFormatted', 'N/A')})" if 'eta' in payload else ""
-            logger.info(f"Progress: {progress}% - {message}{eta_text}")
+            params_text = f" {message_params}" if message_params else ""
+            logger.info(f"Progress: {progress}% - {message_key}{params_text}{eta_text}")
         except Exception as e:
             logger.error(f"Error emitting progress: {e}")
 
@@ -218,17 +234,17 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         # Napomena: 0-10% je chunk assembly, zato parsing počinje od 10%
         if tracker:
             tracker.start_phase('parsing')
-            tracker.emit('parsing', 10, 'Započinjem parsiranje CSV podataka...', force=True)
+            tracker.emit('parsing', 10, 'fp_parsing_start', force=True)
 
         try:
             if tracker:
-                tracker.emit('parsing', 12, 'Učitavanje CSV fajla...')
+                tracker.emit('parsing', 12, 'fp_loading_csv')
 
             lines = file_content.strip().split('\n')
             logger.info(f"Total lines in CSV: {len(lines)}")
 
             if tracker:
-                tracker.emit('parsing', 15, f'Učitano {len(lines)} linija iz CSV-a')
+                tracker.emit('parsing', 15, 'fp_lines_loaded', message_params={'lineCount': len(lines)})
 
             if len(lines) > 0:
                 header = lines[0]
@@ -236,14 +252,14 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 logger.info(f"Header fields: {header.split(';')}")
 
             if tracker:
-                tracker.emit('parsing', 15, 'Parsiranje sa pandas bibliotekom...')
+                tracker.emit('parsing', 17, 'fp_pandas_parsing')
 
             try:
                 df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True, on_bad_lines='skip')
                 logger.info(f"Successfully parsed CSV with {len(df)} rows after skipping bad lines")
 
                 if tracker:
-                    tracker.emit('parsing', 28, f'Parsiranje završeno - {len(df)} redova ✓')
+                    tracker.emit('parsing', 28, 'fp_parsing_complete', message_params={'rowCount': len(df)})
                     tracker.end_phase('parsing')  # Snimi stvarno vrijeme parsing faze
             except Exception as pandas_error:
                 logger.error(f"Even with on_bad_lines='skip', pandas failed: {str(pandas_error)}")
@@ -268,7 +284,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             # === FAZA 2: PREPROCESSING (20-30%) ===
             if tracker:
                 tracker.start_phase('preprocessing')
-                tracker.emit('preprocessing', 30, 'Konverzija tipova podataka...')
+                tracker.emit('preprocessing', 30, 'fp_type_conversion')
 
             # Validate that values can be converted to numeric
             non_numeric = df[value_col_name].apply(lambda x: not is_numeric(x))
@@ -290,13 +306,13 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
 
         # VORBEREITUNG DER ROHDATEN (matching original logic)
         if tracker:
-            tracker.emit('preprocessing', 32, 'Uklanjanje duplikata...')
+            tracker.emit('preprocessing', 32, 'fp_removing_duplicates')
 
         # Duplikate in den Rohdaten löschen
         df = df.drop_duplicates(subset=[utc_col_name]).reset_index(drop=True)
 
         if tracker:
-            tracker.emit('preprocessing', 34, 'Sortiranje podataka po vremenu...')
+            tracker.emit('preprocessing', 34, 'fp_sorting_data')
 
         # Rohdaten nach UTC ordnen
         df = df.sort_values(by=[utc_col_name])
@@ -308,7 +324,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             return jsonify({"error": "Keine Daten gefunden"}), 400
 
         if tracker:
-            tracker.emit('preprocessing', 35, 'Konverzija datum/vrijeme formata...')
+            tracker.emit('preprocessing', 35, 'fp_datetime_conversion')
 
         # ZEITGRENZEN (matching original logic)
         # Convert UTC to datetime objects
@@ -320,7 +336,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         logger.info(f"Time range: {time_min_raw} to {time_max_raw}")
 
         if tracker:
-            tracker.emit('preprocessing', 37, 'Priprema podataka završena ✓')
+            tracker.emit('preprocessing', 37, 'fp_preprocessing_complete')
             tracker.end_phase('preprocessing')  # Snimi stvarno vrijeme preprocessing faze
 
         # KONTINUIERLICHER ZEITSTEMPEL (matching original logic)
@@ -365,7 +381,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             tracker.total_steps = 1  # Processing ima samo 1 korak
             tracker.current_step = 1
             tracker.start_step(len(time_list))  # Započni step sa ukupnim brojem vremenskih tačaka
-            tracker.emit('processing', 37, f'Započinjem {mode_input} procesiranje...', force=True)
+            tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': mode_input})
 
         # Convert df to format matching original (for easier index access)
         df_dict = df.to_dict('list')
@@ -382,7 +398,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         # METHODE: MITTELWERTBILDUNG (matching original logic)
         if mode_input == "mean":
             if tracker:
-                tracker.emit('processing', 37, 'Računam srednje vrijednosti...', force=True)
+                tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': 'mean'})
 
             # Schleife durchläuft alle Zeitschritte des kontinuierlichen Zeitstempels
             for i in range(0, len(time_list)):
@@ -390,7 +406,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 if tracker and i % emit_frequency == 0 and i > 0:
                     tracker.update_step_progress(i)
                     progress = 37 + (i / len(time_list)) * 53  # Map to 37-90%
-                    tracker.emit('processing', progress, f'Procesiranje: {i}/{len(time_list)} vremenskih tačaka')
+                    tracker.emit('processing', progress, 'fp_processing_progress', message_params={'current': i, 'total': len(time_list)})
 
                 # Zeitgrenzen für die Mittelwertbildung (Untersuchungsraum)
                 time_int_min = time_list[i] - datetime.timedelta(minutes=tss/2)
@@ -423,7 +439,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         # METHODE: LINEARE INTERPOLATION (matching original logic)
         elif mode_input == "intrpl":
             if tracker:
-                tracker.emit('processing', 37, 'Započinjem linearnu interpolaciju...', force=True)
+                tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': 'intrpl'})
 
             # Zähler für den Durchlauf der Rohdaten
             i_raw = 0
@@ -437,7 +453,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 if tracker and i % emit_frequency == 0 and i > 0:
                     tracker.update_step_progress(i)
                     progress = 37 + (i / len(time_list)) * 53  # Map to 37-90%
-                    tracker.emit('processing', progress, f'Interpolacija: {i}/{len(time_list)} tačaka')
+                    tracker.emit('processing', progress, 'fp_interpolation_progress', message_params={'current': i, 'total': len(time_list)})
 
                 # Schleife durchläuft die Rohdaten von vorne bis hinten zur Auffindung des nachfolgenden Wertes
                 if direct == 1:
@@ -540,7 +556,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         # METHODE: ZEITLICH NÄCHSTLIEGENDER MESSWERT (matching original logic)
         elif mode_input == "nearest" or mode_input == "nearest (mean)":
             if tracker:
-                tracker.emit('processing', 37, f'Započinjem {mode_input} procesiranje...', force=True)
+                tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': mode_input})
 
             i_raw = 0  # Reset index counter
 
@@ -550,7 +566,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 if tracker and i % emit_frequency == 0 and i > 0:
                     tracker.update_step_progress(i)
                     progress = 37 + (i / len(time_list)) * 53  # Map to 37-90%
-                    tracker.emit('processing', progress, f'{mode_input}: {i}/{len(time_list)} tačaka')
+                    tracker.emit('processing', progress, 'fp_mode_progress', message_params={'mode': mode_input, 'current': i, 'total': len(time_list)})
 
                 try:
                     # Zeitgrenzen für die Untersuchung (Untersuchungsraum)
@@ -608,7 +624,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         logger.info(f"Length of value_list: {len(value_list)}")
 
         if tracker:
-            tracker.emit('processing', 90, 'Procesiranje završeno ✓', force=True)
+            tracker.emit('processing', 90, 'fp_processing_done', force=True)
             tracker.end_phase('processing')
             # Resetiraj step tracking za streaming fazu
             tracker.current_step = 0
@@ -631,7 +647,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             # === FAZA 4: STREAMING (90-100%) ===
             if tracker_ref:
                 tracker_ref.start_phase('streaming')
-                tracker_ref.emit('streaming', 90, f'Započinjem streaming {total_rows} redova...', force=True)
+                tracker_ref.emit('streaming', 90, 'fp_streaming_start', force=True, message_params={'totalRows': total_rows})
 
             # Pošalji ukupan broj redova kao prvi chunk
             yield json.dumps({"total_rows": total_rows}) + "\n"
@@ -656,8 +672,9 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
 
                 if tracker_ref:
                     tracker_ref.emit('streaming', chunk_progress,
-                                    f'Streaming chunk {current_chunk}/{total_chunks_to_stream}...',
-                                    eta_seconds=streaming_eta)
+                                    'fp_streaming_chunk',
+                                    eta_seconds=streaming_eta,
+                                    message_params={'current': current_chunk, 'total': total_chunks_to_stream})
 
                 # Dohvati chunk podataka
                 chunk = result_df.iloc[i:i + chunk_size]
@@ -673,7 +690,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             if tracker_ref:
                 tracker_ref.end_phase('streaming')
                 tracker_ref.emit('complete', 100,
-                               f'Procesiranje uspješno završeno! 🎉 Generirano {total_rows} vremenskih tačaka.', force=True)
+                               'fp_complete', force=True, message_params={'totalRows': total_rows})
 
             yield json.dumps({"status": "complete"}) + "\n"
 
@@ -762,7 +779,7 @@ def upload_chunk():
                 total_chunks=total_chunks
             )
             tracker.start_phase('chunk_assembly')
-            tracker.emit('chunk_assembly', 0, f'Spajam {total_chunks} chunk-ova...', force=True)
+            tracker.emit('chunk_assembly', 0, 'chunk_assembly_start', force=True, message_params={'totalChunks': total_chunks})
 
             def extract_chunk_index(filename):
                 try:
@@ -788,7 +805,7 @@ def upload_chunk():
                     chunk_progress = (i / len(chunks_sorted)) * 10
                     if i % max(1, len(chunks_sorted) // 10) == 0:  # Emit svakih 10%
                         tracker.emit('chunk_assembly', chunk_progress,
-                                   f'Spajam chunk {i+1}/{len(chunks_sorted)}...')
+                                   'chunk_assembly_progress', message_params={'current': i+1, 'total': len(chunks_sorted)})
                     
                     with open(chunk_path, 'rb') as f:
                         chunk_bytes = f.read()
@@ -829,7 +846,7 @@ def upload_chunk():
 
                 # Završi chunk assembly fazu
                 tracker.end_phase('chunk_assembly')
-                tracker.emit('chunk_assembly', 10, 'Chunk-ovi uspješno spojeni!', force=True)
+                tracker.emit('chunk_assembly', 10, 'chunk_assembly_complete', force=True)
 
                 final_lines = full_content.split('\n')
                 logger.info(f"Final content total lines: {len(final_lines)}")
