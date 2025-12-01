@@ -270,8 +270,19 @@ class ProgressTracker:
         self.last_eta = raw_eta
         return max(0, raw_eta)
 
-    def emit(self, progress, message, step, phase, detail=None, force=False):
-        """Šalje progress update sa ETA"""
+    def emit(self, progress, message_key, step, phase, message_params=None, detail_key=None, detail_params=None, force=False):
+        """Šalje progress update sa ETA i i18n podrškom
+
+        Args:
+            progress: Progress postotak (0-100)
+            message_key: i18n ključ za poruku (npr. 'processing_file')
+            step: Trenutni korak procesiranja
+            phase: Trenutna faza
+            message_params: Parametri za interpolaciju glavne poruke
+            detail_key: i18n ključ za detalje (opcionalno)
+            detail_params: Parametri za interpolaciju detalja
+            force: Forsira emit bez obzira na interval
+        """
         current_time = time.time()
 
         if not force and (current_time - self.last_emit_time) < self.emit_interval:
@@ -280,13 +291,19 @@ class ProgressTracker:
         payload = {
             'uploadId': self.upload_id,
             'progress': int(progress),
-            'message': message,
+            'messageKey': message_key,
             'step': step,
-            'phase': phase
+            'phase': phase,
+            'status': 'processing'
         }
 
-        if detail:
-            payload['detail'] = detail
+        if message_params:
+            payload['messageParams'] = message_params
+
+        if detail_key:
+            payload['detailKey'] = detail_key
+        if detail_params:
+            payload['detailParams'] = detail_params
 
         # Dodaj file tracking info
         if self.total_files > 0:
@@ -313,7 +330,7 @@ class ProgressTracker:
             # Fokusirani log: Fajl X/Y | Progress% | ETA
             file_info = f"Fajl {payload.get('currentFile', '?')}/{payload.get('totalFiles', '?')}"
             eta_info = payload.get('etaFormatted', 'N/A')
-            logger.info(f"📊 {file_info} | {int(progress)}% | ETA: {eta_info}")
+            logger.info(f"📊 {file_info} | {int(progress)}% | ETA: {eta_info} | key: {message_key}")
         except Exception as e:
             logger.error(f"Error emitting progress: {e}")
 
@@ -334,28 +351,35 @@ class ProgressTracker:
             return f"{hours}h {minutes}m"
 
 
-def emit_progress(upload_id, progress, message, step, phase, detail=None):
+def emit_progress(upload_id, progress, message_key, step, phase, message_params=None, detail_key=None, detail_params=None):
     """
-    Emit Socket.IO progress update with error handling
+    Emit Socket.IO progress update with error handling and i18n support
 
     Args:
         upload_id (str): Upload ID for the room
         progress (int/float): Progress percentage (0-100)
-        message (str): Progress message
+        message_key (str): i18n key for the message
         step (str): Current processing step
         phase (str): Current processing phase
-        detail (str, optional): Additional detail message
+        message_params (dict, optional): Parameters for message interpolation
+        detail_key (str, optional): i18n key for detail message
+        detail_params (dict, optional): Parameters for detail interpolation
     """
     try:
         data = {
             'uploadId': upload_id,
             'progress': progress,
-            'message': message,
+            'messageKey': message_key,
             'step': step,
-            'phase': phase
+            'phase': phase,
+            'status': 'processing'
         }
-        if detail:
-            data['detail'] = detail
+        if message_params:
+            data['messageParams'] = message_params
+        if detail_key:
+            data['detailKey'] = detail_key
+        if detail_params:
+            data['detailParams'] = detail_params
         socketio.emit('processing_progress', data, room=upload_id)
     except Exception as e:
         logger.error(f"Failed to emit progress for {upload_id}: {e}")
@@ -434,10 +458,12 @@ def emit_file_result(upload_id, filename, result_data, info_record, file_index, 
                     smooth_progress = file_start_progress + (chunk_progress * file_progress_range * 0.8)  # 80% za streaming
                     tracker.emit(
                         smooth_progress,
-                        f'Slanje podataka {chunk_idx + 1}/{total_chunks}: {filename}',
+                        'streaming_chunk',
                         'data_streaming',
                         'data_processing',
-                        detail=f'Fajl {file_index + 1}/{total_files} • {int(chunk_progress * 100)}%'
+                        message_params={'current': chunk_idx + 1, 'total': total_chunks, 'filename': filename},
+                        detail_key='detail_streaming_progress',
+                        detail_params={'fileNum': file_index + 1, 'totalFiles': total_files, 'percentage': int(chunk_progress * 100)}
                     )
 
                 time.sleep(SOCKETIO_CHUNK_DELAY)
@@ -1175,9 +1201,10 @@ def complete_adjustment():
 
         tracker.emit(
             ProgressStages.DATA_PROCESSING_START,
-            f'Započinjem procesiranje {len(filenames)} fajlova ({total_rows:,} redova ukupno)',
+            'processing_start',
             'data_processing_start',
             'data_processing',
+            message_params={'fileCount': len(filenames), 'rowCount': f'{total_rows:,}'},
             force=True
         )
 
@@ -1271,10 +1298,12 @@ def complete_adjustment():
                 file_progress = ProgressStages.calculate_file_progress(file_index, len(filenames))
                 tracker.emit(
                     file_progress,
-                    f'Procesiranje fajla {file_index + 1}/{len(filenames)}: {filename}',
+                    'processing_file',
                     'file_analysis',
                     'data_processing',
-                    detail=f'{row_count:,} redova',
+                    message_params={'current': file_index + 1, 'total': len(filenames), 'filename': filename},
+                    detail_key='detail_rows',
+                    detail_params={'count': f'{row_count:,}'},
                     force=True
                 )
 
@@ -1321,10 +1350,11 @@ def complete_adjustment():
                     conversion_progress = ProgressStages.calculate_file_progress(file_index, len(filenames))
                     tracker.emit(
                         conversion_progress,
-                        f'Konverzija {filename} (bez obrade)',
+                        'conversion_direct',
                         'data_conversion',
                         'data_processing',
-                        detail='Vremenski korak i offset odgovaraju - direktna konverzija'
+                        message_params={'filename': filename},
+                        detail_key='detail_no_processing'
                     )
 
 
@@ -1339,10 +1369,12 @@ def complete_adjustment():
                     adjustment_progress = ProgressStages.calculate_file_progress(file_index, len(filenames))
                     tracker.emit(
                         adjustment_progress,
-                        f'Obrada {filename} ({method_name})',
+                        'processing_method',
                         'data_adjustment',
                         'data_processing',
-                        detail=f'Vremenski korak: {file_time_step}min → {time_step_float}min, offset: {file_offset}min → {offset_float}min'
+                        message_params={'filename': filename, 'method': method_name},
+                        detail_key='detail_timestep_change',
+                        detail_params={'fromStep': file_time_step, 'toStep': time_step_float, 'fromOffset': file_offset, 'toOffset': offset_float}
                     )
 
                     # Koristi float verzije za procesiranje
@@ -1380,20 +1412,25 @@ def complete_adjustment():
                     if info_record and 'Anteil an numerischen Datenpunkten' in info_record:
                         quality_percentage = info_record['Anteil an numerischen Datenpunkten']
 
-                    completion_msg = f'Završeno: {filename}'
+                    # Poruka za završetak fajla
+                    file_complete_message_params = {'filename': filename}
                     if needs_processing:
-                        completion_msg += f' ({file_time_step}min→{time_step}min)'
+                        file_complete_message_params['fromStep'] = file_time_step
+                        file_complete_message_params['toStep'] = time_step
 
-                    quality_detail = f'Generirano {len(result_data):,} podataka'
+                    # Detail za kvalitetu
+                    detail_params = {'count': f'{len(result_data):,}'}
                     if quality_percentage > 0:
-                        quality_detail += f' • {quality_percentage:.1f}% validnih'
+                        detail_params['percentage'] = f'{quality_percentage:.1f}'
 
                     tracker.emit(
                         file_complete_progress,
-                        completion_msg,
+                        'file_complete' if not needs_processing else 'file_complete_with_change',
                         'file_complete',
                         'data_processing',
-                        detail=quality_detail,
+                        message_params=file_complete_message_params,
+                        detail_key='detail_quality' if quality_percentage > 0 else 'detail_rows_generated',
+                        detail_params=detail_params,
                         force=True
                     )
 
@@ -1415,10 +1452,12 @@ def complete_adjustment():
         total_processing_time = time.time() - tracker.start_time
         tracker.emit(
             ProgressStages.COMPLETION,
-            f'Procesiranje završeno! ({tracker.format_time(int(total_processing_time))})',
+            'complete',
             'completion',
             'finalization',
-            detail=f'{len(filenames)} fajlova obrađeno',
+            message_params={'duration': tracker.format_time(int(total_processing_time))},
+            detail_key='detail_files_processed',
+            detail_params={'fileCount': len(filenames)},
             force=True
         )
 
