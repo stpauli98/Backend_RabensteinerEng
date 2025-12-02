@@ -8,7 +8,8 @@ import csv
 import logging
 import traceback
 from io import StringIO
-from flask import request, jsonify, send_file, Blueprint, g
+from flask import request, jsonify, Blueprint, g
+from utils.storage_service import storage_service
 import json
 from core.extensions import socketio
 from middleware.auth import require_auth
@@ -2130,15 +2131,19 @@ def process_data_detailed(data, filename, start_time=None, end_time=None, time_s
 @require_auth
 @require_subscription
 def prepare_save():
+    """
+    Prepare data for download by uploading to Supabase Storage.
+    Returns a fileId that can be used to get a download URL.
+    """
     try:
         try:
             data = request.get_json(force=True)
         except Exception:
             data = request.form.to_dict()
-            
+
         if not data:
             return jsonify({"error": "No data received"}), 400
-            
+
         save_data = data.get('data', data)
         if not save_data:
             return jsonify({"error": "Empty data"}), 400
@@ -2149,64 +2154,113 @@ def prepare_save():
             except json.JSONDecodeError:
                 return jsonify({"error": "Invalid data format"}), 400
 
-        file_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        # Convert data to CSV string
+        output = StringIO()
+        writer = csv.writer(output, delimiter=';')
+        for row in save_data:
+            writer.writerow(row)
+        csv_content = output.getvalue()
 
-        temp_path = os.path.join(UPLOAD_FOLDER, f"download_{file_id}.csv")
+        # Get filename from request or use default
+        filename = data.get('fileName', 'adjusted_data.csv')
+        if not filename.endswith('.csv'):
+            filename += '.csv'
 
-        with open(temp_path, 'w', newline='', encoding='utf-8') as temp_file:
-            writer = csv.writer(temp_file, delimiter=';')
-            for row in save_data:
-                writer.writerow(row)
+        # Upload to Supabase Storage
+        user_id = g.user_id
+        file_id = storage_service.upload_csv(
+            user_id=user_id,
+            csv_content=csv_content,
+            original_filename=filename
+        )
 
-        temp_files[file_id] = {
-            'path': temp_path,
-            'timestamp': time.time()
-        }
+        if not file_id:
+            logger.error("Failed to upload file to Supabase Storage")
+            return jsonify({"error": "Failed to save file to storage"}), 500
 
-        return jsonify({"message": "File prepared for download", "fileId": file_id}), 200
+        total_rows = len(save_data) - 1 if len(save_data) > 0 else 0
+        logger.info(f"✅ File uploaded to Supabase Storage: {file_id} ({total_rows} rows)")
+
+        return jsonify({
+            "message": "File prepared for download",
+            "fileId": file_id,
+            "totalRows": total_rows
+        }), 200
+
     except Exception as e:
         logger.error(f"Error in prepare_save: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-@bp.route('/download/<file_id>', methods=['GET'])
+@bp.route('/download/<path:file_id>', methods=['GET'])
 @require_auth
 @require_subscription
 def download_file(file_id):
+    """
+    Get a signed download URL for a file stored in Supabase Storage.
+    The file_id format is: user_id/timestamp_uuid
+    """
     try:
-        if file_id not in temp_files:
-            return jsonify({"error": "File not found"}), 404
+        # Get signed URL from Supabase Storage (valid for 1 hour)
+        signed_url = storage_service.get_download_url(file_id, expires_in=3600)
 
-        file_info = temp_files[file_id]
-        file_path = file_info['path']
+        if signed_url:
+            logger.info(f"✅ Generated download URL for: {file_id}")
+            return jsonify({
+                "success": True,
+                "downloadUrl": signed_url,
+                "fileId": file_id
+            }), 200
 
-        upload_folder_abs = os.path.abspath(UPLOAD_FOLDER)
-        file_path_abs = os.path.abspath(file_path)
+        logger.error(f"Failed to generate download URL for: {file_id}")
+        return jsonify({"error": "Failed to generate download URL"}), 500
 
-        if not file_path_abs.startswith(upload_folder_abs):
-            logger.error(f"Security: Attempted to access file outside upload folder: {file_path}")
-            return jsonify({"error": "Invalid file path"}), 403
-
-        if not os.path.exists(file_path):
-            return jsonify({"error": "File not found"}), 404
-
-        download_name = f"data_{file_id}.csv"
-
-        response = send_file(
-            file_path,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype='text/csv'
-        )
-
-        try:
-            os.remove(file_path)
-            del temp_files[file_id]
-            logger.info(f"✅ Cleaned up file after download: {file_id}")
-        except Exception as cleanup_error:
-            logger.warning(f"Failed to cleanup file {file_id} after download: {cleanup_error}")
-
-        return response
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route('/cleanup-files', methods=['POST'])
+@require_auth
+def cleanup_files():
+    """
+    Delete files from Supabase Storage after successful download.
+    Called by frontend to clean up temporary files.
+    """
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "No data received"}), 400
+
+        file_ids = data.get('fileIds', [])
+        if not file_ids:
+            return jsonify({
+                "message": "No files to delete",
+                "deletedCount": 0
+            }), 200
+
+        deleted_count = 0
+        failed_ids = []
+
+        for file_id in file_ids:
+            try:
+                if storage_service.delete_file(file_id):
+                    deleted_count += 1
+                    logger.info(f"✅ Deleted file from storage: {file_id}")
+                else:
+                    failed_ids.append(file_id)
+                    logger.warning(f"⚠️ Failed to delete file: {file_id}")
+            except Exception as del_error:
+                logger.error(f"Error deleting file {file_id}: {del_error}")
+                failed_ids.append(file_id)
+
+        return jsonify({
+            "message": "Cleanup complete",
+            "deletedCount": deleted_count,
+            "totalRequested": len(file_ids),
+            "failedIds": failed_ids
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in cleanup_files: {str(e)}")
         return jsonify({"error": str(e)}), 500
