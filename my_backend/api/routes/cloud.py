@@ -9,6 +9,7 @@ import csv
 import logging
 import traceback
 import re
+import time
 from io import StringIO
 from flask import request, jsonify, send_file, Blueprint, Response
 import json
@@ -956,13 +957,6 @@ def interpolate_chunked():
                 logger.warning(f"Error converting row to chart data: {e}. Row: {row}")
                 continue
 
-        try:
-            shutil.rmtree(chunk_dir)
-            logger.info(f"Cleaned up chunk directory for upload {upload_id}")
-            del chunk_uploads[upload_id]
-        except Exception as e:
-            logger.warning(f"Error cleaning up chunks: {str(e)}")
-        
         logger.info(f"Sample of chart data being sent: {chart_data[:5] if chart_data else 'No data'}")
         logger.info(f"Total points in chart data: {len(chart_data)}")
         
@@ -1030,18 +1024,22 @@ def interpolate_chunked():
                 'message': 'Data streaming completed',
                 'success': True
             }, separators=(',', ':')) + '\n'
-            
+
+        def cleanup():
+            """Guaranteed cleanup via call_on_close - runs even on client disconnect"""
             try:
-                chunk_dir = get_chunk_dir(upload_id)
-                if os.path.exists(chunk_dir):
-                    shutil.rmtree(chunk_dir)
+                cleanup_dir = get_chunk_dir(upload_id)
+                if os.path.exists(cleanup_dir):
+                    shutil.rmtree(cleanup_dir)
                 if upload_id in chunk_uploads:
                     del chunk_uploads[upload_id]
-                logger.info(f"Successfully cleaned up chunks for upload ID: {upload_id}")
+                logger.info(f"Cleanup completed for upload {upload_id}")
             except Exception as e:
-                logger.warning(f"Error cleaning up chunks: {str(e)}")
-        
-        return Response(generate_chunks(), mimetype='application/x-ndjson')
+                logger.warning(f"Cleanup error for {upload_id}: {e}")
+
+        response = Response(generate_chunks(), mimetype='application/x-ndjson')
+        response.call_on_close(cleanup)
+        return response
     except Exception as e:
         logger.error(f"Error in interpolation-chunked endpoint: {str(e)}")
         logger.error(traceback.format_exc())

@@ -191,18 +191,34 @@ class ProgressTracker:
             return f"{hours}h {minutes}m"
 
 def clean_for_json(obj):
-    """Konvertuje numpy i pandas tipove u Python native tipove."""
+    """Konvertuje numpy i pandas tipove u Python native tipove. Handla NaN/Inf."""
+    import math
+
+    # Prvo provjeri NaN/None
+    if obj is None:
+        return None
+    if pd.isna(obj):
+        return None
+
+    # Konvertuj numpy tipove
     if isinstance(obj, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32,
                          np.int64, np.uint8, np.uint16, np.uint32, np.uint64)):
         return int(obj)
     elif isinstance(obj, (np.float16, np.float32, np.float64)):
-        return float(obj)
+        val = float(obj)
+        # Provjeri NaN/Inf nakon konverzije
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return val
+    elif isinstance(obj, float):
+        # Native Python float - provjeri NaN/Inf
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
     elif isinstance(obj, (np.ndarray,)):
         return obj.tolist()
     elif isinstance(obj, (pd.Timestamp)):
         return obj.isoformat()
-    elif pd.isna(obj):
-        return None
     return obj
 
 UPLOAD_FOLDER = "chunk_uploads"
@@ -641,58 +657,86 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         total_rows = len(result_df)
 
         def generate():
-            """Generator za streaming NDJSON sa progress trackingom"""
+            """Generator za streaming NDJSON sa progress trackingom - OPTIMIZIRANO"""
             STREAMING_CHUNK_SIZE = 50000
+            BACKPRESSURE_DELAY = 0.01  # 10ms između chunkova
 
-            # === FAZA 4: STREAMING (90-100%) ===
-            if tracker_ref:
-                tracker_ref.start_phase('streaming')
-                tracker_ref.emit('streaming', 90, 'fp_streaming_start', force=True, message_params={'totalRows': total_rows})
+            try:
+                # === FAZA 4: STREAMING (90-100%) ===
+                if tracker_ref:
+                    tracker_ref.start_phase('streaming')
+                    tracker_ref.emit('streaming', 90, 'fp_streaming_start', force=True, message_params={'totalRows': total_rows})
 
-            # Pošalji ukupan broj redova kao prvi chunk
-            yield json.dumps({"total_rows": total_rows}) + "\n"
+                # Pošalji ukupan broj redova kao prvi chunk
+                yield json.dumps({"total_rows": total_rows}) + "\n"
 
-            chunk_size = STREAMING_CHUNK_SIZE
-            total_chunks_to_stream = (total_rows // chunk_size) + 1
-            streaming_start_time = time.time()
+                chunk_size = STREAMING_CHUNK_SIZE
+                total_chunks_to_stream = (total_rows // chunk_size) + 1
+                streaming_start_time = time.time()
 
-            for i in range(0, total_rows, chunk_size):
-                # Progress 90-99%
-                chunk_progress = 90 + ((i / total_rows) * 9)
-                current_chunk = (i // chunk_size) + 1
+                for i in range(0, total_rows, chunk_size):
+                    try:
+                        # Progress 90-99%
+                        chunk_progress = 90 + ((i / total_rows) * 9)
+                        current_chunk = (i // chunk_size) + 1
 
-                # Izračunaj ETA za streaming
-                streaming_eta = None
-                if current_chunk > 1:
-                    elapsed = time.time() - streaming_start_time
-                    chunks_done = current_chunk - 1
-                    chunks_remaining = total_chunks_to_stream - current_chunk + 1
-                    time_per_chunk = elapsed / chunks_done
-                    streaming_eta = int(chunks_remaining * time_per_chunk)
+                        # Izračunaj ETA za streaming
+                        streaming_eta = None
+                        if current_chunk > 1:
+                            elapsed = time.time() - streaming_start_time
+                            chunks_done = current_chunk - 1
+                            chunks_remaining = total_chunks_to_stream - current_chunk + 1
+                            time_per_chunk = elapsed / chunks_done
+                            streaming_eta = int(chunks_remaining * time_per_chunk)
+
+                        if tracker_ref:
+                            tracker_ref.emit('streaming', chunk_progress,
+                                            'fp_streaming_chunk',
+                                            eta_seconds=streaming_eta,
+                                            message_params={'current': current_chunk, 'total': total_chunks_to_stream})
+
+                        # Dohvati chunk podataka
+                        chunk = result_df.iloc[i:i + chunk_size]
+
+                        # OPTIMIZIRANO: Selektuj SAMO potrebne kolone (30-50x brže od iterrows)
+                        chunk_subset = chunk[['UTC', value_col_name]].copy()
+
+                        # KRITIČNO: Konvertuj u object dtype PRIJE obrade da pandas ne vrati NaN
+                        chunk_subset[value_col_name] = chunk_subset[value_col_name].astype(object)
+                        # Zamijeni NaN sa None (object dtype čuva None)
+                        chunk_subset[value_col_name] = chunk_subset[value_col_name].where(
+                            pd.notna(chunk_subset[value_col_name]), None
+                        )
+
+                        # Brza konverzija u records - sada NaN postaje null u JSON-u
+                        for record in chunk_subset.to_dict('records'):
+                            yield json.dumps(record) + "\n"
+
+                        # Backpressure: pauza između chunkova za stabilnost
+                        time.sleep(BACKPRESSURE_DELAY)
+
+                    except Exception as chunk_error:
+                        logger.error(f"Streaming error at chunk {i}: {chunk_error}")
+                        yield json.dumps({"error": f"Chunk {i} failed: {str(chunk_error)}", "partial": True}) + "\n"
+                        break
 
                 if tracker_ref:
-                    tracker_ref.emit('streaming', chunk_progress,
-                                    'fp_streaming_chunk',
-                                    eta_seconds=streaming_eta,
-                                    message_params={'current': current_chunk, 'total': total_chunks_to_stream})
+                    tracker_ref.end_phase('streaming')
+                    tracker_ref.emit('complete', 100,
+                                   'fp_complete', force=True, message_params={'totalRows': total_rows})
 
-                # Dohvati chunk podataka
-                chunk = result_df.iloc[i:i + chunk_size]
+                yield json.dumps({"status": "complete"}) + "\n"
 
-                # Konvertuj svaki red u JSON i yield
-                for _, row in chunk.iterrows():
-                    record = {
-                        "UTC": row['UTC'],
-                        value_col_name: clean_for_json(row[value_col_name])
-                    }
-                    yield json.dumps(record) + "\n"
-
-            if tracker_ref:
-                tracker_ref.end_phase('streaming')
-                tracker_ref.emit('complete', 100,
-                               'fp_complete', force=True, message_params={'totalRows': total_rows})
-
-            yield json.dumps({"status": "complete"}) + "\n"
+            except GeneratorExit:
+                logger.info("Client disconnected during streaming")
+            except BrokenPipeError:
+                logger.warning("Broken pipe - client forcefully disconnected")
+            except Exception as e:
+                logger.error(f"Generator error: {e}")
+                try:
+                    yield json.dumps({"error": str(e)}) + "\n"
+                except:
+                    pass  # Client već disconnected
 
         return Response(generate(), mimetype="application/x-ndjson")
     except Exception as e:
@@ -839,9 +883,14 @@ def upload_chunk():
                             chunk_content += '\n'
                         
                         full_content += chunk_content
-                    
-                    os.remove(chunk_path)
-                
+
+                    # Safe cleanup - handle race condition with multiple workers
+                    try:
+                        if os.path.exists(chunk_path):
+                            os.remove(chunk_path)
+                    except (FileNotFoundError, OSError) as e:
+                        logger.debug(f"Chunk already cleaned up by another worker: {chunk_path}")
+
                 logger.info(f"Final assembled content length: {len(full_content)}")
 
                 # Završi chunk assembly fazu

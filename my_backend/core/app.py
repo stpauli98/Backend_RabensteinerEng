@@ -18,13 +18,18 @@ def create_app():
     
     app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
     
-    socketio = SocketIO(app, 
-                       cors_allowed_origins="*", 
+    # SocketIO konfiguracija optimizirana za streaming
+    # ping_timeout=120: 2 min za dugotrajne streaming operacije
+    # ping_interval=30: svake 30 sekundi
+    # max_http_buffer_size=10MB: buffer za velike poruke
+    socketio = SocketIO(app,
+                       cors_allowed_origins="*",
                        async_mode='threading',
                        logger=False,
                        engineio_logger=False,
-                       ping_timeout=60,
-                       ping_interval=25)
+                       ping_timeout=120,
+                       ping_interval=30,
+                       max_http_buffer_size=10 * 1024 * 1024)
     
     app.extensions['socketio'] = socketio
     
