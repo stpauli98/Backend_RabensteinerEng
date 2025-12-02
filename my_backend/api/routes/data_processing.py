@@ -37,7 +37,7 @@ MAX_CHUNK_SIZE = 10 * 1024 * 1024
 # 95-100% → streaming
 
 STREAMING_CHUNK_SIZE = 50000
-TOTAL_CLEANING_STEPS = 7
+TOTAL_CLEANING_STEPS = 6
 
 
 class ProgressTracker:
@@ -244,7 +244,7 @@ def validate_processing_params(params):
                 raise ValueError(f"{description} must be between {min_val} and {max_val}")
             validated[param] = value
 
-    radio_params = ['radioValueNull', 'radioValueNotNull']
+    radio_params = ['radioValueNull']
     for param in radio_params:
         if param in params:
             if params[param] in [None, '', 'undefined', 'null']:
@@ -316,8 +316,6 @@ def clean_data(df, value_column, params, tracker=None):
         active_steps.append(("elMin", "lower_threshold_removal"))
     if params.get("radioValueNull") == "ja":
         active_steps.append(("radioValueNull", "zero_value_removal"))
-    if params.get("radioValueNotNull") == "ja":
-        active_steps.append(("radioValueNotNull", "non_numeric_removal"))
     if params.get("chgMax") and params.get("lgMax"):
         active_steps.append(("chgMax", "outlier_removal"))
     if params.get("gapMax"):
@@ -402,74 +400,45 @@ def clean_data(df, value_column, params, tracker=None):
                         removed_count += 1
         emit_step_complete(step_key, removed_count)
 
-    # === KORAK 2: EL_MAX ===
+    # === KORAK 2: EL_MAX (vektorizovano) ===
     if params.get("elMax") is not None:
         step_key = "upper_threshold_removal"
         start_step(step_key)
         logger.info("Removing values above upper threshold")
         el_max = float(params["elMax"])
-        removed_count = 0
-        for i in range(len(df)):
-            update_progress(step_key, i)
-            try:
-                if float(df.iloc[i][value_column]) > el_max:
-                    df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                    removed_count += 1
-            except:
-                df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                removed_count += 1
+
+        mask = df[value_column] > el_max
+        removed_count = int(mask.sum())
+        df.loc[mask, value_column] = np.nan
+
         emit_step_complete(step_key, removed_count)
 
-    # === KORAK 3: EL_MIN ===
+    # === KORAK 3: EL_MIN (vektorizovano) ===
     if params.get("elMin") is not None:
         step_key = "lower_threshold_removal"
         start_step(step_key)
         logger.info("Removing values below lower threshold")
         el_min = float(params["elMin"])
-        removed_count = 0
-        for i in range(len(df)):
-            update_progress(step_key, i)
-            try:
-                if float(df.iloc[i][value_column]) < el_min:
-                    df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                    removed_count += 1
-            except:
-                df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                removed_count += 1
+
+        mask = df[value_column] < el_min
+        removed_count = int(mask.sum())
+        df.loc[mask, value_column] = np.nan
+
         emit_step_complete(step_key, removed_count)
 
-    # === KORAK 4: RADIO_VALUE_NULL ===
+    # === KORAK 4: RADIO_VALUE_NULL (vektorizovano) ===
     if params.get("radioValueNull") == "ja":
         step_key = "zero_value_removal"
         start_step(step_key)
-        logger.info("Removing null values")
-        removed_count = 0
-        for i in range(len(df)):
-            update_progress(step_key, i)
-            if df.iloc[i][value_column] == 0:
-                df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                removed_count += 1
+        logger.info("Removing zero values")
+
+        mask = df[value_column] == 0
+        removed_count = int(mask.sum())
+        df.loc[mask, value_column] = np.nan
+
         emit_step_complete(step_key, removed_count)
 
-    # === KORAK 5: RADIO_VALUE_NOT_NULL ===
-    if params.get("radioValueNotNull") == "ja":
-        step_key = "non_numeric_removal"
-        start_step(step_key)
-        logger.info("Removing non-numeric values")
-        removed_count = 0
-        for i in range(len(df)):
-            update_progress(step_key, i)
-            try:
-                float(df.iloc[i][value_column])
-                if math.isnan(float(df.iloc[i][value_column])) == True:
-                    df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                    removed_count += 1
-            except:
-                df.iloc[i, df.columns.get_loc(value_column)] = np.nan
-                removed_count += 1
-        emit_step_complete(step_key, removed_count)
-
-    # === KORAK 6: CHG_MAX + LG_MAX ===
+    # === KORAK 5: CHG_MAX + LG_MAX ===
     if params.get("chgMax") and params.get("lgMax"):
         step_key = "outlier_removal"
         start_step(step_key)
@@ -506,7 +475,7 @@ def clean_data(df, value_column, params, tracker=None):
                     frm = 0
         emit_step_complete(step_key, removed_count)
 
-    # === KORAK 7: GAP_MAX ===
+    # === KORAK 6: GAP_MAX ===
     if params.get("gapMax"):
         step_key = "gap_filling"
         start_step(step_key)
