@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import math
 from datetime import datetime
-import tempfile
 import os
 import time
 import csv
@@ -10,9 +9,7 @@ import logging
 import traceback
 from io import StringIO
 from flask import request, jsonify, send_file, Blueprint, g
-from flask_socketio import emit
 import json
-from services.adjustments.cleanup import cleanup_old_files
 from core.extensions import socketio
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit
@@ -47,6 +44,347 @@ STORED_DATA_TIMEOUT = 60 * 60
 INFO_CACHE_TIMEOUT = 2 * 60 * 60
 SOCKETIO_CHUNK_DELAY = 0.1
 PROGRESS_UPDATE_INTERVAL = 1.0
+
+
+# ============================================================
+# VECTORIZED PROCESSING METHODS (identical to original logic)
+# Schritt 4: data_adapt.py - matematički identične implementacije
+# ============================================================
+
+def _prepare_data_for_processing(df, col):
+    """
+    Priprema podataka - zajednička za sve metode.
+    Filtrira NaN vrijednosti i konvertuje u numpy nizove.
+    """
+    df_clean = df[['UTC', col]].copy()
+    df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+    df_clean = df_clean.dropna(subset=[col]).reset_index(drop=True)
+
+    # Konvertuj UTC u int64 (sekunde od epoch-a)
+    utc_values = df_clean['UTC'].values.astype('datetime64[s]').astype(np.int64)
+    col_values = df_clean[col].values.astype(np.float64)
+
+    return utc_values, col_values
+
+
+def _generate_time_list(df, tss, ofst, start_time, end_time):
+    """
+    Generira kontinuirani timestamp - IDENTIČNO ORIGINALU (Schritt 4, linije 177-190)
+
+    Original logika:
+        t_ref = t_strt.replace(minute=0, second=0, microsecond=0)
+        t_ref += timedelta(minutes=ofst)
+        while t_ref < t_strt:
+            t_ref += timedelta(minutes=tss)
+        t_list = []
+        while t_ref <= t_end:
+            t_list.append(t_ref)
+            t_ref += timedelta(minutes=tss)
+    """
+    from datetime import timedelta
+
+    # Odredi granice
+    if start_time is None:
+        t_strt = df['UTC'].min()
+    else:
+        t_strt = pd.to_datetime(start_time)
+        if t_strt.tzinfo is not None:
+            t_strt = t_strt.tz_localize(None)
+
+    if end_time is None:
+        t_end = df['UTC'].max()
+    else:
+        t_end = pd.to_datetime(end_time)
+        if t_end.tzinfo is not None:
+            t_end = t_end.tz_localize(None)
+
+    # Konvertuj u Python datetime ako je pandas Timestamp
+    if hasattr(t_strt, 'to_pydatetime'):
+        t_strt = t_strt.to_pydatetime()
+    if hasattr(t_end, 'to_pydatetime'):
+        t_end = t_end.to_pydatetime()
+
+    # Originalna logika (Schritt 4, linije 181-190)
+    t_ref = t_strt.replace(minute=0, second=0, microsecond=0)
+    t_ref += timedelta(minutes=ofst)
+
+    while t_ref < t_strt:
+        t_ref += timedelta(minutes=tss)
+
+    t_list = []
+    while t_ref <= t_end:
+        t_list.append(t_ref)
+        t_ref += timedelta(minutes=tss)
+
+    # Konvertuj u numpy int64 (sekunde) za brze operacije
+    t_list_int = np.array([t.timestamp() for t in t_list], dtype=np.int64)
+
+    return t_list, t_list_int
+
+
+def _method_mean_vectorized(utc_values, col_values, t_list_int, tss):
+    """
+    MEAN metoda - klizni prozor ±tss/2
+    IDENTIČNO ORIGINALU (Schritt 4, linije 269-305)
+
+    Original logika:
+        t_int_min = t_list[i1] - timedelta(minutes=tss/2)
+        t_int_max = t_list[i1] + timedelta(minutes=tss/2)
+        value_int_list = [values in window if not nan]
+        result = mean(value_int_list) if len > 0 else nan
+    """
+    half_window = int(tss * 30)  # tss/2 u sekundama
+    n = len(t_list_int)
+
+    value_list = np.full(n, np.nan, dtype=np.float64)
+
+    # Sortiraj za binary search
+    sorted_idx = np.argsort(utc_values)
+    utc_sorted = utc_values[sorted_idx]
+    col_sorted = col_values[sorted_idx]
+
+    for i in range(n):
+        t = t_list_int[i]
+        t_min = t - half_window
+        t_max = t + half_window
+
+        # Binary search O(log n)
+        idx_start = np.searchsorted(utc_sorted, t_min, side='left')
+        idx_end = np.searchsorted(utc_sorted, t_max, side='right')
+
+        if idx_start < idx_end:
+            window_values = col_sorted[idx_start:idx_end]
+            valid = window_values[~np.isnan(window_values)]
+            if len(valid) > 0:
+                value_list[i] = np.mean(valid)
+
+    return value_list
+
+
+def _method_intrpl_vectorized(utc_values, col_values, t_list_int, intrpl_max):
+    """
+    INTRPL - bidirekciona pretraga + linearna interpolacija
+    IDENTIČNO ORIGINALU (Schritt 4, linije 368-503)
+
+    Original logika:
+        1. Pronađi time_next (prvi numerički >= t)
+        2. Pronađi time_prior (zadnji numerički <= t)
+        3. Ako delta_time > intrpl_max*60 -> nan
+        4. Inače linearna interpolacija:
+           value = value_prior - delta_value/delta_time_sec * delta_time_prior_sec
+    """
+    intrpl_max_sec = intrpl_max * 60
+    n = len(t_list_int)
+
+    value_list = np.full(n, np.nan, dtype=np.float64)
+
+    # Filtriraj samo numeričke (već filtrirano u _prepare_data_for_processing)
+    valid_mask = ~np.isnan(col_values)
+    utc_valid = utc_values[valid_mask]
+    col_valid = col_values[valid_mask]
+
+    if len(utc_valid) == 0:
+        return value_list
+
+    for i in range(n):
+        t = t_list_int[i]
+
+        # Pronađi idx gdje bi t bio umetnut
+        idx = np.searchsorted(utc_valid, t)
+
+        # time_next: prvi >= t
+        if idx >= len(utc_valid):
+            continue  # Nema next -> nan
+
+        idx_next = idx
+        if utc_valid[idx_next] < t:
+            if idx_next + 1 < len(utc_valid):
+                idx_next += 1
+            else:
+                continue
+
+        time_next = utc_valid[idx_next]
+        value_next = col_valid[idx_next]
+
+        # time_prior: zadnji <= t
+        idx_prior = idx - 1 if idx > 0 else 0
+        if utc_valid[idx_prior] > t:
+            continue  # Nema valid prior
+
+        time_prior = utc_valid[idx_prior]
+        value_prior = col_valid[idx_prior]
+
+        # Delta kalkulacija
+        delta_time_sec = time_next - time_prior
+        delta_value = value_prior - value_next
+
+        # Originalna logika (linije 470-481)
+        if delta_time_sec == 0:
+            value_list[i] = value_prior
+        elif delta_value == 0 and delta_time_sec <= intrpl_max_sec:
+            value_list[i] = value_prior
+        elif delta_time_sec > intrpl_max_sec:
+            continue  # nan - gap prevelik
+        else:
+            # Linearna interpolacija
+            delta_time_prior_sec = t - time_prior
+            value_list[i] = value_prior - delta_value / delta_time_sec * delta_time_prior_sec
+
+    return value_list
+
+
+def _method_nearest_vectorized(utc_values, col_values, t_list_int, tss):
+    """
+    NEAREST - najbliža vrijednost u prozoru ±tss/2
+    IDENTIČNO ORIGINALU (Schritt 4, linije 312-362)
+
+    Ako više vrijednosti ima istu min deltu, uzmi prvu (np.argmin vraća prvu)
+    """
+    half_window = int(tss * 30)  # tss/2 u sekundama
+    n = len(t_list_int)
+
+    value_list = np.full(n, np.nan, dtype=np.float64)
+
+    valid_mask = ~np.isnan(col_values)
+    utc_valid = utc_values[valid_mask]
+    col_valid = col_values[valid_mask]
+
+    if len(utc_valid) == 0:
+        return value_list
+
+    # Sortiraj za binary search
+    sorted_idx = np.argsort(utc_valid)
+    utc_sorted = utc_valid[sorted_idx]
+    col_sorted = col_valid[sorted_idx]
+
+    for i in range(n):
+        t = t_list_int[i]
+        t_min = t - half_window
+        t_max = t + half_window
+
+        idx_start = np.searchsorted(utc_sorted, t_min, side='left')
+        idx_end = np.searchsorted(utc_sorted, t_max, side='right')
+
+        if idx_start < idx_end:
+            window_times = utc_sorted[idx_start:idx_end]
+            window_values = col_sorted[idx_start:idx_end]
+
+            deltas = np.abs(window_times - t)
+            min_idx = np.argmin(deltas)  # Prvi ako ima više sa istom deltom
+            value_list[i] = window_values[min_idx]
+
+    return value_list
+
+
+def _method_nearest_mean_vectorized(utc_values, col_values, t_list_int, tss):
+    """
+    NEAREST (MEAN) - prosjek svih vrijednosti sa istom minimalnom deltom
+    IDENTIČNO ORIGINALU (Schritt 4, linije 351-359)
+    """
+    half_window = int(tss * 30)
+    n = len(t_list_int)
+
+    value_list = np.full(n, np.nan, dtype=np.float64)
+
+    valid_mask = ~np.isnan(col_values)
+    utc_valid = utc_values[valid_mask]
+    col_valid = col_values[valid_mask]
+
+    if len(utc_valid) == 0:
+        return value_list
+
+    sorted_idx = np.argsort(utc_valid)
+    utc_sorted = utc_valid[sorted_idx]
+    col_sorted = col_valid[sorted_idx]
+
+    for i in range(n):
+        t = t_list_int[i]
+        t_min = t - half_window
+        t_max = t + half_window
+
+        idx_start = np.searchsorted(utc_sorted, t_min, side='left')
+        idx_end = np.searchsorted(utc_sorted, t_max, side='right')
+
+        if idx_start < idx_end:
+            window_times = utc_sorted[idx_start:idx_end]
+            window_values = col_sorted[idx_start:idx_end]
+
+            deltas = np.abs(window_times - t)
+            min_delta = np.min(deltas)
+
+            # Svi sa min deltom (originalna logika - mean svih jednako udaljenih)
+            min_mask = deltas == min_delta
+            value_list[i] = np.mean(window_values[min_mask])
+
+    return value_list
+
+
+def _method_nearest_max_delta_vectorized(utc_values, col_values, t_list_int, nearest_max):
+    """
+    NEAREST (MAX. DELTA) - nearest vrijednost ako je gap <= max
+    IDENTIČNO ORIGINALU (Schritt 4, linije 483-501)
+
+    Razlika od intrpl: umjesto interpolacije, uzima bližu vrijednost (prior ili next)
+    """
+    nearest_max_sec = nearest_max * 60
+    n = len(t_list_int)
+
+    value_list = np.full(n, np.nan, dtype=np.float64)
+
+    valid_mask = ~np.isnan(col_values)
+    utc_valid = utc_values[valid_mask]
+    col_valid = col_values[valid_mask]
+
+    if len(utc_valid) == 0:
+        return value_list
+
+    for i in range(n):
+        t = t_list_int[i]
+        idx = np.searchsorted(utc_valid, t)
+
+        # Prior i Next indeksi
+        idx_next = min(idx, len(utc_valid) - 1)
+        idx_prior = max(idx - 1, 0)
+
+        # Korekcija ako next nije stvarno >= t
+        if idx_next < len(utc_valid) and utc_valid[idx_next] < t:
+            if idx_next + 1 < len(utc_valid):
+                idx_next += 1
+
+        # Validacija indeksa
+        if idx_prior < 0 or idx_next >= len(utc_valid):
+            continue
+
+        time_prior = utc_valid[idx_prior]
+        time_next = utc_valid[idx_next]
+        value_prior = col_valid[idx_prior]
+        value_next = col_valid[idx_next]
+
+        # Dodatna provjera da prior <= t i next >= t
+        if time_prior > t or time_next < t:
+            continue
+
+        delta_time_sec = time_next - time_prior
+        delta_value = value_prior - value_next
+
+        # Originalna logika (linije 485-501)
+        if delta_time_sec == 0:
+            value_list[i] = value_prior
+        elif delta_value == 0 and delta_time_sec <= nearest_max_sec:
+            value_list[i] = value_prior
+        elif delta_time_sec > nearest_max_sec:
+            continue  # nan - gap prevelik
+        else:
+            # Uzmi bližu vrijednost (ne interpoliraj!)
+            delta_time_prior_sec = t - time_prior
+            delta_time_next_sec = time_next - t
+
+            if delta_time_prior_sec < delta_time_next_sec:
+                value_list[i] = value_prior
+            else:
+                value_list[i] = value_next
+
+    return value_list
 
 
 class ProgressStages:
@@ -703,7 +1041,7 @@ def upload_chunk():
                 del chunk_buffer[file_key]
             if file_key in chunk_buffer_timestamps:
                 del chunk_buffer_timestamps[file_key]
-        except:
+        except Exception:
             pass  # upload_id or filename may not be defined yet
         return jsonify({"error": str(e)}), 400
 
@@ -720,7 +1058,7 @@ def cleanup_expired_chunk_buffers():
     for upload_id in expired_uploads:
         if upload_id in chunk_buffer:
             del chunk_buffer[upload_id]
-            pass  # Cleaned up expired chunk buffer
+            # Cleaned up expired chunk buffer
         if upload_id in chunk_buffer_timestamps:
             del chunk_buffer_timestamps[upload_id]
 
@@ -739,7 +1077,7 @@ def cleanup_expired_adjustment_chunks():
     for upload_id in expired_uploads:
         if upload_id in adjustment_chunks:
             del adjustment_chunks[upload_id]
-            pass  # Cleaned up expired adjustment chunks
+            # Cleaned up expired adjustment chunks
         if upload_id in adjustment_chunks_timestamps:
             del adjustment_chunks_timestamps[upload_id]
 
@@ -762,7 +1100,7 @@ def cleanup_expired_temp_files():
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-                pass  # Deleted expired temp file
+                # Deleted expired temp file
             except Exception as e:
                 logger.error(f"Failed to delete temp file {file_path}: {e}")
 
@@ -783,7 +1121,7 @@ def cleanup_expired_stored_data():
     for filename in expired_files:
         if filename in stored_data:
             del stored_data[filename]
-            pass  # Cleaned up expired stored data
+            # Cleaned up expired stored data
         if filename in stored_data_timestamps:
             del stored_data_timestamps[filename]
 
@@ -802,7 +1140,7 @@ def cleanup_expired_info_cache():
     for filename in expired_files:
         if filename in info_df_cache:
             del info_df_cache[filename]
-            pass  # Cleaned up expired info cache
+            # Cleaned up expired info cache
         if filename in info_df_cache_timestamps:
             del info_df_cache_timestamps[filename]
 
@@ -1526,145 +1864,116 @@ def get_method_for_file(methods, filename):
 
 def apply_processing_method(df, col, method, time_step, offset, start_time, end_time, intrpl_max=None):
     """
-    Identična logika kao u data_adapt_1.py process_data_detailed funkciji
-    S timezone handling i sortiranje fixom za pandas kompatibilnost
+    REFACTORED: Koristi vektorizirane metode identične originalu (data_adapt Schritt 4)
+    
+    Metode:
+    - mean: Klizni prozor ±tss/2, prosjek svih vrijednosti u prozoru
+    - intrpl: Bidirekciona pretraga + linearna interpolacija sa intrpl_max limitom
+    - nearest: Najbliža vrijednost u prozoru ±tss/2 (prva ako ima više sa istom deltom)
+    - nearest (mean): Prosjek svih vrijednosti sa minimalnom deltom u prozoru
+    - nearest (max. delta): Nearest sa max delta limitom (koristi intrpl_max parametar)
     """
     logger.info(f"[apply_processing_method] START - method={method}, col={col}, time_step={time_step}, offset={offset}")
     
-    # Convert UTC column to datetime - remove timezone info for consistency
+    # 1. Priprema DataFrame-a
+    df = df.copy()
     df['UTC'] = pd.to_datetime(df['UTC']).dt.tz_localize(None)
-    
-    # Sort by UTC and remove duplicates to ensure monotonic index
     df = df.sort_values('UTC').drop_duplicates(subset=['UTC'], keep='first').reset_index(drop=True)
-    
-    # Convert measurement values to float, replacing non-numeric values with NaN
-    df[col] = pd.to_numeric(df[col], errors='coerce')
     
     # Get time parameters
     tss = time_step
     ofst = offset if offset is not None else 0
     
-    # Determine start and end times (timezone-naive)
-    if start_time is None:
-        t_strt = df['UTC'].min()
-    else:
-        t_strt = pd.to_datetime(start_time)
-        if t_strt.tzinfo is not None:
-            t_strt = t_strt.tz_localize(None)
+    logger.info(f"[apply_processing_method] Preparing data for vectorized processing...")
     
-    if end_time is None:
-        t_end = df['UTC'].max()
-    else:
-        t_end = pd.to_datetime(end_time)
-        if t_end.tzinfo is not None:
-            t_end = t_end.tz_localize(None)
+    # 2. Priprema podataka za vektorizirane operacije
+    utc_values, col_values = _prepare_data_for_processing(df, col)
     
-    logger.info(f"[apply_processing_method] t_strt={t_strt}, t_end={t_end}, tss={tss}, ofst={ofst}")
+    if len(utc_values) == 0:
+        logger.warning(f"[apply_processing_method] No valid numeric data for column {col}")
+        return pd.DataFrame({'UTC': [], col: []})
     
-    # Apply offset if provided (original logic)
-    if ofst:
-        t_strt = t_strt + pd.Timedelta(minutes=ofst)
+    # 3. Generiraj kontinuirani timestamp (identično originalu)
+    t_list, t_list_int = _generate_time_list(df, tss, ofst, start_time, end_time)
     
-    # Create new index with specified time step
-    new_index = pd.date_range(start=t_strt, end=t_end, freq=f'{tss}min')
-    logger.info(f"[apply_processing_method] new_index created, length={len(new_index)}")
+    if len(t_list) == 0:
+        logger.warning(f"[apply_processing_method] No time points generated")
+        return pd.DataFrame({'UTC': [], col: []})
     
-    # Resample data based on method (identical to original)
+    logger.info(f"[apply_processing_method] Generated {len(t_list)} time points, applying method: {method}")
+    
+    # 4. Pozovi odgovarajuću vektoriziranu metodu
     if method == 'mean':
-        logger.info(f"[apply_processing_method] Applying MEAN resample...")
-        resampled = df.set_index('UTC').resample(f'{tss}min', offset=f'{ofst}min')[col].mean()
-        result_df = pd.DataFrame({
-            'UTC': resampled.index,
-            col: resampled.values
-        })
-    elif method == 'max':
-        logger.info(f"[apply_processing_method] Applying MAX resample...")
-        resampled = df.set_index('UTC').resample(f'{tss}min', offset=f'{ofst}min')[col].max()
-        result_df = pd.DataFrame({
-            'UTC': resampled.index,
-            col: resampled.values
-        })
-    elif method == 'min':
-        logger.info(f"[apply_processing_method] Applying MIN resample...")
-        resampled = df.set_index('UTC').resample(f'{tss}min', offset=f'{ofst}min')[col].min()
-        result_df = pd.DataFrame({
-            'UTC': resampled.index,
-            col: resampled.values
-        })
-    elif method == 'nearest':
-        logger.info(f"[apply_processing_method] Applying NEAREST reindex...")
-        df_indexed = df.set_index('UTC')
-        resampled = df_indexed[col].reindex(new_index, method='nearest')
-        result_df = pd.DataFrame({
-            'UTC': new_index,
-            col: resampled.values
-        })
-    elif method == 'nearest (mean)':
-        logger.info(f"[apply_processing_method] Applying NEAREST (MEAN)...")
-        df_indexed = df.set_index('UTC')
-        nearest_vals = df_indexed[col].reindex(new_index, method='nearest')
-        rolling_mean = nearest_vals.rolling(window=2, min_periods=1).mean()
-        result_df = pd.DataFrame({
-            'UTC': new_index,
-            col: rolling_mean.values
-        })
-    elif method == 'nearest (max. delta)':
-        logger.info(f"[apply_processing_method] Applying NEAREST (MAX. DELTA)...")
-        df_indexed = df.set_index('UTC')
-        nearest_vals = df_indexed[col].reindex(new_index, method='nearest')
-        deltas = nearest_vals.diff().abs()
-        max_delta = deltas.quantile(0.95)  # Use 95th percentile as threshold
-        masked_values = nearest_vals.where(deltas <= max_delta)
-        result_df = pd.DataFrame({
-            'UTC': new_index,
-            col: masked_values.values
-        })
+        values = _method_mean_vectorized(utc_values, col_values, t_list_int, tss)
+        
     elif method == 'intrpl':
-        logger.info(f"[apply_processing_method] Applying INTRPL...")
-        df_indexed = df.set_index('UTC')
-        resampled = df_indexed[col].reindex(new_index)
-        interpolated = resampled.interpolate(method='time', limit_direction='both')
+        max_gap = intrpl_max if intrpl_max is not None else 60
+        values = _method_intrpl_vectorized(utc_values, col_values, t_list_int, max_gap)
         
-        # Apply intrpl_max limit if provided - OPTIMIZED vectorized version
-        if intrpl_max is not None:
-            logger.info(f"[apply_processing_method] Applying intrpl_max={intrpl_max} (vectorized)...")
-            
-            # Get original timestamps as numpy array for fast searchsorted
-            original_times = df_indexed.index.values
-            new_times = new_index.values
-            
-            # Find indices where original data was missing (needs interpolation check)
-            missing_mask = resampled.isna().values
-            
-            if missing_mask.any():
-                # Use searchsorted for O(log n) lookup instead of O(n)
-                indices = np.searchsorted(original_times, new_times[missing_mask])
-                
-                # Vectorized gap calculation
-                interpolated_values = interpolated.values.copy()
-                missing_indices = np.where(missing_mask)[0]
-                
-                for j, i in enumerate(missing_indices):
-                    idx = indices[j]
-                    idx_before = max(0, idx - 1)
-                    idx_after = min(len(original_times) - 1, idx)
+    elif method == 'nearest':
+        values = _method_nearest_vectorized(utc_values, col_values, t_list_int, tss)
+        
+    elif method == 'nearest (mean)':
+        values = _method_nearest_mean_vectorized(utc_values, col_values, t_list_int, tss)
+        
+    elif method == 'nearest (max. delta)':
+        max_gap = intrpl_max if intrpl_max is not None else 60
+        values = _method_nearest_max_delta_vectorized(utc_values, col_values, t_list_int, max_gap)
+        
+    elif method == 'max':
+        # MAX metoda - koristi sliding window kao mean, ali uzima max
+        logger.info(f"[apply_processing_method] Applying MAX (sliding window)...")
+        half_window = int(tss * 30)
+        n = len(t_list_int)
+        values = np.full(n, np.nan, dtype=np.float64)
+        
+        sorted_idx = np.argsort(utc_values)
+        utc_sorted = utc_values[sorted_idx]
+        col_sorted = col_values[sorted_idx]
+        
+        for i in range(n):
+            t = t_list_int[i]
+            t_min = t - half_window
+            t_max = t + half_window
+            idx_start = np.searchsorted(utc_sorted, t_min, side='left')
+            idx_end = np.searchsorted(utc_sorted, t_max, side='right')
+            if idx_start < idx_end:
+                window_values = col_sorted[idx_start:idx_end]
+                valid = window_values[~np.isnan(window_values)]
+                if len(valid) > 0:
+                    values[i] = np.max(valid)
                     
-                    if idx_before < len(original_times) and idx_after < len(original_times):
-                        gap_ns = (original_times[idx_after] - original_times[idx_before])
-                        gap_minutes = gap_ns / np.timedelta64(1, 'm')
-                        
-                        if gap_minutes > intrpl_max:
-                            interpolated_values[i] = np.nan
-                
-                interpolated = pd.Series(interpolated_values, index=new_index)
+    elif method == 'min':
+        # MIN metoda - koristi sliding window kao mean, ali uzima min
+        logger.info(f"[apply_processing_method] Applying MIN (sliding window)...")
+        half_window = int(tss * 30)
+        n = len(t_list_int)
+        values = np.full(n, np.nan, dtype=np.float64)
         
-        result_df = pd.DataFrame({
-            'UTC': new_index,
-            col: interpolated.values
-        })
+        sorted_idx = np.argsort(utc_values)
+        utc_sorted = utc_values[sorted_idx]
+        col_sorted = col_values[sorted_idx]
+        
+        for i in range(n):
+            t = t_list_int[i]
+            t_min = t - half_window
+            t_max = t + half_window
+            idx_start = np.searchsorted(utc_sorted, t_min, side='left')
+            idx_end = np.searchsorted(utc_sorted, t_max, side='right')
+            if idx_start < idx_end:
+                window_values = col_sorted[idx_start:idx_end]
+                valid = window_values[~np.isnan(window_values)]
+                if len(valid) > 0:
+                    values[i] = np.min(valid)
     else:
-        logger.info(f"[apply_processing_method] No method matched, returning copy")
-        result_df = df[['UTC', col]].copy()
+        logger.warning(f"[apply_processing_method] Unknown method: {method}, returning original data")
+        return df[['UTC', col]].copy()
+    
+    # 5. Kreiraj rezultat DataFrame
+    result_df = pd.DataFrame({
+        'UTC': t_list,
+        col: values
+    })
     
     logger.info(f"[apply_processing_method] COMPLETE - returning {len(result_df)} rows")
     return result_df
@@ -1824,7 +2133,7 @@ def prepare_save():
     try:
         try:
             data = request.get_json(force=True)
-        except:
+        except Exception:
             data = request.form.to_dict()
             
         if not data:
