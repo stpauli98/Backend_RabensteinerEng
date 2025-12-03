@@ -224,7 +224,7 @@ def clean_for_json(obj):
 UPLOAD_FOLDER = "chunk_uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=None, tracker=None):
+def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=None, tracker=None, decimal_precision='full'):
     """
     Obradjuje CSV sadržaj te vraća rezultat kao gzip-komprimiran JSON odgovor.
     IDENTIČNA LOGIKA KAO U ORIGINALNOM data_prep_1.py FAJLU.
@@ -244,6 +244,15 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             return True
         except (ValueError, TypeError):
             return False
+
+    def apply_precision(value):
+        """Zaokruži vrijednost na zadani broj decimala."""
+        if decimal_precision == 'full' or value == "nan" or not is_numeric(value):
+            return value
+        try:
+            return round(float(value), int(decimal_precision))
+        except (ValueError, TypeError):
+            return value
 
     try:
         # === FAZA 1: PARSING (10-25%) ===
@@ -448,7 +457,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 # Mittelwertbildung über die numerischen Messwerte im Untersuchungsraum
                 if len(value_int_list) > 0:
                     import statistics
-                    value_list.append(statistics.mean(value_int_list))
+                    value_list.append(apply_precision(statistics.mean(value_int_list)))
                 else:
                     value_list.append("nan")
 
@@ -556,7 +565,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
 
                         # Zeitpunkte fallen zusammen oder gleichbleibender Messwert - Keine lineare Interpolation notwendig
                         if delta_time_sec == 0 or (delta_value == 0 and delta_time_sec <= intrpl_max*60):
-                            value_list.append(value_prior)
+                            value_list.append(apply_precision(value_prior))
 
                         # Zeitabstand zu groß - Keine lineare Interpolation möglich
                         elif delta_time_sec > intrpl_max*60:
@@ -565,7 +574,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                         # Lineare Interpolation
                         else:
                             delta_time_prior_sec = (time_list[i] - time_prior).total_seconds()
-                            value_list.append(value_prior - delta_value/delta_time_sec*delta_time_prior_sec)
+                            value_list.append(apply_precision(value_prior - delta_value/delta_time_sec*delta_time_prior_sec))
 
                         direct = 1
 
@@ -617,7 +626,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                             # Find the value with minimum time difference
                             min_time = min(delta_time_int_list)
                             min_idx = delta_time_int_list.index(min_time)
-                            value_list.append(value_int_list[min_idx])
+                            value_list.append(apply_precision(value_int_list[min_idx]))
                         else:  # nearest (mean)
                             # Find all values with the minimum time difference
                             import statistics
@@ -627,7 +636,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                                 for idx, delta in enumerate(delta_time_int_list)
                                 if abs(delta - min_time) < 0.001  # Small tolerance for float comparison
                             ]
-                            value_list.append(statistics.mean(nearest_values))
+                            value_list.append(apply_precision(statistics.mean(nearest_values)))
                     else:
                         value_list.append("nan")
 
@@ -773,6 +782,7 @@ def upload_chunk():
             offset = float(request.form.get('offset', 0))
             mode = request.form.get('mode', '')
             intrpl_max = float(request.form.get('intrplMax', 60))
+            decimal_precision = request.form.get('decimalPrecision', 'full')
         except (ValueError, TypeError) as e:
             logger.error(f"Error parsing parameters: {e}")
             return jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400
@@ -907,7 +917,7 @@ def upload_chunk():
                     logger.info(f"Final content third line: '{final_lines[2]}'")
 
                 # Proslijedi tracker u process_csv (proces počinje od 10% jer je chunk assembly 0-10%)
-                result = process_csv(full_content, tss, offset, mode, intrpl_max, upload_id, tracker)
+                result = process_csv(full_content, tss, offset, mode, intrpl_max, upload_id, tracker, decimal_precision)
 
                 # Track processing and storage usage
                 try:
