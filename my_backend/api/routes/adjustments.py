@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import math
-from datetime import datetime
 import os
 import time
 import csv
@@ -23,7 +22,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 adjustment_chunks = {}
 adjustment_chunks_timestamps = {}
-temp_files = {}
 chunk_buffer = {}
 chunk_buffer_timestamps = {}
 stored_data = {}
@@ -36,15 +34,12 @@ logger = logging.getLogger(__name__)
 
 UTC_fmt = "%Y-%m-%d %H:%M:%S"
 
-UPLOAD_EXPIRY_TIME = 60 * 60
 DATAFRAME_CHUNK_SIZE = 10000
 CHUNK_BUFFER_TIMEOUT = 30 * 60
 ADJUSTMENT_CHUNKS_TIMEOUT = 60 * 60
-TEMP_FILES_TIMEOUT = 60 * 60
 STORED_DATA_TIMEOUT = 60 * 60
 INFO_CACHE_TIMEOUT = 2 * 60 * 60
 SOCKETIO_CHUNK_DELAY = 0.1
-PROGRESS_UPDATE_INTERVAL = 1.0
 
 
 # ============================================================
@@ -905,10 +900,6 @@ info_df = pd.DataFrame(columns=['Name der Datei', 'Name der Messreihe', 'Startze
                                 'Anzahl der numerischen Datenpunkte', 'Anteil an numerischen Datenpunkten'])
 
 
-def allowed_file(filename):
-    """Check if file has .csv extension"""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() == 'csv'
-
 def detect_delimiter(file_content):
     """
     Detect the delimiter used in a CSV file contentt
@@ -1085,31 +1076,6 @@ def cleanup_expired_adjustment_chunks():
     return len(expired_uploads)
 
 
-def cleanup_expired_temp_files():
-    """Remove temp files older than TEMP_FILES_TIMEOUT"""
-    current_time = time.time()
-    expired_files = []
-
-    for file_id, file_info in temp_files.items():
-        if current_time - file_info['timestamp'] > TEMP_FILES_TIMEOUT:
-            expired_files.append(file_id)
-
-    for file_id in expired_files:
-        file_info = temp_files[file_id]
-        file_path = file_info['path']
-
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                # Deleted expired temp file
-            except Exception as e:
-                logger.error(f"Failed to delete temp file {file_path}: {e}")
-
-        del temp_files[file_id]
-
-    return len(expired_files)
-
-
 def cleanup_expired_stored_data():
     """Remove stored data older than STORED_DATA_TIMEOUT"""
     current_time = time.time()
@@ -1153,7 +1119,6 @@ def cleanup_all_expired_data():
     total = 0
     total += cleanup_expired_chunk_buffers()
     total += cleanup_expired_adjustment_chunks()
-    total += cleanup_expired_temp_files()
     total += cleanup_expired_stored_data()
     total += cleanup_expired_info_cache()
 
@@ -1368,6 +1333,7 @@ def adjust_data():
         end_time = data.get('endTime')
         time_step_size = data.get('timeStepSize')
         offset = data.get('offset')
+        decimal_precision = data.get('decimalPrecision', 'full')
 
         methods = data.get('methods', {})
         if not methods:
@@ -1390,7 +1356,8 @@ def adjust_data():
             'timeStepSize': time_step_size,
                     'offset': offset,
                     'methods': methods,
-                    'intrplMaxValues': intrpl_max_values
+                    'intrplMaxValues': intrpl_max_values,
+                    'decimalPrecision': decimal_precision
                 }
             }
         else:
@@ -1399,6 +1366,7 @@ def adjust_data():
             if end_time is not None: params['endTime'] = end_time
             if time_step_size is not None: params['timeStepSize'] = time_step_size
             if offset is not None: params['offset'] = offset
+            if decimal_precision is not None: params['decimalPrecision'] = decimal_precision
             
             if 'methods' not in params:
                 params['methods'] = {}
@@ -1513,6 +1481,7 @@ def complete_adjustment():
         end_time = params.get('endTime')
         time_step = params.get('timeStepSize')
         offset = params.get('offset')
+        decimal_precision = params.get('decimalPrecision', 'full')
 
         intrpl_max_values = params.get('intrplMaxValues', {})
         
@@ -1701,7 +1670,8 @@ def complete_adjustment():
                         dataframes[filename],
                         filename,
                         file_time_step,
-                        file_offset
+                        file_offset,
+                        decimal_precision
                     )
                 else:
                     method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
@@ -1728,7 +1698,8 @@ def complete_adjustment():
                         process_time_step,
                         process_offset,
                         methods,
-                        intrpl_max
+                        intrpl_max,
+                        decimal_precision
                     )
 
                 if result_data is not None and info_record is not None:
@@ -1863,18 +1834,21 @@ def get_method_for_file(methods, filename):
         return method_info.get('method', '').strip()
     return None
 
-def apply_processing_method(df, col, method, time_step, offset, start_time, end_time, intrpl_max=None):
+def apply_processing_method(df, col, method, time_step, offset, start_time, end_time, intrpl_max=None, decimal_precision='full'):
     """
     REFACTORED: Koristi vektorizirane metode identične originalu (data_adapt Schritt 4)
-    
+
     Metode:
     - mean: Klizni prozor ±tss/2, prosjek svih vrijednosti u prozoru
     - intrpl: Bidirekciona pretraga + linearna interpolacija sa intrpl_max limitom
     - nearest: Najbliža vrijednost u prozoru ±tss/2 (prva ako ima više sa istom deltom)
     - nearest (mean): Prosjek svih vrijednosti sa minimalnom deltom u prozoru
     - nearest (max. delta): Nearest sa max delta limitom (koristi intrpl_max parametar)
+
+    Args:
+        decimal_precision: Broj decimala za zaokruživanje ('full', '1', '2', '3', '4', '5', '6')
     """
-    logger.info(f"[apply_processing_method] START - method={method}, col={col}, time_step={time_step}, offset={offset}")
+    logger.info(f"[apply_processing_method] START - method={method}, col={col}, time_step={time_step}, offset={offset}, decimal_precision={decimal_precision}")
     
     # 1. Priprema DataFrame-a
     df = df.copy()
@@ -1969,13 +1943,27 @@ def apply_processing_method(df, col, method, time_step, offset, start_time, end_
     else:
         logger.warning(f"[apply_processing_method] Unknown method: {method}, returning original data")
         return df[['UTC', col]].copy()
-    
-    # 5. Kreiraj rezultat DataFrame
+
+    # 5. Apliciraj preciznost decimala
+    if decimal_precision != 'full':
+        try:
+            precision = int(decimal_precision)
+            # Zaokruži samo numeričke vrijednosti, ostavi NaN
+            values = np.where(
+                np.isnan(values),
+                values,
+                np.round(values, precision)
+            )
+            logger.info(f"[apply_processing_method] Applied decimal precision: {precision}")
+        except (ValueError, TypeError) as e:
+            logger.warning(f"[apply_processing_method] Could not apply decimal precision: {e}")
+
+    # 6. Kreiraj rezultat DataFrame
     result_df = pd.DataFrame({
         'UTC': t_list,
         col: values
     })
-    
+
     logger.info(f"[apply_processing_method] COMPLETE - returning {len(result_df)} rows")
     return result_df
 def create_info_record(df, col, filename, time_step, offset):
@@ -2006,10 +1994,13 @@ def create_info_record(df, col, filename, time_step, offset):
         'Anzahl der numerischen Datenpunkte': int(numeric_points),
         'Anteil an numerischen Datenpunkten': float(numeric_ratio)
     }
-def create_records(df, col, filename):
+def create_records(df, col, filename, decimal_precision='full'):
     """
     Konverzija DataFrame-a u zapise
     OPTIMIZATION #4: Vectorized numpy operations instead of iterrows (50-100x faster)
+
+    Args:
+        decimal_precision: Broj decimala za zaokruživanje ('full', '1', '2', '3', '4', '5', '6')
     """
     original_col = f"{col}_original"
 
@@ -2021,13 +2012,22 @@ def create_records(df, col, filename):
     has_original = original_col in df.columns
     original_values = df[original_col].values if has_original else None
 
+    # Helper za zaokruživanje
+    def apply_precision(value):
+        if decimal_precision == 'full':
+            return value
+        try:
+            return round(float(value), int(decimal_precision))
+        except (ValueError, TypeError):
+            return value
+
     records = []
     for idx in range(len(df)):
         utc_ts = int(utc_timestamps[idx])
         col_val = col_values[idx]
 
         if pd.notnull(col_val):
-            value = float(col_val)
+            value = apply_precision(float(col_val))
         elif has_original and pd.notnull(original_values[idx]):
             value = str(original_values[idx])
         else:
@@ -2041,87 +2041,92 @@ def create_records(df, col, filename):
 
     return records
 
-def convert_data_without_processing(df, filename, time_step, offset):
+def convert_data_without_processing(df, filename, time_step, offset, decimal_precision='full'):
     """
     Direktna konverzija podataka bez obrade kada su parametri isti.
     Ova funkcija preskače kompletan proces obrade i samo konvertuje podatke u format
     koji frontend očekuje, što značajno ubrzava proces kada nema potrebe za transformacijom.
+
+    Args:
+        decimal_precision: Broj decimala za zaokruživanje ('full', '1', '2', '3', '4', '5', '6')
     """
     try:
-
-        
         df = df.copy()
-        
+
         df['UTC'] = pd.to_datetime(df['UTC'])
-        
+
         measurement_cols = [col for col in df.columns if col != 'UTC']
-        
+
         if not measurement_cols:
             logger.warning(f"No measurement columns found for {filename}")
             return [], None
-        
+
         all_records = []
-        
+
         for col in measurement_cols:
-            records = create_records(df, col, filename)
+            records = create_records(df, col, filename, decimal_precision)
             all_records.extend(records)
-            
+
             if len(all_records) > 0 and not any(r.get('info_created') for r in all_records):
                 info_record = create_info_record(df, col, filename, time_step, offset)
                 return all_records, info_record
-        
+
         if not all_records:
             return [], None
-            
+
         info_record = create_info_record(df, measurement_cols[0], filename, time_step, offset)
         return all_records, info_record
-        
+
     except Exception as e:
         logger.error(f"Error in convert_data_without_processing: {str(e)}")
         traceback.print_exc()
         return [], None
 
-def process_data_detailed(data, filename, start_time=None, end_time=None, time_step=None, offset=None, methods={}, intrpl_max=None):
+def process_data_detailed(data, filename, start_time=None, end_time=None, time_step=None, offset=None, methods={}, intrpl_max=None, decimal_precision='full'):
+    """
+    Args:
+        decimal_precision: Broj decimala za zaokruživanje ('full', '1', '2', '3', '4', '5', '6')
+    """
     try:
         df, measurement_cols = prepare_data(data, filename)
-        
+
         df = filter_by_time_range(df, start_time, end_time)
-        
+
         method = get_method_for_file(methods, filename)
-        
+
         if not method:
             logger.warning(f"No processing method specified for {filename} but processing is required")
             return [], None
-        
+
         all_info_records = []
-        
+
         if len(measurement_cols) == 1:
             measurement_col = measurement_cols[0]
-            
+
             processed_df = apply_processing_method(
-                df, measurement_col, method, time_step, offset, start_time, end_time, intrpl_max
+                df, measurement_col, method, time_step, offset, start_time, end_time, intrpl_max, decimal_precision
             )
-            
-            records = create_records(processed_df, measurement_col, filename)
+
+            records = create_records(processed_df, measurement_col, filename, decimal_precision)
             info_record = create_info_record(processed_df, measurement_col, filename, time_step, offset)
-            
+
             return records, info_record
-        
+
         combined_records = []
-        
+
         for col in measurement_cols:
             processed_df = apply_processing_method(
-                df, col, method, time_step, offset, start_time, end_time, intrpl_max
+                df, col, method, time_step, offset, start_time, end_time, intrpl_max, decimal_precision
             )
-            
-            records = create_records(processed_df, col, filename)
+
+            records = create_records(processed_df, col, filename, decimal_precision)
             info_record = create_info_record(processed_df, col, filename, time_step, offset)
-            
+
             combined_records.extend(records)
             all_info_records.append(info_record)
-        
+
         return combined_records, all_info_records[0] if all_info_records else None
-        
+
     except Exception as e:
         logger.error(f"Error in process_data_detailed: {str(e)}")
         traceback.print_exc()
