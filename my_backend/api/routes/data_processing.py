@@ -293,7 +293,7 @@ def safe_error_response(error_msg, status_code=500, error_type=None):
     else:
         return jsonify({"error": "A processing error occurred. Please check your input and try again."}), status_code
 
-def clean_data(df, value_column, params, tracker=None):
+def clean_data(df, value_column, params, tracker=None, decimal_precision='full'):
     """
     Čisti podatke prema zadanim parametrima sa per-step ETA praćenjem.
 
@@ -305,6 +305,15 @@ def clean_data(df, value_column, params, tracker=None):
     """
     logger.info("Starting data cleaning with parameters: %s", params)
     total_rows = len(df)
+
+    def apply_precision(value):
+        """Zaokruži vrijednost na zadani broj decimala."""
+        if decimal_precision == 'full':
+            return value
+        try:
+            return round(float(value), int(decimal_precision))
+        except (ValueError, TypeError):
+            return value
 
     # Izračunaj koje korake ćemo izvršiti (ključevi za prevod)
     active_steps = []
@@ -496,7 +505,7 @@ def clean_data(df, value_column, params, tracker=None):
                     dif_min = dif/frm_width
                     for i_frm in range(idx_strt, idx_end+1):
                         gap_min = (df.iloc[i_frm]["UTC"] - df.iloc[idx_strt-1]["UTC"]).total_seconds() / 60
-                        df.iloc[i_frm, df.columns.get_loc(value_column)] = float(df.iloc[idx_strt-1][value_column]) + gap_min*dif_min
+                        df.iloc[i_frm, df.columns.get_loc(value_column)] = apply_precision(float(df.iloc[idx_strt-1][value_column]) + gap_min*dif_min)
                         filled_count += 1
                 frm = 0
         emit_step_complete(step_key, filled_count)
@@ -750,6 +759,8 @@ def upload_chunk():
                 "radioValueNotNull": request.form.get("radioValueNotNull")
             }
 
+            decimal_precision = request.form.get('decimalPrecision', 'full')
+
             try:
                 params = validate_processing_params(raw_params)
             except ValueError as e:
@@ -763,7 +774,7 @@ def upload_chunk():
             tracker.start_phase('cleaning')
             tracker.emit('cleaning', 25, 'cleaning_start', force=True, message_params={'rowCount': len(df)})
 
-            df_clean = clean_data(df, value_column, params, tracker)
+            df_clean = clean_data(df, value_column, params, tracker, decimal_precision)
 
             tracker.end_phase('cleaning')
             tracker.emit('cleaning', 90, 'cleaning_complete', force=True, message_params={'rowCount': len(df_clean)})
@@ -858,6 +869,12 @@ def upload_chunk():
                             # OPTIMIZIRANO: Selektuj SAMO potrebne kolone (30-50x brže od iterrows)
                             chunk_subset = chunk[['UTC', value_column]].copy()
                             chunk_subset['UTC'] = chunk_subset['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                            # Zaokruživanje SVIH vrijednosti na odabrani broj decimala
+                            if decimal_precision != 'full':
+                                chunk_subset[value_column] = chunk_subset[value_column].apply(
+                                    lambda x: round(x, int(decimal_precision)) if pd.notna(x) else x
+                                )
 
                             # KRITIČNO: Konvertuj u object dtype PRIJE apply da pandas ne vrati NaN
                             chunk_subset[value_column] = chunk_subset[value_column].astype(object)
