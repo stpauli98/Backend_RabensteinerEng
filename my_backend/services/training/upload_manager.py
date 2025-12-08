@@ -492,7 +492,15 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
     for field in allowed_fields:
         if field in file_data:
             if field in numeric_fields:
-                update_data[field] = str(file_data[field])
+                value = file_data[field]
+                # Handle None, empty string, and 'null' string as SQL NULL
+                if value is None or value == '' or value == 'null' or value == 'None':
+                    update_data[field] = None
+                else:
+                    try:
+                        update_data[field] = float(value)
+                    except (ValueError, TypeError):
+                        update_data[field] = None
             else:
                 update_data[field] = file_data[field]
 

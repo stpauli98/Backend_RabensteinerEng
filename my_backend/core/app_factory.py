@@ -3,10 +3,14 @@ import os
 import logging
 from datetime import datetime as dat
 from flask import Flask, jsonify, request
+from flask_socketio import SocketIO
+from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from core.extensions import init_extensions
 from core.socketio_handlers import register_socketio_handlers
+
+socketio = SocketIO()
+cors = CORS()
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -19,9 +23,31 @@ def create_app():
     app = Flask(__name__)
     
     app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
-    
-    socketio = init_extensions(app)
-    
+
+    # Initialize SocketIO
+    socketio.init_app(app,
+                     cors_allowed_origins="*",
+                     async_mode='threading',
+                     logger=False,
+                     engineio_logger=False,
+                     ping_timeout=60,
+                     ping_interval=25,
+                     transports=['polling', 'websocket'],
+                     always_connect=True)
+    app.extensions['socketio'] = socketio
+
+    # Initialize CORS
+    cors.init_app(app, resources={
+        r"/*": {
+            "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "https://entropia-seven.vercel.app", "*"],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+            "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
+            "expose_headers": ["Content-Disposition", "Content-Length"],
+            "supports_credentials": True,
+            "max_age": 3600
+        }
+    })
+
     register_socketio_handlers(socketio)
     
     @app.before_request

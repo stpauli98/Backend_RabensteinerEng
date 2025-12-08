@@ -11,7 +11,7 @@ from io import StringIO
 import numpy as np
 import pandas as pd
 from flask import Blueprint, request, Response, jsonify, send_file, g, redirect
-from core.extensions import socketio
+from core.app_factory import socketio
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit
 from utils.usage_tracking import increment_processing_count, update_storage_usage

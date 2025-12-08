@@ -22,6 +22,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.patches import Polygon
+from core.app_factory import socketio
 
 
 bp = Blueprint('cloud', __name__)
@@ -40,6 +41,105 @@ MIN_TOLERANCE_THRESHOLD = 0.01
 DEFAULT_TOLERANCE_RATIO = 0.1
 STREAMING_CHUNK_SIZE = 5000
 FILE_BUFFER_SIZE = 1024 * 1024
+
+
+class CloudProgressTracker:
+    """
+    Progress tracking za cloud operacije sa ETA i i18n podrškom.
+    Koristi isti pattern kao first_processing.py.
+    """
+
+    def __init__(self, upload_id):
+        self.upload_id = upload_id
+        self.start_time = time.time()
+        self.last_emit_time = 0
+        self.emit_interval = 0.5  # Emit svakih 500ms
+
+    def calculate_eta(self, progress):
+        """Izračunaj preostalo vrijeme na osnovu trenutnog progresa."""
+        if progress <= 0:
+            return None
+
+        elapsed = time.time() - self.start_time
+        if elapsed < 1:  # Čekaj bar 1 sekundu
+            return None
+
+        progress_ratio = progress / 100.0
+        remaining_ratio = 1.0 - progress_ratio
+
+        if progress_ratio > 0:
+            eta_seconds = int(elapsed * (remaining_ratio / progress_ratio))
+            return min(eta_seconds, 3600)  # Max 1 sat
+        return None
+
+    def emit(self, step, progress, message_key, message_params=None, force=False):
+        """
+        Šalje progress update preko SocketIO.
+
+        Args:
+            step: Faza procesiranja (assembling, parsing, validating, processing, etc.)
+            progress: Procenat napretka (0-100)
+            message_key: Ključ za i18n prevod na frontendu
+            message_params: Dodatni parametri za poruku
+            force: Ignoriši rate limiting
+        """
+        current_time = time.time()
+
+        # Rate limiting
+        if not force and (current_time - self.last_emit_time) < self.emit_interval:
+            return
+
+        # Odredi status
+        if step == 'complete':
+            status = 'completed'
+        elif step == 'error':
+            status = 'error'
+        else:
+            status = 'processing'
+
+        payload = {
+            'uploadId': self.upload_id,
+            'step': step,
+            'progress': int(progress),
+            'messageKey': message_key,
+            'status': status
+        }
+
+        # Dodaj parametre za poruku ako postoje
+        if message_params:
+            payload['messageParams'] = message_params
+
+        # Dodaj ETA za processing korake
+        if status == 'processing':
+            eta = self.calculate_eta(progress)
+            if eta is not None:
+                payload['eta'] = eta
+                payload['etaFormatted'] = self.format_time(eta)
+
+        try:
+            socketio.emit('processing_progress', payload, room=self.upload_id)
+            self.last_emit_time = current_time
+            eta_text = f" (ETA: {payload.get('etaFormatted', 'N/A')})" if 'eta' in payload else ""
+            logger.info(f"📊 Cloud Progress: {progress}% - {message_key}{eta_text}")
+        except Exception as e:
+            logger.error(f"Error emitting cloud progress: {e}")
+
+    @staticmethod
+    def format_time(seconds):
+        """Formatira sekunde u čitljiv format."""
+        if seconds is None:
+            return "Procjenjujem..."
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes}m {secs}s"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}m"
+
 
 class UploadManager:
     """Thread-safe upload session manager with TTL cleanup."""
@@ -288,6 +388,18 @@ def calculate_bounds(predictions, tolerance_type, tol_cnt, tol_dep):
 
     return upper_bound, lower_bound
 
+def apply_decimal_precision(values, precision):
+    """Zaokruži vrijednosti na zadani broj decimala."""
+    if precision == 'full':
+        return values
+    try:
+        precision_int = int(precision)
+        if isinstance(values, list):
+            return [round(v, precision_int) if v is not None and not (isinstance(v, float) and np.isnan(v)) else v for v in values]
+        return values
+    except (ValueError, TypeError):
+        return values
+
 @bp.route('/complete', methods=['POST', 'OPTIONS'])
 def complete_redirect():
     """Handle chunked upload completion directly instead of redirecting."""
@@ -334,6 +446,10 @@ def complete_redirect():
         except ValueError as e:
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
+        # Inicijaliziraj progress tracker
+        tracker = CloudProgressTracker(upload_id)
+        tracker.emit('initializing', 5, 'cloud_initializing', force=True)
+
         if upload_id not in chunk_uploads:
             logger.error(f"Invalid upload ID: {upload_id}")
             return jsonify({'success': False, 'data': {'error': 'Invalid upload ID'}}), 400
@@ -371,50 +487,65 @@ def complete_redirect():
             }), 400
 
         logger.info("All chunks received, reassembling files")
-        
+        tracker.emit('assembling', 10, 'cloud_assembling_files', force=True)
+
         temp_file_path = os.path.join(chunk_dir, 'temp_out.csv')
         load_file_path = os.path.join(chunk_dir, 'load.csv')
-        
+
         with open(temp_file_path, 'wb') as temp_file:
             for i in range(temp_info['total_chunks']):
                 chunk_path = os.path.join(chunk_dir, f"temp_file_{i}")
                 with open(chunk_path, 'rb') as chunk:
                     temp_file.write(chunk.read())
-        
+
+        tracker.emit('assembling', 15, 'cloud_assembling_temp_done')
+
         with open(load_file_path, 'wb') as load_file:
             for i in range(load_info['total_chunks']):
                 chunk_path = os.path.join(chunk_dir, f"load_file_{i}")
                 with open(chunk_path, 'rb') as chunk:
                     load_file.write(chunk.read())
-        
+
+        tracker.emit('assembling', 20, 'cloud_assembling_complete')
         logger.info("Files reassembled, processing data")
 
         try:
+            tracker.emit('validating', 25, 'cloud_validating_size')
             validate_csv_size(temp_file_path)
             validate_csv_size(load_file_path)
+            tracker.emit('validating', 30, 'cloud_size_validated')
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
         try:
+            tracker.emit('parsing', 35, 'cloud_parsing_csv')
             df1 = pd.read_csv(temp_file_path, sep=';')
+            tracker.emit('parsing', 40, 'cloud_parsing_temp_done')
             df2 = pd.read_csv(load_file_path, sep=';')
+            tracker.emit('parsing', 50, 'cloud_parsing_complete')
 
+            tracker.emit('validating', 55, 'cloud_validating_dataframes')
             validate_dataframe(df1, "Temperature file")
             validate_dataframe(df2, "Load file")
+            tracker.emit('validating', 60, 'cloud_dataframes_validated')
 
             processing_params = {
                 'REG': data.get('REG', 'lin'),
                 'TR': data.get('TR', 'cnt'),
                 'TOL_CNT': data.get('TOL_CNT', '0'),
                 'TOL_DEP': data.get('TOL_DEP', '0'),
-                'TOL_DEP_EXTRA': data.get('TOL_DEP_EXTRA', '0')
+                'TOL_DEP_EXTRA': data.get('TOL_DEP_EXTRA', '0'),
+                'decimalPrecision': data.get('decimalPrecision', 'full')
             }
-            
+
             logger.info(f"Processing data with parameters: {processing_params}")
-            
+            tracker.emit('processing', 65, 'cloud_processing_start', message_params={'reg_type': processing_params['REG']})
+
             result = _process_data_frames(df1, df2, processing_params)
-            
+            tracker.emit('processing', 95, 'cloud_processing_complete')
+
             try:
                 chunk_dir = get_chunk_dir(upload_id)
                 if os.path.exists(chunk_dir):
@@ -425,6 +556,7 @@ def complete_redirect():
             except Exception as e:
                 logger.warning(f"Error cleaning up chunks: {str(e)}")
 
+            tracker.emit('complete', 100, 'cloud_complete', force=True)
             return result
         except Exception as e:
             logger.error(f"Error processing uploaded files: {str(e)}")
@@ -589,7 +721,7 @@ def _calculate_tolerance_params(data, y_range):
 
     return TOL_CNT, TOL_DEP
 
-def _perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP):
+def _perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision='full'):
     """Perform linear regression and apply tolerance filtering."""
     lin_mdl = LinearRegression()
     lin_mdl.fit(cld_srt[[x]], cld_srt[y])
@@ -616,18 +748,18 @@ def _perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP):
         raise ValueError('No points within tolerance bounds. Try increasing the tolerance values.')
 
     return {
-        'x_values': cld_srt[x].tolist(),
-        'y_values': cld_srt[y].tolist(),
-        'predicted_y': lin_prd.tolist(),
-        'upper_bound': upper_bound.tolist(),
-        'lower_bound': lower_bound.tolist(),
-        'filtered_x': cld_srt_flt[x].tolist(),
-        'filtered_y': cld_srt_flt[y].tolist(),
+        'x_values': apply_decimal_precision(cld_srt[x].tolist(), decimal_precision),
+        'y_values': apply_decimal_precision(cld_srt[y].tolist(), decimal_precision),
+        'predicted_y': apply_decimal_precision(lin_prd.tolist(), decimal_precision),
+        'upper_bound': apply_decimal_precision(upper_bound.tolist(), decimal_precision),
+        'lower_bound': apply_decimal_precision(lower_bound.tolist(), decimal_precision),
+        'filtered_x': apply_decimal_precision(cld_srt_flt[x].tolist(), decimal_precision),
+        'filtered_y': apply_decimal_precision(cld_srt_flt[y].tolist(), decimal_precision),
         'equation': lin_fcn,
         'removed_points': len(cld_srt) - len(cld_srt_flt)
     }
 
-def _perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP):
+def _perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision='full'):
     """Perform polynomial regression and apply tolerance filtering."""
     poly_features = PolynomialFeatures(degree=2)
     X_poly = poly_features.fit_transform(cld_srt[[x]])
@@ -656,13 +788,13 @@ def _perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP):
         raise ValueError('No points within tolerance bounds. Try increasing the tolerance values.')
 
     return {
-        'x_values': cld_srt[x].tolist(),
-        'y_values': cld_srt[y].tolist(),
-        'predicted_y': poly_prd.tolist(),
-        'upper_bound': upper_bound.tolist(),
-        'lower_bound': lower_bound.tolist(),
-        'filtered_x': cld_srt_flt[x].tolist(),
-        'filtered_y': cld_srt_flt[y].tolist(),
+        'x_values': apply_decimal_precision(cld_srt[x].tolist(), decimal_precision),
+        'y_values': apply_decimal_precision(cld_srt[y].tolist(), decimal_precision),
+        'predicted_y': apply_decimal_precision(poly_prd.tolist(), decimal_precision),
+        'upper_bound': apply_decimal_precision(upper_bound.tolist(), decimal_precision),
+        'lower_bound': apply_decimal_precision(lower_bound.tolist(), decimal_precision),
+        'filtered_x': apply_decimal_precision(cld_srt_flt[x].tolist(), decimal_precision),
+        'filtered_y': apply_decimal_precision(cld_srt_flt[y].tolist(), decimal_precision),
         'equation': poly_fcn,
         'removed_points': len(cld_srt) - len(cld_srt_flt)
     }
@@ -680,12 +812,13 @@ def _process_data_frames(df1, df2, data):
         y_range = df2_original[y].max() - df2_original[y].min()
         TOL_CNT, TOL_DEP = _calculate_tolerance_params(data, y_range)
 
-        logger.info(f"Final parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}")
+        decimal_precision = data.get('decimalPrecision', 'full')
+        logger.info(f"Final parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}, decimalPrecision={decimal_precision}")
 
         if REG == "lin":
-            result_data = _perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP)
+            result_data = _perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision)
         else:
-            result_data = _perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP)
+            result_data = _perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision)
 
         logger.info("Sending response:")
         return jsonify({'success': True, 'data': result_data})
@@ -791,11 +924,16 @@ def interpolate_chunked():
         except ValueError as e:
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
+        # Inicijaliziraj progress tracker
+        tracker = CloudProgressTracker(upload_id)
+        tracker.emit('initializing', 5, 'cloud_interpolate_init', force=True)
+
         try:
             max_time_span = float(data.get('max_time_span', '60'))
             logger.info(f"Using max_time_span: {max_time_span}")
         except ValueError as e:
             logger.error(f"Invalid max_time_span value: {data.get('max_time_span')}")
+            tracker.emit('error', 0, 'cloud_invalid_params', force=True)
             return jsonify({'success': False, 'data': {'error': 'Invalid max_time_span parameter'}}), 400
 
         if upload_id not in chunk_uploads:
@@ -810,6 +948,8 @@ def interpolate_chunked():
         chunk_dir = get_chunk_dir(upload_id)
         combined_file_path = os.path.join(chunk_dir, 'combined_interpolate_file.csv')
 
+        tracker.emit('assembling', 10, 'cloud_assembling_chunks', force=True)
+
         with open(combined_file_path, 'wb') as outfile:
             for i in range(upload_info['total_chunks']):
                 chunk_path = os.path.join(chunk_dir, f"interpolate_file_{i}")
@@ -818,14 +958,19 @@ def interpolate_chunked():
                         shutil.copyfileobj(infile, outfile, FILE_BUFFER_SIZE)
 
         logger.info(f"Combined file created at: {combined_file_path}")
+        tracker.emit('assembling', 15, 'cloud_assembling_complete')
 
         try:
+            tracker.emit('validating', 18, 'cloud_validating_size')
             validate_csv_size(combined_file_path)
+            tracker.emit('validating', 20, 'cloud_size_validated')
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
         try:
+            tracker.emit('parsing', 25, 'cloud_detecting_separator')
             with open(combined_file_path, 'r', encoding='utf-8') as f:
                 first_line = f.readline()
 
@@ -838,26 +983,35 @@ def interpolate_chunked():
 
             logger.info(f"Using separator: {sep}")
 
+            tracker.emit('parsing', 30, 'cloud_parsing_csv')
             df2 = pd.read_csv(combined_file_path,
                              sep=sep,
                              decimal=',',
                              engine='c')
+            tracker.emit('parsing', 35, 'cloud_csv_parsed', message_params={'rows': len(df2)})
 
+            tracker.emit('validating', 38, 'cloud_validating_dataframe')
             validate_dataframe(df2, "Interpolation file")
+            tracker.emit('validating', 40, 'cloud_dataframe_validated')
 
         except ValueError as e:
             logger.error(f"Validation error: {str(e)}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
         except Exception as e:
             logger.error(f"Error reading CSV file: {str(e)}")
+            tracker.emit('error', 0, 'cloud_parse_error', message_params={'error': str(e)}, force=True)
             return jsonify({'success': False, 'data': {'error': f'Error reading CSV file: {str(e)}'}}), 400
 
         if 'UTC' not in df2.columns:
             logger.error("UTC column not found in the file")
+            tracker.emit('error', 0, 'cloud_utc_column_missing', force=True)
             return jsonify({'success': False, 'data': {'error': 'UTC column not found. The file must contain a UTC column with timestamps'}}), 400
 
+        tracker.emit('processing', 45, 'cloud_detecting_columns')
+
         load_terms = set(['last', 'load', 'leistung', 'kw', 'w'])
-        load_cols = [col for col in df2.columns if 
+        load_cols = [col for col in df2.columns if
                     any(term in str(col).lower() for term in load_terms)]
 
         if not load_cols:
@@ -867,78 +1021,97 @@ def interpolate_chunked():
                 logger.info(f"No specific load column found, using first non-UTC column: {y_col}")
             else:
                 logger.error("No suitable load column found")
+                tracker.emit('error', 0, 'cloud_load_column_missing', force=True)
                 return jsonify({
-                    'success': False, 
-                    'error': 'Load column not found', 
+                    'success': False,
+                    'error': 'Load column not found',
                     'message': 'The file must contain a column with load data'
                 }), 400
         else:
             y_col = load_cols[0]
             logger.info(f"Found load column: {y_col}")
-        
+
+        tracker.emit('processing', 48, 'cloud_columns_detected', message_params={'column': y_col})
+
         df2 = df2[['UTC', y_col]].copy()
-        
+
         if not pd.api.types.is_numeric_dtype(df2[y_col]):
+            tracker.emit('processing', 50, 'cloud_converting_numeric')
             df2[y_col] = pd.to_numeric(df2[y_col].astype(str).str.replace(',', '.').str.replace(r'[^\d\-\.]', '', regex=True), errors='coerce')
-        
-        
+
+
         try:
+            tracker.emit('datetime', 52, 'cloud_datetime_conversion')
             df2['UTC'] = pd.to_datetime(df2['UTC'], errors='coerce', cache=True)
             df2.dropna(subset=['UTC'], inplace=True)
-                
+            tracker.emit('datetime', 55, 'cloud_datetime_converted')
+
         except Exception as e:
             logger.error(f"Error converting UTC to datetime: {str(e)}")
+            tracker.emit('error', 0, 'cloud_datetime_error', message_params={'error': str(e)}, force=True)
             return jsonify({
-                'success': False, 
-                'error': f'Error processing timestamps: {str(e)}', 
+                'success': False,
+                'error': f'Error processing timestamps: {str(e)}',
                 'message': 'Please check the timestamp format in the file'
             }), 400
         
         df2.sort_values('UTC', inplace=True)
-        
+
         df2.rename(columns={y_col: 'load'}, inplace=True)
         df_load = df2.set_index('UTC')
-        
+
         if len(df_load) < 2:
             logger.error("Not enough valid data points for interpolation")
+            tracker.emit('error', 0, 'cloud_insufficient_data', force=True)
             return jsonify({
-                'success': False, 
-                'error': 'Not enough valid data points', 
+                'success': False,
+                'error': 'Not enough valid data points',
                 'message': 'The file must contain at least 2 valid data points for interpolation'
             }), 400
-        
+
+        tracker.emit('interpolation', 60, 'cloud_analyzing_data')
+
         time_diffs = (df_load.index[1:] - df_load.index[:-1]).total_seconds() / 60
         max_gap = time_diffs.max() if len(time_diffs) > 0 else 0
         logger.info(f"Maximum time gap in data: {max_gap} minutes")
-        
+
         total_minutes = (df_load.index[-1] - df_load.index[0]).total_seconds() / 60
-        
+
         if total_minutes > 10000:
             resample_interval = '5min'
             logger.info(f"Large time span detected ({total_minutes} minutes), using 5-minute intervals")
         else:
             resample_interval = '1min'
             logger.info(f"Using standard 1-minute intervals")
-        
+
         if not pd.api.types.is_numeric_dtype(df_load['load']):
             logger.info("Converting load column to numeric before interpolation")
             df_load['load'] = pd.to_numeric(df_load['load'], errors='coerce')
-        
+
         limit = int(max_time_span)
         logger.info(f"Using interpolation limit of {limit} minutes")
-            
+
+        tracker.emit('interpolation', 70, 'cloud_interpolating', message_params={'limit': limit})
+
         df2_resampled = df_load.copy()
         df2_resampled['load'] = df_load['load'].interpolate(method='linear', limit=limit)
 
         df2_resampled.reset_index(inplace=True)
+        tracker.emit('interpolation', 80, 'cloud_interpolation_complete')
         
         original_points = len(df2)
         total_points = len(df2_resampled)
         added_points = total_points - original_points
-        
+
         logger.info(f"Original points: {original_points}")
         logger.info(f"Interpolated points: {total_points}")
         logger.info(f"Added points: {added_points}")
+
+        tracker.emit('streaming', 85, 'cloud_preparing_stream', message_params={
+            'original': original_points,
+            'interpolated': total_points,
+            'added': added_points
+        })
         
         chart_data = []
         for _, row in df2_resampled.iterrows():
@@ -993,7 +1166,8 @@ def interpolate_chunked():
         original_points_count = original_points
         
         logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
-        
+        tracker.emit('streaming', 90, 'cloud_starting_stream', message_params={'chunks': total_chunks})
+
         def generate_chunks():
             meta_data = {
                 'type': 'meta',
@@ -1004,21 +1178,24 @@ def interpolate_chunked():
                 'success': True
             }
             yield json.dumps(meta_data, separators=(',', ':')) + '\n'
-            
+
             for chunk_idx in range(total_chunks):
                 start_idx = chunk_idx * CHUNK_SIZE
                 end_idx = min(start_idx + CHUNK_SIZE, total_rows)
-                
+
                 chunk_data_list = chart_df.iloc[start_idx:end_idx].to_dict('records')
-                
+
                 chunk_data = {
                     'type': 'data',
                     'chunk_index': chunk_idx,
                     'data': chunk_data_list
                 }
-                
+
                 yield json.dumps(chunk_data, separators=(',', ':')) + '\n'
-            
+
+            # Emit completion progress
+            tracker.emit('complete', 100, 'cloud_interpolate_complete', force=True)
+
             yield json.dumps({
                 'type': 'complete',
                 'message': 'Data streaming completed',

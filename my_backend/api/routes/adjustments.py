@@ -10,7 +10,7 @@ from io import StringIO
 from flask import request, jsonify, Blueprint, g
 from utils.storage_service import storage_service
 import json
-from core.extensions import socketio
+from core.app_factory import socketio
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit
 from utils.usage_tracking import increment_processing_count, update_storage_usage

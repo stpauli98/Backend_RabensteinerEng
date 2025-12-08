@@ -11,7 +11,8 @@ import traceback
 import pandas as pd
 from datetime import datetime
 
-from utils.database import get_supabase_client, create_or_get_session_uuid
+from utils.database import create_or_get_session_uuid
+from utils.supabase_client import get_supabase_admin_client
 
 from services.training.pipeline_exact import run_exact_training_pipeline
 from services.training.data_loader import DataLoader
@@ -29,7 +30,7 @@ class ModernMiddlemanRunner:
     """
     
     def __init__(self):
-        self.supabase = get_supabase_client()
+        self.supabase = get_supabase_admin_client()
         self.socketio = None
         
     def set_socketio(self, socketio_instance):
@@ -167,8 +168,8 @@ class ModernMiddlemanRunner:
             for key in i_dat_inf.index:
                 # Get time horizon from database metadata
                 metadata = files_metadata.get(key, {})
-                th_start = int(metadata.get('zeithorizont_start', -1))
-                th_end = int(metadata.get('zeithorizont_end', 0))
+                th_start = int(float(metadata.get('zeithorizont_start', -1)))
+                th_end = int(float(metadata.get('zeithorizont_end', 0)))
                 logger.info(f"   Input file '{key}': th_strt={th_start}, th_end={th_end}")
                 
                 i_dat_inf.loc[key, "spec"] = "Historische Daten"
@@ -183,8 +184,8 @@ class ModernMiddlemanRunner:
             for key in o_dat_inf.index:
                 # Get time horizon from database metadata
                 metadata = files_metadata.get(key, {})
-                th_start = int(metadata.get('zeithorizont_start', 0))
-                th_end = int(metadata.get('zeithorizont_end', 1))
+                th_start = int(float(metadata.get('zeithorizont_start', 0)))
+                th_end = int(float(metadata.get('zeithorizont_end', 1)))
                 logger.info(f"   Output file '{key}': th_strt={th_start}, th_end={th_end}")
                 
                 o_dat_inf.loc[key, "spec"] = "Historische Daten"
@@ -225,20 +226,7 @@ class ModernMiddlemanRunner:
                 logger.info(f"      {detail}")
             logger.info(f"   Maximum zeithorizont span: {max_zeithorizont_span}h")
 
-            # Maximum safe zeithorizont span is 6 hours (empirically determined)
-            MAX_SAFE_ZEITHORIZONT_HOURS = 6
-
-            if max_zeithorizont_span > MAX_SAFE_ZEITHORIZONT_HOURS:
-                error_msg = (
-                    f"Zeithorizont span ({max_zeithorizont_span}h) exceeds maximum safe limit ({MAX_SAFE_ZEITHORIZONT_HOURS}h). "
-                    f"Large zeithorizont values cause interpolation to request data outside available range, "
-                    f"resulting in empty training arrays. Please reduce zeithorizont to {MAX_SAFE_ZEITHORIZONT_HOURS} hours or less."
-                )
-                logger.error(f"❌ VALIDATION FAILED: {error_msg}")
-                raise ValueError(error_msg)
-
-            logger.info(f"   ✅ Zeithorizont validation passed (span: {max_zeithorizont_span}h <= {MAX_SAFE_ZEITHORIZONT_HOURS}h)")
-            logger.info(f"📍 Step 6 complete: Validation successful")
+            logger.info(f"📍 Step 6 complete: Zeithorizont configuration logged (span: {max_zeithorizont_span}h)")
 
             utc_strt = i_dat_inf["utc_min"].min()
             utc_end = i_dat_inf["utc_max"].max()

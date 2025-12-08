@@ -1673,7 +1673,19 @@ def train_models(session_id):
         from flask import g
         increment_training_count(g.user_id)
         logger.info(f"Tracked training run for user {g.user_id}")
-        
+
+        # Delete old training_results before starting new training
+        # This ensures status endpoint returns correct state during new training
+        try:
+            supabase = get_supabase_client(use_service_role=True)
+            uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+            delete_response = supabase.table('training_results').delete().eq('session_id', uuid_session_id).execute()
+            deleted_count = len(delete_response.data) if delete_response.data else 0
+            if deleted_count > 0:
+                logger.info(f"🗑️ Deleted {deleted_count} old training_results for session {uuid_session_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete old training_results: {e}")
+
         import threading
         from services.training.training_orchestrator import run_model_training_async
         

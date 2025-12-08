@@ -12,7 +12,7 @@ import datetime
 import time
 import threading
 from flask import request, jsonify, Response, send_file, Blueprint, g, redirect
-from core.extensions import socketio
+from core.app_factory import socketio
 from middleware.auth import require_auth
 from middleware.subscription import require_subscription, check_processing_limit
 from utils.usage_tracking import increment_processing_count, update_storage_usage

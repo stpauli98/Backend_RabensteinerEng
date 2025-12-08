@@ -15,11 +15,24 @@ Purpose: Solve timeout issues when saving large training results to database
 import json
 import gzip
 import logging
+import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from threading import Lock
+from typing import Dict, List, Optional, Any, Tuple
 from utils.supabase_client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache for downloaded training results
+# Key: file_path, Value: (results_dict, timestamp)
+_results_cache: Dict[str, Tuple[dict, float]] = {}
+_cache_lock = Lock()
+_CACHE_TTL = 300  # 5 minutes
+_MAX_CACHE_SIZE = 10
+
+# Per-file locks to prevent duplicate downloads (race condition fix)
+_download_locks: Dict[str, Lock] = {}
+_download_locks_lock = Lock()  # Lock for accessing _download_locks dict
 
 
 def upload_training_results(
@@ -139,6 +152,41 @@ def upload_training_results(
         raise
 
 
+def _get_cached_results(file_path: str) -> Optional[dict]:
+    """Get results from cache if not expired"""
+    with _cache_lock:
+        if file_path in _results_cache:
+            cached_data, timestamp = _results_cache[file_path]
+            age_seconds = time.time() - timestamp
+            if age_seconds < _CACHE_TTL:
+                logger.info(f"✅ Cache HIT for {file_path} (age: {age_seconds:.1f}s)")
+                return cached_data
+            else:
+                logger.warning(
+                    f"⚠️ CACHE EXPIRED for {file_path} - age: {age_seconds:.1f}s exceeded TTL: {_CACHE_TTL}s. "
+                    f"If this happens frequently, consider increasing _CACHE_TTL in training_storage.py"
+                )
+                del _results_cache[file_path]
+    return None
+
+
+def _set_cached_results(file_path: str, results: dict) -> None:
+    """Store results in cache with LRU eviction"""
+    with _cache_lock:
+        # Evict oldest if at capacity
+        if len(_results_cache) >= _MAX_CACHE_SIZE:
+            oldest_key = min(_results_cache, key=lambda k: _results_cache[k][1])
+            oldest_age = time.time() - _results_cache[oldest_key][1]
+            del _results_cache[oldest_key]
+            logger.warning(
+                f"⚠️ CACHE FULL - Evicted {oldest_key} (age: {oldest_age:.1f}s) to make room. "
+                f"Cache size: {_MAX_CACHE_SIZE}. If this happens frequently, consider increasing "
+                f"_MAX_CACHE_SIZE in training_storage.py"
+            )
+        _results_cache[file_path] = (results, time.time())
+        logger.info(f"✅ Cached results for {file_path} (cache size: {len(_results_cache)}/{_MAX_CACHE_SIZE})")
+
+
 def download_training_results(
     file_path: str,
     decompress: Optional[bool] = None
@@ -161,33 +209,56 @@ def download_training_results(
         >>> print(results['model_type'])
         "Dense"
     """
-    try:
-        supabase = get_supabase_admin_client()
+    # Check cache first (quick check without lock)
+    cached = _get_cached_results(file_path)
+    if cached is not None:
+        return cached
 
-        logger.info(f"Downloading training results: {file_path}")
+    # Get or create per-file lock to prevent duplicate downloads
+    with _download_locks_lock:
+        if file_path not in _download_locks:
+            _download_locks[file_path] = Lock()
+        file_lock = _download_locks[file_path]
 
-        response = supabase.storage.from_('training-results').download(file_path)
+    # Acquire per-file lock - only one thread can download this specific file
+    with file_lock:
+        # Double-check cache after acquiring lock (another thread may have downloaded)
+        cached = _get_cached_results(file_path)
+        if cached is not None:
+            logger.info(f"✅ Cache HIT after lock acquisition for {file_path} (avoided duplicate download)")
+            return cached
 
-        if decompress is None:
-            decompress = file_path.endswith('.gz')
+        # Actually download the file
+        try:
+            supabase = get_supabase_admin_client()
 
-        if decompress:
-            logger.info(f"Decompressing {len(response) / 1024 / 1024:.2f}MB...")
-            data = gzip.decompress(response)
-            logger.info(f"Decompressed to {len(data) / 1024 / 1024:.2f}MB")
-        else:
-            data = response
+            logger.info(f"📥 Downloading training results: {file_path}")
 
-        results = json.loads(data.decode('utf-8'))
+            response = supabase.storage.from_('training-results').download(file_path)
 
-        logger.info(f"✅ Training results downloaded successfully: {file_path}")
-        return results
+            if decompress is None:
+                decompress = file_path.endswith('.gz')
 
-    except Exception as e:
-        logger.error(f"❌ Failed to download training results from {file_path}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        raise
+            if decompress:
+                logger.info(f"Decompressing {len(response) / 1024 / 1024:.2f}MB...")
+                data = gzip.decompress(response)
+                logger.info(f"Decompressed to {len(data) / 1024 / 1024:.2f}MB")
+            else:
+                data = response
+
+            results = json.loads(data.decode('utf-8'))
+
+            # Cache results before returning
+            _set_cached_results(file_path, results)
+
+            logger.info(f"✅ Training results downloaded successfully: {file_path}")
+            return results
+
+        except Exception as e:
+            logger.error(f"❌ Failed to download training results from {file_path}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
 
 
 def delete_training_results(file_path: str) -> bool:
