@@ -1572,51 +1572,66 @@ def generate_datasets(session_id):
     """
     Generate datasets and violin plots WITHOUT training models.
     This is phase 1 of the training workflow - data visualization only.
-    
+
     Refactored: Business logic moved to dataset_generator.generate_violin_plots_for_session()
+    Now includes progress tracking via WebSocket.
     """
     try:
         data = request.json
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
-        
+
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
-        
+
+        # Create progress tracker for WebSocket updates
+        from services.training.violin_progress_tracker import ViolinProgressTracker
+        from flask import current_app
+
+        socketio = current_app.extensions.get('socketio')
+        progress_tracker = ViolinProgressTracker(socketio, session_id)
+
         from services.training.dataset_generator import generate_violin_plots_for_session
-        
+
         result = generate_violin_plots_for_session(
             session_id=session_id,
             model_parameters=model_parameters,
-            training_split=training_split
+            training_split=training_split,
+            progress_tracker=progress_tracker
         )
-        
+
         violin_plots = result.get('violin_plots', {})
         if violin_plots:
+            # Emit saving to database progress
+            progress_tracker.saving_to_database()
+
             for plot_name, plot_data in violin_plots.items():
                 try:
                     if plot_data:
                         save_visualization_to_database(session_id, plot_name, plot_data)
                 except Exception as viz_error:
                     logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
-        
+
+        # Emit complete progress
+        progress_tracker.complete()
+
         from flask import g
         increment_processing_count(g.user_id)
         logger.info(f"Tracked dataset generation for user {g.user_id}")
-        
+
         return jsonify({
             'success': True,
             'message': 'Datasets generated successfully',
             'dataset_count': 10,
             'violin_plots': violin_plots
         })
-        
+
     except ValueError as e:
         return jsonify({
             'success': False,
             'error': str(e)
         }), 400
-        
+
     except Exception as e:
         logger.error(f"Error in generate_datasets: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500

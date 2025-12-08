@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 def generate_violin_plots_for_session(
     session_id: str,
     model_parameters: Optional[Dict] = None,
-    training_split: Optional[Dict] = None
+    training_split: Optional[Dict] = None,
+    progress_tracker=None
 ) -> Dict:
     """
     Generate datasets and violin plots WITHOUT training models.
@@ -36,6 +37,7 @@ def generate_violin_plots_for_session(
         session_id: Training session ID
         model_parameters: Model configuration (not used for visualization)
         training_split: Training split configuration (not used for visualization)
+        progress_tracker: Optional ViolinProgressTracker for emitting progress updates
 
     Returns:
         dict: {
@@ -54,15 +56,26 @@ def generate_violin_plots_for_session(
 
     logger.info(f"Generating violin plots for session {session_id} WITHOUT training")
 
+    # Emit start progress
+    if progress_tracker:
+        progress_tracker.start()
+
     data_loader = DataLoader()
 
     session_data = data_loader.load_session_data(session_id)
     files_info = session_data.get('files', [])
 
     if not files_info:
+        if progress_tracker:
+            progress_tracker.error('No data available for visualization')
         raise ValueError('No data available for visualization. Please upload CSV files first')
 
-    downloaded_files = data_loader.download_session_files(session_id)
+    # Download files with progress tracking
+    downloaded_files = data_loader.download_session_files(session_id, progress_tracker=progress_tracker)
+
+    # Emit parsing phase
+    if progress_tracker:
+        progress_tracker.parsing_files()
 
     csv_data = {}
     for file_type, file_path in downloaded_files.items():
@@ -78,7 +91,13 @@ def generate_violin_plots_for_session(
             logger.info(f"Loaded {file_type} file with {len(df)} rows and {len(df.columns)} columns: {list(df.columns)}")
 
     if not csv_data:
+        if progress_tracker:
+            progress_tracker.error('Could not load CSV data')
         raise Exception('Could not load CSV data. CSV files could not be read')
+
+    # Emit parsing complete
+    if progress_tracker:
+        progress_tracker.parsing_complete()
 
     input_data = None
     output_data = None
@@ -100,6 +119,8 @@ def generate_violin_plots_for_session(
             output_features = numeric_cols
 
     if input_data is None and output_data is None:
+        if progress_tracker:
+            progress_tracker.error('No numeric data found in CSV files')
         raise ValueError('No numeric data found in CSV files. CSV files must contain numeric columns for visualization')
 
     data_info = {
@@ -110,12 +131,14 @@ def generate_violin_plots_for_session(
         'output_features': output_features
     }
 
+    # Generate plots with progress tracking
     plot_result = generate_violin_plots_from_data(
         session_id,
         input_data=data_info.get('input_data'),
         output_data=data_info.get('output_data'),
         input_features=data_info.get('input_features'),
-        output_features=data_info.get('output_features')
+        output_features=data_info.get('output_features'),
+        progress_tracker=progress_tracker
     )
 
     result = {

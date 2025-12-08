@@ -59,31 +59,37 @@ def generate_violin_plots_from_data(
     input_data: Optional[np.ndarray] = None,
     output_data: Optional[np.ndarray] = None,
     input_features: Optional[List[str]] = None,
-    output_features: Optional[List[str]] = None
+    output_features: Optional[List[str]] = None,
+    progress_tracker=None
 ) -> Dict[str, Any]:
     """
     Generate violin plots for input and output data distributions.
-    
+
     This function creates violin plots WITHOUT training any models,
     following the original implementation approach where plots show
     raw data distribution.
-    
+
     Args:
         session_id: Session identifier
         input_data: Input data array (X data)
         output_data: Output data array (y data)
         input_features: Names of input features
         output_features: Names of output features
-    
+        progress_tracker: Optional ViolinProgressTracker for emitting progress updates
+
     Returns:
         Dictionary containing base64-encoded plot images
     """
     try:
         plots = {}
-        
+
         palette = sns.color_palette("husl", 20)
-        
+
         if input_data is not None and len(input_data) > 0:
+            # Emit progress: generating input plot
+            if progress_tracker:
+                progress_tracker.generating_input_plot()
+
             logger.info(f"Generating input data violin plot for session {session_id}")
             
             if input_features:
@@ -130,10 +136,18 @@ def generate_violin_plots_from_data(
             input_plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
             plots['input_violin_plot'] = f"data:image/png;base64,{input_plot_base64}"
             plt.close()
-            
+
+            # Emit progress: input plot complete
+            if progress_tracker:
+                progress_tracker.input_plot_complete()
+
             logger.info(f"Input violin plot generated successfully")
-        
+
         if output_data is not None and len(output_data) > 0:
+            # Emit progress: generating output plot
+            if progress_tracker:
+                progress_tracker.generating_output_plot()
+
             logger.info(f"Generating output data violin plot for session {session_id}")
             
             if output_features:
@@ -182,16 +196,23 @@ def generate_violin_plots_from_data(
             output_plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
             plots['output_violin_plot'] = f"data:image/png;base64,{output_plot_base64}"
             plt.close()
-            
+
+            # Emit progress: output plot complete
+            if progress_tracker:
+                progress_tracker.output_plot_complete()
+
             logger.info(f"Output violin plot generated successfully")
-        
+
         return {
             'success': True,
             'plots': plots,
             'message': 'Violin plots generated successfully'
         }
-        
+
     except Exception as e:
+        # Emit error if tracker available
+        if progress_tracker:
+            progress_tracker.error(str(e))
         logger.error(f"Error generating violin plots: {str(e)}")
         return {
             'success': False,

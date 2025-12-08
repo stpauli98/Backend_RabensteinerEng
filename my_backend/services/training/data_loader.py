@@ -155,30 +155,42 @@ class DataLoader:
             logger.error(f"Error loading files info: {str(e)}")
             raise
     
-    def download_session_files(self, session_id: str) -> Dict[str, str]:
+    def download_session_files(self, session_id: str, progress_tracker=None) -> Dict[str, str]:
         """
         Download all CSV files for a session
-        
+
         Args:
             session_id: Session identifier
-            
+            progress_tracker: Optional ViolinProgressTracker for emitting progress updates
+
         Returns:
             Dict mapping file types to local file paths
         """
         try:
             files_info = self._load_files_info(session_id)
             downloaded_files = {}
-            
+
             for file_info in files_info:
                 file_type = file_info.get('type', 'unknown')
                 file_name = file_info.get('file_name', 'unknown.csv')
                 storage_path = file_info.get('storage_path', '')
-                
+
+                # Emit progress before download
+                if progress_tracker:
+                    if file_type == 'input':
+                        progress_tracker.downloading_input()
+                    elif file_type == 'output':
+                        progress_tracker.downloading_output()
+
                 local_path = self._download_file(storage_path, file_name, session_id, file_type)
                 downloaded_files[file_type] = local_path
-            
+
+            # Emit download complete
+            if progress_tracker:
+                progress_tracker.download_complete()
+
             return downloaded_files
-            
+
         except Exception as e:
             logger.error(f"Error downloading session files: {str(e)}")
             raise
