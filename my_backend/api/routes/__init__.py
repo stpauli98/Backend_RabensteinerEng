@@ -6,9 +6,9 @@ def register_blueprints(app):
     # Domain blueprints (new architecture)
     from domains.processing import first_processing_bp, data_processing_bp
     from domains.training.api import training_bp
+    from domains.upload import load_data_bp
 
     # Legacy blueprints (pending migration)
-    from api.routes.load_data import bp as load_row_data_bp
     from api.routes.cloud import bp as cloud_bp
     from api.routes.adjustments import bp as adjustmentsOfData_bp
     from api.routes.auth_example import auth_example_bp
@@ -18,9 +18,9 @@ def register_blueprints(app):
     app.register_blueprint(data_processing_bp)
     app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
     app.register_blueprint(training_bp, url_prefix='/api/training')
+    app.register_blueprint(load_data_bp, url_prefix='/api/loadRowData')
 
     # Register legacy blueprints
-    app.register_blueprint(load_row_data_bp, url_prefix='/api/loadRowData')
     app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
     app.register_blueprint(adjustmentsOfData_bp, url_prefix='/api/adjustmentsOfData')
     app.register_blueprint(auth_example_bp)
