@@ -398,7 +398,7 @@ class Visualizer:
         """
         try:
             from utils.training_storage import fetch_training_results_with_storage
-            from utils.database import get_supabase_client, create_or_get_session_uuid
+            from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
             results = fetch_training_results_with_storage(session_id)
 
@@ -468,9 +468,10 @@ class Visualizer:
             PermissionError: If session doesn't belong to the user
         """
         try:
-            from utils.database import get_supabase_client, create_or_get_session_uuid
+            from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
-            supabase = get_supabase_client()
+            # Use service_role to bypass RLS for visualization reads
+            supabase = get_supabase_client(use_service_role=True)
             uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
 
             response = supabase.table('training_visualizations').select('*').eq('session_id', uuid_session_id).execute()

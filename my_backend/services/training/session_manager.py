@@ -19,7 +19,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from utils.database import get_string_id_from_uuid
+from shared.database.operations import get_string_id_from_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict, use
         json.dump(session_metadata, f, indent=2)
 
     try:
-        from utils.database import create_or_get_session_uuid
+        from shared.database.operations import create_or_get_session_uuid
         session_uuid = create_or_get_session_uuid(session_id, user_id)
         if session_uuid:
             from api.routes.training import save_session_to_supabase
@@ -148,7 +148,7 @@ def get_sessions_list(user_id: str = None, limit: int = 50) -> List[Dict]:
     Returns:
         List of session dictionaries with complete metadata
     """
-    from utils.database import get_supabase_client
+    from shared.database.operations import get_supabase_client
 
     supabase = get_supabase_client()
     if not supabase:
@@ -344,7 +344,7 @@ def get_session_from_database(session_id: str, user_id: str = None) -> Dict:
         ValueError: If session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid, get_supabase_client
+    from shared.database.operations import create_or_get_session_uuid, get_supabase_client
 
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
@@ -379,7 +379,7 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
         ValueError: If session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid, get_supabase_client
+    from shared.database.operations import create_or_get_session_uuid, get_supabase_client
     import shutil
 
     # Get UUID with ownership validation (will raise PermissionError if not owner)
@@ -457,7 +457,7 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
     Raises:
         ValueError: If confirmation is not provided
     """
-    from utils.database import get_supabase_client
+    from shared.database.operations import get_supabase_client
     import shutil
 
     if not confirm:
@@ -622,8 +622,8 @@ def update_session_name(session_id: str, new_name: str, user_id: str = None) -> 
         ValueError: If validation fails or session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import update_session_name as db_update_session_name
-    from utils.database import ValidationError, SessionNotFoundError
+    from shared.database.operations import update_session_name as db_update_session_name
+    from shared.database.operations import ValidationError, SessionNotFoundError
 
     if not session_id:
         raise ValueError('sessionId is required')
@@ -666,7 +666,7 @@ def save_time_info_data(session_id: str, time_info: Dict) -> bool:
     Raises:
         ValueError: If validation fails
     """
-    from utils.database import save_time_info
+    from shared.database.operations import save_time_info
 
     if not session_id or not isinstance(session_id, str):
         raise ValueError('Invalid session_id format')
@@ -694,7 +694,7 @@ def save_zeitschritte_data(session_id: str, zeitschritte: Dict, user_id: str = N
     Raises:
         ValueError: If validation fails
     """
-    from utils.database import save_zeitschritte
+    from shared.database.operations import save_zeitschritte
 
     if not session_id or not isinstance(session_id, str):
         raise ValueError('Invalid session_id format')
@@ -725,7 +725,7 @@ def get_time_info_data(session_id: str, user_id: str = None) -> Dict:
         ValueError: If session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid, get_supabase_client
+    from shared.database.operations import create_or_get_session_uuid, get_supabase_client
 
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
@@ -756,7 +756,7 @@ def get_zeitschritte_data(session_id: str, user_id: str = None) -> Dict:
         ValueError: If session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid, get_supabase_client
+    from shared.database.operations import create_or_get_session_uuid, get_supabase_client
 
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
@@ -788,7 +788,7 @@ def get_csv_files_for_session(session_id: str, file_type: str = None, user_id: s
         ValueError: If session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid, get_supabase_client
+    from shared.database.operations import create_or_get_session_uuid, get_supabase_client
 
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
@@ -821,7 +821,7 @@ def get_session_status(session_id: str, user_id: str = None) -> Dict:
         ValueError: If session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid, get_supabase_client
+    from shared.database.operations import create_or_get_session_uuid, get_supabase_client
 
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
@@ -886,7 +886,7 @@ def get_upload_status(session_id: str, user_id: str = None) -> Dict:
         ValueError: If session not found (404)
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import get_supabase_client, create_or_get_session_uuid
+    from shared.database.operations import get_supabase_client, create_or_get_session_uuid
     import uuid as uuid_lib
 
     try:
@@ -981,7 +981,7 @@ def create_database_session(session_id: str, session_name: str = None, user_id: 
         ValueError: If session creation fails or user_id not provided
         PermissionError: If session exists but doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid
+    from shared.database.operations import create_or_get_session_uuid
 
     if not session_id:
         raise ValueError('Missing session ID')
@@ -1015,7 +1015,7 @@ def get_session_uuid(session_id: str, user_id: str = None) -> str:
         ValueError: If session not found
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid
+    from shared.database.operations import create_or_get_session_uuid
 
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
 

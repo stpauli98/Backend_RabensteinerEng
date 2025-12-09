@@ -90,7 +90,7 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
         ValueError: If session not found, no training results, or no models
         PermissionError: If session doesn't belong to the user
     """
-    from utils.database import create_or_get_session_uuid
+    from shared.database.operations import create_or_get_session_uuid
     from utils.training_storage import fetch_training_results_with_storage
     from utils.model_storage import upload_trained_model
 
@@ -207,7 +207,7 @@ def get_models_list(session_id: str, user_id: str = None) -> List[Dict]:
     Raises:
         ValueError: If session not found
     """
-    from utils.database import create_or_get_session_uuid
+    from shared.database.operations import create_or_get_session_uuid
     from utils.model_storage import list_session_models
 
     logger.info(f"📋 Listing models from Storage - session: {session_id}")
@@ -238,7 +238,7 @@ def download_model_file(session_id: str, filename: str = None) -> Tuple[bytes, s
     Raises:
         ValueError: If session not found, no models, or specific model not found
     """
-    from utils.database import create_or_get_session_uuid
+    from shared.database.operations import create_or_get_session_uuid
     from utils.model_storage import list_session_models, download_trained_model
 
     logger.info(f"📥 Download request - session: {session_id}, filename: {filename or 'first .h5 model'}")

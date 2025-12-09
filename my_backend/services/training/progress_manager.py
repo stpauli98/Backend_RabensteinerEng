@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Any, List
 import json
 
-from utils.database import get_supabase_client
+from shared.database.operations import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

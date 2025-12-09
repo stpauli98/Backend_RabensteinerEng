@@ -23,7 +23,7 @@ from api.routes.load_data import (
     _process_datetime_columns,
     _build_result_dataframe
 )
-from api.routes.exceptions import (
+from shared.exceptions import (
     MissingParameterError,
     DelimiterMismatchError,
     CSVParsingError,

@@ -231,7 +231,7 @@ def get_data_for_violin_plots(session_id: str) -> Dict[str, Any]:
         Dictionary containing input/output data and feature names
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from shared.database.operations import get_supabase_client, create_or_get_session_uuid
         
         supabase = get_supabase_client()
         # Note: This function should receive user_id from caller for proper validation

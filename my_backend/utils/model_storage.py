@@ -15,7 +15,7 @@ import os
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
-from utils.supabase_client import get_supabase_admin_client
+from shared.database.client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
 

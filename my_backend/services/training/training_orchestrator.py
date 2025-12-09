@@ -132,8 +132,8 @@ def save_training_results(
     Raises:
         Exception: If storage or database save fails
     """
-    from utils.database import get_supabase_client, create_or_get_session_uuid
-    from utils.supabase_client import get_supabase_admin_client
+    from shared.database.operations import get_supabase_client, create_or_get_session_uuid
+    from shared.database.client import get_supabase_admin_client
     from utils.training_storage import upload_training_results
 
     supabase = get_supabase_admin_client()
@@ -195,7 +195,7 @@ def save_training_results(
 
         # Track storage usage for training results
         try:
-            from utils.usage_tracking import update_storage_usage
+            from shared.tracking.usage import update_storage_usage
 
             # Get user_id from sessions table
             session_response = supabase.table('sessions').select('user_id').eq('id', uuid_session_id).single().execute()
@@ -289,7 +289,7 @@ def run_model_training_async(
         socketio_instance: SocketIO instance for real-time updates (optional)
     """
     from services.training.middleman_runner import ModernMiddlemanRunner
-    from utils.database import create_or_get_session_uuid
+    from shared.database.operations import create_or_get_session_uuid
 
     try:
         logger.info(f"🚀 TRAINING THREAD STARTED for session {session_id}")

@@ -31,7 +31,7 @@ def is_webhook_processed(event_id: str) -> bool:
         return result.data and len(result.data) > 0
 
     except Exception as e:
-        logger.error(f"❌ Error checking webhook processed status: {str(e)}")
+        logger.error(f"Error checking webhook processed status: {str(e)}")
         # If check fails, assume not processed to avoid blocking
         return False
 
@@ -54,11 +54,11 @@ def mark_webhook_processed(event_id: str, event_type: str) -> None:
             'processed_at': datetime.now(timezone.utc).isoformat()
         }).execute()
 
-        logger.info(f"✅ Marked webhook {event_id} as processed")
+        logger.info(f"Marked webhook {event_id} as processed")
 
     except Exception as e:
         # Log error but don't raise - webhook was processed successfully
-        logger.error(f"❌ Error marking webhook as processed: {str(e)}")
+        logger.error(f"Error marking webhook as processed: {str(e)}")
 
 def get_or_create_stripe_customer(user_id: str, email: str) -> str:
     """
@@ -233,15 +233,15 @@ def handle_successful_payment(session: stripe.checkout.Session) -> None:
 
             if result.data:
                 cancelled_count = result.data.get('cancelled_count', 0)
-                logger.info(f"✅ Subscription activated for user {user_id}, plan {plan_id} (cancelled {cancelled_count} old subscription(s))")
+                logger.info(f"Subscription activated for user {user_id}, plan {plan_id} (cancelled {cancelled_count} old subscription(s))")
             else:
-                logger.info(f"✅ Subscription activated for user {user_id}, plan {plan_id}")
+                logger.info(f"Subscription activated for user {user_id}, plan {plan_id}")
 
         except Exception as rpc_error:
             # If RPC function doesn't exist, fall back to non-transactional approach
             # This happens if sql/subscription_transactions.sql was not deployed
-            logger.warning(f"⚠️ RPC function not found, using fallback non-transactional approach: {str(rpc_error)}")
-            logger.warning("⚠️ DEPLOY sql/subscription_transactions.sql for atomic transactions!")
+            logger.warning(f"RPC function not found, using fallback non-transactional approach: {str(rpc_error)}")
+            logger.warning("DEPLOY sql/subscription_transactions.sql for atomic transactions!")
 
             # Fallback: Non-transactional (RISKY but better than nothing)
             supabase.table('user_subscriptions') \
@@ -268,10 +268,10 @@ def handle_successful_payment(session: stripe.checkout.Session) -> None:
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }).execute()
 
-            logger.info(f"✅ Subscription activated for user {user_id}, plan {plan_id} (fallback mode)")
+            logger.info(f"Subscription activated for user {user_id}, plan {plan_id} (fallback mode)")
 
     except Exception as e:
-        logger.error(f"❌ Error handling successful payment: {str(e)}")
+        logger.error(f"Error handling successful payment: {str(e)}")
         raise
 
 
@@ -302,7 +302,7 @@ def get_plan_id_from_stripe_price(stripe_price_id: str):
         return None
 
     except Exception as e:
-        logger.error(f"❌ Error mapping stripe price to plan: {str(e)}")
+        logger.error(f"Error mapping stripe price to plan: {str(e)}")
         return None
 
 
@@ -323,7 +323,7 @@ def handle_subscription_updated(subscription: stripe.Subscription) -> None:
             .execute()
 
         if not existing.data or len(existing.data) == 0:
-            logger.warning(f"⚠️ Subscription {subscription.id} not found in database, skipping update")
+            logger.warning(f"Subscription {subscription.id} not found in database, skipping update")
             return
 
         from datetime import datetime, timezone
@@ -354,7 +354,7 @@ def handle_subscription_updated(subscription: stripe.Subscription) -> None:
                 if current_plan_id != new_plan_id:
                     # Plan changed! Update it
                     update_data['plan_id'] = new_plan_id
-                    logger.info(f"✅ Plan changed for subscription {subscription.id}: {current_plan_id} → {new_plan_id}")
+                    logger.info(f"Plan changed for subscription {subscription.id}: {current_plan_id} -> {new_plan_id}")
 
         # Update existing subscription
         supabase.table('user_subscriptions') \
@@ -362,10 +362,10 @@ def handle_subscription_updated(subscription: stripe.Subscription) -> None:
             .eq('stripe_subscription_id', subscription.id) \
             .execute()
 
-        logger.info(f"✅ Subscription updated: {subscription.id}")
+        logger.info(f"Subscription updated: {subscription.id}")
 
     except Exception as e:
-        logger.error(f"❌ Error handling subscription update: {str(e)}")
+        logger.error(f"Error handling subscription update: {str(e)}")
         raise
 
 
@@ -386,7 +386,7 @@ def handle_subscription_deleted(subscription: stripe.Subscription) -> None:
             .eq('stripe_subscription_id', subscription.id) \
             .execute()
 
-        logger.info(f"✅ Subscription cancelled: {subscription.id}")
+        logger.info(f"Subscription cancelled: {subscription.id}")
 
         # Downgrade to Free plan
         if result.data and len(result.data) > 0:
@@ -395,7 +395,7 @@ def handle_subscription_deleted(subscription: stripe.Subscription) -> None:
                 downgrade_to_free_plan(user_id)
 
     except Exception as e:
-        logger.error(f"❌ Error handling subscription deletion: {str(e)}")
+        logger.error(f"Error handling subscription deletion: {str(e)}")
         raise
 
 
@@ -425,14 +425,14 @@ def downgrade_to_free_plan(user_id: str) -> None:
             if result.data:
                 message = result.data.get('message', '')
                 cancelled_count = result.data.get('cancelled_count', 0)
-                logger.info(f"✅ {message} (cancelled {cancelled_count} paid subscription(s))")
+                logger.info(f"{message} (cancelled {cancelled_count} paid subscription(s))")
             else:
-                logger.info(f"✅ User {user_id} downgraded to Free plan")
+                logger.info(f"User {user_id} downgraded to Free plan")
 
         except Exception as rpc_error:
             # If RPC function doesn't exist, fall back to non-transactional approach
-            logger.warning(f"⚠️ RPC function not found, using fallback approach: {str(rpc_error)}")
-            logger.warning("⚠️ DEPLOY sql/subscription_transactions.sql for atomic transactions!")
+            logger.warning(f"RPC function not found, using fallback approach: {str(rpc_error)}")
+            logger.warning("DEPLOY sql/subscription_transactions.sql for atomic transactions!")
 
             # Fallback: Non-transactional (RISKY but better than nothing)
             from datetime import datetime, timezone
@@ -444,7 +444,7 @@ def downgrade_to_free_plan(user_id: str) -> None:
                 .execute()
 
             if not free_plan.data:
-                logger.error(f"❌ Free plan not found in database")
+                logger.error(f"Free plan not found in database")
                 return
 
             existing_free = supabase.table('user_subscriptions') \
@@ -455,7 +455,7 @@ def downgrade_to_free_plan(user_id: str) -> None:
                 .execute()
 
             if existing_free.data and len(existing_free.data) > 0:
-                logger.info(f"ℹ️ User {user_id} already has active Free plan")
+                logger.info(f"User {user_id} already has active Free plan")
                 return
 
             cancelled_subs = supabase.table('user_subscriptions') \
@@ -469,7 +469,7 @@ def downgrade_to_free_plan(user_id: str) -> None:
                 .execute()
 
             if cancelled_subs.data and len(cancelled_subs.data) > 0:
-                logger.info(f"✅ Cancelled {len(cancelled_subs.data)} active subscription(s) for user {user_id}")
+                logger.info(f"Cancelled {len(cancelled_subs.data)} active subscription(s) for user {user_id}")
 
             supabase.table('user_subscriptions').insert({
                 'user_id': user_id,
@@ -481,10 +481,10 @@ def downgrade_to_free_plan(user_id: str) -> None:
                 'is_trial': False
             }).execute()
 
-            logger.info(f"✅ User {user_id} downgraded to Free plan (fallback mode)")
+            logger.info(f"User {user_id} downgraded to Free plan (fallback mode)")
 
     except Exception as e:
-        logger.error(f"❌ Error downgrading to Free plan: {str(e)}")
+        logger.error(f"Error downgrading to Free plan: {str(e)}")
         raise
 
 
@@ -503,7 +503,7 @@ def handle_payment_failed(invoice: stripe.Invoice) -> None:
         subscription_id = invoice.subscription
 
         if not subscription_id:
-            logger.warning(f"⚠️ Invoice {invoice.id} has no subscription")
+            logger.warning(f"Invoice {invoice.id} has no subscription")
             return
 
         # Update subscription status to past_due
@@ -515,8 +515,8 @@ def handle_payment_failed(invoice: stripe.Invoice) -> None:
             .eq('stripe_subscription_id', subscription_id) \
             .execute()
 
-        logger.warning(f"⚠️ Payment failed for subscription {subscription_id}, status set to past_due")
+        logger.warning(f"Payment failed for subscription {subscription_id}, status set to past_due")
 
     except Exception as e:
-        logger.error(f"❌ Error handling payment failure: {str(e)}")
+        logger.error(f"Error handling payment failure: {str(e)}")
         raise

@@ -28,7 +28,7 @@ from api.routes.load_data import (
     chunk_storage,
     UPLOAD_EXPIRY_SECONDS
 )
-from api.routes.exceptions import UnsupportedTimezoneError
+from shared.exceptions import UnsupportedTimezoneError
 
 
 class TestCleanupOldUploads:

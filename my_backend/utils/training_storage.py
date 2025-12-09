@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 from threading import Lock
 from typing import Dict, List, Optional, Any, Tuple
-from utils.supabase_client import get_supabase_admin_client
+from shared.database.client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
 
@@ -382,7 +382,7 @@ def fetch_training_results_with_storage(
         "Dense"
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
         if supabase is None:
             supabase = get_supabase_client()

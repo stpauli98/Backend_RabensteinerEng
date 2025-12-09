@@ -13,10 +13,10 @@ import time
 import threading
 from flask import request, jsonify, Response, send_file, Blueprint, g, redirect
 from core.app_factory import socketio
-from middleware.auth import require_auth
-from middleware.subscription import require_subscription, check_processing_limit
-from utils.usage_tracking import increment_processing_count, update_storage_usage
-from utils.storage_service import storage_service
+from shared.auth.jwt import require_auth
+from shared.auth.subscription import require_subscription, check_processing_limit
+from shared.tracking.usage import increment_processing_count, update_storage_usage
+from shared.storage.service import storage_service
 
 bp = Blueprint('first_processing', __name__)
 

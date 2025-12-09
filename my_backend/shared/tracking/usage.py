@@ -256,9 +256,9 @@ def get_usage_stats(user_id: str) -> dict:
     Returns:
         dict: Usage statistics with uploads, processing, storage
     """
+    period_start = get_current_period_start()
     try:
         supabase = get_supabase_admin_client()
-        period_start = get_current_period_start()
 
         response = supabase.table('usage_tracking') \
             .select('*') \

@@ -5,7 +5,7 @@ solving the stateless instance problem on Google Cloud Run where
 temp files are lost between requests.
 
 Usage:
-    from shared.storage.service import storage_service
+    from shared.storage import storage_service
 
     # Upload a file
     file_id = storage_service.upload_csv(user_id, csv_content, original_filename)

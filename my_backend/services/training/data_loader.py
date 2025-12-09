@@ -14,7 +14,7 @@ from supabase import create_client
 from typing import Dict, List, Optional, Tuple
 import logging
 
-from utils.database import get_supabase_client, create_or_get_session_uuid
+from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
 logger = logging.getLogger(__name__)
 

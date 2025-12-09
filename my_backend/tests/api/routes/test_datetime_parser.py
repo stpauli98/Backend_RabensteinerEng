@@ -15,7 +15,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 
 from api.routes.load_data import DateTimeParser, SUPPORTED_DATE_FORMATS
-from api.routes.exceptions import UnsupportedTimezoneError
+from shared.exceptions import UnsupportedTimezoneError
 
 
 class TestDateTimeParserInit:

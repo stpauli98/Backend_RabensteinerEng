@@ -1,14 +1,14 @@
 """Example protected routes demonstrating auth and subscription middleware"""
 from flask import Blueprint, jsonify, g
-from middleware.auth import require_auth, optional_auth
-from middleware.subscription import (
+from shared.auth.jwt import require_auth, optional_auth
+from shared.auth.subscription import (
     require_subscription,
     check_upload_limit,
     check_processing_limit,
     check_storage_limit,
     get_user_usage
 )
-from utils.usage_tracking import increment_upload_count
+from shared.tracking.usage import increment_upload_count
 
 auth_example_bp = Blueprint('auth_example', __name__, url_prefix='/api/auth-example')
 

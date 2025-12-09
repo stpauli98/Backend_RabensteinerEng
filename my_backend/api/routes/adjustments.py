@@ -8,12 +8,12 @@ import logging
 import traceback
 from io import StringIO
 from flask import request, jsonify, Blueprint, g
-from utils.storage_service import storage_service
+from shared.storage.service import storage_service
 import json
 from core.app_factory import socketio
-from middleware.auth import require_auth
-from middleware.subscription import require_subscription, check_processing_limit
-from utils.usage_tracking import increment_processing_count, update_storage_usage
+from shared.auth.jwt import require_auth
+from shared.auth.subscription import require_subscription, check_processing_limit
+from shared.tracking.usage import increment_processing_count, update_storage_usage
 
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 

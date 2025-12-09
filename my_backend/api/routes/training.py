@@ -16,10 +16,10 @@ import re
 import time
 from pathlib import Path
 from typing import Optional
-from utils.database import save_session_to_supabase, get_string_id_from_uuid, create_or_get_session_uuid, get_supabase_client
-from middleware.auth import require_auth
-from middleware.subscription import require_subscription, check_processing_limit, check_training_limit
-from utils.usage_tracking import increment_processing_count, increment_training_count
+from shared.database.operations import save_session_to_supabase, get_string_id_from_uuid, create_or_get_session_uuid, get_supabase_client
+from shared.auth.jwt import require_auth
+from shared.auth.subscription import require_subscription, check_processing_limit, check_training_limit
+from shared.tracking.usage import increment_processing_count, increment_training_count
 from utils.validation import validate_session_id, create_error_response, create_success_response
 from utils.metadata_utils import extract_file_metadata_fields, extract_file_metadata
 
@@ -68,7 +68,8 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str
         viz_data: Base64 encoded visualization data
     """
     try:
-        supabase = get_supabase_client()
+        # Use service_role to bypass RLS for visualization inserts
+        supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         existing = supabase.table('training_visualizations').select('id').eq('session_id', uuid_session_id).eq('plot_name', viz_name).execute()
@@ -717,7 +718,8 @@ def get_session_from_database_endpoint(session_id):
             if not database_session_id:
                 return jsonify({'success': False, 'error': 'Could not find or create database session'}), 404
 
-        supabase = get_supabase_client()
+        # Use service_role to bypass RLS for session data reads
+        supabase = get_supabase_client(use_service_role=True)
         if not supabase:
             return jsonify({'success': False, 'error': 'Database connection not available'}), 500
 
@@ -1119,7 +1121,7 @@ def get_csv_files_endpoint(session_id):
 def create_csv_file():
     """Create a new CSV file entry."""
     try:
-        from utils.database import save_file_info, save_csv_file_content
+        from shared.database.operations import save_file_info, save_csv_file_content
         
         if 'file' in request.files:
             file = request.files['file']
@@ -1256,9 +1258,10 @@ def get_training_results(session_id):
     SECURITY: Validates session ownership before returning results
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from shared.database.operations import get_supabase_client, create_or_get_session_uuid
         from utils.training_storage import download_training_results
-        supabase = get_supabase_client()
+        # Use service_role to bypass RLS for training_results reads
+        supabase = get_supabase_client(use_service_role=True)
 
         # Get authenticated user_id and validate ownership
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
@@ -1500,7 +1503,7 @@ def get_training_status(session_id: str):
         JSON response with training status
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from shared.database.operations import get_supabase_client, create_or_get_session_uuid
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
@@ -1796,9 +1799,10 @@ def get_evaluation_tables(session_id):
     Returns df_eval and df_eval_ts structures matching the original training output.
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from shared.database.operations import get_supabase_client, create_or_get_session_uuid
         from utils.training_storage import download_training_results
-        supabase = get_supabase_client()
+        # Use service_role to bypass RLS for training_results reads
+        supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         response = supabase.table('training_results') \
@@ -1934,7 +1938,7 @@ def save_evaluation_tables(session_id):
     Save evaluation tables (df_eval and df_eval_ts) to database
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from shared.database.operations import get_supabase_client, create_or_get_session_uuid
         from datetime import datetime
 
         data = request.get_json()
@@ -1954,7 +1958,8 @@ def save_evaluation_tables(session_id):
                 'error': 'No evaluation tables provided'
             }), 400
 
-        supabase = get_supabase_client()
+        # Use service_role to bypass RLS for evaluation_tables writes
+        supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         evaluation_data = {

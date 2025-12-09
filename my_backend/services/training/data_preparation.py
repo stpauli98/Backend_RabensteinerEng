@@ -29,7 +29,7 @@ def prepare_data_for_training(
         Dictionary containing data splits and metadata
     """
     try:
-        from utils.database import get_supabase_client, create_or_get_session_uuid
+        from shared.database.operations import get_supabase_client, create_or_get_session_uuid
         
         supabase = get_supabase_client()
         uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)

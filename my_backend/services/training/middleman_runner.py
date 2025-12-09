@@ -11,8 +11,8 @@ import traceback
 import pandas as pd
 from datetime import datetime
 
-from utils.database import create_or_get_session_uuid
-from utils.supabase_client import get_supabase_admin_client
+from shared.database.operations import create_or_get_session_uuid
+from shared.database.client import get_supabase_admin_client
 
 from services.training.pipeline_exact import run_exact_training_pipeline
 from services.training.data_loader import DataLoader

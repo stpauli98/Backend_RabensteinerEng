@@ -409,7 +409,7 @@ def create_csv_file_record(session_id: str, file_data: Dict) -> Dict:
         ValueError: If session not found or invalid data
         Exception: If database operation fails
     """
-    from utils.database import get_supabase_client, create_or_get_session_uuid
+    from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
     # Note: This function should receive user_id from caller for proper validation
     # For now, uses None for backward compatibility (to be fixed in caller chain)
@@ -461,7 +461,7 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
         Exception: If update fails
     """
     import uuid as uuid_lib
-    from utils.database import get_supabase_client
+    from shared.database.operations import get_supabase_client
 
     try:
         uuid_lib.UUID(file_id)
@@ -541,7 +541,7 @@ def delete_csv_file_record(file_id: str) -> Dict:
         Exception: If deletion fails
     """
     import uuid as uuid_lib
-    from utils.database import get_supabase_client
+    from shared.database.operations import get_supabase_client
 
     try:
         uuid_lib.UUID(file_id)

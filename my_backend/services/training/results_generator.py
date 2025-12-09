@@ -526,7 +526,7 @@ class ResultsGenerator:
                 logger.warning("No results to save")
                 return False
             
-            from utils.database import create_or_get_session_uuid
+            from shared.database.operations import create_or_get_session_uuid
 
             # Note: This function should receive user_id from caller for proper validation
             # For now, uses None for backward compatibility (to be fixed in caller chain)

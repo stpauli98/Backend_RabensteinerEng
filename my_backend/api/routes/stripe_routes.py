@@ -3,8 +3,8 @@ import os
 import logging
 import stripe
 from flask import Blueprint, request, jsonify, g
-from middleware.auth import require_auth
-from utils.stripe_helpers import (
+from shared.auth.jwt import require_auth
+from shared.payments.stripe import (
     get_or_create_stripe_customer,
     get_stripe_price_id,
     handle_successful_payment,
@@ -192,7 +192,7 @@ def activate_free_plan():
         400: {"error": "message"}
     """
     try:
-        from utils.stripe_helpers import downgrade_to_free_plan
+        from shared.payments.stripe import downgrade_to_free_plan
 
         user_id = g.user_id
 

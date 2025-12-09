@@ -1,7 +1,7 @@
 """SocketIO event handlers"""
 import logging
 from flask_socketio import join_room, leave_room, emit
-from utils.database import get_supabase_client, create_or_get_session_uuid
+from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
 logger = logging.getLogger(__name__)
 
