@@ -101,7 +101,9 @@ def run_exact_training_pipeline(
     utc_strt: datetime,
     utc_end: datetime,
     random_dat: bool = False,
-    mdl_config: Optional[MDL] = None
+    mdl_config: Optional[MDL] = None,
+    socketio=None,
+    session_id: str = None
 ) -> Dict:
     """
     Run the EXACT training pipeline matching training_original.py lines 1068-2260
@@ -140,7 +142,9 @@ def run_exact_training_pipeline(
         (i_array_3D, o_array_3D,
          i_combined_array, o_combined_array,
          utc_ref_log) = create_training_arrays(
-            i_dat, o_dat, i_dat_inf, o_dat_inf, utc_strt, utc_end
+            i_dat, o_dat, i_dat_inf, o_dat_inf, utc_strt, utc_end,
+            socketio=socketio,
+            session_id=session_id
         )
         logger.info(f"   Pipeline Step 1 complete: Created arrays with shape {i_array_3D.shape if hasattr(i_array_3D, 'shape') else 'unknown'}")
     except Exception as e:
@@ -194,19 +198,34 @@ def run_exact_training_pipeline(
     if mdl_config is None:
         mdl_config = MDL()
     
+    # Create SocketIO callback for real-time progress updates
+    socketio_callback = None
+    if socketio is not None and session_id is not None:
+        try:
+            from .socketio_callback import SocketIOProgressCallback
+            socketio_callback = SocketIOProgressCallback(
+                socketio=socketio,
+                session_id=session_id,
+                total_epochs=mdl_config.EP,
+                model_name=mdl_config.MODE
+            )
+            logger.info(f"   SocketIO callback created for session {session_id}")
+        except Exception as e:
+            logger.warning(f"   Failed to create SocketIO callback: {e}")
+    
     mdl = None
     
     if mdl_config.MODE == "Dense":
-        mdl = train_dense(trn_x, trn_y, val_x, val_y, mdl_config)
+        mdl = train_dense(trn_x, trn_y, val_x, val_y, mdl_config, socketio_callback=socketio_callback)
         
     elif mdl_config.MODE == "CNN":
-        mdl = train_cnn(trn_x, trn_y, val_x, val_y, mdl_config)
+        mdl = train_cnn(trn_x, trn_y, val_x, val_y, mdl_config, socketio_callback=socketio_callback)
         
     elif mdl_config.MODE == "LSTM":
-        mdl = train_lstm(trn_x, trn_y, val_x, val_y, mdl_config)
+        mdl = train_lstm(trn_x, trn_y, val_x, val_y, mdl_config, socketio_callback=socketio_callback)
         
     elif mdl_config.MODE == "AR LSTM":
-        mdl = train_ar_lstm(trn_x, trn_y, val_x, val_y, mdl_config)
+        mdl = train_ar_lstm(trn_x, trn_y, val_x, val_y, mdl_config, socketio_callback=socketio_callback)
         
     elif mdl_config.MODE == "SVR_dir":
         mdl = train_svr_dir(trn_x, trn_y, mdl_config)
@@ -323,7 +342,7 @@ def run_exact_training_pipeline(
             'model_type': mdl_config.MODE if mdl_config else 'unknown',
             'error': str(e)
         }
-    
+
     return {
         'trained_model': mdl,
         'train_data': {

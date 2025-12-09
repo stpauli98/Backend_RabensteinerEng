@@ -331,7 +331,9 @@ class ModernMiddlemanRunner:
                     utc_strt=utc_strt,
                     utc_end=utc_end,
                     random_dat=model_params.get('random_dat', False) if model_params else False,
-                    mdl_config=mdl_config
+                    mdl_config=mdl_config,
+                    socketio=self.socketio,
+                    session_id=session_id
                 )
                 logger.info(f"📍 Step 6 complete: Training pipeline finished successfully")
             except Exception as e:

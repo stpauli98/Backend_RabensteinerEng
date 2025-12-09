@@ -63,7 +63,7 @@ def get_activation(activation_name: str) -> str:
     return ACTIVATION_FUNCTIONS.get(activation_name, activation_name.lower())
 
 
-def train_dense(train_x, train_y, val_x, val_y, MDL):    
+def train_dense(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):    
     """
     Funktion trainiert und validiert ein Neuronales Netz anhand der 
     eingegebenen Trainingsdaten (train_x, train_y) und Validierungsdaten 
@@ -124,12 +124,17 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
     
     print("Modell wird trainiert.")
     
+    # Build callbacks list with optional SocketIO progress callback
+    callbacks = [earlystopping]
+    if socketio_callback is not None:
+        callbacks.append(socketio_callback)
+    
     model.fit(
         x               = train_x,
         y               = train_y,
         epochs          = MDL.EP,
         verbose         = 1,
-        callbacks       = [earlystopping],
+        callbacks       = callbacks,
         validation_data = (val_x, val_y)
         )
          
@@ -138,7 +143,7 @@ def train_dense(train_x, train_y, val_x, val_y, MDL):
     return model
 
 
-def train_cnn(train_x, train_y, val_x, val_y, MDL):    
+def train_cnn(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):    
     """
     Funktion trainiert und validiert ein CNN anhand der 
     eingegebenen Trainingsdaten (train_x, train_y) und Validierungsdaten 
@@ -193,12 +198,18 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     
     
     print("Modell wird trainiert.")
+    
+    # Build callbacks list with optional SocketIO progress callback
+    callbacks = [earlystopping]
+    if socketio_callback is not None:
+        callbacks.append(socketio_callback)
+    
     model.fit(
         x               = train_x,
         y               = train_y,
         epochs          = MDL.EP,
         verbose         = 1,
-        callbacks       = [earlystopping],
+        callbacks       = callbacks,
         validation_data = (val_x, val_y)
     )
     
@@ -207,7 +218,7 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL):
     return model
 
 
-def train_lstm(train_x, train_y, val_x, val_y, MDL):
+def train_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
     """
     Funktion trainiert und validiert ein LSTM Neural Network
     
@@ -250,12 +261,17 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
     
     print("Modell wird trainiert.")
     
+    # Build callbacks list with optional SocketIO progress callback
+    callbacks = [earlystopping]
+    if socketio_callback is not None:
+        callbacks.append(socketio_callback)
+    
     model.fit(
         x               = train_x,
         y               = train_y,
         epochs          = MDL.EP,
         verbose         = 1,
-        callbacks       = [earlystopping],
+        callbacks       = callbacks,
         validation_data = (val_x, val_y)
         )
          
@@ -264,7 +280,7 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL):
     return model
 
 
-def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
+def train_ar_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
     """
     Funktion trainiert und validiert ein Autoregressive LSTM
     
@@ -303,12 +319,17 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL):
     
     print("Modell wird trainiert.")
     
+    # Build callbacks list with optional SocketIO progress callback
+    callbacks = [earlystopping]
+    if socketio_callback is not None:
+        callbacks.append(socketio_callback)
+    
     model.fit(
         x               = train_x,
         y               = train_y,
         epochs          = MDL.EP,
         verbose         = 1,
-        callbacks       = [earlystopping],
+        callbacks       = callbacks,
         validation_data = (val_x, val_y)
         )
          

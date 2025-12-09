@@ -320,11 +320,16 @@ def run_model_training_async(
                 logger.error(f"Failed to save training results: {str(e)}")
 
             if socketio_instance:
-                socketio_instance.emit('training_completed', {
+                room = f"training_{session_id}"
+                socketio_instance.emit('training_progress', {
                     'session_id': session_id,
-                    'status': 'completed',
-                    'message': 'Training completed successfully'
-                }, room=session_id)
+                    'status': 'training_completed',
+                    'message': 'All models trained successfully',
+                    'progress_percent': 100,
+                    'phase': 'completed',
+                    'model_type': model_config.get('MODE', 'Dense')
+                }, room=room)
+                logger.info(f"✅ Training completed event emitted for session {session_id}")
         else:
             logger.error(f"Training failed: {result.get('error')}")
             if socketio_instance:

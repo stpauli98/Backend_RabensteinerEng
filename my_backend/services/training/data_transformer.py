@@ -19,9 +19,11 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame, 
+def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                           o_dat_inf: pd.DataFrame, utc_strt: datetime.datetime,
-                          utc_end: datetime.datetime) -> Tuple:
+                          utc_end: datetime.datetime,
+                          socketio=None,
+                          session_id: str = None) -> Tuple:
     """
     Create training arrays exactly as in training_original.py lines 1068-1760
     This function implements the main time loop that builds i_arrays and o_arrays
@@ -83,10 +85,38 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
             break
 
         iteration_count += 1
-        if iteration_count % 10000 == 0:
+        if iteration_count % 500 == 0:
             elapsed = time.time() - loop_start_time
             progress = (iteration_count / total_iterations * 100) if total_iterations > 0 else 0
-            logger.info(f"      Progress: {iteration_count}/{total_iterations} ({progress:.1f}%) - {elapsed:.1f}s elapsed")
+
+            # ETA kalkulacija
+            if iteration_count > 0 and elapsed > 0:
+                rate = iteration_count / elapsed  # iterations per second
+                remaining = total_iterations - iteration_count
+                eta_seconds = remaining / rate if rate > 0 else 0
+            else:
+                eta_seconds = 0
+
+            logger.info(f"      Progress: {iteration_count}/{total_iterations} ({progress:.1f}%) - {elapsed:.1f}s elapsed - ETA: {eta_seconds:.0f}s")
+
+            # Emit progress via Socket.IO
+            if socketio and session_id:
+                try:
+                    room = f"training_{session_id}"
+                    socketio.emit('training_progress', {
+                        'session_id': session_id,
+                        'status': 'data_transformation',
+                        'message': f'Transforming data: {iteration_count}/{total_iterations}',
+                        'progress_percent': round(progress, 1),
+                        'phase': 'data_transformation',
+                        'current_iteration': iteration_count,
+                        'total_iterations': total_iterations,
+                        'elapsed_seconds': round(elapsed, 1),
+                        'eta_seconds': round(eta_seconds, 0),
+                        'estimated_completion': round(elapsed + eta_seconds, 0)
+                    }, room=room)
+                except Exception as e:
+                    logger.warning(f"Failed to emit data transformation progress: {e}")
 
 
         prog_1 = (utc_ref - utc_strt) / (utc_end - utc_strt) * 100
