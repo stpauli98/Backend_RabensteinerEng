@@ -9,10 +9,10 @@ def register_blueprints(app):
     from domains.upload import load_data_bp
     from domains.adjustments import adjustments_bp
     from domains.cloud import cloud_bp
+    from domains.payments import stripe_bp
 
     # Legacy blueprints (pending migration)
     from api.routes.auth_example import auth_example_bp
-    from api.routes.stripe_routes import stripe_bp
 
     # Register domain blueprints
     app.register_blueprint(data_processing_bp)
@@ -21,7 +21,7 @@ def register_blueprints(app):
     app.register_blueprint(load_data_bp, url_prefix='/api/loadRowData')
     app.register_blueprint(adjustments_bp, url_prefix='/api/adjustmentsOfData')
     app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
+    app.register_blueprint(stripe_bp, url_prefix='/api/stripe')
 
     # Register legacy blueprints
     app.register_blueprint(auth_example_bp)
-    app.register_blueprint(stripe_bp)
