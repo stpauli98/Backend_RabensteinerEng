@@ -486,7 +486,28 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
                 logger.info(f"Generated storage_path: {storage_path} for file {file_name}")
             else:
                 logger.warning("No fileName provided, storage_path will be empty")
-        
+
+        # Get zeitschrittweite values from file_info
+        zeitschrittweite_mittelwert = file_info.get("zeitschrittweiteAvgValue", file_info.get("zeitschrittweiteMittelwert")) or None
+        zeitschrittweite_min_val = file_info.get("zeitschrittweiteMinValue", file_info.get("zeitschrittweiteMin")) or None
+
+        # For output files without zeitschrittweite values, try to copy from input file in same session
+        file_type = file_info.get("type", "")
+        if file_type == "output" and (zeitschrittweite_mittelwert is None or zeitschrittweite_min_val is None):
+            try:
+                input_file = supabase.table("files").select(
+                    "zeitschrittweite_mittelwert, zeitschrittweite_min"
+                ).eq("session_id", database_session_id).eq("type", "input").limit(1).execute()
+
+                if input_file.data and len(input_file.data) > 0:
+                    input_data = input_file.data[0]
+                    if zeitschrittweite_mittelwert is None and input_data.get("zeitschrittweite_mittelwert"):
+                        zeitschrittweite_mittelwert = input_data["zeitschrittweite_mittelwert"]
+                    if zeitschrittweite_min_val is None and input_data.get("zeitschrittweite_min"):
+                        zeitschrittweite_min_val = input_data["zeitschrittweite_min"]
+            except Exception as copy_err:
+                logger.warning(f"Could not copy zeitschrittweite values from input file: {str(copy_err)}")
+
         data = {
             "id": valid_uuid,
             "session_id": database_session_id,
@@ -501,8 +522,8 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             "datenform": file_info.get("datenform", ""),
             "datenanpassung": file_info.get("datenanpassung", ""),
             "zeitschrittweite": str(file_info.get("zeitschrittweite", "")),
-            "zeitschrittweite_mittelwert": file_info.get("zeitschrittweiteAvgValue", file_info.get("zeitschrittweiteMittelwert")) or None,
-            "zeitschrittweite_min": file_info.get("zeitschrittweiteMinValue", file_info.get("zeitschrittweiteMin")) or None,
+            "zeitschrittweite_mittelwert": zeitschrittweite_mittelwert,
+            "zeitschrittweite_min": zeitschrittweite_min_val,
             "skalierung": file_info.get("skalierung", "nein"),
             "skalierung_max": str(file_info.get("skalierungMax", "")),
             "skalierung_min": str(file_info.get("skalierungMin", "")),
@@ -521,38 +542,16 @@ def save_file_info(session_id: str, file_info: dict) -> tuple:
             try:
                 dt_obj = datetime.fromisoformat(utc_min)
                 data["utc_min"] = dt_obj.isoformat(sep=' ', timespec='seconds')
-                logger.info(f"Successfully parsed utc_min: {data['utc_min']}")
             except (ValueError, TypeError) as e:
                 logger.warning(f"Invalid utcMin format: {utc_min}, error: {str(e)}")
-        else:
-            logger.info("No utc_min provided")
-            
+
         if utc_max:
             try:
                 dt_obj = datetime.fromisoformat(utc_max)
                 data["utc_max"] = dt_obj.isoformat(sep=' ', timespec='seconds')
-                logger.info(f"Successfully parsed utc_max: {data['utc_max']}")
             except (ValueError, TypeError) as e:
                 logger.warning(f"Invalid utcMax format: {utc_max}, error: {str(e)}")
-        else:
-            logger.info("No utc_max provided")
-            
-        logger.info(f"Attempting to save file data with ID {valid_uuid} to files table")
-        logger.info(f"Data being sent: {json.dumps(data, default=str)}")
-        
-        logger.info(f"zeitschrittweite_mittelwert value: {data['zeitschrittweite_mittelwert']}")
-        logger.info(f"zeitschrittweite_min value: {data['zeitschrittweite_min']}")
-        logger.info(f"Original values from frontend - zeitschrittweiteAvgValue: {file_info.get('zeitschrittweiteAvgValue', '')}, zeitschrittweiteMinValue: {file_info.get('zeitschrittweiteMinValue', '')}")
-        
-        
-        if 'zeithorizont' in data:
-            logger.warning(f"Found 'zeithorizont' key in data which might cause issues")
-        
-        logger.info(f"All keys in data: {list(data.keys())}")
-        
-        if 'zeithorizont_start' in data and 'zeithorizont_end' in data:
-            logger.info(f"Found both 'zeithorizont_start' and 'zeithorizont_end' keys in data")
-        
+
         response = supabase.table("files").insert(data).execute()
         
         if hasattr(response, 'error') and response.error:
@@ -831,16 +830,26 @@ def _save_metadata_to_database(database_session_id: str, metadata: dict) -> bool
 def _prepare_file_batch_data(database_session_id: str, files_list: list) -> list:
     """
     Prepare batch data for file insertion.
-    
+
     Args:
         database_session_id: UUID format session ID
         files_list: List of file info dictionaries
-        
+
     Returns:
         list: List of prepared file data for batch insertion
     """
     batch_data = []
-    
+
+    # Pre-extract zeitschrittweite values from input files in the batch
+    input_zeitschrittweite_mittelwert = None
+    input_zeitschrittweite_min = None
+    for file_info in files_list:
+        if file_info.get("type") == "input":
+            input_zeitschrittweite_mittelwert = file_info.get("zeitschrittweiteAvgValue", file_info.get("zeitschrittweiteMittelwert")) or None
+            input_zeitschrittweite_min = file_info.get("zeitschrittweiteMinValue", file_info.get("zeitschrittweiteMin")) or None
+            if input_zeitschrittweite_mittelwert or input_zeitschrittweite_min:
+                break
+
     for file_info in files_list:
         if not validate_file_info(file_info):
             logger.warning(f"Skipping invalid file info: {file_info}")
@@ -858,7 +867,19 @@ def _prepare_file_batch_data(database_session_id: str, files_list: list) -> list
             file_name = file_info.get("fileName", "")
             if file_name:
                 storage_path = f"{database_session_id}/{file_name}"
-        
+
+        # Get zeitschrittweite values, falling back to input file values for output files
+        zeitschrittweite_mittelwert = file_info.get("zeitschrittweiteAvgValue", file_info.get("zeitschrittweiteMittelwert")) or None
+        zeitschrittweite_min_val = file_info.get("zeitschrittweiteMinValue", file_info.get("zeitschrittweiteMin")) or None
+
+        # For output files without zeitschrittweite values, copy from input file
+        file_type = file_info.get("type", "")
+        if file_type == "output":
+            if zeitschrittweite_mittelwert is None and input_zeitschrittweite_mittelwert:
+                zeitschrittweite_mittelwert = input_zeitschrittweite_mittelwert
+            if zeitschrittweite_min_val is None and input_zeitschrittweite_min:
+                zeitschrittweite_min_val = input_zeitschrittweite_min
+
         data = {
             "id": valid_uuid,
             "session_id": database_session_id,
@@ -873,8 +894,8 @@ def _prepare_file_batch_data(database_session_id: str, files_list: list) -> list
             "datenform": file_info.get("datenform", ""),
             "datenanpassung": file_info.get("datenanpassung", ""),
             "zeitschrittweite": str(file_info.get("zeitschrittweite", "")),
-            "zeitschrittweite_mittelwert": file_info.get("zeitschrittweiteAvgValue", file_info.get("zeitschrittweiteMittelwert")) or None,
-            "zeitschrittweite_min": file_info.get("zeitschrittweiteMinValue", file_info.get("zeitschrittweiteMin")) or None,
+            "zeitschrittweite_mittelwert": zeitschrittweite_mittelwert,
+            "zeitschrittweite_min": zeitschrittweite_min_val,
             "skalierung": file_info.get("skalierung", DatabaseConfig.DEFAULT_SKALIERUNG),
             "skalierung_max": str(file_info.get("skalierungMax", "")),
             "skalierung_min": str(file_info.get("skalierungMin", "")),
