@@ -23,13 +23,13 @@ from shared.tracking.usage import increment_processing_count, increment_training
 from utils.validation import validate_session_id, create_error_response, create_success_response
 from utils.metadata_utils import extract_file_metadata_fields, extract_file_metadata
 
-from services.training.visualization import Visualizer
+from domains.training.services.visualization import Visualizer
 
-from services.training.scaler_manager import get_session_scalers, create_scaler_download_package, scale_new_data
+from domains.training.ml.scaler import get_session_scalers, create_scaler_download_package, scale_new_data
 
-from services.training.model_manager import save_models_to_storage, get_models_list, download_model_file
+from domains.training.ml.models import save_models_to_storage, get_models_list, download_model_file
 
-from services.training.session_manager import (
+from domains.training.services.session import (
     initialize_session, finalize_session, get_sessions_list,
     get_session_info, get_session_from_database, delete_session,
     delete_all_sessions, update_session_name, save_time_info_data,
@@ -38,15 +38,15 @@ from services.training.session_manager import (
     get_session_uuid, get_upload_status
 )
 
-from services.training.upload_manager import (
+from domains.training.services.upload import (
     process_chunk_upload, verify_file_hash, assemble_file_locally,
     save_session_metadata_locally, get_session_metadata_locally,
     update_session_metadata, verify_session_files,
     create_csv_file_record, update_csv_file_record, delete_csv_file_record
 )
 
-from services.training.dataset_generator import generate_violin_plots_for_session
-from services.training.training_orchestrator import run_model_training_async
+from domains.training.data.generator import generate_violin_plots_for_session
+from domains.training.services.orchestrator import run_model_training_async
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1588,13 +1588,11 @@ def generate_datasets(session_id):
         training_split = data.get('training_split', {})
 
         # Create progress tracker for WebSocket updates
-        from services.training.violin_progress_tracker import ViolinProgressTracker
+        from domains.training.services.violin_tracker import ViolinProgressTracker
         from flask import current_app
 
         socketio = current_app.extensions.get('socketio')
         progress_tracker = ViolinProgressTracker(socketio, session_id)
-
-        from services.training.dataset_generator import generate_violin_plots_for_session
 
         result = generate_violin_plots_for_session(
             session_id=session_id,
@@ -1705,8 +1703,7 @@ def train_models(session_id):
             logger.warning(f"Could not delete old training_results: {e}")
 
         import threading
-        from services.training.training_orchestrator import run_model_training_async
-        
+
         training_thread = threading.Thread(
             target=run_model_training_async,
             args=(session_id, model_config, training_split, socketio_instance)

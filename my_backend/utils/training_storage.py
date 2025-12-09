@@ -385,7 +385,7 @@ def fetch_training_results_with_storage(
         from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
         if supabase is None:
-            supabase = get_supabase_client()
+            supabase = get_supabase_client(use_service_role=True)
 
         uuid_session_id = create_or_get_session_uuid(session_id)
         if not uuid_session_id:
