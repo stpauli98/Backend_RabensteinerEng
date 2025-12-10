@@ -254,9 +254,10 @@ class DataScaler:
                 test_ratio /= total_ratio
             
             n_samples = input_array_3d.shape[0]
-            
-            n_train = int(train_ratio * n_samples)
-            n_val = int(val_ratio * n_samples)
+
+            # Koristi round() kao u originalu za identično ponašanje
+            n_train = round(train_ratio * n_samples)
+            n_val = round(val_ratio * n_samples)
             n_test = n_samples - n_train - n_val
             
             

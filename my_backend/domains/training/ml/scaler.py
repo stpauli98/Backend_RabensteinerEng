@@ -89,8 +89,7 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
     scal_i = 0
     
     if i_combined_array.size == 0 or len(i_combined_array.shape) < 2:
-        logger.error("i_combined_array is empty or has invalid shape")
-        return {}, {}
+        raise ValueError("i_combined_array is empty or has invalid shape - cannot create scalers")
         
     for i in range(i_combined_array.shape[1]):
         if i < len(i_scal_list) and i_scal_list[i] == True:
@@ -100,7 +99,10 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
             min_val = i_scal_min_list[i] if i < len(i_scal_min_list) else 0
             max_val = i_scal_max_list[i] if i < len(i_scal_max_list) else 1
             if min_val >= max_val:
-                min_val, max_val = 0, 1
+                logger.warning(f"Invalid input scaler bounds for feature {i}: min={min_val}, max={max_val}. Swapping values.")
+                min_val, max_val = max_val, min_val
+                if min_val >= max_val:  # Still invalid after swap (e.g., both equal)
+                    min_val, max_val = 0, 1
             scaler = MinMaxScaler(feature_range=(min_val, max_val))
             scaler.fit_transform(i_combined_array[:, i].reshape(-1, 1))
             i_scalers[i] = scaler
@@ -114,8 +116,7 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
     o_scalers = {}
     
     if o_combined_array.size == 0 or len(o_combined_array.shape) < 2:
-        logger.error("o_combined_array is empty or has invalid shape")
-        return {}, {}
+        raise ValueError("o_combined_array is empty or has invalid shape - cannot create scalers")
         
     for i in range(o_combined_array.shape[1]):
         if i < len(o_scal_list) and o_scal_list[i] == True:
@@ -125,7 +126,10 @@ def fit_scalers(i_combined_array: np.ndarray, o_combined_array: np.ndarray,
             min_val = o_scal_min_list[i] if i < len(o_scal_min_list) else 0
             max_val = o_scal_max_list[i] if i < len(o_scal_max_list) else 1
             if min_val >= max_val:
-                min_val, max_val = 0, 1
+                logger.warning(f"Invalid output scaler bounds for feature {i}: min={min_val}, max={max_val}. Swapping values.")
+                min_val, max_val = max_val, min_val
+                if min_val >= max_val:  # Still invalid after swap (e.g., both equal)
+                    min_val, max_val = 0, 1
             scaler = MinMaxScaler(feature_range=(min_val, max_val))
             scaler.fit_transform(o_combined_array[:, i].reshape(-1, 1))
             o_scalers[i] = scaler

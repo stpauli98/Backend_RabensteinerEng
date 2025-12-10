@@ -127,46 +127,57 @@ class TimeFeatureExtractor:
             
             if mode == "Zeithorizont":
                 if not use_local_time:
-                    sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
-                    
-                    features["m_sin"] = np.sin(sec / 2629800 * 2 * np.pi)
-                    features["m_cos"] = np.cos(sec / 2629800 * 2 * np.pi)
-                    
+                    # Dinamički izračun sekundi u mjesecu za svaki timestamp
+                    sec_in_month = np.array([
+                        (dt.day - 1) * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second
+                        for dt in timestamps
+                    ])
+                    # Točan broj sekundi u svakom mjesecu (28-31 dana)
+                    sec_m = np.array([
+                        calendar.monthrange(dt.year, dt.month)[1] * 86400
+                        for dt in timestamps
+                    ])
+
+                    features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
+                    features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
+
                 else:
                     utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
                     local_timestamps = [dt.astimezone(pytz.timezone(self.timezone)) for dt in utc_timestamps]
-                    
-                    sec = np.array([
-                        (dt.timetuple().tm_yday - 1) * 86400 +
-                        dt.hour * 3600 +
-                        dt.minute * 60 +
-                        dt.second
+
+                    # Dinamički izračun za local time
+                    sec_in_month = np.array([
+                        (dt.day - 1) * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second
                         for dt in local_timestamps
                     ])
-                    
-                    features["m_sin"] = np.sin(sec / 2629800 * 2 * np.pi)
-                    features["m_cos"] = np.cos(sec / 2629800 * 2 * np.pi)
+                    sec_m = np.array([
+                        calendar.monthrange(dt.year, dt.month)[1] * 86400
+                        for dt in local_timestamps
+                    ])
+
+                    features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
+                    features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
                     
             elif mode == "Aktuelle Zeit":
                 if len(timestamps) > 0:
                     utc_ref = timestamps[0]
-                    
+
                     if not use_local_time:
-                        sec = utc_ref.timestamp()
-                        features["m_sin"] = np.sin(sec / 2629800 * 2 * np.pi)
-                        features["m_cos"] = np.cos(sec / 2629800 * 2 * np.pi)
+                        # Dinamički izračun za Aktuelle Zeit
+                        sec_in_month = (utc_ref.day - 1) * 86400 + utc_ref.hour * 3600 + utc_ref.minute * 60 + utc_ref.second
+                        sec_m = calendar.monthrange(utc_ref.year, utc_ref.month)[1] * 86400
+                        features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
+                        features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
                     else:
                         if utc_ref.tzinfo is None:
                             utc_ref = pytz.utc.localize(utc_ref)
                         local_time = utc_ref.astimezone(pytz.timezone(self.timezone))
-                        
-                        sec = ((local_time.timetuple().tm_yday - 1) * 86400 + 
-                              local_time.hour * 3600 + 
-                              local_time.minute * 60 + 
-                              local_time.second)
-                        
-                        features["m_sin"] = np.sin(sec / 2629800 * 2 * np.pi)
-                        features["m_cos"] = np.cos(sec / 2629800 * 2 * np.pi)
+
+                        sec_in_month = (local_time.day - 1) * 86400 + local_time.hour * 3600 + local_time.minute * 60 + local_time.second
+                        sec_m = calendar.monthrange(local_time.year, local_time.month)[1] * 86400
+
+                        features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
+                        features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
             
             return features
             

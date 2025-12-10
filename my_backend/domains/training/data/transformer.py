@@ -52,7 +52,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     utc_ref_log = []
     utc_strt = utc_ref
     
-    hol_d = HOL.get(T.H.CNTRY, []) if T.H.IMP else []
+    # Koristi set() za O(1) lookup umjesto O(n) liste
+    hol_d = {d.date() for d in HOL.get(T.H.CNTRY, [])} if T.H.IMP else set()
     
     iteration_count = 0
     total_iterations = int((utc_end - utc_ref).total_seconds() / 60 / mts.DELT)
@@ -524,14 +525,42 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
             
             if T.H.IMP:
                 if T.H.SPEC == "Zeithorizont":
-                    pass
-                
+                    # Zeithorizont implementation - check each timestep for holidays
+                    utc_th_strt = utc_ref + datetime.timedelta(hours=T.H.TH_STRT)
+                    utc_th_end = utc_ref + datetime.timedelta(hours=T.H.TH_END)
+
+                    # Generate timesteps
+                    try:
+                        utc_th = pd.date_range(
+                            start=utc_th_strt,
+                            end=utc_th_end,
+                            freq=f'{T.H.DELT}min'
+                        ).to_list()
+                    except:
+                        # Fallback: manually create timestamps
+                        delt = pd.to_timedelta(T.H.DELT, unit="min")
+                        utc_th = []
+                        utc = utc_th_strt
+                        for i1 in range(mts.I_N):
+                            utc_th.append(utc)
+                            utc += delt
+
+                    if T.H.LT == False:
+                        # Compare UTC dates against holidays
+                        df_int_i["h"] = np.array([1 if dt.date() in hol_d else 0 for dt in utc_th])
+                    else:
+                        # Convert to local time first
+                        utc_th_loc = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in utc_th]
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th_loc]
+                        # Compare local dates against holidays
+                        df_int_i["h"] = np.array([1 if dt.date() in hol_d else 0 for dt in lt_th])
+
                 elif T.H.SPEC == "Aktuelle Zeit":
                     if T.H.LT == False:
-                        df_int_i["h"] = [1 if utc_ref.date() in [h.date() for h in hol_d] else 0] * mts.I_N
+                        df_int_i["h"] = [1 if utc_ref.date() in hol_d else 0] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        df_int_i["h"] = [1 if lt.date() in [h.date() for h in hol_d] else 0] * mts.I_N
+                        df_int_i["h"] = [1 if lt.date() in hol_d else 0] * mts.I_N
         
         
         if df_int_i.shape[1] > 0 and df_int_o.shape[1] > 0:
