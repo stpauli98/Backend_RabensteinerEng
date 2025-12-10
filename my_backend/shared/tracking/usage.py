@@ -297,3 +297,56 @@ def get_usage_stats(user_id: str) -> dict:
             'storage_used_gb': 0,
             'storage_used_mb': 0
         }
+
+
+def atomic_increment_with_check(user_id: str, resource_type: str) -> tuple:
+    """
+    Atomski provjeri kvotu i inkrementiraj ako je dozvoljeno.
+
+    Koristi Supabase RPC funkciju za atomsku operaciju koja sprječava
+    race condition kod paralelnih zahtjeva.
+
+    Args:
+        user_id: UUID korisnika
+        resource_type: 'processing', 'training', ili 'upload'
+
+    Returns:
+        tuple: (allowed: bool, details: dict)
+            - allowed: True ako je operacija dozvoljena i inkrementirana
+            - details: {'current': int, 'limit': int, 'message': str}
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        period_start = get_current_period_start()
+
+        result = supabase.rpc('atomic_check_and_increment_quota', {
+            'p_user_id': user_id,
+            'p_resource_type': resource_type,
+            'p_period_start': period_start.date().isoformat()
+        }).execute()
+
+        if result.data and len(result.data) > 0:
+            row = result.data[0]
+            allowed = row.get('allowed', False)
+            details = {
+                'current': row.get('current_count', 0),
+                'limit': row.get('max_limit', 0),
+                'message': row.get('message', '')
+            }
+
+            if allowed:
+                logger.info(f"Atomic quota check passed for user {user_id}, resource {resource_type}: {details['current']}/{details['limit']}")
+            else:
+                logger.warning(f"Atomic quota check failed for user {user_id}, resource {resource_type}: {details['message']}")
+
+            return allowed, details
+
+        logger.error(f"Atomic quota RPC returned no data for user {user_id}")
+        return False, {'current': 0, 'limit': 0, 'message': 'RPC returned no data'}
+
+    except Exception as e:
+        logger.error(f"Atomic quota check failed for user {user_id}: {str(e)}")
+        # Graceful degradation: dozvoli ako RPC ne radi, ali logiraj upozorenje
+        # Ovo osigurava da korisnici nisu blokirani ako RPC ima problem
+        logger.warning(f"Falling back to allow for user {user_id} due to RPC error")
+        return True, {'current': 0, 'limit': -1, 'message': f'Fallback allowed: {str(e)}'}

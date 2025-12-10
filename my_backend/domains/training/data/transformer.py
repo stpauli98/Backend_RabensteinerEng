@@ -321,12 +321,12 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     
                     else:
                         utc_th = [pytz.utc.localize(dt) for dt in utc_th]
-                        lt_th = [dT.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
-                        
-                        sec = np.array([(dT.timetuple().tm_yday - 1) * 86400 +
-                                       dT.hour * 3600 +
-                                       dT.minute * 60 +
-                                       dT.second for dt in lt_th])
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
+
+                        sec = np.array([(dt.timetuple().tm_yday - 1) * 86400 +
+                                       dt.hour * 3600 +
+                                       dt.minute * 60 +
+                                       dt.second for dt in lt_th])
                         
                         y = np.array([x.year for x in lt_th])
                         is_leap = np.vectorize(calendar.isleap)(y)
@@ -342,9 +342,9 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["y_cos"] = [np.cos(sec / 31557600 * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        sec = (lT.timetuple().tm_yday - 1) * 86400 + lT.hour * 3600 + lT.minute * 60 + lT.second
-                        
-                        if calendar.isleap(lT.year):
+                        sec = (lt.timetuple().tm_yday - 1) * 86400 + lt.hour * 3600 + lt.minute * 60 + lt.second
+
+                        if calendar.isleap(lt.year):
                             sec_y = 31622400
                         else:
                             sec_y = 31536000
@@ -372,9 +372,9 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             utc += delt
                     
                     if T.M.LT == False:
-                        m = pd.Series(utc_th).dT.month.values
-                        d = pd.Series(utc_th).dT.day.values
-                        h = pd.Series(utc_th).dT.hour.values
+                        m = pd.Series(utc_th).dt.month.values
+                        d = pd.Series(utc_th).dt.day.values
+                        h = pd.Series(utc_th).dt.hour.values
                         
                         sec = (d - 1) * 86400 + h * 3600
                         sec_m = np.array([calendar.monthrange(utc_th[i].year, m[i])[1] * 86400 
@@ -384,14 +384,14 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["m_cos"] = np.cos(sec / sec_m * 2 * np.pi)
                     else:
                         utc_th = [pytz.utc.localize(dt) for dt in utc_th]
-                        lt_th = [dT.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
-                        
-                        sec = np.array([(dT.day - 1) * 86400 +
-                                       dT.hour * 3600 +
-                                       dT.minute * 60 +
-                                       dT.second for dt in lt_th])
-                        
-                        sec_m = np.array([calendar.monthrange(dT.year, dT.month)[1] * 86400 
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
+
+                        sec = np.array([(dt.day - 1) * 86400 +
+                                       dt.hour * 3600 +
+                                       dt.minute * 60 +
+                                       dt.second for dt in lt_th])
+
+                        sec_m = np.array([calendar.monthrange(dt.year, dt.month)[1] * 86400
                                          for dt in lt_th])
                         
                         df_int_i["m_sin"] = np.sin(sec / sec_m * 2 * np.pi)
@@ -408,8 +408,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["m_cos"] = [np.cos(sec / sec_m * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        sec = (lT.day - 1) * 86400 + lT.hour * 3600 + lT.minute * 60 + lT.second
-                        sec_m = calendar.monthrange(lT.year, lT.month)[1] * 86400
+                        sec = (lt.day - 1) * 86400 + lt.hour * 3600 + lt.minute * 60 + lt.second
+                        sec_m = calendar.monthrange(lt.year, lt.month)[1] * 86400
                         
                         df_int_i["m_sin"] = [np.sin(sec / sec_m * 2 * np.pi)] * mts.I_N
                         df_int_i["m_cos"] = [np.cos(sec / sec_m * 2 * np.pi)] * mts.I_N
@@ -434,21 +434,21 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             utc += delt
                     
                     if T.W.LT == False:
-                        wd = pd.Series(utc_th).dT.weekday.values
-                        h = pd.Series(utc_th).dT.hour.values
-                        m = pd.Series(utc_th).dT.minute.values
+                        wd = pd.Series(utc_th).dt.weekday.values
+                        h = pd.Series(utc_th).dt.hour.values
+                        m = pd.Series(utc_th).dt.minute.values
                         
                         sec = wd * 86400 + h * 3600 + m * 60
                         df_int_i["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
                         df_int_i["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
                     else:
                         utc_th = [pytz.utc.localize(dt) for dt in utc_th]
-                        lt_th = [dT.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
-                        
-                        sec = np.array([dT.weekday() * 86400 +
-                                       dT.hour * 3600 +
-                                       dT.minute * 60 +
-                                       dT.second for dt in lt_th])
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
+
+                        sec = np.array([dt.weekday() * 86400 +
+                                       dt.hour * 3600 +
+                                       dt.minute * 60 +
+                                       dt.second for dt in lt_th])
                         
                         df_int_i["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
                         df_int_i["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
@@ -464,7 +464,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["w_cos"] = [np.cos(sec / 604800 * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        sec = lT.weekday() * 86400 + lT.hour * 3600 + lT.minute * 60 + lT.second
+                        sec = lt.weekday() * 86400 + lt.hour * 3600 + lt.minute * 60 + lt.second
                         
                         df_int_i["w_sin"] = [np.sin(sec / 604800 * 2 * np.pi)] * mts.I_N
                         df_int_i["w_cos"] = [np.cos(sec / 604800 * 2 * np.pi)] * mts.I_N
@@ -489,19 +489,19 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             utc += delt
                     
                     if T.D.LT == False:
-                        h = pd.Series(utc_th).dT.hour.values
-                        m = pd.Series(utc_th).dT.minute.values
+                        h = pd.Series(utc_th).dt.hour.values
+                        m = pd.Series(utc_th).dt.minute.values
                         
                         sec = h * 3600 + m * 60
                         df_int_i["d_sin"] = np.sin(sec / 86400 * 2 * np.pi)
                         df_int_i["d_cos"] = np.cos(sec / 86400 * 2 * np.pi)
                     else:
                         utc_th = [pytz.utc.localize(dt) for dt in utc_th]
-                        lt_th = [dT.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
-                        
-                        sec = np.array([dT.hour * 3600 +
-                                       dT.minute * 60 +
-                                       dT.second for dt in lt_th])
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
+
+                        sec = np.array([dt.hour * 3600 +
+                                       dt.minute * 60 +
+                                       dt.second for dt in lt_th])
                         
                         df_int_i["d_sin"] = np.sin(sec / 86400 * 2 * np.pi)
                         df_int_i["d_cos"] = np.cos(sec / 86400 * 2 * np.pi)
@@ -517,7 +517,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["d_cos"] = [np.cos(sec / 86400 * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        sec = lT.hour * 3600 + lT.minute * 60 + lT.second
+                        sec = lt.hour * 3600 + lt.minute * 60 + lt.second
                         
                         df_int_i["d_sin"] = [np.sin(sec / 86400 * 2 * np.pi)] * mts.I_N
                         df_int_i["d_cos"] = [np.cos(sec / 86400 * 2 * np.pi)] * mts.I_N
@@ -531,7 +531,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["h"] = [1 if utc_ref.date() in [h.date() for h in hol_d] else 0] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        df_int_i["h"] = [1 if lT.date() in [h.date() for h in hol_d] else 0] * mts.I_N
+                        df_int_i["h"] = [1 if lt.date() in [h.date() for h in hol_d] else 0] * mts.I_N
         
         
         if df_int_i.shape[1] > 0 and df_int_o.shape[1] > 0:
