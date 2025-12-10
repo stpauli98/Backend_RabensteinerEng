@@ -502,7 +502,7 @@ class TrainingPipeline:
                 self.socketio.emit('training_progress', {
                     'session_id': self.current_session_id,
                     'progress': self.progress
-                }, room=self.current_session_id)
+                }, room=f"training_{self.current_session_id}")
             
             self._save_progress_to_database()
             

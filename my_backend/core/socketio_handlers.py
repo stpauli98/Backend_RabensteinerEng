@@ -102,6 +102,7 @@ def register_socketio_handlers(socketio):
                 if uuid_session_id:
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
                     
+                    room = f"training_{session_id}"
                     if results.data:
                         training_status = results.data[0]
                         emit('training_status_update', {
@@ -110,13 +111,13 @@ def register_socketio_handlers(socketio):
                             'message': f"Current status: {training_status.get('status', 'unknown')}",
                             'last_updated': training_status.get('updated_at', training_status.get('created_at')),
                             'models_trained': training_status.get('summary', {}).get('models_trained', 0) if training_status.get('summary') else 0
-                        })
+                        }, room=room)
                     else:
                         emit('training_status_update', {
                             'session_id': session_id,
                             'status': 'not_found',
                             'message': 'No training data found for this session'
-                        })
+                        }, room=room)
                 else:
                     emit('training_status_error', {
                         'session_id': session_id,
@@ -169,7 +170,8 @@ def register_socketio_handlers(socketio):
                 
                 if uuid_session_id:
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
-                    
+
+                    room = f"training_{session_id}"
                     if results.data:
                         dataset_status = results.data[0]
                         emit('dataset_status_update', {
@@ -179,13 +181,13 @@ def register_socketio_handlers(socketio):
                             'error_details': dataset_status.get('error_details') if dataset_status.get('status') == 'data_validation_error' else None,
                             'last_updated': dataset_status.get('updated_at', dataset_status.get('created_at')),
                             'processing_stopped': dataset_status.get('summary', {}).get('processing_stopped', False) if dataset_status.get('summary') else False
-                        })
+                        }, room=room)
                     else:
                         emit('dataset_status_update', {
                             'session_id': session_id,
                             'status': 'not_found',
                             'message': 'No dataset generation data found for this session'
-                        })
+                        }, room=room)
                 else:
                     emit('dataset_status_error', {
                         'session_id': session_id,

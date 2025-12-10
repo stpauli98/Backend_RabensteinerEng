@@ -53,6 +53,7 @@ def get_supabase_user_client(access_token: str) -> Client:
     return client
 
 
+@lru_cache(maxsize=1)
 def get_supabase_admin_client() -> Client:
     """
     Get Supabase admin client for privileged operations

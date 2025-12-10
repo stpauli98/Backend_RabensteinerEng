@@ -5,6 +5,7 @@ Handles session isolation, progress tracking, and heartbeat monitoring
 
 import time
 import os
+import sys
 import threading
 import uuid
 import logging
@@ -372,7 +373,7 @@ class ProgressManager:
                 progress_data = self.progress_cache[session_id].copy()
                 progress_data['session_id'] = session_id
                 
-                self.socketio.emit('training_progress', progress_data, room=session_id)
+                self.socketio.emit('training_progress', progress_data, room=f"training_{session_id}")
                 
                 
         except Exception as e:
