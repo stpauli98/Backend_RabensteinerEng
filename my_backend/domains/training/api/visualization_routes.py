@@ -201,33 +201,44 @@ def get_evaluation_tables(session_id):
 
             test_metrics = eval_metrics.get('test_metrics_scaled', {})
 
-            for delta in time_deltas:
+            # Izvuci _TS metrike (po vremenskim koracima) - ako postoje
+            mae_ts = test_metrics.get('MAE_TS', [])
+            mape_ts = test_metrics.get('MAPE_TS', [])
+            mse_ts = test_metrics.get('MSE_TS', [])
+            rmse_ts = test_metrics.get('RMSE_TS', [])
+            nrmse_ts = test_metrics.get('NRMSE_TS', [])
+            wape_ts = test_metrics.get('WAPE_TS', [])
+            smape_ts = test_metrics.get('sMAPE_TS', [])
+            mase_ts = test_metrics.get('MASE_TS', [])
+
+            # Broj timestepova - koristi _TS ako postoji, inače fallback
+            n_timesteps = len(mae_ts) if mae_ts else len(time_deltas)
+
+            for i in range(min(n_timesteps, len(time_deltas))):
+                delta = time_deltas[i]
                 delt_list.append(float(delta))
-                mae_list.append(float(test_metrics.get('MAE', 0.0)))
-                mape_list.append(float(test_metrics.get('MAPE', 0.0)))
-                mse_list.append(float(test_metrics.get('MSE', 0.0)))
-                rmse_list.append(float(test_metrics.get('RMSE', 0.0)))
-                nrmse_list.append(float(test_metrics.get('NRMSE', 0.0)))
-                wape_list.append(float(test_metrics.get('WAPE', 0.0)))
-                smape_list.append(float(test_metrics.get('sMAPE', 0.0)))
-                mase_list.append(float(test_metrics.get('MASE', 0.0)))
 
-                timestep_metrics = []
-                n_timesteps = results.get('n_timesteps', 96)
+                # Koristi _TS verzije ako postoje, inače fallback na ukupne metrike
+                mae_list.append(float(mae_ts[i]) if i < len(mae_ts) else float(test_metrics.get('MAE', 0.0)))
+                mape_list.append(float(mape_ts[i]) if i < len(mape_ts) else float(test_metrics.get('MAPE', 0.0)))
+                mse_list.append(float(mse_ts[i]) if i < len(mse_ts) else float(test_metrics.get('MSE', 0.0)))
+                rmse_list.append(float(rmse_ts[i]) if i < len(rmse_ts) else float(test_metrics.get('RMSE', 0.0)))
+                nrmse_list.append(float(nrmse_ts[i]) if i < len(nrmse_ts) else float(test_metrics.get('NRMSE', 0.0)))
+                wape_list.append(float(wape_ts[i]) if i < len(wape_ts) else float(test_metrics.get('WAPE', 0.0)))
+                smape_list.append(float(smape_ts[i]) if i < len(smape_ts) else float(test_metrics.get('sMAPE', 0.0)))
+                mase_list.append(float(mase_ts[i]) if i < len(mase_ts) else float(test_metrics.get('MASE', 0.0)))
 
-                for ts in range(n_timesteps):
-                    timestep_metrics.append({
-                        'MAE': float(test_metrics.get('MAE', 0.0)),
-                        'MAPE': float(test_metrics.get('MAPE', 0.0)),
-                        'MSE': float(test_metrics.get('MSE', 0.0)),
-                        'RMSE': float(test_metrics.get('RMSE', 0.0)),
-                        'NRMSE': float(test_metrics.get('NRMSE', 0.0)),
-                        'WAPE': float(test_metrics.get('WAPE', 0.0)),
-                        'sMAPE': float(test_metrics.get('sMAPE', 0.0)),
-                        'MASE': float(test_metrics.get('MASE', 0.0))
-                    })
-
-                df_eval_ts[feature_name][float(delta)] = timestep_metrics
+                # Timestep metrike za df_eval_ts
+                df_eval_ts[feature_name][float(delta)] = {
+                    'MAE': mae_list[-1],
+                    'MAPE': mape_list[-1],
+                    'MSE': mse_list[-1],
+                    'RMSE': rmse_list[-1],
+                    'NRMSE': nrmse_list[-1],
+                    'WAPE': wape_list[-1],
+                    'sMAPE': smape_list[-1],
+                    'MASE': mase_list[-1]
+                }
 
             df_eval[feature_name] = {
                 "delta [min]": delt_list,

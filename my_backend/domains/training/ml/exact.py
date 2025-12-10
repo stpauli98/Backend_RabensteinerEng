@@ -26,51 +26,57 @@ logger = logging.getLogger(__name__)
 def calculate_evaluation_metrics(y_true, y_pred):
     """
     Calculate comprehensive evaluation metrics for model performance
-    
+
     Args:
-        y_true: True values (numpy array)
-        y_pred: Predicted values (numpy array)
-    
+        y_true: True values (numpy array) - shape (samples, timesteps, features) or (samples, timesteps)
+        y_pred: Predicted values (numpy array) - same shape as y_true
+
     Returns:
-        Dictionary containing all evaluation metrics
+        Dictionary containing:
+        - Ukupne metrike: MAE, MSE, RMSE, MAPE, NRMSE, WAPE, sMAPE, MASE
+        - _TS verzije: MAE_TS, MSE_TS, etc. - metrike po svakom vremenskom koraku
     """
     if len(y_true.shape) == 1:
         y_true = y_true.reshape(-1, 1)
     if len(y_pred.shape) == 1:
         y_pred = y_pred.reshape(-1, 1)
-    
+
     y_true_flat = y_true.flatten()
     y_pred_flat = y_pred.flatten()
-    
+
+    # =========================================================================
+    # UKUPNE METRIKE (GESAMT)
+    # =========================================================================
     mae = mean_absolute_error(y_true_flat, y_pred_flat)
     mse = mean_squared_error(y_true_flat, y_pred_flat)
     rmse = np.sqrt(mse)
-    
+
     mask = y_true_flat != 0
     if np.any(mask):
         mape = np.mean(np.abs((y_true_flat[mask] - y_pred_flat[mask]) / y_true_flat[mask])) * 100
     else:
         mape = 0.0
-    
-    y_range = np.max(y_true_flat) - np.min(y_true_flat)
-    if y_range > 0:
-        nrmse = rmse / y_range
+
+    # NRMSE normalizacija sa srednjom vrijednosti (kao u originalu)
+    y_mean = np.mean(y_true_flat)
+    if y_mean != 0:
+        nrmse = rmse / y_mean
     else:
         nrmse = 0.0
-    
+
     sum_abs_true = np.sum(np.abs(y_true_flat))
     if sum_abs_true > 0:
         wape = np.sum(np.abs(y_true_flat - y_pred_flat)) / sum_abs_true * 100
     else:
         wape = 0.0
-    
+
     denominator = np.abs(y_true_flat) + np.abs(y_pred_flat)
     mask = denominator != 0
     if np.any(mask):
         smape = np.mean(2.0 * np.abs(y_true_flat[mask] - y_pred_flat[mask]) / denominator[mask]) * 100
     else:
         smape = 0.0
-    
+
     if len(y_true_flat) > 1:
         naive_errors = np.abs(np.diff(y_true_flat))
         mae_naive = np.mean(naive_errors)
@@ -80,8 +86,56 @@ def calculate_evaluation_metrics(y_true, y_pred):
             mase = 1.0
     else:
         mase = 1.0
-    
+
+    # =========================================================================
+    # _TS VERZIJE - METRIKE PO VREMENSKIM KORACIMA (ZEITSCHRITTE)
+    # Kao u originalu: training_original.py linije 82-127
+    # =========================================================================
+    mae_ts, mape_ts, mse_ts, rmse_ts = [], [], [], []
+    nrmse_ts, wape_ts, smape_ts, mase_ts = [], [], [], []
+
+    # Određivanje broja timestepova ovisno o shape-u
+    if len(y_true.shape) == 3:
+        # Shape: (samples, timesteps, features)
+        num_timesteps = y_true.shape[1]
+
+        for i_ts in range(num_timesteps):
+            v_true = y_true[:, i_ts, :].flatten()
+            v_pred = y_pred[:, i_ts, :].flatten()
+
+            # Izračunaj metrike za ovaj timestep
+            ts_metrics = _calculate_single_timestep_metrics(v_true, v_pred)
+
+            mae_ts.append(ts_metrics['mae'])
+            mape_ts.append(ts_metrics['mape'])
+            mse_ts.append(ts_metrics['mse'])
+            rmse_ts.append(ts_metrics['rmse'])
+            nrmse_ts.append(ts_metrics['nrmse'])
+            wape_ts.append(ts_metrics['wape'])
+            smape_ts.append(ts_metrics['smape'])
+            mase_ts.append(ts_metrics['mase'])
+
+    elif len(y_true.shape) == 2:
+        # Shape: (samples, timesteps)
+        num_timesteps = y_true.shape[1]
+
+        for i_ts in range(num_timesteps):
+            v_true = y_true[:, i_ts].flatten()
+            v_pred = y_pred[:, i_ts].flatten()
+
+            ts_metrics = _calculate_single_timestep_metrics(v_true, v_pred)
+
+            mae_ts.append(ts_metrics['mae'])
+            mape_ts.append(ts_metrics['mape'])
+            mse_ts.append(ts_metrics['mse'])
+            rmse_ts.append(ts_metrics['rmse'])
+            nrmse_ts.append(ts_metrics['nrmse'])
+            wape_ts.append(ts_metrics['wape'])
+            smape_ts.append(ts_metrics['smape'])
+            mase_ts.append(ts_metrics['mase'])
+
     return {
+        # Ukupne metrike
         'MAE': float(mae),
         'MSE': float(mse),
         'RMSE': float(rmse),
@@ -89,7 +143,89 @@ def calculate_evaluation_metrics(y_true, y_pred):
         'NRMSE': float(nrmse),
         'WAPE': float(wape),
         'sMAPE': float(smape),
-        'MASE': float(mase)
+        'MASE': float(mase),
+        # _TS verzije (po vremenskim koracima)
+        'MAE_TS': mae_ts,
+        'MAPE_TS': mape_ts,
+        'MSE_TS': mse_ts,
+        'RMSE_TS': rmse_ts,
+        'NRMSE_TS': nrmse_ts,
+        'WAPE_TS': wape_ts,
+        'sMAPE_TS': smape_ts,
+        'MASE_TS': mase_ts
+    }
+
+
+def _calculate_single_timestep_metrics(v_true, v_pred):
+    """
+    Pomoćna funkcija za izračun metrika za jedan vremenski korak.
+    Koristi se u _TS verzijama metrika.
+
+    Args:
+        v_true: True values za jedan timestep (1D array)
+        v_pred: Predicted values za jedan timestep (1D array)
+
+    Returns:
+        Dict sa svim metrikama za taj timestep
+    """
+    # MAE
+    ts_mae = float(mean_absolute_error(v_true, v_pred))
+
+    # MSE
+    ts_mse = float(mean_squared_error(v_true, v_pred))
+
+    # RMSE
+    ts_rmse = float(np.sqrt(ts_mse))
+
+    # MAPE
+    mask = v_true != 0
+    if np.any(mask):
+        ts_mape = float(np.mean(np.abs((v_true[mask] - v_pred[mask]) / v_true[mask])) * 100)
+    else:
+        ts_mape = 0.0
+
+    # NRMSE (normalizacija sa mean, kao u originalu)
+    v_mean = np.mean(v_true)
+    if v_mean != 0:
+        ts_nrmse = float(ts_rmse / v_mean)
+    else:
+        ts_nrmse = 0.0
+
+    # WAPE
+    sum_abs = np.sum(np.abs(v_true))
+    if sum_abs > 0:
+        ts_wape = float(np.sum(np.abs(v_true - v_pred)) / sum_abs * 100)
+    else:
+        ts_wape = 0.0
+
+    # sMAPE
+    denom = np.abs(v_true) + np.abs(v_pred)
+    mask = denom != 0
+    if np.any(mask):
+        ts_smape = float(np.mean(2.0 * np.abs(v_true[mask] - v_pred[mask]) / denom[mask]) * 100)
+    else:
+        ts_smape = 0.0
+
+    # MASE
+    if len(v_true) > 1:
+        naive_errors = np.abs(np.diff(v_true))
+        mae_naive = np.mean(naive_errors)
+        if mae_naive > 0:
+            ts_mase = float(ts_mae / mae_naive)
+        else:
+            ts_mase = 1.0
+    else:
+        ts_mase = 1.0
+
+    return {
+        'mae': ts_mae,
+        'mape': ts_mape,
+        'mse': ts_mse,
+        'rmse': ts_rmse,
+        'nrmse': ts_nrmse,
+        'wape': ts_wape,
+        'smape': ts_smape,
+        'mase': ts_mase
     }
 
 
