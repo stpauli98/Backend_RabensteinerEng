@@ -9,6 +9,7 @@ def register_blueprints(app):
     from domains.adjustments import adjustments_bp
     from domains.cloud import cloud_bp
     from domains.payments import stripe_bp
+    from domains.keepalive import keepalive_bp
 
     app.register_blueprint(data_processing_bp)
     app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
@@ -17,3 +18,4 @@ def register_blueprints(app):
     app.register_blueprint(adjustments_bp, url_prefix='/api/adjustmentsOfData')
     app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
     app.register_blueprint(stripe_bp, url_prefix='/api/stripe')
+    app.register_blueprint(keepalive_bp, url_prefix='/api/keepalive')
