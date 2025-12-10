@@ -84,7 +84,8 @@ def upload_trained_model(
                 file=model_data,
                 file_options={
                     "content-type": "application/octet-stream",
-                    "cache-control": "3600"
+                    "cache-control": "3600",
+                    "upsert": "true"
                 }
             )
 
@@ -114,13 +115,14 @@ def upload_trained_model(
                     logger.info(f"✅ Bucket '{bucket_name}' created successfully")
 
                     response = supabase.storage.from_(bucket_name).upload(
-                        path=file_path,
-                        file=model_data,
-                        file_options={
-                            "content-type": "application/octet-stream",
-                            "cache-control": "3600"
-                        }
-                    )
+                path=file_path,
+                file=model_data,
+                file_options={
+                    "content-type": "application/octet-stream",
+                    "cache-control": "3600",
+                    "upsert": "true"
+                }
+            )
 
                     logger.info(f"✅ Model uploaded successfully after bucket creation: {file_path}")
 

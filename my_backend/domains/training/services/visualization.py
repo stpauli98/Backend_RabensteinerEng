@@ -749,3 +749,67 @@ def create_visualizer() -> Visualizer:
         Visualizer instance
     """
     return Visualizer()
+
+
+def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str, user_id: str = None) -> bool:
+    """
+    Save a visualization to the database (with duplicate check).
+
+    Args:
+        session_id: Session identifier
+        viz_name: Name of the visualization
+        viz_data: Base64 encoded visualization data
+        user_id: User ID for session ownership (optional, uses Flask g if not provided)
+
+    Returns:
+        bool: True if successful
+
+    Raises:
+        Exception: If save fails
+    """
+    from datetime import datetime
+    from shared.database.operations import get_supabase_client, create_or_get_session_uuid
+
+    try:
+        # Get user_id from Flask context if not provided
+        if user_id is None:
+            try:
+                from flask import g
+                user_id = g.user_id
+            except (RuntimeError, AttributeError):
+                pass  # Not in Flask context
+
+        # Use service_role to bypass RLS for visualization inserts
+        supabase = get_supabase_client(use_service_role=True)
+        uuid_session_id = create_or_get_session_uuid(session_id, user_id)
+
+        existing = supabase.table('training_visualizations').select('id').eq(
+            'session_id', uuid_session_id
+        ).eq('plot_name', viz_name).execute()
+
+        if existing.data:
+            viz_record = {
+                'image_data': viz_data,
+                'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
+                'created_at': datetime.now().isoformat()
+            }
+            response = supabase.table('training_visualizations').update(viz_record).eq(
+                'session_id', uuid_session_id
+            ).eq('plot_name', viz_name).execute()
+            logger.info(f"Updated existing visualization {viz_name} for session {session_id}")
+        else:
+            viz_record = {
+                'session_id': uuid_session_id,
+                'plot_name': viz_name,
+                'image_data': viz_data,
+                'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
+                'created_at': datetime.now().isoformat()
+            }
+            response = supabase.table('training_visualizations').insert(viz_record).execute()
+            logger.info(f"Created new visualization {viz_name} for session {session_id}")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Error saving visualization {viz_name} for session {session_id}: {str(e)}")
+        raise

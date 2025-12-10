@@ -62,7 +62,7 @@ def create_app():
             headers['Access-Control-Max-Age'] = '3600'
             return response
     
-    from api.routes import register_blueprints
+    from core.blueprints import register_blueprints
     register_blueprints(app)
     
     @app.errorhandler(400)

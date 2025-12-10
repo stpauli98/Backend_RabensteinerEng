@@ -2,7 +2,7 @@
 
 Backend application for Rabensteiner Engineering data processing and ML model training system.
 
-## 📋 Overview
+## Overview
 
 The backend provides:
 - Chunked CSV data upload and processing
@@ -10,187 +10,184 @@ The backend provides:
 - Training of various ML models (Dense, CNN, LSTM, SVR, Linear)
 - Real-time progress tracking via WebSocket
 - Cloud integration with Supabase
+- Stripe payment processing
 - Automatic cleanup of old files
 
-## 🚀 Installation
+## Installation
 
 ### Prerequisites
-- Python 3.8+
-- pip
-- Virtual environment (recommended)
+- Python 3.9+
+- Docker (recommended)
 
-### Installation Steps
+### Docker (Recommended)
 
-1. **Clone the repository**
 ```bash
-git clone https://github.com/your-repo/Backend_RabensteinerEng.git
-cd Backend_RabensteinerEng/my_backend
+# Build
+docker build --build-arg ENV_FILE=.env -t my_backend .
+
+# Run
+docker run -p 8080:8080 --env-file .env my_backend
 ```
 
-2. **Create virtual environment**
+### Local Development
+
 ```bash
+# Create virtual environment
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
 
-3. **Install dependencies**
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-4. **Configure environment variables**
-```bash
-cp .env.example .env
-# Edit .env file with your Supabase settings
-```
-
-Required environment variables:
-- `SUPABASE_URL`: Your Supabase project URL (e.g., https://xyzcompany.supabase.co)
-- `SUPABASE_KEY`: Your Supabase anon/public key
-
-## 🏗️ Architecture
-
-```
-my_backend/
-├── api/routes/           # API endpoints (Flask blueprints)
-│   ├── adjustments.py    # Data adjustments endpoints
-│   ├── cloud.py          # Cloud operations
-│   ├── data_processing.py# Main data processing
-│   ├── first_processing.py# Initial processing
-│   ├── load_data.py      # Data upload endpoints
-│   └── training.py       # ML training endpoints
-├── services/             # Business logic
-│   ├── adjustments/      # Data adjustment services
-│   ├── cloud/            # Cloud integration
-│   ├── data_processing/  # Processing logic
-│   ├── training/         # ML training pipeline
-│   └── upload/           # File upload handlers
-├── core/                 # Application core
-│   ├── app_factory.py    # Flask app creation
-│   ├── extensions.py     # Flask extensions
-│   └── socketio_handlers.py # WebSocket handlers
-├── utils/                # Utilities
-│   └── database.py       # Supabase client
-├── models/               # Data models
-├── config/               # Configuration
-├── storage/              # File storage
-└── app.py               # Entry point
-```
-
-## 🔧 Configuration
-
-### Environment Variables (.env)
-
-```env
-# Flask
-FLASK_ENV=development
-PORT=8080
-
-# Supabase
-SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_key
-
-# Upload settings
-MAX_CONTENT_LENGTH=104857600  # 100MB
-UPLOAD_FOLDER=uploads
-TEMP_FOLDER=temp_uploads
-```
-
-## 🚦 Running the Application
-
-### Development Mode
-```bash
+# Run
 python app.py
 ```
 
-Server will be available at `http://localhost:8080`
+## Environment Variables
 
-### Production Mode
-```bash
-gunicorn -w 4 -b 0.0.0.0:8080 --timeout 300 app:app
+Create a `.env` file with:
+
+```env
+# Supabase
+SUPABASE_URL=your_supabase_url
+SUPABASE_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+# Stripe
+STRIPE_SECRET_KEY=your_stripe_secret_key
+STRIPE_PUBLISHABLE_KEY=your_stripe_publishable_key
+STRIPE_WEBHOOK_SECRET=your_webhook_secret
+
+# Frontend
+FRONTEND_URL=http://localhost:3000
 ```
 
-### Docker
-```bash
-docker build -t rabensteiner-backend .
-docker run -p 8080:8080 --env-file .env rabensteiner-backend
+## Architecture
+
+```
+my_backend/
+├── app.py                      # Entry point
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+│
+├── core/                       # Application core
+│   ├── app.py                  # Flask app (alternative)
+│   ├── app_factory.py          # Flask app factory
+│   ├── blueprints.py           # Blueprint registration
+│   └── socketio_handlers.py    # WebSocket handlers
+│
+├── domains/                    # Domain-driven architecture
+│   ├── training/               # ML training domain
+│   │   ├── api/                # Training endpoints (36 routes)
+│   │   ├── data/               # Data processing, scaling
+│   │   ├── ml/                 # Models, scalers, trainers
+│   │   └── services/           # Session, upload, visualization
+│   │
+│   ├── processing/             # Data processing domain
+│   │   ├── api/                # Processing endpoints
+│   │   └── services/           # CSV processing, cleaning
+│   │
+│   ├── upload/                 # File upload domain
+│   │   ├── api/                # Upload endpoints
+│   │   └── services/           # State management, parsing
+│   │
+│   ├── adjustments/            # Data adjustments domain
+│   │   ├── api/                # Adjustment endpoints
+│   │   └── services/           # Adjustment logic
+│   │
+│   ├── cloud/                  # Cloud analysis domain
+│   │   ├── api/                # Cloud endpoints
+│   │   └── services/           # Regression, interpolation
+│   │
+│   └── payments/               # Stripe payments domain
+│       └── api/                # Payment endpoints
+│
+├── shared/                     # Shared infrastructure
+│   ├── auth/                   # JWT authentication, subscription checks
+│   ├── database/               # Supabase client and operations
+│   ├── payments/               # Stripe helpers
+│   ├── storage/                # Storage service
+│   ├── tracking/               # Usage tracking
+│   └── exceptions/             # Error handling
+│
+├── middleware/                 # Authentication middleware
+├── services/                   # Scheduled cleanup service
+├── utils/                      # Helper utilities
+└── sql/                        # SQL schema references
 ```
 
-## 📡 API Endpoints
+## API Endpoints
 
 ### Health Check
 - `GET /` - Server status
 - `GET /health` - Health check
 
-### Data Upload
-- `POST /api/loadRowData/upload-chunk` - Upload data in chunks
-- `POST /api/loadRowData/finalize-upload` - Finalize upload
-- `POST /api/loadRowData/cancel-upload` - Cancel upload
+### Training (`/api/training`)
+- `POST /upload-chunk` - Upload CSV chunk
+- `POST /finalize-session` - Finalize upload session
+- `GET /list-sessions` - List training sessions
+- `POST /generate-datasets/<session_id>` - Generate datasets
+- `POST /train-models/<session_id>` - Train ML models
+- `GET /results/<session_id>` - Get training results
+- `GET /scalers/<session_id>` - Get scalers info
+- `POST /scale-data/<session_id>` - Scale new data
 
-### Data Processing
-- `POST /api/firstProcessing/upload_chunk` - Initial processing
-- `POST /api/dataProcessingMain/upload-chunk` - Main processing
-- `POST /api/adjustmentsOfData/process` - Data adjustments
+### Data Upload (`/api/loadRowData`)
+- `POST /upload-chunk` - Upload data chunk
+- `POST /finalize-upload` - Finalize upload
+- `POST /cancel-upload` - Cancel upload
 
-### Training
-- `POST /api/training/generate-dataset` - Generate dataset
-- `POST /api/training/train` - Train models
-- `GET /api/training/status/<session_id>` - Training status
+### Processing (`/api/firstProcessing`, `/api/dataProcessingMain`)
+- `POST /upload_chunk` - Process data chunks
+- `POST /process` - Main processing
 
-### Cloud Operations
-- `POST /api/cloud/upload-chunk` - Cloud upload
-- `POST /api/cloud/clouddata` - Retrieve cloud data
-- `POST /api/cloud/interpolate-chunked` - Data interpolation
+### Adjustments (`/api/adjustmentsOfData`)
+- `POST /process` - Apply data adjustments
 
-## 🔌 WebSocket Events
+### Cloud (`/api/cloud`)
+- `POST /upload-chunk` - Cloud upload
+- `POST /clouddata` - Retrieve cloud data
+- `POST /interpolate-chunked` - Data interpolation
+
+### Payments (`/api/stripe`)
+- `POST /create-checkout-session` - Create Stripe checkout
+- `POST /webhook` - Stripe webhook handler
+- `GET /subscription-status` - Get subscription status
+
+## WebSocket Events
 
 ### Client → Server
 - `connect` - Connect to server
 - `join` - Join room
 - `join_training_session` - Join training session
-- `request_training_status` - Request training status
 
 ### Server → Client
 - `upload_progress` - Upload progress
-- `training_status_update` - Training status update
+- `training_status_update` - Training status
 - `dataset_status_update` - Dataset generation status
-- `processing_error` - Processing error
+- `violin_plot_progress` - Violin plot generation progress
 
-## 🧪 Testing
+## Running
 
+### Development
 ```bash
-# Run unit tests
-python -m pytest tests/
-
-# With coverage
-python -m pytest --cov=. tests/
+python app.py
+# Server at http://localhost:8080
 ```
 
-## 📦 Deployment
-
-### Google Cloud Run
+### Production (Docker)
 ```bash
-gcloud builds submit --tag gcr.io/PROJECT_ID/rabensteiner-backend
-gcloud run deploy --image gcr.io/PROJECT_ID/rabensteiner-backend --platform managed
+docker build --build-arg ENV_FILE=.env -t my_backend .
+docker run -p 8080:8080 --env-file .env my_backend
 ```
 
-### Render.com
-1. Connect GitHub repository
-2. Set environment variables
-3. Auto-deploy on push
-
-## 🐛 Debugging
-
-### Logging
-```python
-import logging
-logger = logging.getLogger(__name__)
-logger.debug("Debug message")
-logger.info("Info message")
-logger.error("Error message")
+### Docker Compose
+```bash
+docker-compose up --build
 ```
 
-### Common Issues
+## Common Issues
 
 **Port already in use:**
 ```bash
@@ -198,26 +195,16 @@ lsof -i :8080
 kill -9 <PID>
 ```
 
-**Import errors:**
-Check that you're in the correct directory and virtual environment is activated.
-
 **Supabase connection:**
-Verify that SUPABASE_URL and SUPABASE_KEY are correctly set in .env file.
+Verify SUPABASE_URL and SUPABASE_KEY in .env file.
 
-## 📄 License
-
-Proprietary - Rabensteiner Engineering
-
-## 👥 Team
-
-- Backend Development Team
-- ML Engineering Team
-
-## 📞 Contact
-
-For questions and support, contact the development team.
+**Stripe webhooks:**
+Use Stripe CLI for local testing:
+```bash
+stripe listen --forward-to localhost:8080/api/stripe/webhook
+```
 
 ---
 
-**Version:** 1.0.0  
-**Last Updated:** August 2024
+**Version:** 2.0.0
+**Last Updated:** December 2024

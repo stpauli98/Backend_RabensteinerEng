@@ -4,60 +4,93 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-### Running the Application
-- **Development**: `python app.py` - Runs Flask app with SocketIO on port 8080
-- **Production**: `gunicorn app:app` - Uses gunicorn with configuration from Dockerfile
-- **Docker**: `docker build -t my_backend .` then `docker run -p 8080:8080 my_backend`
+### Docker (Recommended)
+```bash
+# Build with environment file
+docker build --build-arg ENV_FILE=.env -t my_backend .
 
-### Dependencies
-- **Install**: `pip install -r requirements.txt`
-- **Update**: Update `requirements.txt` manually when adding new dependencies
+# Run container
+docker run -p 8080:8080 --env-file .env my_backend
 
-### Testing
-- No automated test framework is configured
-- Manual testing via API endpoints and health check at `/health`
+# Build and run combined
+docker build --build-arg ENV_FILE=.env -t my_backend . && docker run -p 8080:8080 --env-file .env my_backend
+```
+
+### Local Development
+```bash
+python app.py  # Runs on port 8080
+```
+
+### Health Check
+```bash
+curl http://localhost:8080/health
+```
 
 ## Architecture Overview
 
-### Core Application Structure
-- **app.py**: Main Flask application with SocketIO integration, blueprint registration, and scheduled cleanup
-- **Blueprint-based modular design**: Each major feature is a separate blueprint module
+This is a Flask backend using **Domain-Driven Design** with the following structure:
 
-### Key Modules
-- **firstProcessing.py**: Initial CSV data processing, chunked file upload handling
-- **load_row_data.py**: Raw data loading with support for multiple datetime formats
-- **data_processing_main.py**: Advanced data cleaning and filtering operations
-- **adjustmentsOfData.py**: Data adjustment operations with temporary file management
-- **training.py**: Machine learning model training and file metadata extraction
-- **cloud.py**: Cloud-based data analysis with matplotlib visualization
-- **supabase_client.py**: Database operations using Supabase client
+### Core (`core/`)
+- `app_factory.py` - Flask app factory with SocketIO, CORS, error handlers
+- `blueprints.py` - Central blueprint registration for all domains
+- `socketio_handlers.py` - WebSocket event handlers
 
-### Data Flow Architecture
-1. **File Upload**: Chunked upload system stores temporary files in `chunk_uploads/`
-2. **Processing Pipeline**: Data flows through firstProcessing → load_row_data → data_processing_main → adjustmentsOfData
-3. **Real-time Updates**: SocketIO provides progress tracking during long-running operations
-4. **Temporary Storage**: Files stored in `temp_uploads/` with automatic cleanup every 30 minutes
-5. **Persistence**: Session data and metadata saved to Supabase database
+### Domains (`domains/`)
+Each domain follows the pattern: `api/` (endpoints) + `services/` (business logic) + `data/` (data processing)
 
-### WebSocket Integration
-- **SocketIO**: Real-time communication for file processing progress
-- **Room-based**: Clients join rooms based on uploadId for targeted updates
-- **Progress Events**: Emit progress updates during data processing operations
+| Domain | Prefix | Purpose |
+|--------|--------|---------|
+| `training/` | `/api/training` | ML model training, 36 endpoints |
+| `processing/` | `/api/firstProcessing`, `/api/dataProcessingMain` | CSV data processing |
+| `upload/` | `/api/loadRowData` | Chunked file upload |
+| `adjustments/` | `/api/adjustmentsOfData` | Data adjustments |
+| `cloud/` | `/api/cloud` | Cloud analysis, interpolation |
+| `payments/` | `/api/stripe` | Stripe subscriptions |
 
-### File Management
-- **Chunk Storage**: `chunk_uploads/` for temporary file chunks during upload
-- **Temp Storage**: `temp_uploads/` for processed files with automatic cleanup
-- **Session Storage**: `uploads/file_uploads/session_*` for organized file sessions
+### Shared Infrastructure (`shared/`)
+- `auth/` - JWT authentication (`@require_auth`), subscription checks (`@require_subscription`)
+- `database/` - Supabase client and operations (`get_supabase_client`, `save_session_to_supabase`)
+- `payments/` - Stripe helpers
+- `tracking/` - Usage tracking (`increment_processing_count`)
 
-### Environment Configuration
-- **Production**: Uses gunicorn with 1 worker, 8 threads, no timeout
-- **CORS**: Configured for `localhost:3000` with full method support
-- **Logging**: INFO level logging across all modules
-- **Database**: Supabase integration via environment variables (`SUPABASE_URL`, `SUPABASE_KEY`)
+### Key Patterns
 
-### Data Processing Features
-- **CSV Processing**: Support for multiple datetime formats and data cleaning
-- **Interpolation**: Time series data interpolation with configurable parameters
-- **Outlier Detection**: Statistical outlier removal with customizable thresholds
-- **Visualization**: Matplotlib-based chart generation for data analysis
-- **Machine Learning**: Scikit-learn integration for model training and predictions
+**Authentication Decorators** (order matters):
+```python
+@bp.route('/endpoint', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
+def endpoint():
+    user_id = g.user_id  # Available after @require_auth
+```
+
+**Supabase Operations**:
+```python
+from shared.database.operations import get_supabase_client
+supabase = get_supabase_client(use_service_role=True)  # Bypasses RLS
+```
+
+**WebSocket Progress Updates**:
+```python
+from flask import current_app
+socketio = current_app.extensions.get('socketio')
+socketio.emit('training_status_update', data, room=session_id)
+```
+
+### Data Flow
+1. **Upload**: Chunked CSV upload → `uploads/file_uploads/session_*`
+2. **Process**: Data cleaning, interpolation, adjustments
+3. **Train**: Generate datasets → Train models (Dense, CNN, LSTM, SVR, Linear)
+4. **Results**: Stored in Supabase, scalers saved for inference
+
+### Environment Variables
+Required in `.env`:
+- `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+- `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`
+- `FRONTEND_URL`
+
+### File Storage
+- `chunk_uploads/` - Temporary chunks during upload
+- `temp_uploads/` - Processed files (auto-cleanup every 30 min)
+- `uploads/file_uploads/` - Session files

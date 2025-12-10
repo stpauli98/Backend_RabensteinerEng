@@ -68,10 +68,9 @@ def initialize_session(session_id: str, time_info: Dict, zeitschritte: Dict, use
         json.dump(session_metadata, f, indent=2)
 
     try:
-        from shared.database.operations import create_or_get_session_uuid
+        from shared.database.operations import create_or_get_session_uuid, save_session_to_supabase
         session_uuid = create_or_get_session_uuid(session_id, user_id)
         if session_uuid:
-            from api.routes.training import save_session_to_supabase
             success = save_session_to_supabase(session_id)
             if not success:
                 logger.warning(f"Failed to save session {session_id} data to Supabase")
@@ -102,13 +101,13 @@ def finalize_session(session_id: str, session_data: Dict) -> Dict:
             'message': str
         }
     """
-    from api.routes.training import (
+    from domains.training.services.upload import (
         update_session_metadata,
         verify_session_files,
         calculate_n_dat_from_session,
-        save_session_metadata_locally,
-        save_session_to_database
+        save_session_metadata_locally
     )
+    from shared.database.operations import save_session_to_supabase
 
     updated_metadata = update_session_metadata(session_id, session_data)
 
@@ -120,7 +119,7 @@ def finalize_session(session_id: str, session_data: Dict) -> Dict:
     save_session_metadata_locally(session_id, final_metadata)
 
     try:
-        success = save_session_to_database(session_id, n_dat, file_count)
+        success = save_session_to_supabase(session_id, n_dat, file_count)
         if not success:
             logger.warning(f"Failed to save session {session_id} to database, but continuing")
     except Exception as e:

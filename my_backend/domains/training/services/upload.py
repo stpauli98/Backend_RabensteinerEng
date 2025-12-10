@@ -582,3 +582,93 @@ def delete_csv_file_record(file_id: str) -> Dict:
         'message': f"File {file_record['file_name']} deleted successfully",
         'storage_deleted': storage_deleted
     }
+
+
+def calculate_n_dat_from_session(session_id: str) -> int:
+    """
+    Calculate n_dat (total number of data samples) from uploaded CSV files in a session.
+    This mimics the n_dat = i_array_3D.shape[0] calculation from training_original.py
+
+    Args:
+        session_id: ID of the session
+
+    Returns:
+        int: Total number of data samples (n_dat)
+    """
+    try:
+        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+        if not os.path.exists(upload_dir):
+            logger.warning(f"Upload directory not found for session {session_id}")
+            return 0
+
+        total_samples = 0
+        csv_files = []
+
+        for file_name in os.listdir(upload_dir):
+            if file_name.lower().endswith('.csv') and os.path.isfile(os.path.join(upload_dir, file_name)):
+                csv_files.append(file_name)
+
+        if not csv_files:
+            logger.warning(f"No CSV files found in session {session_id}")
+            return 0
+
+        for csv_file in csv_files:
+            file_path = os.path.join(upload_dir, csv_file)
+            try:
+                df = pd.read_csv(file_path)
+                file_samples = len(df)
+                total_samples += file_samples
+                logger.info(f"File {csv_file}: {file_samples} samples")
+            except Exception as e:
+                logger.error(f"Error reading CSV file {csv_file}: {str(e)}")
+                continue
+
+        logger.info(f"Session {session_id} total n_dat: {total_samples}")
+        return total_samples
+
+    except Exception as e:
+        logger.error(f"Error calculating n_dat for session {session_id}: {str(e)}")
+        return 0
+
+
+def cleanup_incomplete_uploads(upload_base_dir: str = None, max_age_hours: int = 24) -> int:
+    """
+    Clean up incomplete or old upload sessions.
+
+    Args:
+        upload_base_dir: Base directory for uploads (defaults to UPLOAD_BASE_DIR)
+        max_age_hours: Maximum age for incomplete uploads
+
+    Returns:
+        int: Number of cleaned up sessions
+    """
+    import time
+    import shutil
+
+    if upload_base_dir is None:
+        upload_base_dir = UPLOAD_BASE_DIR
+
+    cleaned_count = 0
+    current_time = time.time()
+    max_age_seconds = max_age_hours * 3600
+
+    try:
+        for session_dir in Path(upload_base_dir).iterdir():
+            if not session_dir.is_dir():
+                continue
+
+            dir_age = current_time - session_dir.stat().st_mtime
+            if dir_age > max_age_seconds:
+                finalized_marker = session_dir / '.finalized'
+                if not finalized_marker.exists():
+                    try:
+                        shutil.rmtree(session_dir)
+                        cleaned_count += 1
+                        logger.info(f"Cleaned up old session: {session_dir.name}")
+                    except Exception as e:
+                        logger.error(f"Error cleaning up {session_dir}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+
+    return cleaned_count
