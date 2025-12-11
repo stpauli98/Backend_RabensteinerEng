@@ -36,7 +36,11 @@ UPLOAD_BASE_DIR = 'uploads/file_uploads'
 
 # Logger setup
 def get_logger(name: str) -> logging.Logger:
-    """Get a configured logger for the given module name."""
+    """Get a configured logger for the given module name.
+
+    Log level is controlled by LOG_LEVEL environment variable (default: INFO).
+    Set LOG_LEVEL=DEBUG in .env for verbose logging during development.
+    """
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler()
@@ -44,7 +48,7 @@ def get_logger(name: str) -> logging.Logger:
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         ))
         logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
+    # Level is inherited from root logger configured in app_factory.py
     return logger
 
 

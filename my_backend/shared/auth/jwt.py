@@ -50,7 +50,7 @@ def require_auth(f):
             g.user_metadata = response.user.user_metadata
             g.access_token = token
 
-            logger.info(f"Authenticated user: {g.user_email} ({g.user_id})")
+            logger.debug(f"Authenticated user: {g.user_email} ({g.user_id})")
 
             return f(*args, **kwargs)
 
@@ -99,7 +99,7 @@ def optional_auth(f):
                 g.user_metadata = response.user.user_metadata
                 g.access_token = token
 
-                logger.info(f"Optional auth: Authenticated user {g.user_email}")
+                logger.debug(f"Optional auth: Authenticated user {g.user_email}")
 
         except Exception as e:
             logger.debug(f"Optional auth failed (continuing anyway): {str(e)}")

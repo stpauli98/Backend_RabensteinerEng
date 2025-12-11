@@ -328,6 +328,12 @@ def create_scaler_download_package(session_id: str) -> str:
         raise ValueError(f'No scalers found for session {session_id}')
 
     def deserialize_scalers_dict(scaler_dict):
+        """Deserialize scalers from base64-encoded pickle data.
+
+        SECURITY NOTE: pickle.loads() can execute arbitrary code.
+        This is safe here because scalers are only stored by authenticated users
+        via our training pipeline and retrieved from trusted Supabase storage.
+        """
         result = {}
         for key, scaler_data in scaler_dict.items():
             if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
@@ -414,7 +420,12 @@ def scale_new_data(session_id: str, input_data, save_scaled: bool = False) -> Di
         raise ValueError(f'No input scalers found for session {session_id}')
 
     def deserialize_scaler(scaler_data):
-        """Convert serialized scaler back to usable object"""
+        """Convert serialized scaler back to usable object.
+
+        SECURITY NOTE: pickle.loads() can execute arbitrary code.
+        This is safe here because scalers are only stored by authenticated users
+        via our training pipeline and retrieved from trusted Supabase storage.
+        """
         if scaler_data is None:
             return None
         elif isinstance(scaler_data, dict) and '_model_type' in scaler_data:

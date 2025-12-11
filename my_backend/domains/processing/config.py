@@ -1,12 +1,10 @@
 """
 Processing domain configuration constants.
-"""
-import os
-import tempfile
 
-# Upload folders
-CHUNK_UPLOAD_FOLDER = "chunk_uploads"
-DATA_PROCESSING_UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "upload_chunks")
+Note: Chunk upload folders are no longer used locally.
+Chunks are now stored in Supabase Storage (temp-chunks bucket) for
+multi-instance Cloud Run support. See shared/storage/chunk_service.py
+"""
 
 # File constraints
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB

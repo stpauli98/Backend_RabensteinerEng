@@ -43,12 +43,12 @@ from shared.exceptions import (
 from domains.upload.config import SUPPORTED_ENCODINGS
 from domains.upload.services.progress import ProgressTracker
 from domains.upload.services.datetime_parser import DateTimeParser
-from domains.upload.services.state_manager import chunk_storage, temp_files
 from domains.upload.services.csv_utils import (
     detect_delimiter,
     clean_time,
     clean_file_content
 )
+from shared.storage.chunk_service import chunk_storage_service
 
 
 # Global parser instance
@@ -75,6 +75,9 @@ def _error_response(error_code: str, message: str, status_code: int = 400) -> Tu
 def upload_chunk() -> Tuple[Response, int]:
     """
     Handle chunked file upload.
+
+    Chunks are stored in Supabase Storage for multi-instance Cloud Run support.
+    Metadata (parameters) is saved on first chunk upload.
     """
     try:
         if 'fileChunk' not in request.files:
@@ -89,7 +92,17 @@ def upload_chunk() -> Tuple[Response, int]:
         chunk_index = int(request.form['chunkIndex'])
         total_chunks = int(request.form['totalChunks'])
 
-        if upload_id not in chunk_storage:
+        # Read chunk content
+        file_chunk = request.files['fileChunk']
+        chunk_content = file_chunk.read()
+
+        # Upload chunk to Supabase Storage
+        if not chunk_storage_service.upload_chunk(upload_id, chunk_index, chunk_content):
+            return jsonify({"error": "Failed to save chunk to storage"}), 500
+
+        # Save metadata on first chunk (or if metadata doesn't exist yet)
+        existing_metadata = chunk_storage_service.get_upload_metadata(upload_id)
+        if existing_metadata is None:
             try:
                 selected_columns_str = request.form.get('selected_columns')
                 if not selected_columns_str:
@@ -98,35 +111,29 @@ def upload_chunk() -> Tuple[Response, int]:
                 if not isinstance(selected_columns, dict):
                     return jsonify({"error": "selected_columns must be a JSON object"}), 400
 
-                chunk_storage[upload_id] = {
-                    'chunks': {},
-                    'total_chunks': total_chunks,
-                    'received_chunks': 0,
-                    'last_activity': 0,
-                    'parameters': {
-                        'delimiter': request.form.get('delimiter'),
-                        'timezone': request.form.get('timezone', 'UTC'),
-                        'has_header': request.form.get('hasHeader', 'nein'),
-                        'selected_columns': selected_columns,
-                        'custom_date_format': request.form.get('custom_date_format'),
-                        'value_column_name': request.form.get('valueColumnName', '').strip(),
-                        'dropdown_count': int(request.form.get('dropdown_count', '2'))
-                    }
+                parameters = {
+                    'delimiter': request.form.get('delimiter'),
+                    'timezone': request.form.get('timezone', 'UTC'),
+                    'has_header': request.form.get('hasHeader', 'nein'),
+                    'selected_columns': selected_columns,
+                    'custom_date_format': request.form.get('custom_date_format'),
+                    'value_column_name': request.form.get('valueColumnName', '').strip(),
+                    'dropdown_count': int(request.form.get('dropdown_count', '2'))
                 }
+
+                if not chunk_storage_service.save_upload_metadata(upload_id, total_chunks, parameters):
+                    return jsonify({"error": "Failed to save upload metadata"}), 500
+
             except json.JSONDecodeError:
                 return jsonify({"error": "Invalid JSON format for selected_columns"}), 400
-        else:
-            chunk_storage[upload_id]['total_chunks'] = max(chunk_storage[upload_id]['total_chunks'], total_chunks)
 
-        file_chunk = request.files['fileChunk']
-        chunk_content = file_chunk.read()
-        chunk_storage[upload_id]['chunks'][chunk_index] = chunk_content
-        chunk_storage[upload_id]['received_chunks'] += 1
+        # Count received chunks from Supabase Storage
+        received_chunks = chunk_storage_service.get_upload_chunk_count(upload_id)
 
         return jsonify({
-            "message": f"Chunk {chunk_index + 1}/{chunk_storage[upload_id]['total_chunks']} received",
+            "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
             "uploadId": upload_id,
-            "remainingChunks": chunk_storage[upload_id]['total_chunks'] - chunk_storage[upload_id]['received_chunks']
+            "remainingChunks": total_chunks - received_chunks
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -139,6 +146,9 @@ def upload_chunk() -> Tuple[Response, int]:
 def finalize_upload() -> Tuple[Response, int]:
     """
     Finalize chunked upload and process the complete file.
+
+    Reads metadata from Supabase Storage, verifies all chunks received,
+    then processes the assembled file.
     """
     try:
         data = request.get_json(force=True, silent=True)
@@ -148,18 +158,24 @@ def finalize_upload() -> Tuple[Response, int]:
 
         upload_id = data['uploadId']
 
-        if upload_id not in chunk_storage:
+        # Get metadata from Supabase Storage
+        metadata = chunk_storage_service.get_upload_metadata(upload_id)
+        if metadata is None:
             return jsonify({"error": "Upload not found or already processed"}), 404
 
-        if chunk_storage[upload_id]['received_chunks'] != chunk_storage[upload_id]['total_chunks']:
-            remaining = chunk_storage[upload_id]['total_chunks'] - chunk_storage[upload_id]['received_chunks']
+        # Verify all chunks received
+        received_chunks = chunk_storage_service.get_upload_chunk_count(upload_id)
+        total_chunks = metadata['total_chunks']
+
+        if received_chunks != total_chunks:
+            remaining = total_chunks - received_chunks
             return jsonify({
                 "error": f"Not all chunks received. Missing {remaining} chunks.",
-                "received": chunk_storage[upload_id]['received_chunks'],
-                "total": chunk_storage[upload_id]['total_chunks']
+                "received": received_chunks,
+                "total": total_chunks
             }), 400
 
-        return process_chunks(upload_id)
+        return process_chunks(upload_id, metadata)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -169,6 +185,8 @@ def finalize_upload() -> Tuple[Response, int]:
 def cancel_upload() -> Tuple[Response, int]:
     """
     Cancel an in-progress upload.
+
+    Deletes all chunks and metadata from Supabase Storage.
     """
     try:
         data = request.get_json(force=True, silent=True)
@@ -178,37 +196,55 @@ def cancel_upload() -> Tuple[Response, int]:
 
         upload_id = data['uploadId']
 
-        if upload_id in chunk_storage:
-            del chunk_storage[upload_id]
+        # Delete all chunks and metadata from Supabase Storage
+        deleted_count = chunk_storage_service.delete_upload_chunks(upload_id)
 
-            socketio = get_socketio()
-            socketio.emit('upload_progress', {
-                'uploadId': upload_id,
-                'progress': 0,
-                'status': 'error',
-                'message': 'Upload canceled by user'
-            }, room=upload_id)
+        socketio = get_socketio()
+        socketio.emit('upload_progress', {
+            'uploadId': upload_id,
+            'progress': 0,
+            'status': 'error',
+            'message': 'Upload canceled by user'
+        }, room=upload_id)
 
         return jsonify({
             "success": True,
-            "message": "Upload canceled successfully"
+            "message": f"Upload canceled successfully ({deleted_count} files deleted)"
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 
-def process_chunks(upload_id: str) -> Tuple[Response, int]:
+def process_chunks(upload_id: str, metadata: Dict[str, Any]) -> Tuple[Response, int]:
     """
     Process and decode uploaded file chunks.
+
+    Downloads chunks from Supabase Storage, combines them, decodes,
+    and processes the CSV file.
+
+    Args:
+        upload_id: Unique upload identifier
+        metadata: Upload metadata dict with 'total_chunks' and 'parameters'
     """
     try:
         socketio = get_socketio()
+        total_chunks = metadata['total_chunks']
 
-        upload_data = chunk_storage[upload_id]
-        chunks = [upload_data['chunks'][i] for i in range(upload_data['total_chunks'])]
+        # Download all chunks from Supabase Storage
+        combined_bytes = chunk_storage_service.download_all_chunks(upload_id, total_chunks)
+        if combined_bytes is None:
+            error_msg = f"Failed to download chunks for upload {upload_id}"
+            socketio.emit('upload_progress', {
+                'uploadId': upload_id,
+                'progress': 0,
+                'status': 'error',
+                'message': error_msg
+            }, room=upload_id)
+            # Cleanup on error
+            chunk_storage_service.delete_upload_chunks(upload_id)
+            return jsonify({"error": error_msg}), 500
 
-        combined_bytes = b"".join(chunks)
-
+        # Decode the combined bytes
         encodings = SUPPORTED_ENCODINGS
         full_content = None
 
@@ -239,27 +275,29 @@ def process_chunks(upload_id: str) -> Tuple[Response, int]:
                 'status': 'error',
                 'message': error.message
             }, room=upload_id)
+            # Cleanup on error
+            chunk_storage_service.delete_upload_chunks(upload_id)
             return jsonify(error.to_dict()), 400
 
-        params = upload_data['parameters']
+        # Get parameters and cleanup chunks from storage
+        params = metadata['parameters']
         params['uploadId'] = upload_id
-        del chunk_storage[upload_id]
+
+        # Cleanup chunks from Supabase Storage (success path)
+        chunk_storage_service.delete_upload_chunks(upload_id)
 
         return upload_files(full_content, params)
     except LoadDataException as e:
+        # Cleanup on error
+        chunk_storage_service.delete_upload_chunks(upload_id)
         from flask import has_app_context
         if has_app_context():
             return jsonify(e.to_dict()), 400
         else:
             raise
-    except KeyError:
-        error = UploadNotFoundError(upload_id)
-        from flask import has_app_context
-        if has_app_context():
-            return jsonify(error.to_dict()), 404
-        else:
-            raise error
     except Exception as e:
+        # Cleanup on error
+        chunk_storage_service.delete_upload_chunks(upload_id)
         from flask import has_app_context
         if has_app_context():
             return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500

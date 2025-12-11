@@ -97,15 +97,15 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 tracker.emit('parsing', 12, 'fp_loading_csv')
 
             lines = file_content.strip().split('\n')
-            logger.info(f"Total lines in CSV: {len(lines)}")
+            logger.debug(f"Total lines in CSV: {len(lines)}")
 
             if tracker:
                 tracker.emit('parsing', 15, 'fp_lines_loaded', message_params={'lineCount': len(lines)})
 
             if len(lines) > 0:
                 header = lines[0]
-                logger.info(f"Header: '{header}'")
-                logger.info(f"Header fields: {header.split(';')}")
+                logger.debug(f"Header: '{header}'")
+                logger.debug(f"Header fields: {header.split(';')}")
 
             if tracker:
                 tracker.emit('parsing', 17, 'fp_pandas_parsing')
@@ -123,7 +123,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 try:
                     df = pd.read_csv(StringIO(file_content), delimiter=';', skipinitialspace=True,
                                    quoting=csv.QUOTE_NONE, on_bad_lines='skip')
-                    logger.info(f"Successfully parsed CSV with QUOTE_NONE, {len(df)} rows")
+                    logger.debug(f"Successfully parsed CSV with QUOTE_NONE, {len(df)} rows")
                 except Exception as final_error:
                     logger.error(f"All parsing attempts failed: {str(final_error)}")
                     raise pandas_error
@@ -135,7 +135,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
 
             utc_col_name = df.columns[0]
             value_col_name = df.columns[1]
-            logger.info(f"Using columns: UTC='{utc_col_name}', Value='{value_col_name}'")
+            logger.debug(f"Using columns: UTC='{utc_col_name}', Value='{value_col_name}'")
 
             # === PHASE 2: PREPROCESSING (20-30%) ===
             if tracker:
@@ -145,7 +145,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             # Validate that values can be converted to numeric
             non_numeric = df[value_col_name].apply(lambda x: not is_numeric(x))
             if non_numeric.any():
-                logger.info(f"Found non-numeric values in {value_col_name}: {df[value_col_name][non_numeric].head()}")
+                logger.debug(f"Found non-numeric values in {value_col_name}: {df[value_col_name][non_numeric].head()}")
 
             df[value_col_name] = pd.to_numeric(df[value_col_name], errors='coerce')
 
@@ -154,7 +154,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             final_count = len(df)
 
             if initial_count != final_count:
-                logger.info(f"Removed {initial_count - final_count} rows with invalid data")
+                logger.debug(f"Removed {initial_count - final_count} rows with invalid data")
 
         except Exception as e:
             logger.error(f"Error parsing CSV data: {str(e)}")
@@ -189,7 +189,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         time_min_raw = df[utc_col_name].iloc[0].to_pydatetime()
         time_max_raw = df[utc_col_name].iloc[-1].to_pydatetime()
 
-        logger.info(f"Time range: {time_min_raw} to {time_max_raw}")
+        logger.debug(f"Time range: {time_min_raw} to {time_max_raw}")
 
         if tracker:
             tracker.emit('preprocessing', 37, 'fp_preprocessing_complete')
@@ -211,8 +211,8 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         if normalized_offset > 0:
             time_min += datetime.timedelta(minutes=normalized_offset)
 
-        logger.info(f"Applying offset of {normalized_offset} minutes to {time_min_raw}")
-        logger.info(f"Resulting start time: {time_min}")
+        logger.debug(f"Applying offset of {normalized_offset} minutes to {time_min_raw}")
+        logger.debug(f"Resulting start time: {time_min}")
 
         # Generate continuous timestamp
         time_list = []
@@ -225,9 +225,9 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         if not time_list:
             return jsonify({"error": "Keine gültigen Zeitpunkte generiert"}), 400
 
-        logger.info(f"Generated {len(time_list)} time points")
-        logger.info(f"First timestamp: {time_list[0]}")
-        logger.info(f"Last timestamp: {time_list[-1]}")
+        logger.debug(f"Generated {len(time_list)} time points")
+        logger.debug(f"First timestamp: {time_list[0]}")
+        logger.debug(f"Last timestamp: {time_list[-1]}")
 
         # === PHASE 3: PROCESSING (37-90%) ===
         if tracker:
@@ -406,8 +406,8 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                     value_list.append("nan")
 
         # DATA FRAME WITH PROCESSED DATA
-        logger.info(f"Length of time_list: {len(time_list)}")
-        logger.info(f"Length of value_list: {len(value_list)}")
+        logger.debug(f"Length of time_list: {len(time_list)}")
+        logger.debug(f"Length of value_list: {len(value_list)}")
 
         if tracker:
             tracker.emit('processing', 90, 'fp_processing_done', force=True)
@@ -485,7 +485,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 yield json.dumps({"status": "complete"}) + "\n"
 
             except GeneratorExit:
-                logger.info("Client disconnected during streaming")
+                logger.debug("Client disconnected during streaming")
             except BrokenPipeError:
                 logger.warning("Broken pipe - client forcefully disconnected")
             except Exception as e:

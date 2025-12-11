@@ -1,9 +1,14 @@
 """
 Chunk upload handling service.
-Manages chunked file uploads, locking, and assembly.
+
+DEPRECATED (partially): Local chunk storage functions are no longer used.
+Chunks are now stored in Supabase Storage (temp-chunks bucket) for
+multi-instance Cloud Run support. See shared/storage/chunk_service.py
+
+Still in use:
+- validate_file_upload() - Used by data_processing.py for file validation
 """
 import os
-import re
 import tempfile
 import threading
 import logging
@@ -11,7 +16,8 @@ from domains.processing.config import MAX_FILE_SIZE, MAX_CHUNK_SIZE, ALLOWED_EXT
 
 logger = logging.getLogger(__name__)
 
-# Lock for preventing race conditions during chunk processing
+# DEPRECATED: Lock for preventing race conditions during chunk processing
+# No longer needed - Supabase Storage handles concurrency
 upload_locks = {}
 upload_locks_lock = threading.Lock()
 

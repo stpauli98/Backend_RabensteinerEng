@@ -12,11 +12,19 @@ from core.socketio_handlers import register_socketio_handlers
 socketio = SocketIO()
 cors = CORS()
 
+# Configure logging level from environment (default: INFO for production)
+# Set LOG_LEVEL=DEBUG in .env for verbose logging during development
+_log_level = getattr(logging, os.environ.get('LOG_LEVEL', 'INFO').upper(), logging.INFO)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=_log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Suppress noisy third-party loggers (they flood logs with INFO level messages)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
 def create_app():
     """Application factory function"""
@@ -24,9 +32,14 @@ def create_app():
     
     app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
+    # CORS origins from environment (default: "*" for backward compatibility)
+    # Set CORS_ORIGINS=https://entropia-seven.vercel.app,http://localhost:3000 in production
+    _cors_origins = os.environ.get('CORS_ORIGINS', '*')
+    _socketio_cors = _cors_origins.split(',') if _cors_origins != '*' else '*'
+
     # Initialize SocketIO
     socketio.init_app(app,
-                     cors_allowed_origins="*",
+                     cors_allowed_origins=_socketio_cors,
                      async_mode='threading',
                      logger=False,
                      engineio_logger=False,
@@ -36,10 +49,11 @@ def create_app():
                      always_connect=True)
     app.extensions['socketio'] = socketio
 
-    # Initialize CORS
+    # Initialize CORS with configurable origins
+    _flask_cors_origins = _cors_origins.split(',') if _cors_origins != '*' else ["http://localhost:3000", "http://127.0.0.1:3000", "https://entropia-seven.vercel.app", "*"]
     cors.init_app(app, resources={
         r"/*": {
-            "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "https://entropia-seven.vercel.app", "*"],
+            "origins": _flask_cors_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
             "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
             "expose_headers": ["Content-Disposition", "Content-Length"],
@@ -107,9 +121,9 @@ def create_app():
             return jsonify({'error': str(e)}), 500
     
     scheduler = BackgroundScheduler(daemon=True)
-    
+
     from services.adjustments.cleanup import cleanup_old_files
-    
+
     def run_cleanup_with_app_context():
         with app.app_context():
             try:
@@ -117,8 +131,19 @@ def create_app():
                 logger.info(f"Scheduled cleanup completed: {result.get('message', 'No message')}")
             except Exception as e:
                 logger.error(f"Error in scheduled cleanup: {str(e)}")
-    
+
+    def run_chunk_cleanup():
+        """Clean up expired chunk uploads from Supabase Storage"""
+        try:
+            from shared.storage.chunk_service import chunk_storage_service
+            deleted = chunk_storage_service.cleanup_expired_uploads(max_age_hours=1.0)
+            if deleted > 0:
+                logger.info(f"Cleaned up {deleted} expired chunk uploads from Supabase Storage")
+        except Exception as e:
+            logger.error(f"Error in chunk cleanup: {str(e)}")
+
     scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='cleanup_job')
+    scheduler.add_job(run_chunk_cleanup, 'interval', minutes=30, id='chunk_cleanup_job')
     scheduler.start()
     
     return app, socketio

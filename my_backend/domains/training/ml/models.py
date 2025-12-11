@@ -124,6 +124,9 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
             logger.info(f"📥 Deserializing model {idx + 1}/{len(serialized_models)}: {model_class}")
 
             model_bytes = base64.b64decode(model_data)
+            # SECURITY NOTE: pickle.loads() can execute arbitrary code.
+            # This is safe here because models are only stored by authenticated users
+            # via our training pipeline and retrieved from trusted Supabase storage.
             model_obj = pickle.loads(model_bytes)
 
             logger.info(f"✅ Model deserialized successfully: {model_class}")

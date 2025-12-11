@@ -48,7 +48,7 @@ class ProgressTracker:
         if phase_name in self.phase_start_times:
             duration = time.time() - self.phase_start_times[phase_name]
             self.phase_durations[phase_name] = duration
-            logger.info(f"Phase '{phase_name}' completed in {duration:.2f}s")
+            logger.debug(f"Phase '{phase_name}' completed in {duration:.2f}s")
 
     def start_step(self, total_rows):
         """Start a new step - reset ETA tracking for this step"""
@@ -142,10 +142,19 @@ class ProgressTracker:
         try:
             socketio.emit('processing_progress', payload, room=self.upload_id)
             self.last_emit_time = current_time
+
+            # Log only at milestone progress points (25%, 50%, 75%, 100%) or on force
+            progress_int = int(progress)
+            is_milestone = progress_int in (0, 25, 50, 75, 100) or force
+
             eta_text = f" (ETA: {payload.get('etaFormatted', 'N/A')})" if 'eta' in payload else ""
             step_info = f" [{self.current_step}/{self.total_steps}]" if self.total_steps > 0 else ""
             params_text = f" {message_params}" if message_params else ""
-            logger.info(f"Progress: {progress}%{step_info} - {message_key}{params_text}{eta_text}")
+
+            if is_milestone:
+                logger.info(f"Progress: {progress}%{step_info} - {message_key}{params_text}{eta_text}")
+            else:
+                logger.debug(f"Progress: {progress}%{step_info} - {message_key}{params_text}{eta_text}")
         except Exception as e:
             logger.error(f"Error emitting progress: {e}")
 

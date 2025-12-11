@@ -31,7 +31,7 @@ def register_socketio_handlers(socketio):
             upload_id = data.get('uploadId')
             if upload_id:
                 join_room(upload_id)
-                logger.info(f"Client joined upload room: {upload_id}")
+                logger.debug(f"Client joined upload room: {upload_id}")
                 emit('joined_room', {'uploadId': upload_id}, room=upload_id)
         except Exception as e:
             logger.error(f"Error in join_upload_room: {str(e)}")
@@ -46,7 +46,7 @@ def register_socketio_handlers(socketio):
             if session_id:
                 room = f"training_{session_id}"
                 join_room(room)
-                logger.info(f"Client joined training room: {room}")
+                logger.debug(f"Client joined training room: {room}")
                 
                 emit('training_session_joined', {
                     'status': 'success',
@@ -76,7 +76,7 @@ def register_socketio_handlers(socketio):
             if session_id:
                 room = f"training_{session_id}"
                 leave_room(room)
-                logger.info(f"Client left training room: {room}")
+                logger.debug(f"Client left training room: {room}")
                 
                 emit('training_session_left', {
                     'status': 'success',
@@ -136,7 +136,7 @@ def register_socketio_handlers(socketio):
             if 'uploadId' in data:
                 upload_id = data['uploadId']
                 join_room(upload_id)
-                logger.info(f"Client joined Socket.IO room: {upload_id}")
+                logger.debug(f"Client joined Socket.IO room: {upload_id}")
                 
                 socketio.emit('status', {'message': f'Joined room: {upload_id}'}, room=upload_id)
         except Exception as e:
@@ -150,7 +150,7 @@ def register_socketio_handlers(socketio):
             if 'uploadId' in data:
                 upload_id = data['uploadId']
                 leave_room(upload_id)
-                logger.info(f"Client left Socket.IO room: {upload_id}")
+                logger.debug(f"Client left Socket.IO room: {upload_id}")
                 
                 emit('left_room', {'uploadId': upload_id})
         except Exception as e:
@@ -163,7 +163,7 @@ def register_socketio_handlers(socketio):
         try:
             session_id = data.get('session_id')
             if session_id:
-                logger.info(f"Frontend requesting dataset status for session: {session_id}")
+                logger.debug(f"Frontend requesting dataset status for session: {session_id}")
                 
                 supabase = get_supabase_client()
                 uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)

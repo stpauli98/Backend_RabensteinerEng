@@ -118,7 +118,7 @@ def require_subscription(f):
         g.subscription = subscription
         g.plan = subscription.get('subscription_plans', {})
 
-        logger.info(f"User {g.user_email} has {g.plan.get('name', 'Unknown')} plan")
+        logger.debug(f"User {g.user_email} has {g.plan.get('name', 'Unknown')} plan")
 
         return f(*args, **kwargs)
 
@@ -162,7 +162,7 @@ def check_upload_limit(f):
         g.usage = usage
         g.uploads_remaining = uploads_limit - uploads_used
 
-        logger.info(f"Upload check passed for {g.user_email}: {uploads_used}/{uploads_limit} used")
+        logger.debug(f"Upload check passed for {g.user_email}: {uploads_used}/{uploads_limit} used")
 
         return f(*args, **kwargs)
 
@@ -206,7 +206,7 @@ def check_processing_limit(f):
         g.usage = usage
         g.processing_remaining = processing_limit - processing_used
 
-        logger.info(f"Processing check passed for {g.user_email}: {processing_used}/{processing_limit} used")
+        logger.debug(f"Processing check passed for {g.user_email}: {processing_used}/{processing_limit} used")
 
         return f(*args, **kwargs)
 
@@ -251,7 +251,7 @@ def check_storage_limit(f):
         g.usage = usage
         g.storage_remaining_mb = storage_limit_mb - storage_used_mb
 
-        logger.info(f"Storage check passed for {g.user_email}: {storage_used_mb}/{storage_limit_mb} MB used")
+        logger.debug(f"Storage check passed for {g.user_email}: {storage_used_mb}/{storage_limit_mb} MB used")
 
         return f(*args, **kwargs)
 
@@ -310,7 +310,7 @@ def check_training_limit(f):
         g.usage = usage
         g.training_remaining = training_limit - training_used
 
-        logger.info(f"Training check passed for {g.user_email}: {training_used}/{training_limit} used")
+        logger.debug(f"Training check passed for {g.user_email}: {training_used}/{training_limit} used")
 
         return f(*args, **kwargs)
 

@@ -118,8 +118,10 @@ def validate_session_ownership(session_id: str, user_id: str) -> bool:
         bool: True ako korisnik ima pristup
 
     Note:
-        Trenutno vraća True jer se vlasništvo provjerava u drugim slojevima.
-        Ova funkcija je pripremljena za buduću implementaciju strožije provjere.
+        Trenutno vraća True jer se vlasništvo provjerava putem Supabase RLS policy-a
+        koji osigurava da korisnik može pristupiti samo svojim sesijama.
+        Ova funkcija je placeholder za dodatnu aplikacijsku provjeru ako bude potrebna.
     """
-    # TODO: Implementirati provjeru vlasništva ako je potrebno
+    # Ownership is currently enforced via Supabase RLS policies on sessions table.
+    # This function can be extended if additional application-level checks are needed.
     return True

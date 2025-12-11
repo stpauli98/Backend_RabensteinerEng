@@ -1,11 +1,13 @@
 """
 Data Processing API endpoints.
 Handles chunked CSV upload and data cleaning operations.
+
+Chunks are stored in Supabase Storage (temp-chunks bucket) for multi-instance
+Cloud Run support. Chunks are automatically cleaned up after processing.
 """
 import json
 import logging
 import math
-import os
 import re
 import time
 
@@ -16,26 +18,17 @@ from flask import Blueprint, request, Response, jsonify, g
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage
+from shared.storage.chunk_service import chunk_storage_service
 
-from domains.processing.config import (
-    DATA_PROCESSING_UPLOAD_FOLDER,
-    STREAMING_CHUNK_SIZE,
-    BACKPRESSURE_DELAY
-)
+from domains.processing.config import STREAMING_CHUNK_SIZE, BACKPRESSURE_DELAY
 from domains.processing.services.progress import ProgressTracker
 from domains.processing.services.data_cleaner import clean_data, validate_processing_params
-from domains.processing.services.chunk_handler import (
-    secure_path_join,
-    validate_file_upload,
-    combine_chunks_efficiently
-)
+from domains.processing.services.chunk_handler import validate_file_upload
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('data_processing', __name__)
-
-os.makedirs(DATA_PROCESSING_UPLOAD_FOLDER, exist_ok=True)
 
 
 def safe_error_response(error_msg, status_code=500, error_type=None):
@@ -69,12 +62,17 @@ def safe_error_response(error_msg, status_code=500, error_type=None):
 def upload_chunk():
     """
     Endpoint for receiving and processing CSV data in chunks.
+
+    Chunks are stored in Supabase Storage (temp-chunks bucket) for multi-instance
+    Cloud Run support. Once all chunks are received, they are assembled and processed.
+    Chunks are automatically cleaned up after successful processing or on error.
+
     Uses ProgressTracker for real-time progress tracking with ETA calculation.
     """
     tracker = None
 
     try:
-        logger.info(f"Processing chunk {request.form.get('chunkIndex')}/{request.form.get('totalChunks')}")
+        logger.debug(f"Processing chunk {request.form.get('chunkIndex')}/{request.form.get('totalChunks')}")
 
         if not all(key in request.form for key in ["uploadId", "chunkIndex", "totalChunks"]):
             missing_fields = [key for key in ["uploadId", "chunkIndex", "totalChunks"] if key not in request.form]
@@ -105,60 +103,43 @@ def upload_chunk():
             logger.error("Received empty chunk")
             return jsonify({"error": "Empty chunk received"}), 400
 
-        try:
-            upload_dir = secure_path_join(DATA_PROCESSING_UPLOAD_FOLDER, upload_id)
-            os.makedirs(upload_dir, exist_ok=True)
-        except ValueError as e:
-            logger.error(f"Invalid upload_id: {upload_id}")
-            return safe_error_response("Invalid upload identifier", 400, 'security')
+        # Upload chunk to Supabase Storage
+        if not chunk_storage_service.upload_chunk(upload_id, chunk_index, chunk):
+            return safe_error_response("Failed to save chunk to storage", 500)
 
-        chunk_path = os.path.join(upload_dir, f"chunk_{chunk_index:04d}.part")
-
-        with open(chunk_path, "wb") as f:
-            f.write(chunk)
+        logger.debug(f"Saved chunk {chunk_index + 1}/{total_chunks} for upload {upload_id[:8]}...")
 
         if chunk_index < total_chunks - 1:
             return jsonify({"status": "chunk received", "chunkIndex": chunk_index})
 
-        # === LAST CHUNK RECEIVED - CHECK IF ALL CHUNKS ARE ON DISK ===
-        missing_chunks = []
-        for i in range(total_chunks):
-            part_path = os.path.join(upload_dir, f"chunk_{i:04d}.part")
-            if not os.path.exists(part_path):
-                missing_chunks.append(i)
+        # === LAST CHUNK RECEIVED - CHECK IF ALL CHUNKS IN SUPABASE ===
+        import time as time_module
+        max_wait = 5
+        wait_interval = 0.2
+        waited = 0
 
-        if missing_chunks:
-            import time as time_module
-            max_wait = 5
-            wait_interval = 0.2
-            waited = 0
+        received_chunks = chunk_storage_service.list_chunks(upload_id)
+        while waited < max_wait and len(received_chunks) < total_chunks:
+            time_module.sleep(wait_interval)
+            waited += wait_interval
+            received_chunks = chunk_storage_service.list_chunks(upload_id)
 
-            while waited < max_wait and missing_chunks:
-                time_module.sleep(wait_interval)
-                waited += wait_interval
-                missing_chunks = [
-                    i for i in range(total_chunks)
-                    if not os.path.exists(os.path.join(upload_dir, f"chunk_{i:04d}.part"))
-                ]
+        if len(received_chunks) < total_chunks:
+            logger.error(f"Timeout waiting for chunks: got {len(received_chunks)}/{total_chunks}")
+            return jsonify({
+                "error": "Missing chunks after timeout",
+                "receivedChunks": len(received_chunks),
+                "expectedChunks": total_chunks
+            }), 400
 
-            if missing_chunks:
-                logger.error(f"Timeout waiting for chunks: {missing_chunks}")
-                return jsonify({
-                    "error": "Missing chunks after timeout",
-                    "missingChunks": missing_chunks
-                }), 400
-
-            logger.info(f"All chunks arrived after {waited:.1f}s wait")
+        if waited > 0:
+            logger.debug(f"All chunks arrived after {waited:.1f}s wait")
 
         # === ALL CHUNKS RECEIVED - START PROCESSING ===
-        logger.info("All chunks received, starting processing...")
+        logger.info(f"All chunks received for upload {upload_id[:8]}..., starting processing...")
 
-        # Calculate total file size
-        total_file_size = sum(
-            os.path.getsize(os.path.join(upload_dir, f"chunk_{i:04d}.part"))
-            for i in range(total_chunks)
-            if os.path.exists(os.path.join(upload_dir, f"chunk_{i:04d}.part"))
-        )
+        # Estimate total file size
+        total_file_size = chunk_size * total_chunks  # Approximate
 
         # Initialize ProgressTracker
         tracker = ProgressTracker(
@@ -172,18 +153,29 @@ def upload_chunk():
         tracker.emit('chunk_assembly', 0, 'chunk_assembly_start', force=True, message_params={'totalChunks': total_chunks})
 
         try:
-            combined_file_path, total_size = combine_chunks_efficiently(upload_dir, total_chunks)
+            # Download and combine all chunks from Supabase Storage
+            content = chunk_storage_service.download_all_chunks_as_string(
+                upload_id, total_chunks, encoding='utf-8'
+            )
+
+            if content is None:
+                raise ValueError("Failed to download and assemble chunks from storage")
+
+            total_size = len(content.encode('utf-8'))
             tracker.end_phase('chunk_assembly')
             tracker.emit('chunk_assembly', 10, 'chunk_assembly_complete', force=True)
-        except (FileNotFoundError, ValueError) as e:
+
+            # Cleanup chunks immediately after successful download
+            deleted = chunk_storage_service.delete_upload_chunks(upload_id)
+            logger.debug(f"Cleaned up {deleted} chunks for upload {upload_id[:8]}...")
+
+        except (ValueError, Exception) as e:
             logger.error(f"Chunk combination failed: {e}")
-            for i in range(total_chunks):
-                part_path = os.path.join(upload_dir, f"chunk_{i:04d}.part")
-                try:
-                    if os.path.exists(part_path):
-                        os.remove(part_path)
-                except OSError:
-                    pass
+            # Cleanup chunks on error - scheduled job will handle any missed ones
+            try:
+                chunk_storage_service.delete_upload_chunks(upload_id)
+            except Exception:
+                pass  # Scheduled cleanup will handle it
 
             if "exceeds" in str(e):
                 return safe_error_response("File too large", 413, 'validation')
@@ -192,7 +184,6 @@ def upload_chunk():
 
         if total_size == 0:
             logger.error("No data in combined chunks")
-            os.unlink(combined_file_path)
             return jsonify({"error": "No data in combined chunks"}), 400
 
         try:
@@ -200,10 +191,6 @@ def upload_chunk():
             tracker.start_phase('parsing')
             tracker.emit('parsing', 10, 'parsing_start', force=True)
 
-            with open(combined_file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            os.unlink(combined_file_path)
             lines = content.splitlines()
 
             tracker.emit('parsing', 12, 'parsing_lines_loaded', message_params={'lineCount': len(lines)})
@@ -277,11 +264,11 @@ def upload_chunk():
             # Track processing usage
             try:
                 increment_processing_count(g.user_id)
-                logger.info(f"Tracked processing for user {g.user_id}")
+                logger.debug(f"Tracked processing for user {g.user_id}")
 
                 file_size_mb = total_size / (1024 * 1024)
                 update_storage_usage(g.user_id, file_size_mb)
-                logger.info(f"Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+                logger.debug(f"Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
             except Exception as e:
                 logger.error(f"Failed to track processing usage: {str(e)}")
 
@@ -347,8 +334,8 @@ def upload_chunk():
                             chunk = df_clean.iloc[i:i + chunk_size]
 
                             if i == 0:
-                                logger.info("First 10 rows of processed data:")
-                                logger.info(chunk.head(10).to_string())
+                                logger.debug("First 10 rows of processed data:")
+                                logger.debug(chunk.head(10).to_string())
 
                             chunk_subset = chunk[['UTC', value_column]].copy()
                             chunk_subset['UTC'] = chunk_subset['UTC'].dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -378,7 +365,7 @@ def upload_chunk():
                     yield json.dumps({"status": "complete"}, cls=CustomJSONEncoder) + "\n"
 
                 except GeneratorExit:
-                    logger.info("Client disconnected during streaming")
+                    logger.debug("Client disconnected during streaming")
                 except BrokenPipeError:
                     logger.warning("Broken pipe - client forcefully disconnected")
                 except Exception as e:

@@ -135,7 +135,7 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
     if params.get("eqMax"):
         step_key = "measurement_failure_removal"
         start_step(step_key)
-        logger.info("Removing measurement failures (identical consecutive values)")
+        logger.debug("Removing measurement failures (identical consecutive values)")
         eq_max = float(params["eqMax"])
         frm = 0
         removed_count = 0
@@ -166,7 +166,7 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
     if params.get("elMax") is not None:
         step_key = "upper_threshold_removal"
         start_step(step_key)
-        logger.info("Removing values above upper threshold")
+        logger.debug("Removing values above upper threshold")
         el_max = float(params["elMax"])
 
         mask = df[value_column] > el_max
@@ -179,7 +179,7 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
     if params.get("elMin") is not None:
         step_key = "lower_threshold_removal"
         start_step(step_key)
-        logger.info("Removing values below lower threshold")
+        logger.debug("Removing values below lower threshold")
         el_min = float(params["elMin"])
 
         mask = df[value_column] < el_min
@@ -192,7 +192,7 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
     if params.get("radioValueNull") == "ja":
         step_key = "zero_value_removal"
         start_step(step_key)
-        logger.info("Removing zero values")
+        logger.debug("Removing zero values")
 
         mask = df[value_column] == 0
         removed_count = int(mask.sum())
@@ -204,7 +204,7 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
     if params.get("chgMax") and params.get("lgMax"):
         step_key = "outlier_removal"
         start_step(step_key)
-        logger.info("Removing outliers")
+        logger.debug("Removing outliers")
         chg_max = float(params["chgMax"])
         lg_max = float(params["lgMax"])
         frm = 0
@@ -242,7 +242,7 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
     if params.get("gapMax"):
         step_key = "gap_filling"
         start_step(step_key)
-        logger.info("Filling measurement gaps")
+        logger.debug("Filling measurement gaps")
         gap_max = float(params["gapMax"])
         frm = 0
         filled_count = 0
@@ -270,16 +270,16 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
         el_min = float(params["elMin"])
         final_violations_min = (df[value_column] < el_min).sum()
         zero_values = (df[value_column] == 0).sum()
-        logger.info(f"Final validation: Found {final_violations_min} values < {el_min} and {zero_values} zero values")
+        logger.debug(f"Final validation: Found {final_violations_min} values < {el_min} and {zero_values} zero values")
         if final_violations_min > 0:
-            logger.info(f"Removing {final_violations_min} interpolated values below elMin threshold")
+            logger.debug(f"Removing {final_violations_min} interpolated values below elMin threshold")
             df.loc[df[value_column] < el_min, value_column] = np.nan
 
     if params.get("elMax") is not None:
         el_max = float(params["elMax"])
         final_violations_max = (df[value_column] > el_max).sum()
         if final_violations_max > 0:
-            logger.info(f"Removing {final_violations_max} interpolated values above elMax threshold")
+            logger.debug(f"Removing {final_violations_max} interpolated values above elMax threshold")
             df.loc[df[value_column] > el_max, value_column] = np.nan
 
     logger.info("Data cleaning completed")

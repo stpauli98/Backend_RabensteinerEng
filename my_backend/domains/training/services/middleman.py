@@ -244,8 +244,8 @@ class ModernMiddlemanRunner:
 
             # If zeithorizont looks backward (negative), offset start time forward
             # Otherwise, use minimal offset to avoid edge cases
-            logger.info(f"   🔍 DEBUG: utc_strt BEFORE offset: {utc_strt} (type: {type(utc_strt)})")
-            logger.info(f"   🔍 DEBUG: min_th_start: {min_th_start}")
+            logger.debug(f"utc_strt BEFORE offset: {utc_strt} (type: {type(utc_strt)})")
+            logger.debug(f"min_th_start: {min_th_start}")
 
             if min_th_start < 0:
                 offset_hours = abs(min_th_start) + 0.5  # Add 0.5 hour safety margin
@@ -265,8 +265,8 @@ class ModernMiddlemanRunner:
                 o_dat_inf["th_end"].max() if not o_dat_inf.empty else 0
             )
 
-            logger.info(f"   🔍 DEBUG: utc_end BEFORE offset: {utc_end}")
-            logger.info(f"   🔍 DEBUG: max_th_end: {max_th_end}")
+            logger.debug(f"utc_end BEFORE offset: {utc_end}")
+            logger.debug(f"max_th_end: {max_th_end}")
 
             if max_th_end > 0:
                 offset_hours_end = max_th_end + 0.5  # Add 0.5 hour safety margin

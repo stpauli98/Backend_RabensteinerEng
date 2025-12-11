@@ -45,7 +45,7 @@ def increment_upload_count(user_id: str) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Incremented upload count for user {user_id}: {current_count} -> {current_count + 1}")
+            logger.info(f"Usage: {user_id[:8]}... upload {current_count}->{current_count + 1}")
         else:
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
@@ -63,7 +63,7 @@ def increment_upload_count(user_id: str) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Created new usage tracking record for user {user_id}")
+            logger.info(f"Usage: {user_id[:8]}... new tracking record (upload)")
 
         return True
 
@@ -103,7 +103,7 @@ def increment_processing_count(user_id: str) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Incremented processing count for user {user_id}: {current_count} -> {current_count + 1}")
+            logger.info(f"Usage: {user_id[:8]}... processing {current_count}->{current_count + 1}")
         else:
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
@@ -121,7 +121,7 @@ def increment_processing_count(user_id: str) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Created new usage tracking record for user {user_id} with processing_count: 1")
+            logger.info(f"Usage: {user_id[:8]}... new tracking record (processing)")
 
         return True
 
@@ -159,7 +159,7 @@ def increment_training_count(user_id: str) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Incremented training count for user {user_id}: {current_count} -> {current_count + 1}")
+            logger.info(f"Usage: {user_id[:8]}... training {current_count}->{current_count + 1}")
         else:
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
@@ -177,7 +177,7 @@ def increment_training_count(user_id: str) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Created new usage tracking record for user {user_id} with training count: 1")
+            logger.info(f"Usage: {user_id[:8]}... new tracking record (training)")
 
         return True
 
@@ -218,7 +218,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Updated storage usage for user {user_id}: {current_storage_gb:.4f} GB -> {new_storage_gb:.4f} GB (added {storage_gb:.4f} GB / {storage_mb:.2f} MB)")
+            logger.info(f"Usage: {user_id[:8]}... storage {current_storage_gb:.2f}->{new_storage_gb:.2f} GB (+{storage_mb:.1f}MB)")
         else:
             storage_gb = storage_mb / 1024
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
@@ -237,7 +237,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Created new usage tracking record for user {user_id} with storage: {storage_gb:.2f} GB ({storage_mb} MB)")
+            logger.info(f"Usage: {user_id[:8]}... new tracking record (storage: {storage_gb:.2f} GB)")
 
         return True
 

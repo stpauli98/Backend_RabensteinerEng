@@ -16,7 +16,7 @@ from domains.training.config import MTS, T, HOL
 from domains.training.data.loader import utc_idx_pre, utc_idx_post
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+# Log level now controlled by LOG_LEVEL environment variable in app_factory.py
 
 
 def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,

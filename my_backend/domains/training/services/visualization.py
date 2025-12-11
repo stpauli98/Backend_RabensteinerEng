@@ -564,6 +564,9 @@ class Visualizer:
                 if isinstance(model_data, dict) and model_data.get('_model_type') == 'serialized_model':
                     try:
                         model_bytes = base64.b64decode(model_data['_model_data'])
+                        # SECURITY NOTE: pickle.loads() can execute arbitrary code.
+                        # This is safe here because models are only stored by authenticated users
+                        # via our training pipeline and retrieved from trusted Supabase storage.
                         trained_model = pickle.loads(model_bytes)
                         logger.info(f"Successfully deserialized model of type {model_data.get('_model_class')}")
                     except Exception as e:

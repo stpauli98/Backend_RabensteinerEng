@@ -6,8 +6,11 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 from apscheduler.schedulers.background import BackgroundScheduler
 
+# Configure logging level from environment (default: INFO for production)
+# Set LOG_LEVEL=DEBUG in .env for verbose logging during development
+_log_level = getattr(logging, os.environ.get('LOG_LEVEL', 'INFO').upper(), logging.INFO)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=_log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
