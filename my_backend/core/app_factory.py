@@ -142,8 +142,19 @@ def create_app():
         except Exception as e:
             logger.error(f"Error in chunk cleanup: {str(e)}")
 
+    def run_processed_files_cleanup():
+        """Clean up old processed files from Supabase Storage (24h expiry)"""
+        try:
+            from shared.storage.service import storage_service
+            deleted = storage_service.cleanup_all_old_files(max_age_hours=24)
+            if deleted > 0:
+                logger.info(f"Cleaned up {deleted} old processed files from Supabase Storage")
+        except Exception as e:
+            logger.error(f"Error in processed files cleanup: {str(e)}")
+
     scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='cleanup_job')
     scheduler.add_job(run_chunk_cleanup, 'interval', minutes=30, id='chunk_cleanup_job')
+    scheduler.add_job(run_processed_files_cleanup, 'interval', hours=6, id='processed_files_cleanup_job')
     scheduler.start()
     
     return app, socketio

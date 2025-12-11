@@ -285,6 +285,54 @@ class StorageService:
             logger.error(f"Failed to cleanup old files: {e}")
             return 0
 
+    def cleanup_all_old_files(self, max_age_hours: int = 24) -> int:
+        """
+        Clean up old files for ALL users in the processed-files bucket.
+
+        This method iterates through all user folders and deletes files
+        older than max_age_hours. Intended for scheduled background cleanup
+        to prevent memory leaks when frontend fails to call /cleanup-files.
+
+        Args:
+            max_age_hours: Maximum file age in hours (default: 24 hours)
+
+        Returns:
+            Total number of files deleted across all users
+        """
+        try:
+            if not self._ensure_bucket_exists():
+                logger.error("Bucket not available for cleanup")
+                return 0
+
+            # List all user folders (top-level directories)
+            user_folders = self.client.storage.from_(BUCKET_NAME).list()
+
+            if not user_folders:
+                logger.debug("No user folders found in processed-files bucket")
+                return 0
+
+            total_deleted = 0
+
+            for folder_info in user_folders:
+                user_id = folder_info.get('name', '')
+                if not user_id:
+                    continue
+
+                try:
+                    deleted = self.cleanup_old_files(user_id, max_age_hours)
+                    total_deleted += deleted
+                    if deleted > 0:
+                        logger.debug(f"Cleaned up {deleted} old files for user {user_id[:8]}...")
+                except Exception as user_error:
+                    logger.debug(f"Error cleaning up files for user {user_id[:8]}...: {user_error}")
+                    continue
+
+            return total_deleted
+
+        except Exception as e:
+            logger.error(f"Failed to cleanup all old files: {e}")
+            return 0
+
 
 # Global singleton instance
 storage_service = StorageService()
