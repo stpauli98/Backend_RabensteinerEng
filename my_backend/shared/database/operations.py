@@ -31,18 +31,32 @@ class DatabaseConfig:
 
     UUID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
     SESSION_ID_PATTERN = r'^session_\d+_[a-zA-Z0-9]+$'
+    # Pattern for session_UUID format (e.g., session_b2be65df-ce96-4305-b4c7-6530c7bc7096)
+    SESSION_UUID_PATTERN = re.compile(r'^session_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
 
 def validate_session_id(session_id: str) -> bool:
-    """Validate session ID format"""
+    """Validate session ID format
+
+    Accepts:
+    - Pure UUID: b2be65df-ce96-4305-b4c7-6530c7bc7096
+    - Legacy format: session_1234567890_abc123
+    - UUID with prefix: session_b2be65df-ce96-4305-b4c7-6530c7bc7096
+    """
     if not session_id or not isinstance(session_id, str):
         return False
-    
+
+    # Check pure UUID
     try:
         uuid.UUID(session_id)
         return True
     except ValueError:
         pass
-    
+
+    # Check session_UUID format (e.g., session_b2be65df-ce96-4305-b4c7-6530c7bc7096)
+    if DatabaseConfig.SESSION_UUID_PATTERN.match(session_id):
+        return True
+
+    # Check legacy format (e.g., session_1234567890_abc123)
     return bool(re.match(DatabaseConfig.SESSION_ID_PATTERN, session_id))
 
 def validate_file_info(file_info: dict) -> bool:

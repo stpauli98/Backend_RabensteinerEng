@@ -12,9 +12,10 @@ def validate_session_id(session_id):
     """
     Validate session ID format.
 
-    Accepts either:
+    Accepts:
     - Valid UUID format (e.g., "550e8400-e29b-41d4-a716-446655440000")
     - Session string format (e.g., "session_123456_abc123")
+    - Session UUID format (e.g., "session_550e8400-e29b-41d4-a716-446655440000")
 
     Args:
         session_id: Session identifier string to validate
@@ -25,14 +26,21 @@ def validate_session_id(session_id):
     if not session_id or not isinstance(session_id, str):
         return False
 
+    # Check pure UUID
     try:
         uuid.UUID(session_id)
         return True
     except ValueError:
         pass
 
-    pattern = r'^session_\d+_[a-zA-Z0-9]+$'
-    return bool(re.match(pattern, session_id))
+    # Check session_UUID format (e.g., session_b2be65df-ce96-4305-b4c7-6530c7bc7096)
+    session_uuid_pattern = r'^session_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    if re.match(session_uuid_pattern, session_id, re.IGNORECASE):
+        return True
+
+    # Check legacy format (e.g., session_1234567890_abc123)
+    legacy_pattern = r'^session_\d+_[a-zA-Z0-9]+$'
+    return bool(re.match(legacy_pattern, session_id))
 
 
 def create_error_response(message, status_code=400):

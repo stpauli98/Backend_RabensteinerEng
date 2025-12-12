@@ -143,17 +143,67 @@ class DataLoader:
             raise
     
     def _load_files_info(self, session_id: str) -> List[Dict]:
-        """Load file metadata for the session"""
+        """
+        Load file metadata for the session including all training parameters
+
+        Returns list of dicts with:
+        - Basic: id, file_name, bezeichnung, storage_path, type
+        - Metadata: utc_min, utc_max, min, max, offset, datenpunkte, numerische_datenpunkte, numerischer_anteil
+        - Config: datenform, zeithorizont_start, zeithorizont_end
+        - Adjustment: datenanpassung, mittelwertbildung_uber_den_zeithorizont
+        - Scaling: skalierung, skalierung_max, skalierung_min
+        - Transform: zeitschrittweite, zeitschrittweite_transferierten_daten, offset_transferierten_daten
+        """
         try:
             uuid_session_id = self._convert_to_uuid(session_id)
-            
+
             response = self.supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
-            
-            return response.data or []
-            
+
+            files_data = response.data or []
+
+            # Parse and convert string values to proper types
+            for file_info in files_data:
+                # Convert scaling parameters
+                file_info['scal'] = file_info.get('skalierung', 'nein').lower() == 'ja'
+                file_info['scal_max'] = self._safe_float(file_info.get('skalierung_max'), 1.0)
+                file_info['scal_min'] = self._safe_float(file_info.get('skalierung_min'), 0.0)
+
+                # Convert zeithorizont parameters
+                file_info['th_strt'] = self._safe_float(file_info.get('zeithorizont_start'), -24.0)
+                file_info['th_end'] = self._safe_float(file_info.get('zeithorizont_end'), 0.0)
+
+                # Convert datenanpassung method
+                file_info['meth'] = file_info.get('datenanpassung', 'Lineare Interpolation')
+
+                # Convert mittelwertbildung flag
+                file_info['avg'] = file_info.get('mittelwertbildung_uber_den_zeithorizont', 'nein').lower() == 'ja'
+
+                # Convert datenform specification
+                file_info['spec'] = file_info.get('datenform', 'Historische Daten')
+
+                # Convert time step values
+                file_info['delt'] = self._safe_float(file_info.get('zeitschrittweite'), 15.0)
+                file_info['delt_transf'] = self._safe_float(file_info.get('zeitschrittweite_transferierten_daten'), None)
+                file_info['ofst_transf'] = self._safe_float(file_info.get('offset_transferierten_daten'), None)
+
+                # Convert min/max values
+                file_info['val_min'] = self._safe_float(file_info.get('min'), None)
+                file_info['val_max'] = self._safe_float(file_info.get('max'), None)
+
+            return files_data
+
         except Exception as e:
             logger.error(f"Error loading files info: {str(e)}")
             raise
+
+    def _safe_float(self, value, default=None):
+        """Safely convert value to float"""
+        if value is None or value == '' or value == 'var':
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
     
     def download_session_files(self, session_id: str, progress_tracker=None) -> Dict[str, str]:
         """

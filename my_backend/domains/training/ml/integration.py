@@ -40,116 +40,176 @@ class RealDataProcessor:
     def process_session_data(self, session_id: str) -> Dict:
         """
         Process session data using real extracted functions
-        
+
         Args:
             session_id: Session identifier
-            
+
         Returns:
             Dict containing processed data ready for training
         """
         try:
-            
+
             session_data = self.data_loader.load_session_data(session_id)
-            
+
+            # Get files_info with zeithorizont, datenanpassung, scaling parameters
+            files_info = session_data.get('files', [])
+            logger.info(f"Loaded {len(files_info)} files with config from DB")
+
             input_files, output_files = self.data_loader.prepare_file_paths(session_id)
-            
+
             dat = {}
             inf = pd.DataFrame()
-            
+
             for file_path in input_files:
                 try:
                     df = self.data_loader.load_csv_data(file_path, delimiter=';')
                     file_name = file_path.split('/')[-1].replace('.csv', '')
                     dat[file_name] = df
-                    
-                    
+
+
                     dat, inf = self.data_loader.process_csv_data(dat, inf)
-                    
-                    
+
+
                 except Exception as e:
                     logger.error(f"Error processing input file {file_path}: {str(e)}")
                     continue
-            
+
             output_dat = {}
             for file_path in output_files:
                 try:
                     df = self.data_loader.load_csv_data(file_path, delimiter=';')
                     file_name = file_path.split('/')[-1].replace('.csv', '')
                     output_dat[file_name] = df
-                    
-                    
+
+
                 except Exception as e:
                     logger.error(f"Error processing output file {file_path}: {str(e)}")
                     continue
-            
+
             if len(inf) > 0:
                 zeitschritte = session_data.get('zeitschritte', {})
                 mts_default = MTS()
                 N = int(zeitschritte.get('eingabe', mts_default.I_N))
                 OFST = float(zeitschritte.get('offset', mts_default.OFST))
-                
+
                 data_processor = DataProcessor(MTS())
                 transformed_inf = data_processor.transform_data(inf, N, OFST)
-                
-            
-            train_datasets = self._create_ml_datasets(dat, output_dat, session_data)
-            
+
+            # Pass files_info to dataset creation for zeithorizont/datenanpassung support
+            train_datasets = self._create_ml_datasets(dat, output_dat, session_data, files_info)
+
             return {
                 'input_data': dat,
                 'output_data': output_dat,
                 'metadata': inf,
                 'train_datasets': train_datasets,
-                'session_data': session_data
+                'session_data': session_data,
+                'files_info': files_info
             }
-            
+
         except Exception as e:
             logger.error(f"Error in real data processing: {str(e)}")
             raise
     
-    def _create_ml_datasets(self, input_data: Dict, output_data: Dict, session_data: Dict) -> Dict:
+    def _create_ml_datasets(self, input_data: Dict, output_data: Dict, session_data: Dict,
+                             files_info: list = None) -> Dict:
         """
-        Create datasets for ML training from processed data
-        
+        Create datasets for ML training from processed data with zeithorizont support
+
         Args:
             input_data: Processed input data
-            output_data: Processed output data  
+            output_data: Processed output data
             session_data: Session configuration
-            
+            files_info: List of file metadata with zeithorizont, datenanpassung settings
+
         Returns:
             Dict containing training datasets
         """
         try:
             datasets = {}
-            
+            zeitschritte = session_data.get('zeitschritte', {})
+            time_steps_in = int(zeitschritte.get('eingabe', 13))
+            time_steps_out = int(zeitschritte.get('ausgabe', 13))
+            delt = float(zeitschritte.get('zeitschrittweite', 15))
+            ofst = float(zeitschritte.get('offset', 0))
+
+            # Build file_info lookup by file_name
+            file_info_map = {}
+            if files_info:
+                for fi in files_info:
+                    if 'file_name' in fi:
+                        # Remove .csv extension for matching
+                        name_key = fi['file_name'].replace('.csv', '')
+                        file_info_map[name_key] = fi
+                        file_info_map[fi['file_name']] = fi
+
+            # Create DataProcessor for zeithorizont-aware processing
+            data_processor = DataProcessor(MTS())
+
             for input_name, input_df in input_data.items():
                 for output_name, output_df in output_data.items():
                     dataset_name = f"{input_name}_to_{output_name}"
-                    
+
                     if len(input_df) > 0 and len(output_df) > 0:
+                        # Get file-specific configuration
+                        input_file_info = file_info_map.get(input_name)
+                        output_file_info = file_info_map.get(output_name)
+
+                        # Check if we have zeithorizont config
+                        use_zeithorizont = (
+                            input_file_info is not None and
+                            'th_strt' in input_file_info and
+                            input_file_info.get('th_strt') is not None
+                        )
+
+                        if use_zeithorizont:
+                            # Use new zeithorizont-aware dataset creation
+                            try:
+                                X, y = data_processor._create_sequences_with_zeithorizont(
+                                    input_df, output_df,
+                                    time_steps_in, time_steps_out,
+                                    delt, ofst,
+                                    input_file_info, output_file_info
+                                )
+
+                                if X is not None and len(X) > 0:
+                                    datasets[dataset_name] = {
+                                        'X': X,
+                                        'y': y,
+                                        'time_steps_in': time_steps_in,
+                                        'time_steps_out': time_steps_out,
+                                        'input_features': X.shape[-1] if len(X.shape) > 2 else 1,
+                                        'output_features': y.shape[-1] if len(y.shape) > 2 else 1,
+                                        'input_file_info': input_file_info,
+                                        'output_file_info': output_file_info,
+                                        'zeithorizont_used': True
+                                    }
+                                    logger.info(f"Created zeithorizont dataset {dataset_name}: X={X.shape}, y={y.shape}")
+                                    continue
+
+                            except Exception as zh_error:
+                                logger.warning(f"Zeithorizont method failed for {dataset_name}, falling back: {str(zh_error)}")
+
+                        # Fallback to simple method
                         X = input_df.select_dtypes(include=[np.number]).values
                         y = output_df.select_dtypes(include=[np.number]).values
-                        
+
                         nan_mask_x = ~np.isnan(X).any(axis=1)
                         nan_mask_y = ~np.isnan(y).any(axis=1) if len(y.shape) > 1 else ~np.isnan(y)
-                        
+
                         combined_mask = nan_mask_x[:min(len(nan_mask_x), len(nan_mask_y))] & nan_mask_y[:min(len(nan_mask_x), len(nan_mask_y))]
-                        
+
                         X = X[:len(combined_mask)][combined_mask]
                         y = y[:len(combined_mask)][combined_mask]
-                        
-                        
+
                         if X.shape[0] > 10 and y.shape[0] > 10:
                             min_len = min(X.shape[0], y.shape[0])
                             X = X[:min_len]
                             y = y[:min_len]
-                            
-                            zeitschritte = session_data.get('zeitschritte', {})
-                            time_steps_in = int(zeitschritte.get('eingabe', 13))
-                            time_steps_out = int(zeitschritte.get('ausgabe', 13))
-                            
+
                             if X.shape[0] >= time_steps_in and y.shape[0] >= time_steps_out:
                                 samples = min_len - max(time_steps_in, time_steps_out) + 1
-                                
+
                                 if samples > 0:
                                     X_reshaped = np.array([
                                         X[i:i+time_steps_in] for i in range(samples)
@@ -157,22 +217,24 @@ class RealDataProcessor:
                                     y_reshaped = np.array([
                                         y[i:i+time_steps_out] for i in range(samples)
                                     ])
-                                    
+
                                     datasets[dataset_name] = {
                                         'X': X_reshaped,
                                         'y': y_reshaped,
                                         'time_steps_in': time_steps_in,
                                         'time_steps_out': time_steps_out,
                                         'input_features': X.shape[1],
-                                        'output_features': y.shape[1] if len(y.shape) > 1 else 1
+                                        'output_features': y.shape[1] if len(y.shape) > 1 else 1,
+                                        'input_file_info': input_file_info,
+                                        'output_file_info': output_file_info,
+                                        'zeithorizont_used': False
                                     }
-                                    
-            
+
             if not datasets:
                 logger.warning("No valid datasets created from input data")
-            
+
             return datasets
-            
+
         except Exception as e:
             logger.error(f"Error creating ML datasets: {str(e)}")
             raise
@@ -225,25 +287,50 @@ class RealModelTrainer:
                 
                 X_combined = X.reshape(-1, X.shape[-1]) if len(X.shape) > 2 else X
                 y_combined = y.reshape(-1, y.shape[-1]) if len(y.shape) > 2 else y
-                
+
                 from sklearn.preprocessing import MinMaxScaler
                 X_scalers = {}
                 y_scalers = {}
-                
-                for i in range(X_combined.shape[1]):
-                    scaler = MinMaxScaler(feature_range=(0, 1))
-                    X_combined[:, i:i+1] = scaler.fit_transform(X_combined[:, i:i+1])
-                    X_scalers[i] = scaler
-                
-                for i in range(y_combined.shape[1]):
-                    scaler = MinMaxScaler(feature_range=(0, 1))
-                    y_combined[:, i:i+1] = scaler.fit_transform(y_combined[:, i:i+1])
-                    y_scalers[i] = scaler
-                
+
+                # Get custom scaling ranges from file_info
+                input_file_info = dataset.get('input_file_info', {})
+                output_file_info = dataset.get('output_file_info', {})
+
+                # Check if input scaling is enabled and get custom range
+                input_scal_enabled = input_file_info.get('scal', True) if input_file_info else True
+                input_scal_min = input_file_info.get('scal_min', 0.0) if input_file_info else 0.0
+                input_scal_max = input_file_info.get('scal_max', 1.0) if input_file_info else 1.0
+
+                # Check if output scaling is enabled and get custom range
+                output_scal_enabled = output_file_info.get('scal', True) if output_file_info else True
+                output_scal_min = output_file_info.get('scal_min', 0.0) if output_file_info else 0.0
+                output_scal_max = output_file_info.get('scal_max', 1.0) if output_file_info else 1.0
+
+                logger.info(f"Scaling config - Input: enabled={input_scal_enabled}, range=({input_scal_min}, {input_scal_max})")
+                logger.info(f"Scaling config - Output: enabled={output_scal_enabled}, range=({output_scal_min}, {output_scal_max})")
+
+                # Apply input scaling with custom range
+                if input_scal_enabled:
+                    for i in range(X_combined.shape[1]):
+                        scaler = MinMaxScaler(feature_range=(input_scal_min, input_scal_max))
+                        X_combined[:, i:i+1] = scaler.fit_transform(X_combined[:, i:i+1])
+                        X_scalers[i] = scaler
+                else:
+                    logger.info("Input scaling disabled, using raw values")
+
+                # Apply output scaling with custom range
+                if output_scal_enabled:
+                    for i in range(y_combined.shape[1]):
+                        scaler = MinMaxScaler(feature_range=(output_scal_min, output_scal_max))
+                        y_combined[:, i:i+1] = scaler.fit_transform(y_combined[:, i:i+1])
+                        y_scalers[i] = scaler
+                else:
+                    logger.info("Output scaling disabled, using raw values")
+
                 X = X_combined.reshape(X.shape) if len(X.shape) > 2 else X_combined
                 y = y_combined.reshape(y.shape) if len(y.shape) > 2 else y_combined
-                
-                random_dat = self.session_data.get('random_data', False)
+
+                random_dat = session_data.get('random_data', False)
                 if random_dat:
                     indices = np.random.permutation(n_dat)
                     X = X[indices]
@@ -266,10 +353,20 @@ class RealModelTrainer:
                 y_test_orig = y_orig[n_train+n_val:] if n_test > 0 else None
                 
                 dataset_results = {}
-                
+
                 dataset_results['scalers'] = {
                     'X_scalers': X_scalers,
-                    'y_scalers': y_scalers
+                    'y_scalers': y_scalers,
+                    'input_scaling_params': {
+                        'enabled': input_scal_enabled,
+                        'scal_min': input_scal_min,
+                        'scal_max': input_scal_max
+                    },
+                    'output_scaling_params': {
+                        'enabled': output_scal_enabled,
+                        'scal_min': output_scal_min,
+                        'scal_max': output_scal_max
+                    }
                 }
                 
                 import os
