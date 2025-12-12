@@ -111,12 +111,17 @@ def finalize_session(session_id: str, session_data: Dict) -> Dict:
 
     updated_metadata = update_session_metadata(session_id, session_data)
 
-    final_metadata, file_count = verify_session_files(session_id, updated_metadata)
+    # verify_session_files returns a dict with 'valid', 'missing_files', 'existing_files', 'total_files'
+    verification_result = verify_session_files(session_id, updated_metadata)
+    file_count = verification_result['total_files']
+    
+    if not verification_result['valid']:
+        logger.warning(f"Missing files for session {session_id}: {verification_result['missing_files']}")
 
     n_dat = calculate_n_dat_from_session(session_id)
-    final_metadata['n_dat'] = n_dat
+    updated_metadata['n_dat'] = n_dat
 
-    save_session_metadata_locally(session_id, final_metadata)
+    save_session_metadata_locally(session_id, updated_metadata)
 
     try:
         success = save_session_to_supabase(session_id, n_dat, file_count)
