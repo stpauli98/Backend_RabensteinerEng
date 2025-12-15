@@ -196,11 +196,47 @@ def check_file_exists_by_hash(session_id: str, file_hash: str) -> Optional[Dict[
         return None
 
 
+def get_storage_reference_count(storage_path: str, exclude_file_id: Optional[str] = None) -> int:
+    """Count how many DB records reference the same storage_path.
+
+    Used for shared storage - to determine if a storage file can be safely deleted.
+
+    Args:
+        storage_path: The storage path to check references for
+        exclude_file_id: Optional file ID to exclude from count (e.g., the file being deleted)
+
+    Returns:
+        int: Number of file records using this storage_path
+    """
+    if not storage_path:
+        return 0
+
+    supabase = get_supabase_client()
+
+    try:
+        query = supabase.table(TableNames.FILES)\
+            .select("id", count='exact')\
+            .eq("storage_path", storage_path)
+
+        if exclude_file_id:
+            query = query.neq("id", exclude_file_id)
+
+        response = query.execute()
+        return response.count if response.count else 0
+
+    except Exception as e:
+        logger.warning(f"Error getting storage reference count for {storage_path}: {str(e)}")
+        return 0
+
+
 def cleanup_orphan_files(session_id: str, valid_file_ids: List[str]) -> int:
     """Delete files from session that are no longer in the valid list.
 
     This is used during finalization to clean up any orphan files
     that were uploaded but later removed from the session.
+
+    Uses reference counting for shared storage - only deletes from storage
+    if no other DB records reference the same storage_path.
 
     Args:
         session_id: UUID of the session
@@ -227,18 +263,13 @@ def cleanup_orphan_files(session_id: str, valid_file_ids: List[str]) -> int:
         for file_record in all_files_response.data:
             file_id = file_record.get('id')
             if file_id not in valid_ids_set:
-                # Delete from Storage
                 storage_path = file_record.get('storage_path')
                 file_type = file_record.get('type', 'input')
 
-                if storage_path:
-                    try:
-                        bucket_name = BucketNames.get_bucket_for_type(file_type)
-                        supabase.storage.from_(bucket_name).remove([storage_path])
-                    except Exception as storage_err:
-                        logger.warning(f"Could not delete file from storage: {storage_err}")
+                # Check reference count BEFORE deleting (exclude current file)
+                ref_count = get_storage_reference_count(storage_path, exclude_file_id=file_id) if storage_path else 0
 
-                # Delete from database
+                # Delete from database FIRST
                 try:
                     supabase.table(TableNames.FILES)\
                         .delete()\
@@ -247,6 +278,18 @@ def cleanup_orphan_files(session_id: str, valid_file_ids: List[str]) -> int:
                     deleted_count += 1
                 except Exception as db_err:
                     logger.error(f"Could not delete file record {file_id}: {db_err}")
+                    continue  # Skip storage deletion if DB delete failed
+
+                # Only delete from Storage if no other records reference this path
+                if storage_path and ref_count == 0:
+                    try:
+                        bucket_name = BucketNames.get_bucket_for_type(file_type)
+                        supabase.storage.from_(bucket_name).remove([storage_path])
+                        logger.info(f"Deleted orphan file from storage: {storage_path}")
+                    except Exception as storage_err:
+                        logger.warning(f"Could not delete file from storage: {storage_err}")
+                elif storage_path and ref_count > 0:
+                    logger.info(f"Storage file kept (shared): {storage_path} ({ref_count} references remain)")
 
         logger.info(f"Cleaned up {deleted_count} orphan files from session {session_id}")
         return deleted_count

@@ -294,18 +294,68 @@ def instant_upload():
         if not uuid_session_id:
             return create_error_response(f'Invalid session ID: {session_id}', 400)
 
-        # Check for duplicate by hash
+        # Check for duplicate by hash - if found, create NEW DB record with SHARED storage
         if file_hash:
             existing_file = check_file_exists_by_hash(uuid_session_id, file_hash)
             if existing_file:
-                logger.info(f"File with hash {file_hash[:16]}... already exists, returning existing")
+                logger.info(f"File with hash {file_hash[:16]}... already exists, creating new record with shared storage")
+
+                # Prepare file data for NEW database record (shared storage)
+                safe_filename = sanitize_filename(file.filename)
+                bezeichnung = file_metadata.get('bezeichnung', safe_filename)
+                file_type = file_metadata.get('type', 'input')
+
+                # Check for duplicate bezeichnung in this session
+                from shared.database.client import get_supabase_client
+                supabase = get_supabase_client()
+                existing_bezeichnung = supabase.table('files')\
+                    .select('id')\
+                    .eq('session_id', uuid_session_id)\
+                    .eq('bezeichnung', bezeichnung)\
+                    .eq('type', file_type)\
+                    .execute()
+
+                if existing_bezeichnung.data and len(existing_bezeichnung.data) > 0:
+                    return create_error_response(
+                        f'A file with bezeichnung "{bezeichnung}" already exists in this session',
+                        400
+                    )
+
+                # Create NEW file record with SHARED storage_path
+                file_data = {
+                    'fileName': safe_filename,
+                    'bezeichnung': bezeichnung,
+                    'type': file_type,
+                    'file_hash': file_hash,
+                    'storage_path': existing_file.get('storage_path', ''),  # Share storage path
+                    **file_metadata
+                }
+
+                from shared.database.operations import save_file_info
+                success, file_uuid = save_file_info(session_id, file_data)
+                if not success:
+                    return create_error_response('Failed to save file metadata', 500)
+
+                # Update storage_path in the new record
+                try:
+                    supabase.table('files').update({
+                        'storage_path': existing_file.get('storage_path', ''),
+                        'file_hash': file_hash
+                    }).eq('id', file_uuid).execute()
+                except Exception as update_err:
+                    logger.warning(f"Could not update storage_path for shared file: {update_err}")
+
+                increment_processing_count(g.user_id)
+                logger.info(f"Created new record {file_uuid} with shared storage from {existing_file['id']}")
+
                 return jsonify({
                     'success': True,
                     'data': {
-                        'fileId': existing_file['id'],
-                        'isNew': False,
+                        'fileId': file_uuid,  # NEW ID
+                        'isNew': True,  # Logically new record
                         'storagePath': existing_file.get('storage_path', ''),
-                        'message': 'File already exists (duplicate detected)'
+                        'sharedStorage': True,
+                        'message': 'File record created with shared storage'
                     }
                 })
 

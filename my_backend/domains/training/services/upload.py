@@ -809,8 +809,8 @@ def delete_csv_file_record(file_id: str) -> Dict:
     """
     Delete CSV file record from database and Supabase Storage.
 
-    Deletes file from appropriate storage bucket (based on type),
-    then removes record from database.
+    Uses reference counting for shared storage - only deletes from storage
+    if no other DB records reference the same storage_path.
 
     Args:
         file_id: File UUID
@@ -828,6 +828,7 @@ def delete_csv_file_record(file_id: str) -> Dict:
     """
     import uuid as uuid_lib
     from shared.database.operations import get_supabase_client
+    from shared.database.storage import get_storage_reference_count
 
     try:
         uuid_lib.UUID(file_id)
@@ -845,17 +846,10 @@ def delete_csv_file_record(file_id: str) -> Dict:
     storage_path = file_record.get('storage_path', '')
     file_type = file_record.get('type', 'input')
 
-    storage_deleted = False
+    # Check reference count BEFORE deleting DB record (exclude current file)
+    ref_count = get_storage_reference_count(storage_path, exclude_file_id=file_id) if storage_path else 0
 
-    if storage_path:
-        try:
-            bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
-            storage_response = supabase.storage.from_(bucket_name).remove([storage_path])
-            logger.info(f"Deleted file from storage: {bucket_name}/{storage_path}")
-            storage_deleted = True
-        except Exception as storage_error:
-            logger.warning(f"Could not delete file from storage: {str(storage_error)}")
-
+    # Delete DB record FIRST
     delete_response = supabase.table('files').delete().eq('id', file_id).execute()
 
     if not delete_response.data or len(delete_response.data) == 0:
@@ -863,16 +857,35 @@ def delete_csv_file_record(file_id: str) -> Dict:
 
     logger.info(f"Deleted CSV file record: {file_id} ({file_record['file_name']})")
 
+    storage_deleted = False
+
+    # Only delete from storage if no other records reference this storage_path
+    if storage_path and ref_count == 0:
+        try:
+            bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+            supabase.storage.from_(bucket_name).remove([storage_path])
+            logger.info(f"Deleted file from storage: {bucket_name}/{storage_path} (no more references)")
+            storage_deleted = True
+        except Exception as storage_error:
+            logger.warning(f"Could not delete file from storage: {str(storage_error)}")
+    elif storage_path and ref_count > 0:
+        logger.info(f"Storage file kept: {storage_path} ({ref_count} references remain)")
+
     return {
         'deleted_file': file_record,
         'message': f"File {file_record['file_name']} deleted successfully",
-        'storage_deleted': storage_deleted
+        'storage_deleted': storage_deleted,
+        'shared_storage_kept': ref_count > 0
     }
 
 
 def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
     """
     Calculate n_dat (total number of data samples) from CSV files.
+
+    For shared storage, counts each DB record separately even if they share
+    the same physical storage file. This means if the same CSV is uploaded
+    twice with different Bezeichnung, n_dat will be doubled.
 
     For Cloud Run (stateless), uses temp_dir where files were downloaded
     from Supabase Storage by verify_session_files().
@@ -886,6 +899,8 @@ def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
         int: Total number of data samples (n_dat)
     """
     try:
+        from shared.database.operations import get_supabase_client
+
         # Use temp_dir if provided (Cloud Run), otherwise fall back to local dir
         if temp_dir and os.path.exists(temp_dir):
             working_dir = temp_dir
@@ -896,27 +911,73 @@ def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
                 logger.warning(f"No directory found for session {session_id}")
                 return 0
 
+        # Get DB records to count references per storage_path (for shared storage)
+        supabase = get_supabase_client()
+        try:
+            files_response = supabase.table('files')\
+                .select('id, storage_path, file_name')\
+                .eq('session_id', session_id)\
+                .execute()
+
+            db_files = files_response.data if files_response.data else []
+
+            # Group by storage_path to count how many DB records share each file
+            storage_path_counts = {}
+            for file_record in db_files:
+                storage_path = file_record.get('storage_path', '')
+                file_name = file_record.get('file_name', '')
+
+                if storage_path:
+                    if storage_path not in storage_path_counts:
+                        storage_path_counts[storage_path] = {
+                            'count': 0,
+                            'file_name': file_name
+                        }
+                    storage_path_counts[storage_path]['count'] += 1
+
+            logger.info(f"Found {len(db_files)} DB records, {len(storage_path_counts)} unique storage paths")
+
+        except Exception as db_error:
+            logger.warning(f"Could not get DB file records: {str(db_error)}, falling back to filesystem")
+            storage_path_counts = {}
+
         total_samples = 0
-        csv_files = []
+        csv_files_processed = set()
 
         for file_name in os.listdir(working_dir):
             if file_name.lower().endswith('.csv') and os.path.isfile(os.path.join(working_dir, file_name)):
-                csv_files.append(file_name)
+                file_path = os.path.join(working_dir, file_name)
 
-        if not csv_files:
+                try:
+                    df = pd.read_csv(file_path)
+                    file_samples = len(df)
+
+                    # Check if this file is shared (multiple DB records reference it)
+                    # Find matching storage_path
+                    multiplier = 1
+                    for storage_path, info in storage_path_counts.items():
+                        if file_name in storage_path or info['file_name'] == file_name:
+                            multiplier = info['count']
+                            break
+
+                    # Multiply samples by number of DB records using this file
+                    file_contribution = file_samples * multiplier
+                    total_samples += file_contribution
+
+                    if multiplier > 1:
+                        logger.info(f"File {file_name}: {file_samples} samples × {multiplier} records = {file_contribution}")
+                    else:
+                        logger.info(f"File {file_name}: {file_samples} samples")
+
+                    csv_files_processed.add(file_name)
+
+                except Exception as e:
+                    logger.error(f"Error reading CSV file {file_name}: {str(e)}")
+                    continue
+
+        if not csv_files_processed:
             logger.warning(f"No CSV files found for session {session_id}")
             return 0
-
-        for csv_file in csv_files:
-            file_path = os.path.join(working_dir, csv_file)
-            try:
-                df = pd.read_csv(file_path)
-                file_samples = len(df)
-                total_samples += file_samples
-                logger.info(f"File {csv_file}: {file_samples} samples")
-            except Exception as e:
-                logger.error(f"Error reading CSV file {csv_file}: {str(e)}")
-                continue
 
         logger.info(f"Session {session_id} total n_dat: {total_samples}")
         return total_samples

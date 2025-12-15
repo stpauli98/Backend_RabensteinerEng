@@ -379,6 +379,9 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
     """
     Delete a session and all associated data.
 
+    Uses reference counting for shared storage - only deletes from storage
+    if no other DB records reference the same storage_path.
+
     Args:
         session_id: Session identifier
         user_id: User ID to validate session ownership (required for security)
@@ -387,6 +390,7 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
         dict: {
             'deleted_files': int,
             'deleted_db_records': int,
+            'storage_files_deleted': int,
             'message': str
         }
 
@@ -395,6 +399,7 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
         PermissionError: If session doesn't belong to the user
     """
     from shared.database.operations import create_or_get_session_uuid, get_supabase_client
+    from shared.database.storage import get_storage_reference_count
     import shutil
 
     # Get UUID with ownership validation (will raise PermissionError if not owner)
@@ -417,12 +422,36 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
 
     deleted_files = 0
     deleted_db_records = 0
+    storage_files_deleted = 0
 
     upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
     if os.path.exists(upload_dir):
         shutil.rmtree(upload_dir)
         deleted_files = 1
         logger.info(f"Deleted local directory for session {session_id}")
+
+    # Get all files for this session BEFORE deleting DB records
+    # Group by storage_path to handle shared storage
+    try:
+        files_response = supabase.table('files').select('id, storage_path, type').eq('session_id', str(uuid_session_id)).execute()
+        session_files = files_response.data if files_response.data else []
+
+        # Group files by storage_path and type
+        storage_paths_to_check = {}
+        for file_data in session_files:
+            storage_path = file_data.get('storage_path')
+            file_type = file_data.get('type', 'input')
+            if storage_path:
+                if storage_path not in storage_paths_to_check:
+                    storage_paths_to_check[storage_path] = {
+                        'type': file_type,
+                        'file_ids': []
+                    }
+                storage_paths_to_check[storage_path]['file_ids'].append(file_data.get('id'))
+
+    except Exception as e:
+        logger.warning(f"Could not get files for session: {str(e)}")
+        storage_paths_to_check = {}
 
     try:
         supabase.table('training_results').delete().eq('session_id', str(uuid_session_id)).execute()
@@ -447,9 +476,26 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
     except Exception as e:
         logger.error(f"Error deleting database records: {str(e)}")
 
+    # Now delete from Storage - only if no other records reference the storage_path
+    for storage_path, info in storage_paths_to_check.items():
+        try:
+            # Check if any OTHER records still use this storage_path (globally)
+            ref_count = get_storage_reference_count(storage_path)
+
+            if ref_count == 0:
+                bucket_name = 'aus-csv-files' if info['type'] == 'output' else 'csv-files'
+                supabase.storage.from_(bucket_name).remove([storage_path])
+                storage_files_deleted += 1
+                logger.info(f"Deleted from storage: {bucket_name}/{storage_path}")
+            else:
+                logger.info(f"Storage file kept (shared): {storage_path} ({ref_count} references remain)")
+        except Exception as storage_error:
+            logger.warning(f"Could not delete from storage {storage_path}: {str(storage_error)}")
+
     return {
         'deleted_files': deleted_files,
         'deleted_db_records': deleted_db_records,
+        'storage_files_deleted': storage_files_deleted,
         'message': f"Session {session_id} deleted successfully"
     }
 
@@ -513,19 +559,27 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
     try:
         files_response = supabase.table('files').select('storage_path, type').execute()
 
+        # Deduplicate storage paths to avoid deleting same file multiple times
+        # (important for shared storage where multiple DB records reference same file)
+        unique_storage_paths = {}
         for file_data in files_response.data:
             storage_path = file_data.get('storage_path')
             file_type = file_data.get('type', 'input')
 
-            if storage_path:
-                try:
-                    bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
-                    supabase.storage.from_(bucket_name).remove([storage_path])
-                    storage_deleted[bucket_name] += 1
-                    logger.info(f"Deleted from storage: {bucket_name}/{storage_path}")
-                except Exception as storage_error:
-                    logger.warning(f"Could not delete from storage {storage_path}: {str(storage_error)}")
-                    database_errors.append(f"Storage: {storage_path} - {str(storage_error)}")
+            if storage_path and storage_path not in unique_storage_paths:
+                unique_storage_paths[storage_path] = file_type
+
+        logger.info(f"Found {len(unique_storage_paths)} unique storage paths to delete")
+
+        for storage_path, file_type in unique_storage_paths.items():
+            try:
+                bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+                supabase.storage.from_(bucket_name).remove([storage_path])
+                storage_deleted[bucket_name] += 1
+                logger.info(f"Deleted from storage: {bucket_name}/{storage_path}")
+            except Exception as storage_error:
+                logger.warning(f"Could not delete from storage {storage_path}: {str(storage_error)}")
+                database_errors.append(f"Storage: {storage_path} - {str(storage_error)}")
 
     except Exception as e:
         logger.error(f"Error deleting from storage: {str(e)}")
