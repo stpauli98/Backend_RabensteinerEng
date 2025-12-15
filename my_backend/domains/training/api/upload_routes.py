@@ -237,3 +237,167 @@ def delete_csv_file(file_id):
             'success': False,
             'error': str(e)
         }), 500
+
+
+@bp.route('/instant-upload', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
+def instant_upload():
+    """Upload a single CSV file immediately to database and Storage.
+
+    This endpoint is used for instant file uploads when a user adds a file.
+    It performs deduplication via file hash check before uploading.
+
+    Request: FormData with:
+    - file: CSV file
+    - sessionId: string (required)
+    - fileMetadata: JSON string with file metadata
+    - fileHash: SHA-256 hash of file content (optional)
+
+    Response:
+    - success: bool
+    - data:
+        - fileId: UUID of the file
+        - isNew: bool (true if newly uploaded, false if duplicate)
+        - storagePath: string path in storage
+    """
+    try:
+        from shared.database.operations import save_file_info, save_csv_file_content
+        from shared.database.storage import check_file_exists_by_hash
+        from shared.database.session import resolve_session_id
+
+        # Validate request
+        if 'file' not in request.files:
+            return create_error_response('No file provided', 400)
+
+        file = request.files['file']
+        if not file.filename:
+            return create_error_response('No file selected', 400)
+
+        session_id = request.form.get('sessionId')
+        if not session_id:
+            return create_error_response('Session ID is required', 400)
+
+        # Parse file metadata
+        file_metadata = {}
+        if 'fileMetadata' in request.form:
+            try:
+                file_metadata = json.loads(request.form['fileMetadata'])
+            except json.JSONDecodeError:
+                return create_error_response('Invalid fileMetadata JSON', 400)
+
+        file_hash = request.form.get('fileHash', '')
+
+        # Resolve session ID to UUID
+        uuid_session_id = resolve_session_id(session_id)
+        if not uuid_session_id:
+            return create_error_response(f'Invalid session ID: {session_id}', 400)
+
+        # Check for duplicate by hash
+        if file_hash:
+            existing_file = check_file_exists_by_hash(uuid_session_id, file_hash)
+            if existing_file:
+                logger.info(f"File with hash {file_hash[:16]}... already exists, returning existing")
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'fileId': existing_file['id'],
+                        'isNew': False,
+                        'storagePath': existing_file.get('storage_path', ''),
+                        'message': 'File already exists (duplicate detected)'
+                    }
+                })
+
+        # Prepare file data for database
+        safe_filename = sanitize_filename(file.filename)
+        bezeichnung = file_metadata.get('bezeichnung', safe_filename)
+        file_type = file_metadata.get('type', 'input')
+
+        # Check for duplicate bezeichnung in this session
+        from shared.database.client import get_supabase_client
+        supabase = get_supabase_client()
+        existing_bezeichnung = supabase.table('files')\
+            .select('id')\
+            .eq('session_id', uuid_session_id)\
+            .eq('bezeichnung', bezeichnung)\
+            .eq('type', file_type)\
+            .execute()
+
+        if existing_bezeichnung.data and len(existing_bezeichnung.data) > 0:
+            return create_error_response(
+                f'A file with bezeichnung "{bezeichnung}" already exists in this session',
+                400
+            )
+
+        file_data = {
+            'fileName': safe_filename,
+            'bezeichnung': bezeichnung,
+            'type': file_type,
+            **file_metadata
+        }
+
+        # Add file hash to metadata if provided
+        if file_hash:
+            file_data['file_hash'] = file_hash
+
+        # Save file metadata to database
+        success, file_uuid = save_file_info(session_id, file_data)
+        if not success:
+            return create_error_response('Failed to save file metadata', 500)
+
+        # Save file content to Storage
+        storage_path = ''
+        if file_uuid:
+            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                file.save(temp_file.name)
+                temp_path = temp_file.name
+
+            try:
+                file_type = file_data.get('type', 'input')
+                storage_success = save_csv_file_content(
+                    file_uuid, uuid_session_id, safe_filename, temp_path, file_type
+                )
+
+                if storage_success:
+                    storage_path = f"{uuid_session_id}/{safe_filename}"
+                else:
+                    logger.warning(f"Failed to upload file to storage for file {file_uuid}")
+
+            finally:
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+
+        # Update file record with hash if provided
+        if file_hash and file_uuid:
+            try:
+                from shared.database.session import get_supabase_client
+                supabase = get_supabase_client()
+                supabase.table('files').update({
+                    'file_hash': file_hash
+                }).eq('id', file_uuid).execute()
+            except Exception as hash_err:
+                logger.warning(f"Could not save file hash: {hash_err}")
+
+        increment_processing_count(g.user_id)
+        logger.info(f"Instant upload successful for user {g.user_id}, file {file_uuid}")
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'fileId': file_uuid,
+                'isNew': True,
+                'storagePath': storage_path,
+                'message': 'File uploaded successfully'
+            }
+        })
+
+    except ValueError as e:
+        logger.error(f"Validation error in instant upload: {str(e)}")
+        return create_error_response(str(e), 400)
+
+    except Exception as e:
+        logger.error(f"Error in instant upload: {str(e)}")
+        return create_error_response(str(e), 500)

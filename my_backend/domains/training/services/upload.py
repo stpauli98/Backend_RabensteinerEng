@@ -102,6 +102,117 @@ def assemble_file_locally(upload_id: str, filename: str) -> str:
     return assembled_file_path
 
 
+def upload_assembled_file_to_storage(
+    session_id: str,
+    filename: str,
+    file_path: str,
+    file_type: str
+) -> str:
+    """
+    Upload assembled file to Supabase Storage immediately after assembly.
+    
+    This ensures files are persisted in cloud storage before Cloud Run's
+    ephemeral filesystem is cleared.
+
+    Args:
+        session_id: Session identifier
+        filename: Name of the file
+        file_path: Local path to assembled file
+        file_type: 'input' or 'output'
+
+    Returns:
+        str: Storage path if successful, empty string otherwise
+    """
+    from shared.database.client import get_supabase_admin_client
+
+    try:
+        supabase = get_supabase_admin_client()
+        bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+        storage_path = f"{session_id}/{filename}"
+
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+
+        # Try upload, handle if file already exists
+        try:
+            supabase.storage.from_(bucket_name).upload(
+                path=storage_path,
+                file=file_content,
+                file_options={"content-type": "text/csv"}
+            )
+            logger.info(f"Uploaded {filename} to {bucket_name}/{storage_path}")
+        except Exception as e:
+            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                # File exists, update instead
+                supabase.storage.from_(bucket_name).update(
+                    path=storage_path,
+                    file=file_content,
+                    file_options={"content-type": "text/csv"}
+                )
+                logger.info(f"Updated existing file {filename} in {bucket_name}/{storage_path}")
+            else:
+                raise
+
+        return storage_path
+
+    except Exception as e:
+        logger.error(f"Failed to upload {filename} to storage: {str(e)}")
+        return ""
+
+
+def update_file_storage_path_in_metadata(
+    session_id: str,
+    filename: str,
+    storage_path: str
+) -> bool:
+    """
+    Update storagePath in session_metadata.json for a specific file.
+    
+    This ensures the metadata reflects the storage location so that
+    finalize_session can correctly reference the files.
+
+    Args:
+        session_id: Session identifier
+        filename: Name of the file
+        storage_path: Storage path in Supabase Storage
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+    session_metadata_path = os.path.join(upload_dir, 'session_metadata.json')
+
+    if not os.path.exists(session_metadata_path):
+        logger.warning(f"Session metadata not found: {session_metadata_path}")
+        return False
+
+    try:
+        with open(session_metadata_path, 'r') as f:
+            session_metadata = json.load(f)
+
+        # Find and update the file's storagePath
+        updated = False
+        for file_info in session_metadata.get('files', []):
+            if file_info.get('fileName') == filename:
+                file_info['storagePath'] = storage_path
+                updated = True
+                break
+
+        if not updated:
+            logger.warning(f"File {filename} not found in session metadata")
+            return False
+
+        with open(session_metadata_path, 'w') as f:
+            json.dump(session_metadata, f, indent=2)
+
+        logger.info(f"Updated storagePath for {filename}: {storage_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to update storagePath for {filename}: {str(e)}")
+        return False
+
+
 def save_session_metadata_locally(session_id: str, metadata: dict) -> bool:
     """
     Save session metadata to local file system.
@@ -184,45 +295,190 @@ def update_session_metadata(session_id: str, data: Dict) -> Dict:
     return existing_metadata
 
 
-def verify_session_files(session_id: str, metadata: Dict) -> Dict:
+def download_files_from_storage(session_id: str, files_metadata: List[Dict]) -> Tuple[str, List[str]]:
     """
-    Verify all files for a session exist and are valid.
+    Download all session files from Supabase Storage to temp directory.
 
-    Checks that all files listed in metadata actually exist
-    in the upload directory.
+    For Cloud Run (stateless), files must be downloaded from Storage
+    since local filesystem doesn't persist between instances.
 
     Args:
         session_id: Session identifier
-        metadata: Session metadata containing file list
+        files_metadata: List of file info dicts with 'fileName', 'storagePath', 'type'
+
+    Returns:
+        Tuple of (temp_dir_path, list_of_downloaded_file_names)
+    """
+    import tempfile
+    import shutil
+    from shared.database.client import get_supabase_admin_client
+
+    supabase = get_supabase_admin_client()
+
+    # Create temp directory for this session
+    temp_dir = tempfile.mkdtemp(prefix=f"session_{session_id}_")
+    downloaded_files = []
+
+    logger.info(f"Downloading {len(files_metadata)} files for session {session_id} to {temp_dir}")
+
+    for file_info in files_metadata:
+        file_name = file_info.get('fileName', file_info.get('file_name', ''))
+        storage_path = file_info.get('storagePath', file_info.get('storage_path', ''))
+        file_type = file_info.get('type', 'input')
+
+        if not file_name:
+            logger.warning(f"Missing fileName for file: {file_info}")
+            continue
+
+        if not storage_path:
+            logger.warning(f"Missing storagePath for file {file_name}, skipping download")
+            continue
+
+        bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
+        local_path = os.path.join(temp_dir, file_name)
+
+        try:
+            logger.info(f"Downloading {bucket_name}/{storage_path} → {local_path}")
+            response = supabase.storage.from_(bucket_name).download(storage_path)
+
+            if response:
+                with open(local_path, 'wb') as f:
+                    f.write(response)
+                downloaded_files.append(file_name)
+                logger.info(f"✓ Downloaded {file_name} ({len(response)} bytes)")
+            else:
+                logger.warning(f"Empty response for {storage_path}")
+
+        except Exception as e:
+            logger.error(f"Failed to download {storage_path}: {str(e)}")
+
+    logger.info(f"Downloaded {len(downloaded_files)}/{len(files_metadata)} files for session {session_id}")
+    return temp_dir, downloaded_files
+
+
+def cleanup_temp_dir(temp_dir: str):
+    """
+    Remove temporary directory and all contents.
+
+    Should be called after verify_session_files() and calculate_n_dat_from_session()
+    to clean up downloaded files.
+    """
+    import shutil
+    try:
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            logger.info(f"Cleaned up temp dir: {temp_dir}")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup temp dir {temp_dir}: {str(e)}")
+
+
+def verify_session_files(session_id: str, metadata: Dict) -> Dict:
+    """
+    Verify all files exist for a session by downloading from Supabase Storage.
+
+    For Cloud Run (stateless), files are downloaded from Storage to temp dir
+    since local filesystem doesn't persist between instances.
+
+    IMPORTANT: Files are stored directly in Supabase `files` table via frontend,
+    NOT in local metadata. So we query the DB directly to get accurate file count.
+
+    Args:
+        session_id: Session identifier
+        metadata: Session metadata (used as fallback, but DB is primary source)
 
     Returns:
         dict: {
             'valid': bool,
             'missing_files': list,
             'existing_files': list,
-            'total_files': int
+            'downloaded_files': list,
+            'total_files': int,
+            'temp_dir': str or None  # Caller must cleanup!
         }
     """
-    upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-    files_list = metadata.get('files', [])
+    import uuid as uuid_lib
+    from shared.database.client import get_supabase_admin_client
+    from shared.database.operations import create_or_get_session_uuid
 
-    missing_files = []
-    existing_files = []
+    # Get UUID for the session
+    try:
+        uuid_lib.UUID(session_id)
+        database_session_id = session_id
+    except (ValueError, TypeError):
+        try:
+            database_session_id = create_or_get_session_uuid(session_id)
+        except Exception as e:
+            logger.error(f"Failed to get UUID for session {session_id}: {str(e)}")
+            database_session_id = None
 
-    for file_info in files_list:
-        file_name = file_info.get('fileName', file_info.get('file_name'))
-        file_path = os.path.join(upload_dir, file_name)
+        if not database_session_id:
+            logger.error(f"Failed to get UUID for session {session_id}")
+            return {
+                'valid': False,
+                'missing_files': [],
+                'existing_files': [],
+                'downloaded_files': [],
+                'total_files': 0,
+                'temp_dir': None
+            }
 
-        if os.path.exists(file_path):
-            existing_files.append(file_name)
+    # Query files directly from Supabase `files` table (PRIMARY SOURCE)
+    files_metadata = []
+    try:
+        supabase = get_supabase_admin_client()
+        response = supabase.table('files').select('*').eq('session_id', database_session_id).execute()
+
+        if response.data:
+            logger.info(f"Found {len(response.data)} files in DB for session {session_id}")
+            for f in response.data:
+                files_metadata.append({
+                    'fileName': f.get('file_name'),
+                    'storagePath': f.get('storage_path'),
+                    'type': f.get('type', 'input')
+                })
         else:
-            missing_files.append(file_name)
+            logger.info(f"No files found in DB for session {session_id}, checking metadata fallback")
+            # Fallback to metadata if DB query returns nothing
+            files_metadata = metadata.get('files', [])
+    except Exception as e:
+        logger.error(f"Error querying files table for session {session_id}: {str(e)}")
+        # Fallback to metadata on error
+        files_metadata = metadata.get('files', [])
+
+    if not files_metadata:
+        logger.warning(f"No files found for session {session_id} (neither in DB nor metadata)")
+        return {
+            'valid': True,
+            'missing_files': [],
+            'existing_files': [],
+            'downloaded_files': [],
+            'total_files': 0,
+            'temp_dir': None
+        }
+
+    logger.info(f"Processing {len(files_metadata)} files for session {session_id}")
+
+    # Download all files from Supabase Storage to temp directory
+    temp_dir, downloaded_files = download_files_from_storage(session_id, files_metadata)
+
+    # Determine which files are missing
+    expected_files = [
+        f.get('fileName', f.get('file_name', ''))
+        for f in files_metadata
+        if f.get('fileName') or f.get('file_name')
+    ]
+    missing_files = [f for f in expected_files if f not in downloaded_files]
+
+    if missing_files:
+        logger.warning(f"Missing files for session {session_id}: {missing_files}")
 
     return {
         'valid': len(missing_files) == 0,
         'missing_files': missing_files,
-        'existing_files': existing_files,
-        'total_files': len(files_list)
+        'existing_files': downloaded_files,
+        'downloaded_files': downloaded_files,
+        'total_files': len(files_metadata),  # Now using accurate count from DB
+        'temp_dir': temp_dir  # Caller must cleanup with cleanup_temp_dir()!
     }
 
 
@@ -263,6 +519,10 @@ def process_chunk_upload(
     chunk_index = metadata['chunkIndex']
     total_chunks = metadata['totalChunks']
     filename = metadata['fileName']
+    file_type = metadata.get('fileType', 'unknown')
+
+    # DEBUG: Log chunk receipt with all metadata
+    logger.info(f"📥 CHUNK RECEIVED: {filename} [{chunk_index+1}/{total_chunks}] type={file_type} size={len(chunk_data)} bytes session={upload_id[:8]}...")
 
     upload_dir = os.path.join(UPLOAD_BASE_DIR, upload_id)
     os.makedirs(upload_dir, exist_ok=True)
@@ -303,6 +563,12 @@ def process_chunk_upload(
         json.dump(chunk_metadata, f, indent=2)
 
     if chunk_index == 0 and additional_data:
+        # DEBUG: Log additional_data structure for first chunk
+        file_metadata = additional_data.get('fileMetadata', {})
+        logger.info(f"📋 FIRST CHUNK METADATA for {filename}:")
+        logger.info(f"   bezeichnung: '{file_metadata.get('bezeichnung', 'MISSING')}'")
+        logger.info(f"   type: '{file_metadata.get('type', 'MISSING')}'")
+        logger.info(f"   storagePath: '{file_metadata.get('storagePath', 'MISSING')}'")
         _update_session_metadata_from_chunk(upload_id, filename, additional_data)
 
     result = {
@@ -316,12 +582,27 @@ def process_chunk_upload(
 
         file_size = os.path.getsize(assembled_path)
 
+        # CRITICAL: Upload to Supabase Storage immediately after assembly
+        # This ensures files are persisted before Cloud Run ephemeral storage is cleared
+        file_type = metadata.get('fileType', 'input')
+        storage_path = upload_assembled_file_to_storage(
+            upload_id, filename, assembled_path, file_type
+        )
+
+        # Update session_metadata.json with storagePath
+        if storage_path:
+            update_file_storage_path_in_metadata(upload_id, filename, storage_path)
+            logger.info(f"File {filename} uploaded to storage: {storage_path}")
+        else:
+            logger.warning(f"Failed to upload {filename} to storage - will retry in finalize")
+
         result['assembled'] = True
         result['assembled_path'] = assembled_path
+        result['storage_path'] = storage_path  # Include storage path in result
         result['file_size'] = file_size
-        result['message'] = f'File {filename} assembled successfully'
+        result['message'] = f'File {filename} assembled and uploaded successfully'
 
-        logger.info(f"File assembled: {filename}, size: {file_size / 1024:.2f} KB")
+        logger.info(f"File assembled: {filename}, size: {file_size / 1024:.2f} KB, storage: {storage_path}")
 
         if filename.endswith('.csv'):
             try:
@@ -391,7 +672,12 @@ def _update_session_metadata_from_chunk(
     with open(session_metadata_path, 'w') as f:
         json.dump(session_metadata, f, indent=2)
 
-    logger.info(f"Updated session metadata for {upload_id} with file {filename}")
+    # DEBUG: Log full files list in session_metadata
+    files_list = session_metadata.get('files', [])
+    logger.info(f"📁 SESSION METADATA UPDATED for {upload_id}:")
+    logger.info(f"   Total files in metadata: {len(files_list)}")
+    for f in files_list:
+        logger.info(f"   - {f.get('fileName', 'N/A')}: bezeichnung='{f.get('bezeichnung', '')}' type='{f.get('type', 'N/A')}' storagePath='{f.get('storagePath', '')[:50]}...'")
 
 
 def create_csv_file_record(session_id: str, file_data: Dict) -> Dict:
@@ -584,36 +870,45 @@ def delete_csv_file_record(file_id: str) -> Dict:
     }
 
 
-def calculate_n_dat_from_session(session_id: str) -> int:
+def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
     """
-    Calculate n_dat (total number of data samples) from uploaded CSV files in a session.
-    This mimics the n_dat = i_array_3D.shape[0] calculation from training_original.py
+    Calculate n_dat (total number of data samples) from CSV files.
+
+    For Cloud Run (stateless), uses temp_dir where files were downloaded
+    from Supabase Storage by verify_session_files().
 
     Args:
         session_id: ID of the session
+        temp_dir: Temp directory containing downloaded files (from verify_session_files)
+                  If None, falls back to local UPLOAD_BASE_DIR (for backwards compatibility)
 
     Returns:
         int: Total number of data samples (n_dat)
     """
     try:
-        upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
-        if not os.path.exists(upload_dir):
-            logger.warning(f"Upload directory not found for session {session_id}")
-            return 0
+        # Use temp_dir if provided (Cloud Run), otherwise fall back to local dir
+        if temp_dir and os.path.exists(temp_dir):
+            working_dir = temp_dir
+            logger.info(f"Using temp dir for n_dat calculation: {temp_dir}")
+        else:
+            working_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
+            if not os.path.exists(working_dir):
+                logger.warning(f"No directory found for session {session_id}")
+                return 0
 
         total_samples = 0
         csv_files = []
 
-        for file_name in os.listdir(upload_dir):
-            if file_name.lower().endswith('.csv') and os.path.isfile(os.path.join(upload_dir, file_name)):
+        for file_name in os.listdir(working_dir):
+            if file_name.lower().endswith('.csv') and os.path.isfile(os.path.join(working_dir, file_name)):
                 csv_files.append(file_name)
 
         if not csv_files:
-            logger.warning(f"No CSV files found in session {session_id}")
+            logger.warning(f"No CSV files found for session {session_id}")
             return 0
 
         for csv_file in csv_files:
-            file_path = os.path.join(upload_dir, csv_file)
+            file_path = os.path.join(working_dir, csv_file)
             try:
                 df = pd.read_csv(file_path)
                 file_samples = len(df)

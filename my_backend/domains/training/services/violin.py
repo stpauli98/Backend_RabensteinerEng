@@ -60,10 +60,11 @@ def generate_violin_plots_from_data(
     output_data: Optional[np.ndarray] = None,
     input_features: Optional[List[str]] = None,
     output_features: Optional[List[str]] = None,
+    files_data: Optional[List[Dict]] = None,
     progress_tracker=None
 ) -> Dict[str, Any]:
     """
-    Generate violin plots for input and output data distributions.
+    Generate violin plots for data distributions.
 
     This function creates violin plots WITHOUT training any models,
     following the original implementation approach where plots show
@@ -71,10 +72,12 @@ def generate_violin_plots_from_data(
 
     Args:
         session_id: Session identifier
-        input_data: Input data array (X data)
-        output_data: Output data array (y data)
-        input_features: Names of input features
-        output_features: Names of output features
+        input_data: Input data array (X data) - legacy parameter
+        output_data: Output data array (y data) - legacy parameter
+        input_features: Names of input features - legacy parameter
+        output_features: Names of output features - legacy parameter
+        files_data: List of file data dicts with keys: bezeichnung, data, features, type
+                   New parameter - if provided, generates one plot per file/bezeichnung
         progress_tracker: Optional ViolinProgressTracker for emitting progress updates
 
     Returns:
@@ -82,9 +85,96 @@ def generate_violin_plots_from_data(
     """
     try:
         plots = {}
-
         palette = sns.color_palette("husl", 20)
 
+        # NEW: If files_data is provided, generate one plot per bezeichnung
+        if files_data is not None and len(files_data) > 0:
+            logger.info(f"Generating violin plots for {len(files_data)} files")
+            
+            for idx, file_data in enumerate(files_data):
+                bezeichnung = file_data.get('bezeichnung', f'file_{idx}')
+                data = file_data.get('data')
+                features = file_data.get('features', [])
+                file_type = file_data.get('type', 'unknown')
+                
+                if data is None or len(data) == 0:
+                    logger.warning(f"No data for {bezeichnung}, skipping")
+                    continue
+                
+                # Emit progress
+                if progress_tracker:
+                    if file_type == 'input':
+                        progress_tracker.generating_input_plot()
+                    else:
+                        progress_tracker.generating_output_plot()
+                
+                logger.info(f"Generating violin plot for '{bezeichnung}' ({file_type})")
+                
+                # Create DataFrame
+                if features:
+                    df = pd.DataFrame(data, columns=features)
+                else:
+                    n_features = data.shape[1] if len(data.shape) > 1 else 1
+                    features = [f"Feature_{i+1}" for i in range(n_features)]
+                    df = pd.DataFrame(data, columns=features)
+                
+                n_ft = len(features)
+                fig_width = max(2 * n_ft, 6)
+                fig, axes = plt.subplots(1, n_ft, figsize=(fig_width, 6))
+                
+                if n_ft == 1:
+                    axes = [axes]
+                
+                for i, feature in enumerate(features):
+                    values = df[feature]
+                    
+                    if not values.isna().all():
+                        sns.violinplot(
+                            y=values,
+                            ax=axes[i],
+                            color=palette[(idx * 3 + i) % len(palette)],
+                            inner="quartile",
+                            linewidth=1.5
+                        )
+                        axes[i].set_title(feature)
+                        axes[i].set_xlabel("")
+                        axes[i].set_ylabel("")
+                    else:
+                        axes[i].text(0.5, 0.5, 'No data', 
+                                   ha='center', va='center', 
+                                   transform=axes[i].transAxes)
+                        axes[i].set_title(feature)
+                
+                type_label = "Input" if file_type == 'input' else "Output"
+                plt.suptitle(f"{bezeichnung} ({type_label}) - Data Distribution", fontsize=15, fontweight="bold")
+                plt.tight_layout()
+                
+                buffer = io.BytesIO()
+                plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+                buffer.seek(0)
+                plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+                
+                # Use bezeichnung as plot key
+                plot_key = f"{bezeichnung}_violin_plot"
+                plots[plot_key] = f"data:image/png;base64,{plot_base64}"
+                plt.close()
+                
+                # Emit progress complete
+                if progress_tracker:
+                    if file_type == 'input':
+                        progress_tracker.input_plot_complete()
+                    else:
+                        progress_tracker.output_plot_complete()
+                
+                logger.info(f"Violin plot for '{bezeichnung}' generated successfully")
+            
+            return {
+                'success': True,
+                'plots': plots,
+                'message': f'Violin plots generated successfully for {len(files_data)} files'
+            }
+
+        # LEGACY: Original behavior for backward compatibility
         if input_data is not None and len(input_data) > 0:
             # Emit progress: generating input plot
             if progress_tracker:

@@ -205,7 +205,7 @@ class DataLoader:
         except (ValueError, TypeError):
             return default
     
-    def download_session_files(self, session_id: str, progress_tracker=None) -> Dict[str, str]:
+    def download_session_files(self, session_id: str, progress_tracker=None) -> Dict[str, Dict]:
         """
         Download all CSV files for a session
 
@@ -214,7 +214,10 @@ class DataLoader:
             progress_tracker: Optional ViolinProgressTracker for emitting progress updates
 
         Returns:
-            Dict mapping file types to local file paths
+            Dict mapping bezeichnung to file info dict containing:
+            - 'path': local file path
+            - 'type': file type ('input' or 'output')
+            - 'file_name': original file name
         """
         try:
             files_info = self._load_files_info(session_id)
@@ -224,6 +227,8 @@ class DataLoader:
                 file_type = file_info.get('type', 'unknown')
                 file_name = file_info.get('file_name', 'unknown.csv')
                 storage_path = file_info.get('storage_path', '')
+                # Use bezeichnung as unique key (fallback to file_name if not set)
+                bezeichnung = file_info.get('bezeichnung', file_name.replace('.csv', ''))
 
                 # Emit progress before download
                 if progress_tracker:
@@ -232,8 +237,14 @@ class DataLoader:
                     elif file_type == 'output':
                         progress_tracker.downloading_output()
 
-                local_path = self._download_file(storage_path, file_name, session_id, file_type)
-                downloaded_files[file_type] = local_path
+                local_path = self._download_file(storage_path, file_name, session_id, file_type, bezeichnung)
+                # Store with bezeichnung as key and include metadata
+                downloaded_files[bezeichnung] = {
+                    'path': local_path,
+                    'type': file_type,
+                    'file_name': file_name
+                }
+                logger.info(f"Downloaded file '{file_name}' with bezeichnung '{bezeichnung}' (type: {file_type})")
 
             # Emit download complete
             if progress_tracker:
@@ -245,21 +256,24 @@ class DataLoader:
             logger.error(f"Error downloading session files: {str(e)}")
             raise
     
-    def _download_file(self, storage_path: str, file_name: str, session_id: str, file_type: str = 'input') -> str:
+    def _download_file(self, storage_path: str, file_name: str, session_id: str, file_type: str = 'input', bezeichnung: str = None) -> str:
         """
         Download a single file from storage
-        
+
         Args:
             storage_path: Path in storage bucket
             file_name: Name of the file
             session_id: Session identifier
             file_type: Type of file ('input' or 'output') to determine bucket
-            
+            bezeichnung: Unique bezeichnung for the file (used in local path to prevent overwrites)
+
         Returns:
             Local file path
         """
         try:
-            local_file_path = os.path.join(self.temp_dir, f"{session_id}_{file_name}")
+            # Use bezeichnung in local path to prevent files with same file_name from overwriting each other
+            unique_name = bezeichnung if bezeichnung else file_name.replace('.csv', '')
+            local_file_path = os.path.join(self.temp_dir, f"{session_id}_{unique_name}.csv")
             
             bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
             
@@ -291,7 +305,10 @@ class DataLoader:
             input_files = []
             output_files = []
             
-            for file_type, file_path in downloaded_files.items():
+            for bezeichnung, file_info in downloaded_files.items():
+                file_type = file_info.get('type', 'unknown')
+                file_path = file_info.get('path', '')
+
                 if file_type == 'input':
                     input_files.append(file_path)
                 elif file_type == 'output':
@@ -436,76 +453,77 @@ class DataLoader:
 def load(dat, inf):
     """
     FUNKTION ZUR AUSGABE DER INFORMATIONEN
-    Exact copy from training_original.py lines 37-109
-    
+    Based on training_original.py lines 37-109
+    Modified to process ALL files in the dictionary, not just the last one.
+
     Args:
         dat: Dictionary of DataFrames
         inf: Information DataFrame
-        
+
     Returns:
         Tuple of updated (dat, inf)
     """
-    
-    df_name, df = next(reversed(dat.items()))
 
-    df["UTC"] = pd.to_datetime(df["UTC"], 
-                               format = "%Y-%m-%d %H:%M:%S")
+    # Process ALL files in the dictionary
+    for df_name, df in dat.items():
+        df["UTC"] = pd.to_datetime(df["UTC"],
+                                   format = "%Y-%m-%d %H:%M:%S")
 
-    utc_min = df["UTC"].iloc[0]
-    
-    utc_max = df["UTC"].iloc[-1]
-    
-    n_all = len(df)
-    
-    delt = (df["UTC"].iloc[-1]-df["UTC"].iloc[0]).total_seconds()/(60*(n_all-1))
+        utc_min = df["UTC"].iloc[0]
 
-    if round(60/delt) == 60/delt:
-        
-        ofst = (df["UTC"].iloc[0]-
-                (df["UTC"].iloc[0]).replace(minute      = 0, 
-                                            second      = 0, 
-                                            microsecond = 0)).total_seconds()/60
-        while ofst-delt >= 0:
-           ofst -= delt
-    
-    else:
-        
-        ofst = "var"
+        utc_max = df["UTC"].iloc[-1]
 
-    n_num = n_all
-    for i in range(n_all):
-        try:
-            float(df.iloc[i, 1])
-            if math.isnan(float(df.iloc[i, 1])):
-               n_num -= 1
-        except:
-            n_num -= 1  
-    
-    rate_num = round(n_num/n_all*100, 2)
-        
-    val_max = df.iloc[:, 1].max() 
-    
-    val_min = df.iloc[:, 1].min()
-    
-    dat[df_name] = df
+        n_all = len(df)
 
-    if inf.empty:
-        inf = pd.DataFrame(columns=["utc_min", "utc_max", "delt", "ofst", "n_all", 
-                                   "n_num", "rate_num", "val_min", "val_max", "scal", "avg"])
-    
-    inf.loc[df_name] = {
-        "utc_min":  utc_min,
-        "utc_max":  utc_max, 
-        "delt":     delt,
-        "ofst":     ofst,
-        "n_all":    n_all,
-        "n_num":    n_num,
-        "rate_num": rate_num,
-        "val_min":  val_min,
-        "val_max":  val_max,
-        "scal":     False,
-        "avg":      False}
- 
+        delt = (df["UTC"].iloc[-1]-df["UTC"].iloc[0]).total_seconds()/(60*(n_all-1))
+
+        if round(60/delt) == 60/delt:
+
+            ofst = (df["UTC"].iloc[0]-
+                    (df["UTC"].iloc[0]).replace(minute      = 0,
+                                                second      = 0,
+                                                microsecond = 0)).total_seconds()/60
+            while ofst-delt >= 0:
+               ofst -= delt
+
+        else:
+
+            ofst = "var"
+
+        n_num = n_all
+        for i in range(n_all):
+            try:
+                float(df.iloc[i, 1])
+                if math.isnan(float(df.iloc[i, 1])):
+                   n_num -= 1
+            except:
+                n_num -= 1
+
+        rate_num = round(n_num/n_all*100, 2)
+
+        val_max = df.iloc[:, 1].max()
+
+        val_min = df.iloc[:, 1].min()
+
+        dat[df_name] = df
+
+        if inf.empty:
+            inf = pd.DataFrame(columns=["utc_min", "utc_max", "delt", "ofst", "n_all",
+                                       "n_num", "rate_num", "val_min", "val_max", "scal", "avg"])
+
+        inf.loc[df_name] = {
+            "utc_min":  utc_min,
+            "utc_max":  utc_max,
+            "delt":     delt,
+            "ofst":     ofst,
+            "n_all":    n_all,
+            "n_num":    n_num,
+            "rate_num": rate_num,
+            "val_min":  val_min,
+            "val_max":  val_max,
+            "scal":     False,
+            "avg":      False}
+
     return dat, inf 
 
 

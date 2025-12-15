@@ -147,19 +147,12 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     val_list = []
                     
                     
-                    try:
-                        utc_th = pd.date_range(
-                            start=utc_th_strt,
-                            end=utc_th_end,
-                            freq=f'{i_dat_inf.loc[key, "delt_transf"]}min'
-                        ).to_list()
-                    except Exception as e:
-                        delt = pd.to_timedelta(i_dat_inf.loc[key, "delt_transf"], unit="min")
-                        utc_th = []
-                        utc = utc_th_strt
-                        for i1 in range(mts.I_N):
-                            utc_th.append(utc)
-                            utc += delt
+                    # Use periods parameter to guarantee exactly mts.I_N elements
+                    utc_th = pd.date_range(
+                        start=utc_th_strt,
+                        end=utc_th_end,
+                        periods=mts.I_N
+                    ).to_list()
                     
                     if len(utc_th) > 0:
                         data_utc_min = i_dat[key].iloc[0, 0]
@@ -234,19 +227,12 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                 else:
                     val_list = []
                     
-                    try:
-                        utc_th = pd.date_range(
-                            start=utc_th_strt,
-                            end=utc_th_end,
-                            freq=f'{o_dat_inf.loc[key, "delt_transf"]}min'
-                        ).to_list()
-                    except:
-                        delt = pd.to_timedelta(o_dat_inf.loc[key, "delt_transf"], unit="min")
-                        utc_th = []
-                        utc = utc_th_strt
-                        for i1 in range(mts.O_N):
-                            utc_th.append(utc)
-                            utc += delt
+                    # Use periods parameter to guarantee exactly mts.O_N elements
+                    utc_th = pd.date_range(
+                        start=utc_th_strt,
+                        end=utc_th_end,
+                        periods=mts.O_N
+                    ).to_list()
                     
                     if o_dat_inf.loc[key, "meth"] == "Lineare Interpolation":
                         
@@ -301,20 +287,13 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.Y.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.Y.TH_END)
                     
-                    try:
-                        utc_th = pd.date_range(
-                            start=utc_th_strt,
-                            end=utc_th_end,
-                            freq=f'{T.Y.DELT}min'
-                        ).to_list()
-                    except:
-                        delt = pd.to_timedelta(T.Y.DELT, unit="min")
-                        utc_th = []
-                        utc = utc_th_strt
-                        for i1 in range(mts.I_N):
-                            utc_th.append(utc)
-                            utc += delt
-                    
+                    # Use periods parameter to guarantee exactly mts.I_N elements
+                    utc_th = pd.date_range(
+                        start=utc_th_strt,
+                        end=utc_th_end,
+                        periods=mts.I_N
+                    ).to_list()
+
                     if T.Y.LT == False:
                         sec = pd.Series(utc_th).map(pd.Timestamp.timestamp)
                         df_int_i["y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
@@ -358,20 +337,13 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.M.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.M.TH_END)
                     
-                    try:
-                        utc_th = pd.date_range(
-                            start=utc_th_strt,
-                            end=utc_th_end,
-                            freq=f'{T.M.DELT}min'
-                        ).to_list()
-                    except:
-                        delt = pd.to_timedelta(T.M.DELT, unit="min")
-                        utc_th = []
-                        utc = utc_th_strt
-                        for i1 in range(mts.I_N):
-                            utc_th.append(utc)
-                            utc += delt
-                    
+                    # Use periods parameter to guarantee exactly mts.I_N elements
+                    utc_th = pd.date_range(
+                        start=utc_th_strt,
+                        end=utc_th_end,
+                        periods=mts.I_N
+                    ).to_list()
+
                     if T.M.LT == False:
                         m = pd.Series(utc_th).dt.month.values
                         d = pd.Series(utc_th).dt.day.values
@@ -420,20 +392,13 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.W.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.W.TH_END)
                     
-                    try:
-                        utc_th = pd.date_range(
-                            start=utc_th_strt,
-                            end=utc_th_end,
-                            freq=f'{T.W.DELT}min'
-                        ).to_list()
-                    except:
-                        delt = pd.to_timedelta(T.W.DELT, unit="min")
-                        utc_th = []
-                        utc = utc_th_strt
-                        for i1 in range(mts.I_N):
-                            utc_th.append(utc)
-                            utc += delt
-                    
+                    # Use periods parameter to guarantee exactly mts.I_N elements
+                    utc_th = pd.date_range(
+                        start=utc_th_strt,
+                        end=utc_th_end,
+                        periods=mts.I_N
+                    ).to_list()
+
                     if T.W.LT == False:
                         wd = pd.Series(utc_th).dt.weekday.values
                         h = pd.Series(utc_th).dt.hour.values
@@ -475,20 +440,13 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.D.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.D.TH_END)
                     
-                    try:
-                        utc_th = pd.date_range(
-                            start=utc_th_strt,
-                            end=utc_th_end,
-                            freq=f'{T.D.DELT}min'
-                        ).to_list()
-                    except:
-                        delt = pd.to_timedelta(T.D.DELT, unit="min")
-                        utc_th = []
-                        utc = utc_th_strt
-                        for i1 in range(mts.I_N):
-                            utc_th.append(utc)
-                            utc += delt
-                    
+                    # Use periods parameter to guarantee exactly mts.I_N elements
+                    utc_th = pd.date_range(
+                        start=utc_th_strt,
+                        end=utc_th_end,
+                        periods=mts.I_N
+                    ).to_list()
+
                     if T.D.LT == False:
                         h = pd.Series(utc_th).dt.hour.values
                         m = pd.Series(utc_th).dt.minute.values
@@ -529,21 +487,12 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.H.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.H.TH_END)
 
-                    # Generate timesteps
-                    try:
-                        utc_th = pd.date_range(
-                            start=utc_th_strt,
-                            end=utc_th_end,
-                            freq=f'{T.H.DELT}min'
-                        ).to_list()
-                    except:
-                        # Fallback: manually create timestamps
-                        delt = pd.to_timedelta(T.H.DELT, unit="min")
-                        utc_th = []
-                        utc = utc_th_strt
-                        for i1 in range(mts.I_N):
-                            utc_th.append(utc)
-                            utc += delt
+                    # Use periods parameter to guarantee exactly mts.I_N elements
+                    utc_th = pd.date_range(
+                        start=utc_th_strt,
+                        end=utc_th_end,
+                        periods=mts.I_N
+                    ).to_list()
 
                     if T.H.LT == False:
                         # Compare UTC dates against holidays

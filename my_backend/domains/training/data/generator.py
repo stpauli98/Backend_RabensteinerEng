@@ -71,14 +71,20 @@ def generate_violin_plots_for_session(
         raise ValueError('No data available for visualization. Please upload CSV files first')
 
     # Download files with progress tracking
+    # Now returns dict with bezeichnung as key: {bezeichnung: {path, type, file_name}}
     downloaded_files = data_loader.download_session_files(session_id, progress_tracker=progress_tracker)
 
     # Emit parsing phase
     if progress_tracker:
         progress_tracker.parsing_files()
 
+    # Parse CSV files - now keyed by bezeichnung
     csv_data = {}
-    for file_type, file_path in downloaded_files.items():
+    for bezeichnung, file_info in downloaded_files.items():
+        file_path = file_info['path']
+        file_type = file_info['type']
+        file_name = file_info['file_name']
+
         if os.path.exists(file_path):
             try:
                 df = pd.read_csv(file_path, sep=';')
@@ -87,8 +93,12 @@ def generate_violin_plots_for_session(
             except:
                 df = pd.read_csv(file_path)
 
-            csv_data[file_type] = df
-            logger.info(f"Loaded {file_type} file with {len(df)} rows and {len(df.columns)} columns: {list(df.columns)}")
+            csv_data[bezeichnung] = {
+                'df': df,
+                'type': file_type,
+                'file_name': file_name
+            }
+            logger.info(f"Loaded '{bezeichnung}' ({file_type}) with {len(df)} rows and {len(df.columns)} columns")
 
     if not csv_data:
         if progress_tracker:
@@ -99,60 +109,63 @@ def generate_violin_plots_for_session(
     if progress_tracker:
         progress_tracker.parsing_complete()
 
-    input_data = None
-    output_data = None
-    input_features = []
-    output_features = []
+    # Separate files by type and prepare data lists
+    input_files_data = []
+    output_files_data = []
 
-    if 'input' in csv_data:
-        input_df = csv_data['input']
-        numeric_cols = input_df.select_dtypes(include=[np.number]).columns.tolist()
+    for bezeichnung, data in csv_data.items():
+        df = data['df']
+        file_type = data['type']
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
         if numeric_cols:
-            input_data = input_df[numeric_cols].values
-            input_features = numeric_cols
+            file_data = {
+                'bezeichnung': bezeichnung,
+                'data': df[numeric_cols].values,
+                'features': numeric_cols,
+                'type': file_type
+            }
+            if file_type == 'input':
+                input_files_data.append(file_data)
+            else:
+                output_files_data.append(file_data)
 
-    if 'output' in csv_data:
-        output_df = csv_data['output']
-        numeric_cols = output_df.select_dtypes(include=[np.number]).columns.tolist()
-        if numeric_cols:
-            output_data = output_df[numeric_cols].values
-            output_features = numeric_cols
-
-    if input_data is None and output_data is None:
+    if not input_files_data and not output_files_data:
         if progress_tracker:
             progress_tracker.error('No numeric data found in CSV files')
         raise ValueError('No numeric data found in CSV files. CSV files must contain numeric columns for visualization')
 
-    data_info = {
-        'success': True,
-        'input_data': input_data,
-        'output_data': output_data,
-        'input_features': input_features,
-        'output_features': output_features
-    }
+    # Combine all files data for violin plot generation
+    all_files_data = input_files_data + output_files_data
 
-    # Generate plots with progress tracking
+    # Generate plots with progress tracking - one plot per bezeichnung
     plot_result = generate_violin_plots_from_data(
         session_id,
-        input_data=data_info.get('input_data'),
-        output_data=data_info.get('output_data'),
-        input_features=data_info.get('input_features'),
-        output_features=data_info.get('output_features'),
+        files_data=all_files_data,
         progress_tracker=progress_tracker
     )
+
+    # Collect features info
+    all_input_features = []
+    all_output_features = []
+    for fd in input_files_data:
+        all_input_features.extend(fd['features'])
+    for fd in output_files_data:
+        all_output_features.extend(fd['features'])
 
     result = {
         'success': plot_result['success'],
         'violin_plots': plot_result.get('plots', {}),
         'message': 'Violin plots generated successfully. Ready for model training.',
         'data_info': {
-            'input_features': input_features,
-            'output_features': output_features,
-            'input_shape': input_data.shape if input_data is not None else None,
-            'output_shape': output_data.shape if output_data is not None else None
+            'input_features': list(set(all_input_features)),
+            'output_features': list(set(all_output_features)),
+            'input_files_count': len(input_files_data),
+            'output_files_count': len(output_files_data),
+            'total_files': len(all_files_data)
         }
     }
 
-    logger.info(f"✅ Violin plots generated for session {session_id}")
+    logger.info(f"✅ Violin plots generated for session {session_id}: {len(all_files_data)} files processed")
 
     return result

@@ -23,6 +23,15 @@ logger = logging.getLogger(__name__)
 
 BACKEND_URL = "http://127.0.0.1:8080"
 
+def safe_float_to_int(value: Any, default: int) -> int:
+    """Safely convert a value to int, handling empty strings and None."""
+    if value is None or value == '' or value == 'None':
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
 class ModernMiddlemanRunner:
     """
     Modern middleman runner that uses TrainingPipeline instead of subprocess
@@ -75,32 +84,47 @@ class ModernMiddlemanRunner:
             i_dat = {}
             o_dat = {}
 
-            # Create mapping of file names to metadata
+            # Create mapping of bezeichnung to metadata AND file_name to bezeichnung
             files_metadata = {}
+            filename_to_bezeichnung = {}
             for file_info in session_data.get('files', []):
                 base_name = file_info['file_name'].replace('.csv', '')
-                files_metadata[base_name] = file_info
-                logger.info(f"   Loaded metadata for '{base_name}': type={file_info['type']}, zeithorizont={file_info.get('zeithorizont_start')}-{file_info.get('zeithorizont_end')}")
+                bezeichnung = file_info.get('bezeichnung', base_name)
+                files_metadata[bezeichnung] = file_info
+                filename_to_bezeichnung[base_name] = bezeichnung
+                logger.info(f"   Loaded metadata for '{bezeichnung}' (file: {base_name}): type={file_info['type']}, zeithorizont={file_info.get('zeithorizont_start')}-{file_info.get('zeithorizont_end')}")
 
             for file_path in input_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
-                file_name = file_path.split('/')[-1].replace('.csv', '')
-                if '_' in file_name:
-                    parts = file_name.split('_')
+                # Local files are now named: session_{uuid}_{bezeichnung}.csv
+                local_name = file_path.split('/')[-1].replace('.csv', '')
+                if '_' in local_name:
+                    parts = local_name.split('_')
                     if len(parts) > 2 and parts[0] == 'session':
-                        file_name = '_'.join(parts[3:])
-                i_dat[file_name] = df
-                logger.info(f"   📊 Loaded input file '{file_name}': shape={df.shape}, columns={list(df.columns[:3])}")
+                        # bezeichnung is everything after session_{uuid}_
+                        bezeichnung = '_'.join(parts[2:])
+                    else:
+                        bezeichnung = local_name
+                else:
+                    bezeichnung = local_name
+                i_dat[bezeichnung] = df
+                logger.info(f"   📊 Loaded input file '{bezeichnung}': shape={df.shape}, columns={list(df.columns[:3])}")
 
             for file_path in output_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
-                file_name = file_path.split('/')[-1].replace('.csv', '')
-                if '_' in file_name:
-                    parts = file_name.split('_')
+                # Local files are now named: session_{uuid}_{bezeichnung}.csv
+                local_name = file_path.split('/')[-1].replace('.csv', '')
+                if '_' in local_name:
+                    parts = local_name.split('_')
                     if len(parts) > 2 and parts[0] == 'session':
-                        file_name = '_'.join(parts[3:])
-                o_dat[file_name] = df
-                logger.info(f"   📊 Loaded output file '{file_name}': shape={df.shape}, columns={list(df.columns[:3])}")
+                        # bezeichnung is everything after session_{uuid}_
+                        bezeichnung = '_'.join(parts[2:])
+                    else:
+                        bezeichnung = local_name
+                else:
+                    bezeichnung = local_name
+                o_dat[bezeichnung] = df
+                logger.info(f"   📊 Loaded output file '{bezeichnung}': shape={df.shape}, columns={list(df.columns[:3])}")
             
             from domains.training.data.loader import load, transf
             from domains.training.config import MTS
@@ -168,8 +192,8 @@ class ModernMiddlemanRunner:
             for key in i_dat_inf.index:
                 # Get time horizon from database metadata
                 metadata = files_metadata.get(key, {})
-                th_start = int(float(metadata.get('zeithorizont_start', -1)))
-                th_end = int(float(metadata.get('zeithorizont_end', 0)))
+                th_start = safe_float_to_int(metadata.get('zeithorizont_start'), -1)
+                th_end = safe_float_to_int(metadata.get('zeithorizont_end'), 0)
                 logger.info(f"   Input file '{key}': th_strt={th_start}, th_end={th_end}")
                 
                 i_dat_inf.loc[key, "spec"] = "Historische Daten"
@@ -184,8 +208,8 @@ class ModernMiddlemanRunner:
             for key in o_dat_inf.index:
                 # Get time horizon from database metadata
                 metadata = files_metadata.get(key, {})
-                th_start = int(float(metadata.get('zeithorizont_start', 0)))
-                th_end = int(float(metadata.get('zeithorizont_end', 1)))
+                th_start = safe_float_to_int(metadata.get('zeithorizont_start'), 0)
+                th_end = safe_float_to_int(metadata.get('zeithorizont_end'), 1)
                 logger.info(f"   Output file '{key}': th_strt={th_start}, th_end={th_end}")
                 
                 o_dat_inf.loc[key, "spec"] = "Historische Daten"

@@ -169,9 +169,20 @@ BEGIN
     )
     RETURNING id INTO v_new_subscription_id;
 
+    -- Reset usage to 0 when downgrading to Free plan
+    -- This ensures the user starts fresh with Free plan limits
+    UPDATE usage_tracking
+    SET
+        uploads_count = 0,
+        processing_jobs_count = 0,
+        training_runs_count = 0,
+        storage_used_gb = 0,
+        updated_at = NOW()
+    WHERE user_id = p_user_id;
+
     RETURN json_build_object(
         'success', TRUE,
-        'message', 'User downgraded to Free plan',
+        'message', 'User downgraded to Free plan with usage reset',
         'new_subscription_id', v_new_subscription_id,
         'cancelled_count', v_cancelled_count
     );

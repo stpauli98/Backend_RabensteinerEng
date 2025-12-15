@@ -456,7 +456,11 @@ class DataProcessor:
             file_info_map = {}
             if files_info:
                 for fi in files_info:
-                    # Map by file_name
+                    # Map by bezeichnung (primary key)
+                    bezeichnung = fi.get('bezeichnung', '')
+                    if bezeichnung:
+                        file_info_map[bezeichnung] = fi
+                    # Also map by file_name for backwards compatibility
                     if 'file_name' in fi:
                         file_info_map[fi['file_name']] = fi
                     # Also map by storage_path
@@ -697,10 +701,15 @@ class DataProcessor:
             delt = float(zeitschritte.get('zeitschrittweite', 15))  # MTS.DELT
             ofst = float(zeitschritte.get('offset', 0))  # MTS.OFST
 
-            # Build file_info lookup
+            # Build file_info lookup - use bezeichnung as primary key
             file_info_map = {}
             if files_info:
                 for fi in files_info:
+                    # Map by bezeichnung (primary key)
+                    bezeichnung = fi.get('bezeichnung', '')
+                    if bezeichnung:
+                        file_info_map[bezeichnung] = fi
+                    # Also map by file_name for backwards compatibility
                     if 'file_name' in fi:
                         file_info_map[fi['file_name']] = fi
                     if 'storage_path' in fi:

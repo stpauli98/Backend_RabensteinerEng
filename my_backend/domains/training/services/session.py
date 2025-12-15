@@ -89,6 +89,9 @@ def finalize_session(session_id: str, session_data: Dict) -> Dict:
     """
     Finalize a session after all files have been uploaded.
 
+    For Cloud Run (stateless), downloads files from Supabase Storage
+    to calculate n_dat, then cleans up temp files.
+
     Args:
         session_id: Session identifier
         session_data: Session data from request
@@ -105,21 +108,29 @@ def finalize_session(session_id: str, session_data: Dict) -> Dict:
         update_session_metadata,
         verify_session_files,
         calculate_n_dat_from_session,
-        save_session_metadata_locally
+        save_session_metadata_locally,
+        cleanup_temp_dir
     )
     from shared.database.operations import save_session_to_supabase
 
     updated_metadata = update_session_metadata(session_id, session_data)
 
-    # verify_session_files returns a dict with 'valid', 'missing_files', 'existing_files', 'total_files'
+    # verify_session_files downloads files from Supabase Storage to temp dir
+    # Returns dict with 'valid', 'missing_files', 'existing_files', 'total_files', 'temp_dir'
     verification_result = verify_session_files(session_id, updated_metadata)
     file_count = verification_result['total_files']
-    
+    temp_dir = verification_result.get('temp_dir')
+
     if not verification_result['valid']:
         logger.warning(f"Missing files for session {session_id}: {verification_result['missing_files']}")
 
-    n_dat = calculate_n_dat_from_session(session_id)
+    # Calculate n_dat from downloaded files in temp directory
+    n_dat = calculate_n_dat_from_session(session_id, temp_dir)
     updated_metadata['n_dat'] = n_dat
+
+    # Cleanup temp directory after we're done with the files
+    if temp_dir:
+        cleanup_temp_dir(temp_dir)
 
     save_session_metadata_locally(session_id, updated_metadata)
 
@@ -669,17 +680,15 @@ def save_time_info_data(session_id: str, time_info: Dict) -> bool:
 
     Raises:
         ValueError: If validation fails
+        DatabaseError: If database operation fails
     """
-    from shared.database.operations import save_time_info
+    from shared.database.operations import save_time_info, DatabaseError
 
     if not session_id or not isinstance(session_id, str):
         raise ValueError('Invalid session_id format')
 
-    success = save_time_info(session_id, time_info)
-
-    if not success:
-        raise Exception('Failed to save time info')
-
+    # save_time_info now raises DatabaseError on failure
+    save_time_info(session_id, time_info)
     return True
 
 
@@ -697,8 +706,9 @@ def save_zeitschritte_data(session_id: str, zeitschritte: Dict, user_id: str = N
 
     Raises:
         ValueError: If validation fails
+        DatabaseError: If database operation fails
     """
-    from shared.database.operations import save_zeitschritte
+    from shared.database.operations import save_zeitschritte, DatabaseError
 
     if not session_id or not isinstance(session_id, str):
         raise ValueError('Invalid session_id format')
@@ -706,11 +716,8 @@ def save_zeitschritte_data(session_id: str, zeitschritte: Dict, user_id: str = N
     if not isinstance(zeitschritte, dict):
         raise ValueError('Invalid zeitschritte format - must be a dictionary')
 
-    success = save_zeitschritte(session_id, zeitschritte)
-
-    if not success:
-        raise Exception('Failed to save zeitschritte')
-
+    # save_zeitschritte now raises DatabaseError on failure
+    save_zeitschritte(session_id, zeitschritte, user_id=user_id)
     return True
 
 
