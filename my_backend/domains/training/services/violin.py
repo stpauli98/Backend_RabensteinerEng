@@ -145,7 +145,13 @@ def generate_violin_plots_from_data(
                                    transform=axes[i].transAxes)
                         axes[i].set_title(feature)
                 
-                type_label = "Input" if file_type == 'input' else "Output"
+                # Determine type label
+                if file_type == 'time':
+                    type_label = "Zeit"
+                elif file_type == 'input':
+                    type_label = "Input"
+                else:
+                    type_label = "Output"
                 plt.suptitle(f"{bezeichnung} ({type_label}) - Data Distribution", fontsize=15, fontweight="bold")
                 plt.tight_layout()
                 

@@ -138,6 +138,64 @@ def generate_violin_plots_for_session(
     # Combine all files data for violin plot generation
     all_files_data = input_files_data + output_files_data
 
+    # Generate TIME components if enabled in time_info
+    time_info = session_data.get('time_info', {})
+    if time_info and any([time_info.get('jahr'), time_info.get('monat'),
+                          time_info.get('woche'), time_info.get('tag'),
+                          time_info.get('feiertag')]):
+        try:
+            from domains.training.data.processor import TimeFeatures
+            
+            # Get first input file's DataFrame to extract timestamps
+            first_input_df = None
+            for bezeichnung, data in csv_data.items():
+                if data['type'] == 'input':
+                    first_input_df = data['df']
+                    break
+            
+            if first_input_df is None and csv_data:
+                # Use any file if no input file
+                first_input_df = list(csv_data.values())[0]['df']
+            
+            if first_input_df is not None and 'UTC' in first_input_df.columns:
+                # Ensure UTC column is datetime
+                df_copy = first_input_df.copy()
+                df_copy['UTC'] = pd.to_datetime(df_copy['UTC'])
+                
+                timezone = time_info.get('zeitzone', 'UTC')
+                processor = TimeFeatures(timezone)
+                
+                # Generate time features
+                time_features_df = processor.add_time_features(
+                    df_copy, 'UTC', time_info
+                )
+                
+                # Extract TIME columns (y_sin, y_cos, m_sin, m_cos, w_sin, w_cos, d_sin, d_cos)
+                time_cols = [c for c in time_features_df.columns 
+                             if c.endswith('_sin') or c.endswith('_cos')]
+                
+                if time_cols:
+                    # Create display names: y_sin -> Y_sin, w_cos -> W_cos
+                    display_names = [c[0].upper() + c[1:] for c in time_cols]
+                    
+                    time_file_data = {
+                        'bezeichnung': 'TIME Components',
+                        'data': time_features_df[time_cols].values,
+                        'features': display_names,
+                        'type': 'time'
+                    }
+                    all_files_data.append(time_file_data)
+                    logger.info(f"Added TIME components to violin plots: {display_names}")
+                else:
+                    logger.warning("No TIME feature columns generated")
+            else:
+                logger.warning("No UTC column found in input files, skipping TIME components")
+                
+        except Exception as e:
+            logger.error(f"Error generating TIME components for violin plots: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     # Generate plots with progress tracking - one plot per bezeichnung
     plot_result = generate_violin_plots_from_data(
         session_id,

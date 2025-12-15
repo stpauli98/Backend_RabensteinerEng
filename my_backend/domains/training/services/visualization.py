@@ -437,16 +437,33 @@ class Visualizer:
             if not output_variables:
                 output_variables = ['Predicted_Load']
 
+            # Define known TIME component names
+            time_component_names = ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
+            
+            # Separate regular input variables from TIME components
+            input_vars_list = input_variables if isinstance(input_variables, list) else []
+            regular_inputs = [v for v in input_vars_list if v not in time_component_names]
+            time_components = [v for v in input_vars_list if v in time_component_names]
+            
+            # If no TIME components found in stored data, return default TIME component names
+            # (they may exist in the data but not be named in metadata)
+            if not time_components:
+                time_components = time_component_names
+            
+            logger.info(f"get_available_variables: inputs={regular_inputs}, time={time_components}, outputs={output_variables}")
+
             return {
-                'input_variables': input_variables if isinstance(input_variables, list) else [],
-                'output_variables': output_variables if isinstance(output_variables, list) else []
+                'input_variables': regular_inputs,
+                'output_variables': output_variables if isinstance(output_variables, list) else [],
+                'time_components': time_components
             }
 
         except Exception as e:
             logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
             return {
                 'input_variables': ['Temperature', 'Load'],
-                'output_variables': ['Predicted_Load']
+                'output_variables': ['Predicted_Load'],
+                'time_components': ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
             }
 
     def get_session_visualizations(self, session_id: str, user_id: str = None) -> Dict:
@@ -578,6 +595,12 @@ class Visualizer:
             test_data = results.get('test_data', {})
             metadata = results.get('metadata', {})
             scalers = results.get('scalers', {})
+            
+            # Get input features for name-to-index mapping
+            input_features = results.get('input_features', [])
+            output_features = results.get('output_features', [])
+            logger.info(f"Input features from storage: {input_features}")
+            logger.info(f"Output features from storage: {output_features}")
 
             has_test_data = False
             if test_data:
@@ -593,6 +616,11 @@ class Visualizer:
             if not has_test_data:
                 logger.error(f"No test data found in database for session {session_id}")
                 raise ValueError('No training data available for this session. Please train a model first before generating plots')
+            
+            # Log data shapes for debugging
+            logger.info(f"tst_x shape: {tst_x.shape}, tst_y shape: {tst_y.shape}")
+            logger.info(f"Number of input features in array: {tst_x.shape[-1]}")
+            logger.info(f"Number of named input features: {len(input_features)}")
 
             if trained_model and hasattr(trained_model, 'predict'):
                 model_type = results.get('model_type', 'Unknown')
@@ -659,50 +687,109 @@ class Visualizer:
                 else:
                     x_values = np.arange(tst_x.shape[1])
 
+                # Build name-to-index mapping from stored input_features
+                # This allows proper indexing by variable name instead of sequential order
+                name_to_idx = {name: idx for idx, name in enumerate(input_features)}
+                
                 color_idx = 0
                 for var_name, selected in df_plot_in.items():
-                    if selected and color_idx < tst_x.shape[-1]:
-                        if y_sbpl_fmt == 'original':
-                            y_values = tst_x[i_sbpl, :, color_idx]
+                    if selected:
+                        # Find actual index for this variable using name mapping
+                        if var_name in name_to_idx:
+                            feat_idx = name_to_idx[var_name]
+                            if feat_idx < tst_x.shape[-1]:
+                                if y_sbpl_fmt == 'original':
+                                    y_values = tst_x[i_sbpl, :, feat_idx]
+                                else:
+                                    y_values = tst_x[i_sbpl, :, feat_idx]
+
+                                # Determine label prefix based on whether it's a TIME component
+                                time_components = ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
+                                label_prefix = 'TIME' if var_name in time_components else 'IN'
+                                
+                                ax.plot(x_values, y_values,
+                                       label=f'{label_prefix}: {var_name}',
+                                       color=palette[color_idx % len(palette)],
+                                       marker='o', markersize=2,
+                                       linewidth=1)
+                                color_idx += 1
+                            else:
+                                logger.warning(f"Variable {var_name} index {feat_idx} exceeds tst_x dimension {tst_x.shape[-1]}")
                         else:
-                            y_values = tst_x[i_sbpl, :, color_idx]
+                            logger.warning(f"Variable {var_name} not found in input_features mapping. Available: {list(name_to_idx.keys())[:10]}...")
 
-                        ax.plot(x_values, y_values,
-                               label=f'IN: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='o', markersize=2,
-                               linewidth=1)
-                        color_idx += 1
+                # Build output name-to-index mapping
+                output_name_to_idx = {name: idx for idx, name in enumerate(output_features)}
+                
+                for var_name, selected in df_plot_out.items():
+                    if selected:
+                        # Find actual index for this output variable
+                        if var_name in output_name_to_idx:
+                            out_idx = output_name_to_idx[var_name]
+                            if out_idx < tst_y.shape[-1]:
+                                if y_sbpl_fmt == 'original':
+                                    y_values = tst_y[i_sbpl, :, out_idx]
+                                else:
+                                    y_values = tst_y[i_sbpl, :, out_idx]
 
-                for i_out, (var_name, selected) in enumerate(df_plot_out.items()):
-                    if selected and i_out < tst_y.shape[-1]:
-                        if y_sbpl_fmt == 'original':
-                            y_values = tst_y[i_sbpl, :, i_out]
+                                ax.plot(x_values[:len(y_values)], y_values,
+                                       label=f'OUT: {var_name}',
+                                       color=palette[color_idx % len(palette)],
+                                       marker='s', markersize=2,
+                                       linewidth=1)
+                                color_idx += 1
+                            else:
+                                logger.warning(f"Output variable {var_name} index {out_idx} exceeds tst_y dimension {tst_y.shape[-1]}")
                         else:
-                            y_values = tst_y[i_sbpl, :, i_out]
+                            # Fallback to sequential index if name not found
+                            i_out = list(df_plot_out.keys()).index(var_name)
+                            if i_out < tst_y.shape[-1]:
+                                y_values = tst_y[i_sbpl, :, i_out]
+                                ax.plot(x_values[:len(y_values)], y_values,
+                                       label=f'OUT: {var_name}',
+                                       color=palette[color_idx % len(palette)],
+                                       marker='s', markersize=2,
+                                       linewidth=1)
+                                color_idx += 1
 
-                        ax.plot(x_values[:len(y_values)], y_values,
-                               label=f'OUT: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='s', markersize=2,
-                               linewidth=1)
-                        color_idx += 1
+                for var_name, selected in df_plot_fcst.items():
+                    if selected:
+                        # Find actual index for forecast (uses same mapping as output)
+                        if var_name in output_name_to_idx:
+                            fcst_idx = output_name_to_idx[var_name]
+                            n_fcst_features = tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1
+                            if fcst_idx < n_fcst_features:
+                                if len(tst_fcst.shape) == 3:
+                                    y_values = tst_fcst[i_sbpl, :, fcst_idx]
+                                elif len(tst_fcst.shape) == 2:
+                                    y_values = tst_fcst[i_sbpl, :]
+                                else:
+                                    y_values = tst_fcst
 
-                for i_fcst, (var_name, selected) in enumerate(df_plot_fcst.items()):
-                    if selected and i_fcst < tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1:
-                        if len(tst_fcst.shape) == 3:
-                            y_values = tst_fcst[i_sbpl, :, i_fcst]
-                        elif len(tst_fcst.shape) == 2:
-                            y_values = tst_fcst[i_sbpl, :]
+                                ax.plot(x_values[:len(y_values)], y_values,
+                                       label=f'FCST: {var_name}',
+                                       color=palette[color_idx % len(palette)],
+                                       marker='^', markersize=2,
+                                       linewidth=1, linestyle='--')
+                                color_idx += 1
                         else:
-                            y_values = tst_fcst
-
-                        ax.plot(x_values[:len(y_values)], y_values,
-                               label=f'FCST: {var_name}',
-                               color=palette[color_idx % len(palette)],
-                               marker='^', markersize=2,
-                               linewidth=1, linestyle='--')
-                        color_idx += 1
+                            # Fallback to sequential index
+                            i_fcst = list(df_plot_fcst.keys()).index(var_name)
+                            n_fcst_features = tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1
+                            if i_fcst < n_fcst_features:
+                                if len(tst_fcst.shape) == 3:
+                                    y_values = tst_fcst[i_sbpl, :, i_fcst]
+                                elif len(tst_fcst.shape) == 2:
+                                    y_values = tst_fcst[i_sbpl, :]
+                                else:
+                                    y_values = tst_fcst
+                                    
+                                ax.plot(x_values[:len(y_values)], y_values,
+                                       label=f'FCST: {var_name}',
+                                       color=palette[color_idx % len(palette)],
+                                       marker='^', markersize=2,
+                                       linewidth=1, linestyle='--')
+                                color_idx += 1
 
                 ax.set_title(f'Sample {i_sbpl + 1}', fontsize=10)
                 ax.legend(loc='upper left', fontsize=8)

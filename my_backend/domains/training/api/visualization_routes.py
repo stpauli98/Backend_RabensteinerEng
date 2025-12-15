@@ -38,7 +38,8 @@ def get_plot_variables(session_id):
             'success': True,
             'session_id': session_id,
             'input_variables': variables['input_variables'],
-            'output_variables': variables['output_variables']
+            'output_variables': variables['output_variables'],
+            'time_components': variables.get('time_components', [])
         })
 
     except PermissionError as e:
@@ -49,7 +50,8 @@ def get_plot_variables(session_id):
             'success': True,
             'session_id': session_id,
             'input_variables': ['Temperature', 'Load'],
-            'output_variables': ['Predicted_Load']
+            'output_variables': ['Predicted_Load'],
+            'time_components': ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
         })
 
 
