@@ -23,7 +23,7 @@ def wape(y_true, y_pred):
         y_pred: Predicted values
         
     Returns:
-        WAPE value as percentage (0.0 if NaN)
+        WAPE value as percentage (np.nan if denominator is 0)
     """
     
     y_true = np.array(y_true, dtype=np.float64)
@@ -33,7 +33,7 @@ def wape(y_true, y_pred):
     denominator = np.sum(np.abs(y_true))
     
     if denominator == 0:
-        return 0.0
+        return np.nan
 
     return (numerator/denominator)*100
 

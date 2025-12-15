@@ -146,13 +146,21 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                 else:
                     val_list = []
                     
-                    
-                    # Use periods parameter to guarantee exactly mts.I_N elements
-                    utc_th = pd.date_range(
-                        start=utc_th_strt,
-                        end=utc_th_end,
-                        periods=mts.I_N
-                    ).to_list()
+                    # ORIGINAL LOGIC: Use freq parameter with fallback to manual generation
+                    try:
+                        utc_th = pd.date_range(
+                            start=utc_th_strt,
+                            end=utc_th_end,
+                            freq=f'{i_dat_inf.loc[key, "delt_transf"]}min'
+                        ).to_list()
+                    except:
+                        # Fallback: manual time series generation
+                        delt = pd.to_timedelta(i_dat_inf.loc[key, "delt_transf"], unit="min")
+                        utc_th = []
+                        utc = utc_th_strt
+                        for i1 in range(mts.I_N):
+                            utc_th.append(utc)
+                            utc += delt
                     
                     if len(utc_th) > 0:
                         data_utc_min = i_dat[key].iloc[0, 0]
@@ -227,12 +235,21 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                 else:
                     val_list = []
                     
-                    # Use periods parameter to guarantee exactly mts.O_N elements
-                    utc_th = pd.date_range(
-                        start=utc_th_strt,
-                        end=utc_th_end,
-                        periods=mts.O_N
-                    ).to_list()
+                    # ORIGINAL LOGIC: Use freq parameter with fallback to manual generation
+                    try:
+                        utc_th = pd.date_range(
+                            start=utc_th_strt,
+                            end=utc_th_end,
+                            freq=f'{o_dat_inf.loc[key, "delt_transf"]}min'
+                        ).to_list()
+                    except:
+                        # Fallback: manual time series generation
+                        delt = pd.to_timedelta(o_dat_inf.loc[key, "delt_transf"], unit="min")
+                        utc_th = []
+                        utc = utc_th_strt
+                        for i1 in range(mts.O_N):
+                            utc_th.append(utc)
+                            utc += delt
                     
                     if o_dat_inf.loc[key, "meth"] == "Lineare Interpolation":
                         

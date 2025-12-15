@@ -97,7 +97,7 @@ def train_dense(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
     
     for _ in range(MDL.LAY):
         model.add(tf.keras.layers.Dense(MDL.N,
-                                        activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF))
+                                        activation = MDL.ACTF))
     
     model.add(tf.keras.layers.Dense(train_y.shape[1]*train_y.shape[2], 
                                   kernel_initializer = tf.initializers.zeros))
@@ -167,13 +167,13 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
             model.add(tf.keras.layers.Conv2D(filters        = MDL.N, 
                                              kernel_size    = MDL.K,
                                              padding        = 'same',
-                                             activation     = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                             activation     = MDL.ACTF,
                                              input_shape    = train_x.shape[1:]))
         else:
             model.add(tf.keras.layers.Conv2D(filters        = MDL.N, 
                                              kernel_size    = MDL.K,
                                              padding        = 'same',
-                                             activation     = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF))
+                                             activation     = MDL.ACTF))
     
     
     output_channels = train_y.shape[-1] if len(train_y.shape) == 4 else 1
@@ -235,12 +235,12 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
     for i in range(MDL.LAY):
         if i == 0:
             model.add(tf.keras.layers.LSTM(MDL.N,
-                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         activation = MDL.ACTF,
                                          input_shape = (train_x.shape[1], train_x.shape[2]),
                                          return_sequences = True))
         else:
             model.add(tf.keras.layers.LSTM(MDL.N,
-                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         activation = MDL.ACTF,
                                          return_sequences = True))
     
     model.add(tf.keras.layers.TimeDistributed(
@@ -293,12 +293,12 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
     for i in range(MDL.LAY):
         if i == 0:
             model.add(tf.keras.layers.LSTM(MDL.N,
-                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         activation = MDL.ACTF,
                                          input_shape = (train_x.shape[1], train_x.shape[2]),
                                          return_sequences = True))
         else:
             model.add(tf.keras.layers.LSTM(MDL.N,
-                                         activation = MDL.ACTF.lower() if MDL.ACTF == "ReLU" else MDL.ACTF,
+                                         activation = MDL.ACTF,
                                          return_sequences = True))
     
     model.add(tf.keras.layers.TimeDistributed(
