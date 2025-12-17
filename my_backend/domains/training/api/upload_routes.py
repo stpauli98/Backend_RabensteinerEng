@@ -122,7 +122,7 @@ def get_csv_files_endpoint(session_id):
     """Get all CSV files for a session."""
     try:
         file_type = request.args.get('type', None)
-        files = get_csv_files_for_session(session_id, file_type)
+        files = get_csv_files_for_session(session_id, file_type, user_id=g.user_id)
 
         if files:
             return jsonify({

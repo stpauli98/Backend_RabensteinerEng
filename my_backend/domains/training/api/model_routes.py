@@ -190,7 +190,7 @@ def save_model(session_id):
 def list_models_database(session_id):
     """List all trained models stored in Supabase Storage for a session."""
     try:
-        models = get_models_list(session_id)
+        models = get_models_list(session_id, user_id=g.user_id)
 
         return jsonify({
             'success': True,

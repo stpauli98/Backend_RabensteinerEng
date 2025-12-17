@@ -369,7 +369,8 @@ def create_database_session_endpoint():
         session_id = data.get('sessionId') if data else None
         session_name = data.get('sessionName') if data else None
 
-        session_uuid = create_database_session(session_id, session_name)
+        # Pass user_id from auth context to create_database_session
+        session_uuid = create_database_session(session_id, session_name, user_id=g.user_id)
 
         return jsonify({
             'success': True,
