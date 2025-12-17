@@ -65,6 +65,37 @@ def upload_chunk():
         for key, value in request.args.items():
             additional_data[key] = value
 
+        # Check for duplicate file_name + bezeichnung on first chunk only
+        chunk_index = metadata.get('chunkIndex', 0)
+        if chunk_index == 0:
+            file_metadata = additional_data.get('fileMetadata', {})
+            file_name = metadata.get('fileName', '')
+            bezeichnung = file_metadata.get('bezeichnung', '')
+            session_id = metadata.get('sessionId', '')
+
+            if file_name and bezeichnung and session_id:
+                from shared.database.client import get_supabase_client
+                from shared.database.operations import create_or_get_session_uuid
+
+                try:
+                    uuid_session_id = create_or_get_session_uuid(session_id, user_id=g.user_id if hasattr(g, 'user_id') else None)
+                    if uuid_session_id:
+                        supabase = get_supabase_client()
+                        existing = supabase.table('files')\
+                            .select('id')\
+                            .eq('session_id', uuid_session_id)\
+                            .eq('file_name', file_name)\
+                            .eq('bezeichnung', bezeichnung)\
+                            .execute()
+
+                        if existing.data and len(existing.data) > 0:
+                            return create_error_response(
+                                f'File "{file_name}" with bezeichnung "{bezeichnung}" already exists in this session',
+                                400
+                            )
+                except Exception as dup_check_error:
+                    logger.warning(f"Duplicate check failed (non-blocking): {dup_check_error}")
+
         result = process_chunk_upload(chunk_data, metadata, additional_data)
 
         if result.get('assembled'):

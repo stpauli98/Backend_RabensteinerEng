@@ -249,3 +249,98 @@ def download_model_h5(session_id):
             'error': str(e),
             'message': 'Failed to download model from Storage'
         }), 500
+
+
+@bp.route('/predict/<session_id>', methods=['POST'])
+@require_auth
+@require_subscription
+def predict_with_model(session_id):
+    """
+    Make predictions using a trained model from session.
+
+    Request body:
+    {
+        "model_filename": "best_model.h5",
+        "input_data": [{"feature1": 1.5, "feature2": 2.3}, ...]
+    }
+
+    Response:
+    {
+        "success": true,
+        "predictions": [1.234, 2.345, ...],
+        "model_used": "best_model.h5",
+        "timestamp": "2024-...",
+        "input_count": 2
+    }
+    """
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+        model_filename = data.get('model_filename')
+        if not model_filename:
+            return jsonify({'success': False, 'error': 'model_filename is required'}), 400
+
+        input_data = data.get('input_data')
+        if not input_data:
+            return jsonify({'success': False, 'error': 'input_data is required'}), 400
+
+        if not isinstance(input_data, list):
+            return jsonify({'success': False, 'error': 'input_data must be a list'}), 400
+
+        # Get user_id from auth context
+        user_id = g.user_id if hasattr(g, 'user_id') else 'anonymous'
+
+        # Optional: disable scaling
+        apply_scaling = data.get('apply_scaling', True)
+
+        # Import and use prediction service
+        from domains.training.services.prediction_service import PredictionService
+
+        service = PredictionService(session_id, user_id)
+        result = service.predict(
+            model_filename=model_filename,
+            input_data=input_data,
+            apply_scaling=apply_scaling
+        )
+
+        return jsonify({
+            'success': True,
+            'predictions': result['predictions'],
+            'model_used': result['model_used'],
+            'timestamp': result['timestamp'],
+            'input_count': result['input_count'],
+            'scaling_applied': result['scaling_applied']
+        })
+
+    except FileNotFoundError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'code': 'MODEL_NOT_FOUND'
+        }), 404
+
+    except ValueError as e:
+        error_msg = str(e)
+        if 'No training results' in error_msg or 'No scalers' in error_msg:
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'code': 'SCALERS_NOT_FOUND'
+            }), 404
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'code': 'VALIDATION_ERROR'
+        }), 400
+
+    except Exception as e:
+        logger.error(f"Error making prediction: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to make prediction'
+        }), 500

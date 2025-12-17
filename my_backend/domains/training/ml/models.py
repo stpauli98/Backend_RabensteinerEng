@@ -29,6 +29,10 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
     """
     Recursively extract serialized models from training results.
 
+    IMPORTANT: Scaler dictionaries (scalers.input, scalers.output) are treated as
+    SINGLE objects and saved as one file each, not split into individual scalers.
+    This matches OriginalTraining behavior: 2 .save files + 1 model.
+
     Args:
         training_results: Training results dictionary containing serialized models
 
@@ -38,13 +42,30 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
             'model_class': str,
             'model_data': str (base64),
             'path': str,
-            'data_size': int
+            'data_size': int,
+            'is_scaler_dict': bool (optional)
         }, ...]
     """
+    def is_scaler_dictionary(path: str) -> bool:
+        """Check if this path is a scaler dictionary that should be saved as one file."""
+        return path in ['scalers.input', 'scalers.output']
+
     def extract_models_info(obj, path=""):
         """Recursively extract serialized models"""
         found_models = []
         if isinstance(obj, dict):
+            # CRITICAL: Stop recursion for scaler dictionaries - treat as single object
+            if is_scaler_dictionary(path):
+                # This is a scaler dictionary (e.g., scalers.input = {0: scaler, 1: scaler, ...})
+                # Save the entire dictionary as ONE file, not individual scalers
+                found_models.append({
+                    'model_class': 'ScalerDictionary',
+                    'path': path,
+                    'is_scaler_dict': True,
+                    'scaler_dict_data': obj  # Raw dictionary, will be serialized later
+                })
+                return found_models  # STOP recursion here!
+
             if '_model_type' in obj and obj.get('_model_type') == 'serialized_model':
                 model_class = obj.get('_model_class', 'Unknown')
                 model_data = obj.get('_model_data', '')
@@ -92,7 +113,7 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
     """
     from shared.database.operations import create_or_get_session_uuid
     from utils.training_storage import fetch_training_results_with_storage
-    from utils.model_storage import upload_trained_model
+    from utils.model_storage import upload_trained_model, delete_session_models
 
     logger.info(f"📦 Saving models to storage - session: {session_id}")
 
@@ -112,15 +133,82 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
 
     logger.info(f"Found {len(serialized_models)} serialized model(s) in training results")
 
+    # Delete old models before uploading new ones (overwrite behavior)
+    delete_result = delete_session_models(str(uuid_session_id))
+    if delete_result['deleted_count'] > 0:
+        logger.info(f"🗑️ Deleted {delete_result['deleted_count']} old model(s) before saving new ones")
+
     uploaded_models = []
     failed_models = []
 
     for idx, model_info in enumerate(serialized_models):
         model_class = model_info['model_class']
-        model_data = model_info['model_data']
         path = model_info['path']
 
         try:
+            # Handle scaler dictionaries as single files (matches OriginalTraining format)
+            if model_info.get('is_scaler_dict'):
+                scaler_dict_data = model_info['scaler_dict_data']
+                logger.info(f"📥 Processing scaler dictionary: {path} with {len(scaler_dict_data)} scalers")
+
+                # Deserialize each scaler in the dictionary
+                # SECURITY NOTE: pickle.loads() can execute arbitrary code.
+                # This is safe here because scalers are only stored by authenticated users
+                # via our training pipeline and retrieved from trusted Supabase storage.
+                deserialized_scalers = {}
+                for key, scaler_data in scaler_dict_data.items():
+                    if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+                        scaler_bytes = base64.b64decode(scaler_data['_model_data'])
+                        deserialized_scalers[int(key)] = pickle.loads(scaler_bytes)
+                    else:
+                        deserialized_scalers[int(key)] = None
+
+                # Determine filename: i_scaler.save or o_scaler.save
+                if 'input' in path:
+                    filename = 'i_scaler.save'
+                    dataset_name = 'i_scaler'
+                else:
+                    filename = 'o_scaler.save'
+                    dataset_name = 'o_scaler'
+
+                # Save entire dictionary as one .save file
+                with tempfile.NamedTemporaryFile(suffix='.save', delete=False, mode='wb') as temp_file:
+                    temp_file_path = temp_file.name
+
+                try:
+                    with open(temp_file_path, 'wb') as f:
+                        pickle.dump(deserialized_scalers, f)
+                    logger.info(f"💾 Saved scaler dictionary to {temp_file_path} ({len(deserialized_scalers)} scalers)")
+
+                    storage_result = upload_trained_model(
+                        session_id=str(uuid_session_id),
+                        model_file_path=temp_file_path,
+                        model_type='ScalerDictionary',
+                        dataset_name=dataset_name
+                    )
+
+                    uploaded_models.append({
+                        'dataset_name': dataset_name,
+                        'model_type': 'SCALER_DICTIONARY',
+                        'filename': storage_result['original_filename'],
+                        'storage_path': storage_result['file_path'],
+                        'size_mb': round(storage_result['file_size'] / (1024 * 1024), 2),
+                        'path_in_results': path,
+                        'file_format': 'save',
+                        'scaler_count': len(deserialized_scalers)
+                    })
+
+                    logger.info(f"✅ Uploaded scaler dictionary: {storage_result['file_path']}")
+
+                finally:
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
+                        logger.debug(f"🗑️ Cleaned up temporary file: {temp_file_path}")
+
+                continue  # Skip to next model
+
+            # Handle regular models (Keras, sklearn, etc.)
+            model_data = model_info['model_data']
             logger.info(f"📥 Deserializing model {idx + 1}/{len(serialized_models)}: {model_class}")
 
             model_bytes = base64.b64decode(model_data)
@@ -148,7 +236,8 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
 
                 logger.info(f"📤 Uploading {model_class} model to storage...")
 
-                dataset_name = path.split('.')[0] if '.' in path else 'default'
+                # For regular models, use a simple dataset name
+                dataset_name = path.replace('.', '_') if path else 'model'
 
                 storage_result = upload_trained_model(
                     session_id=str(uuid_session_id),

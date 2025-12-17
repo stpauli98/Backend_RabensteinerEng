@@ -184,6 +184,78 @@ def download_trained_model(
         raise
 
 
+def load_model_from_storage(session_id: str, model_filename: str):
+    """
+    Download and load a model from Supabase Storage.
+    
+    Args:
+        session_id: UUID session ID
+        model_filename: Name of model file (e.g., 'best_model.h5')
+        
+    Returns:
+        Loaded model object (Keras or sklearn)
+        
+    Raises:
+        FileNotFoundError: If model not found in storage
+        ValueError: If model format not supported
+    """
+    import tempfile
+    import os
+    import io
+    
+    # Construct storage path
+    file_path = f"{session_id}/{model_filename}"
+    
+    logger.info(f"📥 Loading model from storage: {file_path}")
+    
+    try:
+        # Download model bytes
+        model_bytes = download_trained_model(session_id, file_path)
+        
+        # Determine model type by extension
+        if model_filename.endswith('.h5') or model_filename.endswith('.keras'):
+            # Keras model - requires temp file
+            suffix = '.h5' if model_filename.endswith('.h5') else '.keras'
+            
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+                tmp_file.write(model_bytes)
+                tmp_path = tmp_file.name
+            
+            try:
+                import tensorflow as tf
+                from tensorflow import keras
+                
+                # Suppress TF warnings
+                tf.get_logger().setLevel('ERROR')
+                
+                # Load the model
+                model = keras.models.load_model(tmp_path, compile=False)
+                
+                logger.info(f"✅ Keras model loaded: {model.name if hasattr(model, 'name') else 'unnamed'}")
+                return model
+                
+            finally:
+                # Cleanup temp file
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                    
+        elif model_filename.endswith('.pkl') or model_filename.endswith('.joblib'):
+            # sklearn model
+            import joblib
+            
+            model = joblib.load(io.BytesIO(model_bytes))
+            
+            logger.info(f"✅ sklearn model loaded: {type(model).__name__}")
+            return model
+            
+        else:
+            raise ValueError(f"Unsupported model format: {model_filename}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error loading model {model_filename}: {e}")
+        raise
+
+
 def list_session_models(session_id: str) -> List[Dict]:
     """
     List all trained models for a session
@@ -205,7 +277,7 @@ def list_session_models(session_id: str) -> List[Dict]:
         models = []
         for file_info in files:
             filename = file_info['name']
-            if filename.endswith('.h5') or filename.endswith('.pkl'):
+            if filename.endswith('.h5') or filename.endswith('.pkl') or filename.endswith('.save'):
                 parts = filename.rsplit('.', 1)
                 file_extension = parts[1] if len(parts) > 1 else ''
 
@@ -233,3 +305,71 @@ def list_session_models(session_id: str) -> List[Dict]:
     except Exception as e:
         logger.error(f"❌ Error listing models: {e}")
         return []
+
+
+def delete_session_models(session_id: str) -> Dict:
+    """
+    Delete all trained models for a session from Supabase Storage.
+
+    This should be called before uploading new models to ensure
+    old models are removed and don't accumulate.
+
+    Args:
+        session_id: UUID session ID
+
+    Returns:
+        dict: {
+            'deleted_count': int,
+            'deleted_files': list of filenames,
+            'errors': list of error messages
+        }
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        bucket_name = 'trained-models'
+
+        logger.info(f"🗑️ Deleting old models for session: {session_id}")
+
+        # List all files in the session folder
+        files = supabase.storage.from_(bucket_name).list(session_id)
+
+        if not files:
+            logger.info(f"No existing models to delete for session {session_id}")
+            return {
+                'deleted_count': 0,
+                'deleted_files': [],
+                'errors': []
+            }
+
+        deleted_files = []
+        errors = []
+
+        # Delete each model file (.h5, .pkl, and .save)
+        for file_info in files:
+            filename = file_info['name']
+            if filename.endswith('.h5') or filename.endswith('.pkl') or filename.endswith('.save'):
+                file_path = f"{session_id}/{filename}"
+                try:
+                    supabase.storage.from_(bucket_name).remove([file_path])
+                    deleted_files.append(filename)
+                    logger.info(f"🗑️ Deleted: {file_path}")
+                except Exception as delete_error:
+                    error_msg = f"Failed to delete {file_path}: {str(delete_error)}"
+                    errors.append(error_msg)
+                    logger.warning(error_msg)
+
+        logger.info(f"✅ Deleted {len(deleted_files)} old models for session {session_id}")
+
+        return {
+            'deleted_count': len(deleted_files),
+            'deleted_files': deleted_files,
+            'errors': errors
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error deleting models: {e}")
+        return {
+            'deleted_count': 0,
+            'deleted_files': [],
+            'errors': [str(e)]
+        }

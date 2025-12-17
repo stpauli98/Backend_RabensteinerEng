@@ -254,6 +254,10 @@ def save_training_results(
                             'created_at': datetime.now().isoformat()
                         }
                     }
+                    # Delete existing plot with same name before insert (upsert behavior)
+                    supabase.table('training_visualizations').delete().eq(
+                        'session_id', uuid_session_id
+                    ).eq('plot_name', plot_name).execute()
                     supabase.table('training_visualizations').insert(viz_data).execute()
                 logger.info(f"Violin plots saved for session {uuid_session_id}")
             else:
@@ -262,6 +266,24 @@ def save_training_results(
             logger.error(f"Failed to save violin plots: {str(viz_error)}")
             import traceback
             logger.error(traceback.format_exc())
+
+    # Auto-save models to trained-models bucket
+    try:
+        from domains.training.ml.models import save_models_to_storage
+
+        logger.info(f"🤖 Auto-saving trained models to storage for session {uuid_session_id}...")
+        models_result = save_models_to_storage(session_id, user_id=None)
+
+        logger.info(f"✅ Auto-saved {models_result['total_uploaded']} model(s) to trained-models bucket")
+
+        if models_result['failed_models']:
+            logger.warning(f"⚠️ {models_result['total_failed']} model(s) failed to save: {models_result['failed_models']}")
+
+    except Exception as auto_save_error:
+        # Log error but don't fail the whole training - results are already saved in JSON
+        logger.error(f"⚠️ Auto-save models failed (non-critical): {auto_save_error}")
+        import traceback
+        logger.error(traceback.format_exc())
 
     return True
 

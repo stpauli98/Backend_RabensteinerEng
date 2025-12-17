@@ -27,6 +27,43 @@ logger = logging.getLogger(__name__)
 UPLOAD_BASE_DIR = os.environ.get('UPLOAD_BASE_DIR', 'uploads/file_uploads')
 
 
+def generate_storage_path(session_id: str, file_name: str, bezeichnung: str = None) -> str:
+    """
+    Generate unique storage path for a file including bezeichnung.
+
+    This prevents file overwrites when the same file is uploaded
+    with different bezeichnung values.
+
+    Args:
+        session_id: Session UUID
+        file_name: Original file name
+        bezeichnung: Optional bezeichnung for uniqueness
+
+    Returns:
+        Storage path: "session_id/bezeichnung_filename" or "session_id/filename"
+    """
+    import re
+
+    def sanitize_for_path(name: str) -> str:
+        """Sanitize string for use in storage path."""
+        if not name:
+            return ""
+        # Replace spaces and special chars with underscores
+        sanitized = re.sub(r'[^\w\-.]', '_', name)
+        # Remove multiple consecutive underscores
+        sanitized = re.sub(r'_+', '_', sanitized)
+        # Remove leading/trailing underscores
+        return sanitized.strip('_')
+
+    safe_filename = sanitize_for_path(file_name)
+
+    if bezeichnung:
+        safe_bezeichnung = sanitize_for_path(bezeichnung)
+        return f"{session_id}/{safe_bezeichnung}_{safe_filename}"
+
+    return f"{session_id}/{safe_filename}"
+
+
 def verify_file_hash(file_data: bytes, expected_hash: str) -> bool:
     """
     Verify file integrity using SHA-256 hash.
@@ -106,11 +143,12 @@ def upload_assembled_file_to_storage(
     session_id: str,
     filename: str,
     file_path: str,
-    file_type: str
+    file_type: str,
+    bezeichnung: str = None
 ) -> str:
     """
     Upload assembled file to Supabase Storage immediately after assembly.
-    
+
     This ensures files are persisted in cloud storage before Cloud Run's
     ephemeral filesystem is cleared.
 
@@ -119,6 +157,7 @@ def upload_assembled_file_to_storage(
         filename: Name of the file
         file_path: Local path to assembled file
         file_type: 'input' or 'output'
+        bezeichnung: File bezeichnung for unique storage path
 
     Returns:
         str: Storage path if successful, empty string otherwise
@@ -128,7 +167,8 @@ def upload_assembled_file_to_storage(
     try:
         supabase = get_supabase_admin_client()
         bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
-        storage_path = f"{session_id}/{filename}"
+        # Use bezeichnung in storage path to prevent overwrites
+        storage_path = generate_storage_path(session_id, filename, bezeichnung)
 
         with open(file_path, 'rb') as f:
             file_content = f.read()
@@ -582,12 +622,23 @@ def process_chunk_upload(
 
         file_size = os.path.getsize(assembled_path)
 
+        # Get bezeichnung from session_metadata for unique storage path
+        bezeichnung = None
+        session_metadata = get_session_metadata_locally(upload_id)
+        if session_metadata:
+            for file_info in session_metadata.get('files', []):
+                if file_info.get('fileName') == filename:
+                    bezeichnung = file_info.get('bezeichnung', '')
+                    break
+
         # CRITICAL: Upload to Supabase Storage immediately after assembly
         # This ensures files are persisted before Cloud Run ephemeral storage is cleared
         file_type = metadata.get('fileType', 'input')
         storage_path = upload_assembled_file_to_storage(
-            upload_id, filename, assembled_path, file_type
+            upload_id, filename, assembled_path, file_type, bezeichnung
         )
+
+        logger.info(f"📤 STORAGE PATH for {filename}: {storage_path} (bezeichnung='{bezeichnung}')")
 
         # Update session_metadata.json with storagePath
         if storage_path:

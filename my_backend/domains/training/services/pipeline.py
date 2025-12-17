@@ -411,7 +411,11 @@ class TrainingPipeline:
                     'plot_data_base64': plot_data_base64,
                     'metadata': {'generated_by': 'real_pipeline'}
                 }
-                
+
+                # Delete existing plot with same name before insert (upsert behavior)
+                self.supabase.table('training_visualizations').delete().eq(
+                    'session_id', session_id
+                ).eq('plot_name', plot_name).execute()
                 self.supabase.table('training_visualizations').insert(viz_data).execute()
                 
             

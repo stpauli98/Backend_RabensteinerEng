@@ -85,12 +85,19 @@ def generate_violin_plots_from_data(
     """
     try:
         plots = {}
-        palette = sns.color_palette("husl", 20)
+        # Palette will be created dynamically based on total features (like original)
 
         # NEW: If files_data is provided, generate one plot per bezeichnung
         if files_data is not None and len(files_data) > 0:
             logger.info(f"Generating violin plots for {len(files_data)} files")
-            
+
+            # Calculate total features for palette (like original: tab20 with dynamic size)
+            total_features = sum(
+                file_data.get('data').shape[1] if file_data.get('data') is not None and len(file_data.get('data').shape) > 1 else 1
+                for file_data in files_data
+            )
+            palette = sns.color_palette("tab20", total_features)
+
             for idx, file_data in enumerate(files_data):
                 bezeichnung = file_data.get('bezeichnung', f'file_{idx}')
                 data = file_data.get('data')
@@ -119,7 +126,7 @@ def generate_violin_plots_from_data(
                     df = pd.DataFrame(data, columns=features)
                 
                 n_ft = len(features)
-                fig_width = max(2 * n_ft, 6)
+                fig_width = 2 * n_ft  # Original: no minimum width constraint
                 fig, axes = plt.subplots(1, n_ft, figsize=(fig_width, 6))
                 
                 if n_ft == 1:
@@ -132,7 +139,7 @@ def generate_violin_plots_from_data(
                         sns.violinplot(
                             y=values,
                             ax=axes[i],
-                            color=palette[(idx * 3 + i) % len(palette)],
+                            color=palette[i],  # Original: direct index without modulo
                             inner="quartile",
                             linewidth=1.5
                         )
@@ -145,14 +152,13 @@ def generate_violin_plots_from_data(
                                    transform=axes[i].transAxes)
                         axes[i].set_title(feature)
                 
-                # Determine type label
+                # Determine type label and title (German like original)
                 if file_type == 'time':
-                    type_label = "Zeit"
+                    plt.suptitle(f"Datenverteilung \nder Zeitdaten ({bezeichnung})", fontsize=15, fontweight="bold")
                 elif file_type == 'input':
-                    type_label = "Input"
+                    plt.suptitle(f"Datenverteilung \nder Eingabedaten ({bezeichnung})", fontsize=15, fontweight="bold")
                 else:
-                    type_label = "Output"
-                plt.suptitle(f"{bezeichnung} ({type_label}) - Data Distribution", fontsize=15, fontweight="bold")
+                    plt.suptitle(f"Datenverteilung \nder Ausgabedaten ({bezeichnung})", fontsize=15, fontweight="bold")
                 plt.tight_layout()
                 
                 buffer = io.BytesIO()
@@ -181,6 +187,15 @@ def generate_violin_plots_from_data(
             }
 
         # LEGACY: Original behavior for backward compatibility
+        # Calculate total features for palette (like original: tab20 with dynamic size)
+        n_ft_i = 0
+        n_ft_o = 0
+        if input_data is not None and len(input_data) > 0:
+            n_ft_i = input_data.shape[1] if len(input_data.shape) > 1 else 1
+        if output_data is not None and len(output_data) > 0:
+            n_ft_o = output_data.shape[1] if len(output_data.shape) > 1 else 1
+        palette = sns.color_palette("tab20", n_ft_i + n_ft_o)
+
         if input_data is not None and len(input_data) > 0:
             # Emit progress: generating input plot
             if progress_tracker:
@@ -195,21 +210,21 @@ def generate_violin_plots_from_data(
                 input_features = [f"Feature_{i+1}" for i in range(n_features)]
                 df_input = pd.DataFrame(input_data, columns=input_features)
             
-            n_ft_i = len(input_features)
-            fig_width = max(2 * n_ft_i, 6)
-            fig, axes = plt.subplots(1, n_ft_i, figsize=(fig_width, 6))
+            n_features_input = len(input_features)
+            fig_width = 2 * n_features_input  # Original: no minimum width constraint
+            fig, axes = plt.subplots(1, n_features_input, figsize=(fig_width, 6))
             
-            if n_ft_i == 1:
+            if n_features_input == 1:
                 axes = [axes]
-            
+
             for i, feature in enumerate(input_features):
                 values = df_input[feature]
-                
+
                 if not values.isna().all():
                     sns.violinplot(
                         y=values,
                         ax=axes[i],
-                        color=palette[i % len(palette)],
+                        color=palette[i],  # Original: direct index without modulo
                         inner="quartile",
                         linewidth=1.5
                     )
@@ -223,7 +238,7 @@ def generate_violin_plots_from_data(
                                transform=axes[i].transAxes)
                     axes[i].set_title(feature)
             
-            plt.suptitle("Input Data Distribution", fontsize=15, fontweight="bold")
+            plt.suptitle("Datenverteilung \nder Eingabedaten", fontsize=15, fontweight="bold")
             plt.tight_layout()
             
             buffer = io.BytesIO()
@@ -253,19 +268,20 @@ def generate_violin_plots_from_data(
                 output_features = [f"Output_{i+1}" for i in range(n_features)]
                 df_output = pd.DataFrame(output_data, columns=output_features)
             
-            n_ft_o = len(output_features)
-            fig_width = max(2 * n_ft_o, 6)
-            fig, axes = plt.subplots(1, n_ft_o, figsize=(fig_width, 6))
-            
-            if n_ft_o == 1:
+            n_features_output = len(output_features)
+            fig_width = 2 * n_features_output  # Original: no minimum width constraint
+            fig, axes = plt.subplots(1, n_features_output, figsize=(fig_width, 6))
+
+            if n_features_output == 1:
                 axes = [axes]
-            
+
             for i, feature in enumerate(output_features):
                 values = df_output[feature]
-                
+
                 if not values.isna().all():
-                    color_idx = (i + len(input_features) if input_features else i) % len(palette)
-                    
+                    # Original: palette[i + n_ft_i] - offset by input features count
+                    color_idx = i + n_ft_i
+
                     sns.violinplot(
                         y=values,
                         ax=axes[i],
@@ -283,7 +299,7 @@ def generate_violin_plots_from_data(
                                transform=axes[i].transAxes)
                     axes[i].set_title(feature)
             
-            plt.suptitle("Output Data Distribution", fontsize=15, fontweight="bold")
+            plt.suptitle("Datenverteilung \nder Ausgabedaten", fontsize=15, fontweight="bold")
             plt.tight_layout()
             
             buffer = io.BytesIO()

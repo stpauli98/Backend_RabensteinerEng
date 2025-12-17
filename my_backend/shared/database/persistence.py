@@ -192,8 +192,15 @@ def save_file_info(session_id: str, file_info: dict) -> Tuple[bool, Optional[str
     storage_path = file_info.get("storagePath", "")
     if not storage_path:
         file_name = file_info.get("fileName", "")
+        bezeichnung = file_info.get("bezeichnung", "")
         if file_name:
-            storage_path = f"{database_session_id}/{sanitize_filename(file_name)}"
+            # Include bezeichnung in storage path to prevent overwrites
+            if bezeichnung:
+                safe_bezeichnung = sanitize_filename(bezeichnung)
+                safe_filename = sanitize_filename(file_name)
+                storage_path = f"{database_session_id}/{safe_bezeichnung}_{safe_filename}"
+            else:
+                storage_path = f"{database_session_id}/{sanitize_filename(file_name)}"
 
     # Get zeitschrittweite values from file_info
     zeitschrittweite_mittelwert = file_info.get(

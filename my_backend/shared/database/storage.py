@@ -23,7 +23,8 @@ def save_csv_file_content(
     session_id: str,
     file_name: str,
     file_path: str,
-    file_type: str
+    file_type: str,
+    bezeichnung: str = None
 ) -> bool:
     """Save CSV file content to Supabase Storage.
 
@@ -33,6 +34,7 @@ def save_csv_file_content(
         file_name: Name of the file
         file_path: Path to the file on local filesystem
         file_type: Type of the file ('input' or 'output')
+        bezeichnung: File bezeichnung for unique storage path
 
     Returns:
         bool: True if successful
@@ -55,7 +57,13 @@ def save_csv_file_content(
     except IOError as e:
         raise StorageError(f"Could not read file {file_path}: {str(e)}")
 
-    storage_path = f"{session_id}/{sanitize_filename(file_name)}"
+    # Include bezeichnung in storage path to prevent overwrites
+    if bezeichnung:
+        safe_bezeichnung = sanitize_filename(bezeichnung)
+        safe_filename = sanitize_filename(file_name)
+        storage_path = f"{session_id}/{safe_bezeichnung}_{safe_filename}"
+    else:
+        storage_path = f"{session_id}/{sanitize_filename(file_name)}"
 
     try:
         # Check if file already exists in bucket
