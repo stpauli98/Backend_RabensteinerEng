@@ -174,13 +174,16 @@ def check_file_exists_by_hash(session_id: str, file_hash: str) -> Optional[Dict[
     """Check if a file with the given hash already exists in the session.
 
     This is used for deduplication - to avoid uploading the same file twice.
+    Note: Caller should check 'type' field to ensure bucket compatibility
+    before reusing storage_path (input files use 'csv-files' bucket,
+    output files use 'aus-csv-files' bucket).
 
     Args:
         session_id: UUID of the session
         file_hash: SHA-256 hash of the file content
 
     Returns:
-        dict: File info (id, storage_path) if exists, None otherwise
+        dict: File info (id, storage_path, file_name, bezeichnung, type) if exists, None otherwise
     """
     if not file_hash:
         return None
@@ -189,7 +192,7 @@ def check_file_exists_by_hash(session_id: str, file_hash: str) -> Optional[Dict[
 
     try:
         response = supabase.table(TableNames.FILES)\
-            .select("id, storage_path, file_name, bezeichnung")\
+            .select("id, storage_path, file_name, bezeichnung, type")\
             .eq("session_id", session_id)\
             .eq("file_hash", file_hash)\
             .limit(1)\
