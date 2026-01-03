@@ -48,7 +48,7 @@ from domains.upload.services.csv_utils import (
     clean_time,
     clean_file_content
 )
-from shared.storage.chunk_service import chunk_storage_service
+from domains.processing.services.local_chunk_service import local_chunk_service
 
 
 # Global parser instance
@@ -76,7 +76,8 @@ def upload_chunk() -> Tuple[Response, int]:
     """
     Handle chunked file upload.
 
-    Chunks are stored in Supabase Storage for multi-instance Cloud Run support.
+    Chunks are stored on local filesystem for fast processing.
+    Session Affinity ensures all chunks from same user go to same instance.
     Metadata (parameters) is saved on first chunk upload.
     """
     try:
@@ -96,13 +97,15 @@ def upload_chunk() -> Tuple[Response, int]:
         file_chunk = request.files['fileChunk']
         chunk_content = file_chunk.read()
 
-        # Upload chunk to Supabase Storage
-        if not chunk_storage_service.upload_chunk(upload_id, chunk_index, chunk_content):
-            return jsonify({"error": "Failed to save chunk to storage"}), 500
+        # ONLY chunk 0 handles cleanup and metadata - other chunks just upload
+        if chunk_index == 0:
+            # Check if this is a new upload (different total_chunks means new upload)
+            existing_metadata = local_chunk_service.get_upload_metadata(upload_id)
+            if existing_metadata is None or existing_metadata.get('total_chunks') != total_chunks:
+                # Clean up stale data from previous upload
+                local_chunk_service.delete_upload_chunks(upload_id)
 
-        # Save metadata on first chunk (or if metadata doesn't exist yet)
-        existing_metadata = chunk_storage_service.get_upload_metadata(upload_id)
-        if existing_metadata is None:
+            # Parse and save metadata BEFORE uploading chunk 0
             try:
                 selected_columns_str = request.form.get('selected_columns')
                 if not selected_columns_str:
@@ -121,14 +124,25 @@ def upload_chunk() -> Tuple[Response, int]:
                     'dropdown_count': int(request.form.get('dropdown_count', '2'))
                 }
 
-                if not chunk_storage_service.save_upload_metadata(upload_id, total_chunks, parameters):
+                if not local_chunk_service.save_upload_metadata(upload_id, total_chunks, parameters):
                     return jsonify({"error": "Failed to save upload metadata"}), 500
 
             except json.JSONDecodeError:
                 return jsonify({"error": "Invalid JSON format for selected_columns"}), 400
+        else:
+            # Non-zero chunks: wait for metadata (chunk 0 must arrive first or concurrently)
+            import time
+            for _ in range(10):  # Wait up to 1 second
+                if local_chunk_service.get_upload_metadata(upload_id) is not None:
+                    break
+                time.sleep(0.1)
 
-        # Count received chunks from Supabase Storage
-        received_chunks = chunk_storage_service.get_upload_chunk_count(upload_id)
+        # Upload chunk to local filesystem
+        if not local_chunk_service.upload_chunk(upload_id, chunk_index, chunk_content):
+            return jsonify({"error": "Failed to save chunk to storage"}), 500
+
+        # Count received chunks from local filesystem
+        received_chunks = local_chunk_service.get_upload_chunk_count(upload_id)
 
         return jsonify({
             "message": f"Chunk {chunk_index + 1}/{total_chunks} received",
@@ -147,7 +161,7 @@ def finalize_upload() -> Tuple[Response, int]:
     """
     Finalize chunked upload and process the complete file.
 
-    Reads metadata from Supabase Storage, verifies all chunks received,
+    Reads metadata from local filesystem, verifies all chunks received,
     then processes the assembled file.
     """
     try:
@@ -158,13 +172,13 @@ def finalize_upload() -> Tuple[Response, int]:
 
         upload_id = data['uploadId']
 
-        # Get metadata from Supabase Storage
-        metadata = chunk_storage_service.get_upload_metadata(upload_id)
+        # Get metadata from local filesystem
+        metadata = local_chunk_service.get_upload_metadata(upload_id)
         if metadata is None:
             return jsonify({"error": "Upload not found or already processed"}), 404
 
         # Verify all chunks received
-        received_chunks = chunk_storage_service.get_upload_chunk_count(upload_id)
+        received_chunks = local_chunk_service.get_upload_chunk_count(upload_id)
         total_chunks = metadata['total_chunks']
 
         if received_chunks != total_chunks:
@@ -186,7 +200,7 @@ def cancel_upload() -> Tuple[Response, int]:
     """
     Cancel an in-progress upload.
 
-    Deletes all chunks and metadata from Supabase Storage.
+    Deletes all chunks and metadata from local filesystem.
     """
     try:
         data = request.get_json(force=True, silent=True)
@@ -196,8 +210,8 @@ def cancel_upload() -> Tuple[Response, int]:
 
         upload_id = data['uploadId']
 
-        # Delete all chunks and metadata from Supabase Storage
-        deleted_count = chunk_storage_service.delete_upload_chunks(upload_id)
+        # Delete all chunks and metadata from local filesystem
+        deleted_count = local_chunk_service.delete_upload_chunks(upload_id)
 
         socketio = get_socketio()
         socketio.emit('upload_progress', {
@@ -219,11 +233,8 @@ def process_chunks(upload_id: str, metadata: Dict[str, Any]) -> Tuple[Response, 
     """
     Process and decode uploaded file chunks.
 
-    Downloads chunks from Supabase Storage using memory-optimized streaming,
-    combines and decodes them, then processes the CSV file.
-
-    Uses download_all_chunks_streaming() which reduces peak RAM by ~30%
-    by decoding chunks immediately instead of loading all bytes first.
+    Downloads chunks from local filesystem and combines them,
+    then processes the CSV file.
 
     Args:
         upload_id: Unique upload identifier
@@ -233,9 +244,8 @@ def process_chunks(upload_id: str, metadata: Dict[str, Any]) -> Tuple[Response, 
         socketio = get_socketio()
         total_chunks = metadata['total_chunks']
 
-        # Download and decode all chunks using memory-optimized streaming
-        # This decodes each chunk immediately after download, reducing peak RAM
-        full_content = chunk_storage_service.download_all_chunks_streaming(
+        # Download and decode all chunks from local filesystem
+        full_content = local_chunk_service.download_all_chunks_as_string(
             upload_id, total_chunks, encoding='utf-8'
         )
 
@@ -248,7 +258,7 @@ def process_chunks(upload_id: str, metadata: Dict[str, Any]) -> Tuple[Response, 
                 'message': error_msg
             }, room=upload_id)
             # Cleanup on error
-            chunk_storage_service.delete_upload_chunks(upload_id)
+            local_chunk_service.delete_upload_chunks(upload_id)
             return jsonify({"error": error_msg}), 500
 
         # Validate decoded content has proper CSV delimiters
@@ -268,20 +278,20 @@ def process_chunks(upload_id: str, metadata: Dict[str, Any]) -> Tuple[Response, 
                 'message': error.message
             }, room=upload_id)
             # Cleanup on error
-            chunk_storage_service.delete_upload_chunks(upload_id)
+            local_chunk_service.delete_upload_chunks(upload_id)
             return jsonify(error.to_dict()), 400
 
         # Get parameters and cleanup chunks from storage
         params = metadata['parameters']
         params['uploadId'] = upload_id
 
-        # Cleanup chunks from Supabase Storage (success path)
-        chunk_storage_service.delete_upload_chunks(upload_id)
+        # Cleanup chunks from local filesystem (success path)
+        local_chunk_service.delete_upload_chunks(upload_id)
 
         return upload_files(full_content, params)
     except LoadDataException as e:
         # Cleanup on error
-        chunk_storage_service.delete_upload_chunks(upload_id)
+        local_chunk_service.delete_upload_chunks(upload_id)
         from flask import has_app_context
         if has_app_context():
             return jsonify(e.to_dict()), 400
@@ -289,7 +299,7 @@ def process_chunks(upload_id: str, metadata: Dict[str, Any]) -> Tuple[Response, 
             raise
     except Exception as e:
         # Cleanup on error
-        chunk_storage_service.delete_upload_chunks(upload_id)
+        local_chunk_service.delete_upload_chunks(upload_id)
         from flask import has_app_context
         if has_app_context():
             return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
@@ -575,27 +585,29 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             total_rows = len(result_df)
             tracker.emit('saving', 85, 'result_created', force=True, message_params={'rowCount': total_rows})
 
-            # Save to Supabase Storage
-            tracker.emit('saving', 90, 'saving_to_cloud_storage', force=True)
+            # Save to local storage (faster and no size limits)
+            tracker.emit('saving', 90, 'saving_to_storage', force=True)
 
             csv_content = result_df.to_csv(sep=';', index=False)
 
-            user_id = g.user_id
-            file_id = storage_service.upload_csv(
-                user_id=user_id,
+            # Generate unique file_id
+            import uuid
+            file_id = f"{g.user_id}_{upload_id}_{uuid.uuid4().hex[:8]}"
+
+            # Save to local filesystem
+            if not local_chunk_service.save_processed_result(
+                file_id=file_id,
                 csv_content=csv_content,
-                original_filename=f"processed_{upload_id}.csv",
                 metadata={
                     'totalRows': total_rows,
                     'headers': result_df.columns.tolist(),
-                    'uploadId': upload_id
+                    'uploadId': upload_id,
+                    'userId': g.user_id
                 }
-            )
+            ):
+                raise ValueError("Failed to save file to storage")
 
-            if not file_id:
-                raise ValueError("Failed to upload file to storage")
-
-            tracker.emit('saving', 95, 'cloud_storage_saved', force=True)
+            tracker.emit('saving', 95, 'storage_saved', force=True)
 
             # Generate preview (first 100 rows)
             preview_rows = min(100, total_rows)
@@ -659,6 +671,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
 def prepare_save() -> Tuple[Response, int]:
     """
     Prepare merged/processed data for download.
+    Saves to local filesystem for fast access and no size limits.
     """
     try:
         data = request.json
@@ -681,18 +694,20 @@ def prepare_save() -> Tuple[Response, int]:
 
         user_id = g.user_id
 
-        file_id = storage_service.upload_csv(
-            user_id=user_id,
+        # Generate unique file_id and save to local storage
+        import uuid
+        file_id = f"{user_id}_{uuid.uuid4().hex[:8]}"
+
+        if not local_chunk_service.save_processed_result(
+            file_id=file_id,
             csv_content=csv_content,
-            original_filename=file_name or "merged_data.csv",
             metadata={
                 'totalRows': len(save_data) - 1,
                 'source': 'prepare-save',
-                'merged': True
+                'merged': True,
+                'originalFilename': file_name or "merged_data.csv"
             }
-        )
-
-        if not file_id:
+        ):
             return jsonify({"error": "Failed to save file to storage"}), 500
 
         return jsonify({
@@ -709,7 +724,9 @@ def prepare_save() -> Tuple[Response, int]:
 @require_auth
 def merge_and_prepare() -> Tuple[Response, int]:
     """
-    Merge multiple processed files from Supabase Storage into one file.
+    Merge multiple processed files into one file.
+    Reads from local storage first, falls back to Supabase for legacy files.
+    Saves merged result to local storage.
     """
     try:
         data = request.json
@@ -734,7 +751,10 @@ def merge_and_prepare() -> Tuple[Response, int]:
         headers = None
 
         for file_id in file_ids:
-            csv_content = storage_service.download_csv(file_id)
+            # Try local storage first, then Supabase fallback
+            csv_content = local_chunk_service.get_processed_result(file_id)
+            if not csv_content:
+                csv_content = storage_service.download_csv(file_id)
 
             if not csv_content:
                 return jsonify({"error": f"Failed to download file: {file_id}"}), 404
@@ -758,26 +778,30 @@ def merge_and_prepare() -> Tuple[Response, int]:
 
         user_id = g.user_id
 
-        merged_file_id = storage_service.upload_csv(
-            user_id=user_id,
+        # Generate unique file_id and save to local storage
+        import uuid
+        merged_file_id = f"{user_id}_{uuid.uuid4().hex[:8]}"
+
+        if not local_chunk_service.save_processed_result(
+            file_id=merged_file_id,
             csv_content=csv_content,
-            original_filename=file_name,
             metadata={
                 'totalRows': len(merged_df),
                 'source': 'merge-and-prepare',
                 'merged': True,
-                'sourceFiles': len(file_ids)
+                'sourceFiles': len(file_ids),
+                'originalFilename': file_name
             }
-        )
-
-        if not merged_file_id:
+        ):
             return jsonify({"error": "Failed to save merged file"}), 500
 
-        # Clean up source files
+        # Clean up source files (try local first, then Supabase)
         deleted_count = 0
         for file_id in file_ids:
             try:
-                if storage_service.delete_file(file_id):
+                if local_chunk_service.delete_processed_result(file_id):
+                    deleted_count += 1
+                elif storage_service.delete_file(file_id):
                     deleted_count += 1
             except Exception:
                 pass
@@ -799,9 +823,24 @@ def merge_and_prepare() -> Tuple[Response, int]:
 @require_auth
 def download_file(file_id: str) -> Response:
     """
-    Download prepared CSV file from Supabase Storage.
+    Download prepared CSV file from local storage.
+    Falls back to Supabase Storage for legacy files.
     """
     try:
+        # Try local storage first
+        csv_content = local_chunk_service.get_processed_result(file_id)
+
+        if csv_content:
+            response = Response(
+                csv_content,
+                mimetype='text/csv',
+                headers={
+                    'Content-Disposition': f'attachment; filename="processed_{file_id.split("_")[-1]}.csv"'
+                }
+            )
+            return response
+
+        # Fallback to Supabase Storage for legacy files
         signed_url = storage_service.get_download_url(file_id, expires_in=3600)
 
         if signed_url:
@@ -829,7 +868,8 @@ def download_file(file_id: str) -> Response:
 @require_auth
 def cleanup_files() -> Tuple[Response, int]:
     """
-    Delete files from Supabase Storage after successful download.
+    Delete files from local storage after successful download.
+    Falls back to Supabase Storage for legacy files.
     """
     try:
         data = request.json
@@ -847,7 +887,10 @@ def cleanup_files() -> Tuple[Response, int]:
 
         for file_id in file_ids:
             try:
-                if storage_service.delete_file(file_id):
+                # Try local storage first, then Supabase fallback
+                if local_chunk_service.delete_processed_result(file_id):
+                    deleted_count += 1
+                elif storage_service.delete_file(file_id):
                     deleted_count += 1
                 else:
                     failed_ids.append(file_id)

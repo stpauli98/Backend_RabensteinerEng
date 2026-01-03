@@ -135,17 +135,17 @@ def create_app():
                 logger.error(f"Error in scheduled cleanup: {str(e)}")
 
     def run_chunk_cleanup():
-        """Clean up expired chunk uploads from Supabase Storage"""
+        """Clean up expired chunk uploads from local filesystem"""
         try:
-            from shared.storage.chunk_service import chunk_storage_service
-            deleted = chunk_storage_service.cleanup_expired_uploads(max_age_hours=1.0)
+            from domains.processing.services.local_chunk_service import local_chunk_service
+            deleted = local_chunk_service.cleanup_all_expired()
             if deleted > 0:
-                logger.info(f"Cleaned up {deleted} expired chunk uploads from Supabase Storage")
+                logger.info(f"Cleaned up {deleted} expired chunk uploads from local filesystem")
         except Exception as e:
             logger.error(f"Error in chunk cleanup: {str(e)}")
 
     def run_processed_files_cleanup():
-        """Clean up old processed files from Supabase Storage (24h expiry)"""
+        """Clean up old processed files from Supabase Storage (24h expiry) - for legacy files"""
         try:
             from shared.storage.service import storage_service
             deleted = storage_service.cleanup_all_old_files(max_age_hours=24)
@@ -154,9 +154,20 @@ def create_app():
         except Exception as e:
             logger.error(f"Error in processed files cleanup: {str(e)}")
 
+    def run_local_processed_results_cleanup():
+        """Clean up old processed results from local filesystem (24h expiry)"""
+        try:
+            from domains.processing.services.local_chunk_service import local_chunk_service
+            deleted = local_chunk_service.cleanup_old_processed_results(max_age_hours=24)
+            if deleted > 0:
+                logger.info(f"Cleaned up {deleted} old processed results from local filesystem")
+        except Exception as e:
+            logger.error(f"Error in local processed results cleanup: {str(e)}")
+
     scheduler.add_job(run_cleanup_with_app_context, 'interval', minutes=30, id='cleanup_job')
     scheduler.add_job(run_chunk_cleanup, 'interval', minutes=30, id='chunk_cleanup_job')
     scheduler.add_job(run_processed_files_cleanup, 'interval', hours=6, id='processed_files_cleanup_job')
+    scheduler.add_job(run_local_processed_results_cleanup, 'interval', hours=6, id='local_processed_cleanup_job')
     scheduler.start()
     
     return app, socketio

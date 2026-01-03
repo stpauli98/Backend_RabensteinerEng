@@ -3,9 +3,10 @@ Adjustments Domain Configuration
 Constants and settings for data adjustment operations
 """
 import os
+import tempfile
 
-# Upload folder configuration
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
+# Upload folder configuration - use system temp directory for Docker compatibility
+UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'adjustments_uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # DataFrame processing

@@ -2,8 +2,9 @@
 Data Processing API endpoints.
 Handles chunked CSV upload and data cleaning operations.
 
-Chunks are stored in Supabase Storage (temp-chunks bucket) for multi-instance
-Cloud Run support. Chunks are automatically cleaned up after processing.
+Chunks are stored on local filesystem for fast processing.
+Session Affinity ensures all chunks from same user go to same instance.
+Chunks are automatically cleaned up after processing.
 """
 import json
 import logging
@@ -18,7 +19,7 @@ from flask import Blueprint, request, Response, jsonify, g
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage
-from shared.storage.chunk_service import chunk_storage_service
+from domains.processing.services.local_chunk_service import local_chunk_service
 
 from domains.processing.config import STREAMING_CHUNK_SIZE, BACKPRESSURE_DELAY
 from domains.processing.services.progress import ProgressTracker
@@ -103,8 +104,8 @@ def upload_chunk():
             logger.error("Received empty chunk")
             return jsonify({"error": "Empty chunk received"}), 400
 
-        # Upload chunk to Supabase Storage
-        if not chunk_storage_service.upload_chunk(upload_id, chunk_index, chunk):
+        # Upload chunk to local filesystem
+        if not local_chunk_service.upload_chunk(upload_id, chunk_index, chunk):
             return safe_error_response("Failed to save chunk to storage", 500)
 
         logger.debug(f"Saved chunk {chunk_index + 1}/{total_chunks} for upload {upload_id[:8]}...")
@@ -112,28 +113,26 @@ def upload_chunk():
         if chunk_index < total_chunks - 1:
             return jsonify({"status": "chunk received", "chunkIndex": chunk_index})
 
-        # === LAST CHUNK RECEIVED - CHECK IF ALL CHUNKS IN SUPABASE ===
-        import time as time_module
-        max_wait = 5
-        wait_interval = 0.2
-        waited = 0
+        # === LAST CHUNK RECEIVED - VERIFY ALL CHUNKS PRESENT ===
+        # Retry loop to handle race condition with parallel uploads
+        max_retries = 5
+        retry_delay = 0.2  # 200ms
 
-        received_chunks = chunk_storage_service.list_chunks(upload_id)
-        while waited < max_wait and len(received_chunks) < total_chunks:
-            time_module.sleep(wait_interval)
-            waited += wait_interval
-            received_chunks = chunk_storage_service.list_chunks(upload_id)
+        for attempt in range(max_retries):
+            received_chunks = local_chunk_service.list_chunks(upload_id)
+            if len(received_chunks) >= total_chunks:
+                break
+            if attempt < max_retries - 1:
+                logger.debug(f"Waiting for chunks: {len(received_chunks)}/{total_chunks}, retry {attempt + 1}")
+                time.sleep(retry_delay)
 
         if len(received_chunks) < total_chunks:
-            logger.error(f"Timeout waiting for chunks: got {len(received_chunks)}/{total_chunks}")
+            logger.error(f"Missing chunks after {max_retries} retries: got {len(received_chunks)}/{total_chunks}")
             return jsonify({
-                "error": "Missing chunks after timeout",
+                "error": "Missing chunks",
                 "receivedChunks": len(received_chunks),
                 "expectedChunks": total_chunks
             }), 400
-
-        if waited > 0:
-            logger.debug(f"All chunks arrived after {waited:.1f}s wait")
 
         # === ALL CHUNKS RECEIVED - START PROCESSING ===
         logger.info(f"All chunks received for upload {upload_id[:8]}..., starting processing...")
@@ -153,29 +152,33 @@ def upload_chunk():
         tracker.emit('chunk_assembly', 0, 'chunk_assembly_start', force=True, message_params={'totalChunks': total_chunks})
 
         try:
-            # Download and combine all chunks from Supabase Storage
-            content = chunk_storage_service.download_all_chunks_as_string(
-                upload_id, total_chunks, encoding='utf-8'
-            )
+            # Combine all chunks from local filesystem
+            content_bytes = local_chunk_service.download_all_chunks(upload_id, total_chunks)
 
-            if content is None:
-                raise ValueError("Failed to download and assemble chunks from storage")
+            if content_bytes is None:
+                raise ValueError("Failed to assemble chunks from filesystem")
+
+            # Decode bytes to string with encoding fallback
+            try:
+                content = content_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                content = content_bytes.decode('latin-1')
 
             total_size = len(content.encode('utf-8'))
             tracker.end_phase('chunk_assembly')
             tracker.emit('chunk_assembly', 10, 'chunk_assembly_complete', force=True)
 
-            # Cleanup chunks immediately after successful download
-            deleted = chunk_storage_service.delete_upload_chunks(upload_id)
+            # Cleanup chunks immediately after successful assembly
+            deleted = local_chunk_service.delete_upload_chunks(upload_id)
             logger.debug(f"Cleaned up {deleted} chunks for upload {upload_id[:8]}...")
 
         except (ValueError, Exception) as e:
             logger.error(f"Chunk combination failed: {e}")
-            # Cleanup chunks on error - scheduled job will handle any missed ones
+            # Cleanup chunks on error
             try:
-                chunk_storage_service.delete_upload_chunks(upload_id)
+                local_chunk_service.delete_upload_chunks(upload_id)
             except Exception:
-                pass  # Scheduled cleanup will handle it
+                pass  # TTL cleanup will handle it
 
             if "exceeds" in str(e):
                 return safe_error_response("File too large", 413, 'validation')

@@ -474,7 +474,7 @@ def interpolate_chunked():
             tracker.emit('datetime', 52, 'cloud_datetime_conversion')
             df2['UTC'] = pd.to_datetime(df2['UTC'], errors='coerce', cache=True)
             df2.dropna(subset=['UTC'], inplace=True)
-            tracker.emit('datetime', 55, 'cloud_datetime_converted')
+            tracker.emit('datetime', 55, 'cloud_datetime_converted', force=True)
 
         except Exception as e:
             logger.error(f"Error converting UTC to datetime: {str(e)}")
@@ -499,7 +499,7 @@ def interpolate_chunked():
                 'message': 'The file must contain at least 2 valid data points for interpolation'
             }), 400
 
-        tracker.emit('interpolation', 60, 'cloud_analyzing_data')
+        tracker.emit('interpolation', 60, 'cloud_analyzing_data', force=True)
 
         time_diffs = (df_load.index[1:] - df_load.index[:-1]).total_seconds() / 60
         max_gap = time_diffs.max() if len(time_diffs) > 0 else 0
@@ -521,13 +521,13 @@ def interpolate_chunked():
         limit = int(max_time_span)
         logger.info(f"Using interpolation limit of {limit} minutes")
 
-        tracker.emit('interpolation', 70, 'cloud_interpolating', message_params={'limit': limit})
+        tracker.emit('interpolation', 70, 'cloud_interpolating', message_params={'limit': limit}, force=True)
 
         df2_resampled = df_load.copy()
         df2_resampled['load'] = df_load['load'].interpolate(method='linear', limit=limit)
 
         df2_resampled.reset_index(inplace=True)
-        tracker.emit('interpolation', 80, 'cloud_interpolation_complete')
+        tracker.emit('interpolation', 80, 'cloud_interpolation_complete', force=True)
 
         original_points = len(df2)
         total_points = len(df2_resampled)
@@ -541,29 +541,27 @@ def interpolate_chunked():
             'original': original_points,
             'interpolated': total_points,
             'added': added_points
-        })
+        }, force=True)
 
-        chart_data = []
-        for _, row in df2_resampled.iterrows():
-            if pd.isna(row['UTC']):
-                logger.warning(f"Skipping row with NaT timestamp: {row}")
-                continue
+        # Vectorized chart data creation (much faster than iterating)
+        valid_mask = ~df2_resampled['UTC'].isna()
+        valid_df = df2_resampled[valid_mask].copy()
 
-            load_value = 'NaN' if pd.isna(row['load']) else float(row['load'])
+        valid_df['load'] = valid_df['load'].apply(lambda x: 'NaN' if pd.isna(x) else x)
+        valid_df['UTC'] = valid_df['UTC'].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-            try:
-                chart_data.append({
-                    'UTC': row['UTC'].strftime("%Y-%m-%d %H:%M:%S"),
-                    'value': load_value
-                })
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Error converting row to chart data: {e}. Row: {row}")
-                continue
+        chart_df = valid_df.rename(columns={'load': 'value'})[['UTC', 'value']]
 
-        logger.info(f"Sample of chart data being sent: {chart_data[:5] if chart_data else 'No data'}")
-        logger.info(f"Total points in chart data: {len(chart_data)}")
+        total_rows = len(chart_df)
+        CHUNK_SIZE = STREAMING_CHUNK_SIZE
+        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
 
-        if not chart_data:
+        # Log sample for debugging
+        sample_data = chart_df.head(5).to_dict('records') if len(chart_df) > 0 else []
+        logger.info(f"Sample of chart data being sent: {sample_data}")
+        logger.info(f"Total points in chart data: {total_rows}")
+
+        if total_rows == 0:
             logger.error("No valid data points after processing")
             return jsonify({
                 'success': False,
@@ -573,30 +571,10 @@ def interpolate_chunked():
                 }
             }), 400
 
-        CHUNK_SIZE = STREAMING_CHUNK_SIZE
-
-        total_rows = len(df2_resampled)
-        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
-
-        logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
-
-        valid_mask = ~df2_resampled['UTC'].isna()
-        valid_df = df2_resampled[valid_mask].copy()
-
-        valid_df['load'] = valid_df['load'].apply(lambda x: 'NaN' if pd.isna(x) else x)
-
-        valid_df['UTC'] = valid_df['UTC'].dt.strftime("%Y-%m-%d %H:%M:%S")
-
-        chart_df = valid_df.rename(columns={'load': 'value'})[['UTC', 'value']]
-
-        total_rows = len(chart_df)
-        CHUNK_SIZE = STREAMING_CHUNK_SIZE
-        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
-
         original_points_count = original_points
 
         logger.info(f"Total rows: {total_rows}, will be sent in {total_chunks} chunks")
-        tracker.emit('streaming', 90, 'cloud_starting_stream', message_params={'chunks': total_chunks})
+        tracker.emit('streaming', 90, 'cloud_starting_stream', message_params={'chunks': total_chunks}, force=True)
 
         def generate_chunks():
             meta_data = {

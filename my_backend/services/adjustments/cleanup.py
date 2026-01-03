@@ -3,19 +3,21 @@ import os
 import time
 import logging
 
+from domains.adjustments.config import UPLOAD_FOLDER
+
 logger = logging.getLogger(__name__)
 
 temp_files = {}
 
 def cleanup_old_files():
-    """Clean up files older than 60 minutes from temp_uploads directory"""
+    """Clean up files older than 60 minutes from adjustments upload directory"""
     success = True
     errors = []
     deleted_count = 0
     current_time = time.time()
     EXPIRY_TIME = 60 * 60
-    
-    temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'api', 'temp_uploads')
+
+    temp_dir = UPLOAD_FOLDER
     
     try:
         for root, dirs, files in os.walk(temp_dir, topdown=False):
