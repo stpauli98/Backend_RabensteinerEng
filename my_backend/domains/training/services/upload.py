@@ -203,11 +203,12 @@ def upload_assembled_file_to_storage(
 def update_file_storage_path_in_metadata(
     session_id: str,
     filename: str,
-    storage_path: str
+    storage_path: str,
+    bezeichnung: str = None
 ) -> bool:
     """
     Update storagePath in session_metadata.json for a specific file.
-    
+
     This ensures the metadata reflects the storage location so that
     finalize_session can correctly reference the files.
 
@@ -215,6 +216,7 @@ def update_file_storage_path_in_metadata(
         session_id: Session identifier
         filename: Name of the file
         storage_path: Storage path in Supabase Storage
+        bezeichnung: Optional bezeichnung for precise matching (recommended)
 
     Returns:
         bool: True if successful, False otherwise
@@ -231,21 +233,28 @@ def update_file_storage_path_in_metadata(
             session_metadata = json.load(f)
 
         # Find and update the file's storagePath
+        # Match by both fileName and bezeichnung if provided for precision
         updated = False
         for file_info in session_metadata.get('files', []):
-            if file_info.get('fileName') == filename:
+            file_matches = file_info.get('fileName') == filename
+
+            # If bezeichnung provided, require exact match
+            if bezeichnung:
+                file_matches = file_matches and file_info.get('bezeichnung') == bezeichnung
+
+            if file_matches:
                 file_info['storagePath'] = storage_path
                 updated = True
+                logger.info(f"Updated storagePath for {filename} (bezeichnung='{bezeichnung}'): {storage_path}")
                 break
 
         if not updated:
-            logger.warning(f"File {filename} not found in session metadata")
+            logger.warning(f"File {filename} (bezeichnung='{bezeichnung}') not found in session metadata")
             return False
 
         with open(session_metadata_path, 'w') as f:
             json.dump(session_metadata, f, indent=2)
 
-        logger.info(f"Updated storagePath for {filename}: {storage_path}")
         return True
 
     except Exception as e:
@@ -583,12 +592,17 @@ def process_chunk_upload(
         except json.JSONDecodeError:
             chunk_metadata = []
 
+    # Extract bezeichnung from additional_data for storage path generation
+    file_metadata = (additional_data or {}).get('fileMetadata', {})
+    bezeichnung = file_metadata.get('bezeichnung', '')
+
     chunk_info = {
         'chunkIndex': chunk_index,
         'totalChunks': total_chunks,
         'fileName': filename,
         'filePath': chunk_path,
         'fileType': metadata.get('fileType', 'unknown'),
+        'bezeichnung': bezeichnung,  # Store bezeichnung with chunk for later use
         'createdAt': datetime.now().isoformat(),
         'params': additional_data or {}
     }
@@ -622,27 +636,56 @@ def process_chunk_upload(
 
         file_size = os.path.getsize(assembled_path)
 
-        # Get bezeichnung from session_metadata for unique storage path
-        bezeichnung = None
-        session_metadata = get_session_metadata_locally(upload_id)
-        if session_metadata:
-            for file_info in session_metadata.get('files', []):
-                if file_info.get('fileName') == filename:
-                    bezeichnung = file_info.get('bezeichnung', '')
-                    break
+        # Get bezeichnung from chunk_metadata (stored during first chunk processing)
+        # This is more reliable than looking up by fileName in session_metadata
+        # because multiple files can have the same fileName with different bezeichnung
+        bezeichnung_for_storage = None
+
+        # First, try to get from chunk_metadata (most reliable - stored per-file)
+        metadata_path = os.path.join(UPLOAD_BASE_DIR, upload_id, 'metadata.json')
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, 'r') as f:
+                    all_chunks = json.load(f)
+                # Find the first chunk for this file which has the bezeichnung
+                for chunk in all_chunks:
+                    if chunk.get('fileName') == filename and chunk.get('bezeichnung'):
+                        bezeichnung_for_storage = chunk.get('bezeichnung')
+                        break
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(f"Could not read bezeichnung from chunk metadata: {e}")
+
+        # Fallback: try session_metadata with fileName + bezeichnung matching
+        if not bezeichnung_for_storage:
+            session_metadata = get_session_metadata_locally(upload_id)
+            if session_metadata:
+                # Get the current file's bezeichnung from additional_data if available
+                current_bezeichnung = (additional_data or {}).get('fileMetadata', {}).get('bezeichnung', '')
+                for file_info in session_metadata.get('files', []):
+                    if file_info.get('fileName') == filename:
+                        # If we know the current bezeichnung, match exactly
+                        if current_bezeichnung and file_info.get('bezeichnung') == current_bezeichnung:
+                            bezeichnung_for_storage = current_bezeichnung
+                            break
+                        # Otherwise use the first match (legacy behavior)
+                        elif not current_bezeichnung:
+                            bezeichnung_for_storage = file_info.get('bezeichnung', '')
+                            break
+
+        logger.info(f"Using bezeichnung '{bezeichnung_for_storage}' for storage path of {filename}")
 
         # CRITICAL: Upload to Supabase Storage immediately after assembly
         # This ensures files are persisted before Cloud Run ephemeral storage is cleared
         file_type = metadata.get('fileType', 'input')
         storage_path = upload_assembled_file_to_storage(
-            upload_id, filename, assembled_path, file_type, bezeichnung
+            upload_id, filename, assembled_path, file_type, bezeichnung_for_storage
         )
 
-        logger.info(f"📤 STORAGE PATH for {filename}: {storage_path} (bezeichnung='{bezeichnung}')")
+        logger.info(f"📤 STORAGE PATH for {filename}: {storage_path} (bezeichnung='{bezeichnung_for_storage}')")
 
         # Update session_metadata.json with storagePath
         if storage_path:
-            update_file_storage_path_in_metadata(upload_id, filename, storage_path)
+            update_file_storage_path_in_metadata(upload_id, filename, storage_path, bezeichnung_for_storage)
             logger.info(f"File {filename} uploaded to storage: {storage_path}")
         else:
             logger.warning(f"Failed to upload {filename} to storage - will retry in finalize")
@@ -680,6 +723,9 @@ def _update_session_metadata_from_chunk(
     Internal helper function to update session metadata when
     the first chunk of a file is uploaded.
 
+    IMPORTANT: Files are matched by BOTH fileName AND bezeichnung to prevent
+    overwrites when the same file is uploaded with different bezeichnung values.
+
     Args:
         upload_id: Session identifier
         filename: File being uploaded
@@ -708,15 +754,26 @@ def _update_session_metadata_from_chunk(
 
     file_metadata = additional_data.get('fileMetadata', {})
     if file_metadata:
+        # Get bezeichnung from the incoming file metadata
+        incoming_bezeichnung = file_metadata.get('bezeichnung', '')
+
+        # Match by BOTH fileName AND bezeichnung to prevent overwrites
+        # when same file is uploaded with different bezeichnung
         file_exists = False
         for i, existing_file in enumerate(session_metadata.get('files', [])):
-            if existing_file.get('fileName') == filename:
+            existing_filename = existing_file.get('fileName', '')
+            existing_bezeichnung = existing_file.get('bezeichnung', '')
+
+            # Only update if BOTH fileName AND bezeichnung match
+            if existing_filename == filename and existing_bezeichnung == incoming_bezeichnung:
                 session_metadata['files'][i] = file_metadata
                 file_exists = True
+                logger.info(f"Updated existing file entry: {filename} with bezeichnung '{incoming_bezeichnung}'")
                 break
 
         if not file_exists:
             session_metadata['files'].append(file_metadata)
+            logger.info(f"Added new file entry: {filename} with bezeichnung '{incoming_bezeichnung}'")
 
     session_metadata['lastUpdated'] = datetime.now().isoformat()
 
@@ -860,8 +917,8 @@ def delete_csv_file_record(file_id: str) -> Dict:
     """
     Delete CSV file record from database and Supabase Storage.
 
-    Uses reference counting for shared storage - only deletes from storage
-    if no other DB records reference the same storage_path.
+    Directly deletes both the database record and the storage file.
+    Each file has its own unique storage path.
 
     Args:
         file_id: File UUID
@@ -879,7 +936,6 @@ def delete_csv_file_record(file_id: str) -> Dict:
     """
     import uuid as uuid_lib
     from shared.database.operations import get_supabase_client
-    from shared.database.storage import get_storage_reference_count
 
     try:
         uuid_lib.UUID(file_id)
@@ -897,9 +953,6 @@ def delete_csv_file_record(file_id: str) -> Dict:
     storage_path = file_record.get('storage_path', '')
     file_type = file_record.get('type', 'input')
 
-    # Check reference count BEFORE deleting DB record (exclude current file)
-    ref_count = get_storage_reference_count(storage_path, exclude_file_id=file_id) if storage_path else 0
-
     # Delete DB record FIRST
     delete_response = supabase.table('files').delete().eq('id', file_id).execute()
 
@@ -910,23 +963,20 @@ def delete_csv_file_record(file_id: str) -> Dict:
 
     storage_deleted = False
 
-    # Only delete from storage if no other records reference this storage_path
-    if storage_path and ref_count == 0:
+    # Delete from storage - each file has unique storage path
+    if storage_path:
         try:
             bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
             supabase.storage.from_(bucket_name).remove([storage_path])
-            logger.info(f"Deleted file from storage: {bucket_name}/{storage_path} (no more references)")
+            logger.info(f"Deleted file from storage: {bucket_name}/{storage_path}")
             storage_deleted = True
         except Exception as storage_error:
             logger.warning(f"Could not delete file from storage: {str(storage_error)}")
-    elif storage_path and ref_count > 0:
-        logger.info(f"Storage file kept: {storage_path} ({ref_count} references remain)")
 
     return {
         'deleted_file': file_record,
         'message': f"File {file_record['file_name']} deleted successfully",
-        'storage_deleted': storage_deleted,
-        'shared_storage_kept': ref_count > 0
+        'storage_deleted': storage_deleted
     }
 
 
@@ -934,9 +984,7 @@ def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
     """
     Calculate n_dat (total number of data samples) from CSV files.
 
-    For shared storage, counts each DB record separately even if they share
-    the same physical storage file. This means if the same CSV is uploaded
-    twice with different Bezeichnung, n_dat will be doubled.
+    Each file has its own unique storage path, so samples are counted once per file.
 
     For Cloud Run (stateless), uses temp_dir where files were downloaded
     from Supabase Storage by verify_session_files().
@@ -950,8 +998,6 @@ def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
         int: Total number of data samples (n_dat)
     """
     try:
-        from shared.database.operations import get_supabase_client
-
         # Use temp_dir if provided (Cloud Run), otherwise fall back to local dir
         if temp_dir and os.path.exists(temp_dir):
             working_dir = temp_dir
@@ -962,38 +1008,8 @@ def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
                 logger.warning(f"No directory found for session {session_id}")
                 return 0
 
-        # Get DB records to count references per storage_path (for shared storage)
-        supabase = get_supabase_client()
-        try:
-            files_response = supabase.table('files')\
-                .select('id, storage_path, file_name')\
-                .eq('session_id', session_id)\
-                .execute()
-
-            db_files = files_response.data if files_response.data else []
-
-            # Group by storage_path to count how many DB records share each file
-            storage_path_counts = {}
-            for file_record in db_files:
-                storage_path = file_record.get('storage_path', '')
-                file_name = file_record.get('file_name', '')
-
-                if storage_path:
-                    if storage_path not in storage_path_counts:
-                        storage_path_counts[storage_path] = {
-                            'count': 0,
-                            'file_name': file_name
-                        }
-                    storage_path_counts[storage_path]['count'] += 1
-
-            logger.info(f"Found {len(db_files)} DB records, {len(storage_path_counts)} unique storage paths")
-
-        except Exception as db_error:
-            logger.warning(f"Could not get DB file records: {str(db_error)}, falling back to filesystem")
-            storage_path_counts = {}
-
         total_samples = 0
-        csv_files_processed = set()
+        csv_files_processed = 0
 
         for file_name in os.listdir(working_dir):
             if file_name.lower().endswith('.csv') and os.path.isfile(os.path.join(working_dir, file_name)):
@@ -1002,35 +1018,20 @@ def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
                 try:
                     df = pd.read_csv(file_path)
                     file_samples = len(df)
+                    total_samples += file_samples
+                    csv_files_processed += 1
 
-                    # Check if this file is shared (multiple DB records reference it)
-                    # Find matching storage_path
-                    multiplier = 1
-                    for storage_path, info in storage_path_counts.items():
-                        if file_name in storage_path or info['file_name'] == file_name:
-                            multiplier = info['count']
-                            break
-
-                    # Multiply samples by number of DB records using this file
-                    file_contribution = file_samples * multiplier
-                    total_samples += file_contribution
-
-                    if multiplier > 1:
-                        logger.info(f"File {file_name}: {file_samples} samples × {multiplier} records = {file_contribution}")
-                    else:
-                        logger.info(f"File {file_name}: {file_samples} samples")
-
-                    csv_files_processed.add(file_name)
+                    logger.info(f"File {file_name}: {file_samples} samples")
 
                 except Exception as e:
                     logger.error(f"Error reading CSV file {file_name}: {str(e)}")
                     continue
 
-        if not csv_files_processed:
+        if csv_files_processed == 0:
             logger.warning(f"No CSV files found for session {session_id}")
             return 0
 
-        logger.info(f"Session {session_id} total n_dat: {total_samples}")
+        logger.info(f"Session {session_id} total n_dat: {total_samples} from {csv_files_processed} files")
         return total_samples
 
     except Exception as e:

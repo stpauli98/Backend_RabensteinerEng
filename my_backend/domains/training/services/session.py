@@ -379,8 +379,8 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
     """
     Delete a session and all associated data.
 
-    Uses reference counting for shared storage - only deletes from storage
-    if no other DB records reference the same storage_path.
+    Deletes all database records and storage files for the session.
+    Each file has its own unique storage path.
 
     Args:
         session_id: Session identifier
@@ -399,7 +399,6 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
         PermissionError: If session doesn't belong to the user
     """
     from shared.database.operations import create_or_get_session_uuid, get_supabase_client
-    from shared.database.storage import get_storage_reference_count
     import shutil
 
     # Get UUID with ownership validation (will raise PermissionError if not owner)
@@ -431,27 +430,24 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
         logger.info(f"Deleted local directory for session {session_id}")
 
     # Get all files for this session BEFORE deleting DB records
-    # Group by storage_path to handle shared storage
     try:
         files_response = supabase.table('files').select('id, storage_path, type').eq('session_id', str(uuid_session_id)).execute()
         session_files = files_response.data if files_response.data else []
 
-        # Group files by storage_path and type
-        storage_paths_to_check = {}
+        # Collect storage paths to delete
+        storage_paths_to_delete = []
         for file_data in session_files:
             storage_path = file_data.get('storage_path')
             file_type = file_data.get('type', 'input')
             if storage_path:
-                if storage_path not in storage_paths_to_check:
-                    storage_paths_to_check[storage_path] = {
-                        'type': file_type,
-                        'file_ids': []
-                    }
-                storage_paths_to_check[storage_path]['file_ids'].append(file_data.get('id'))
+                storage_paths_to_delete.append({
+                    'path': storage_path,
+                    'type': file_type
+                })
 
     except Exception as e:
         logger.warning(f"Could not get files for session: {str(e)}")
-        storage_paths_to_check = {}
+        storage_paths_to_delete = []
 
     try:
         supabase.table('training_results').delete().eq('session_id', str(uuid_session_id)).execute()
@@ -476,21 +472,15 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
     except Exception as e:
         logger.error(f"Error deleting database records: {str(e)}")
 
-    # Now delete from Storage - only if no other records reference the storage_path
-    for storage_path, info in storage_paths_to_check.items():
+    # Delete all storage files - each file has unique storage path
+    for file_info in storage_paths_to_delete:
         try:
-            # Check if any OTHER records still use this storage_path (globally)
-            ref_count = get_storage_reference_count(storage_path)
-
-            if ref_count == 0:
-                bucket_name = 'aus-csv-files' if info['type'] == 'output' else 'csv-files'
-                supabase.storage.from_(bucket_name).remove([storage_path])
-                storage_files_deleted += 1
-                logger.info(f"Deleted from storage: {bucket_name}/{storage_path}")
-            else:
-                logger.info(f"Storage file kept (shared): {storage_path} ({ref_count} references remain)")
+            bucket_name = 'aus-csv-files' if file_info['type'] == 'output' else 'csv-files'
+            supabase.storage.from_(bucket_name).remove([file_info['path']])
+            storage_files_deleted += 1
+            logger.info(f"Deleted from storage: {bucket_name}/{file_info['path']}")
         except Exception as storage_error:
-            logger.warning(f"Could not delete from storage {storage_path}: {str(storage_error)}")
+            logger.warning(f"Could not delete from storage {file_info['path']}: {str(storage_error)}")
 
     return {
         'deleted_files': deleted_files,

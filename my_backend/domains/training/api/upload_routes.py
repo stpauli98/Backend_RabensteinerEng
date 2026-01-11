@@ -278,24 +278,23 @@ def instant_upload():
     """Upload a single CSV file immediately to database and Storage.
 
     This endpoint is used for instant file uploads when a user adds a file.
-    It performs deduplication via file hash check before uploading.
+    Each file with unique bezeichnung gets its own storage path.
 
     Request: FormData with:
     - file: CSV file
     - sessionId: string (required)
     - fileMetadata: JSON string with file metadata
-    - fileHash: SHA-256 hash of file content (optional)
+    - fileHash: SHA-256 hash of file content (optional, stored for reference)
 
     Response:
     - success: bool
     - data:
         - fileId: UUID of the file
-        - isNew: bool (true if newly uploaded, false if duplicate)
+        - isNew: bool (always true)
         - storagePath: string path in storage
     """
     try:
         from shared.database.operations import save_file_info, save_csv_file_content
-        from shared.database.storage import check_file_exists_by_hash
         from shared.database.session import resolve_session_id
 
         # Validate request
@@ -324,80 +323,6 @@ def instant_upload():
         uuid_session_id = resolve_session_id(session_id)
         if not uuid_session_id:
             return create_error_response(f'Invalid session ID: {session_id}', 400)
-
-        # Check for duplicate by hash - if found, create NEW DB record with SHARED storage
-        # BUT only if file types match (input→csv-files, output→aus-csv-files buckets)
-        if file_hash:
-            existing_file = check_file_exists_by_hash(uuid_session_id, file_hash)
-            if existing_file:
-                # Prepare file data for NEW database record (shared storage)
-                safe_filename = sanitize_filename(file.filename)
-                bezeichnung = file_metadata.get('bezeichnung', safe_filename)
-                file_type = file_metadata.get('type', 'input')
-
-                # Check if file types match - only share storage if same bucket
-                existing_type = existing_file.get('type', 'input')
-                if existing_type != file_type:
-                    # Types differ → different buckets, cannot share storage
-                    # Fall through to normal upload flow below
-                    logger.info(f"File hash {file_hash[:16]}... exists but type differs ({existing_type} vs {file_type}), uploading to correct bucket")
-                else:
-                    # Types match - can share storage
-                    logger.info(f"File with hash {file_hash[:16]}... already exists, creating new record with shared storage")
-
-                    # Check for duplicate bezeichnung in this session
-                    from shared.database.client import get_supabase_client
-                    supabase = get_supabase_client()
-                    existing_bezeichnung = supabase.table('files')\
-                        .select('id')\
-                        .eq('session_id', uuid_session_id)\
-                        .eq('bezeichnung', bezeichnung)\
-                        .eq('type', file_type)\
-                        .execute()
-
-                    if existing_bezeichnung.data and len(existing_bezeichnung.data) > 0:
-                        return create_error_response(
-                            f'A file with bezeichnung "{bezeichnung}" already exists in this session',
-                            400
-                        )
-
-                    # Create NEW file record with SHARED storage_path
-                    file_data = {
-                        'fileName': safe_filename,
-                        'bezeichnung': bezeichnung,
-                        'type': file_type,
-                        'file_hash': file_hash,
-                        'storage_path': existing_file.get('storage_path', ''),  # Share storage path
-                        **file_metadata
-                    }
-
-                    from shared.database.operations import save_file_info
-                    success, file_uuid = save_file_info(session_id, file_data)
-                    if not success:
-                        return create_error_response('Failed to save file metadata', 500)
-
-                    # Update storage_path in the new record
-                    try:
-                        supabase.table('files').update({
-                            'storage_path': existing_file.get('storage_path', ''),
-                            'file_hash': file_hash
-                        }).eq('id', file_uuid).execute()
-                    except Exception as update_err:
-                        logger.warning(f"Could not update storage_path for shared file: {update_err}")
-
-                    increment_processing_count(g.user_id)
-                    logger.info(f"Created new record {file_uuid} with shared storage from {existing_file['id']}")
-
-                    return jsonify({
-                        'success': True,
-                        'data': {
-                            'fileId': file_uuid,  # NEW ID
-                            'isNew': True,  # Logically new record
-                            'storagePath': existing_file.get('storage_path', ''),
-                            'sharedStorage': True,
-                            'message': 'File record created with shared storage'
-                        }
-                    })
 
         # Prepare file data for database
         safe_filename = sanitize_filename(file.filename)
@@ -445,12 +370,29 @@ def instant_upload():
 
             try:
                 file_type = file_data.get('type', 'input')
+
+                # Generate unique storage path including bezeichnung to prevent overwrites
+                # when same filename is uploaded with different bezeichnung
+                if bezeichnung:
+                    safe_bezeichnung = sanitize_filename(bezeichnung)
+                    unique_storage_filename = f"{safe_bezeichnung}_{safe_filename}"
+                else:
+                    unique_storage_filename = safe_filename
+
                 storage_success = save_csv_file_content(
-                    file_uuid, uuid_session_id, safe_filename, temp_path, file_type
+                    file_uuid, uuid_session_id, unique_storage_filename, temp_path, file_type
                 )
 
                 if storage_success:
-                    storage_path = f"{uuid_session_id}/{safe_filename}"
+                    storage_path = f"{uuid_session_id}/{unique_storage_filename}"
+                    # Update the file record with the correct storage_path
+                    try:
+                        supabase.table('files').update({
+                            'storage_path': storage_path
+                        }).eq('id', file_uuid).execute()
+                        logger.info(f"Updated storage_path for file {file_uuid}: {storage_path}")
+                    except Exception as path_update_err:
+                        logger.warning(f"Could not update storage_path: {path_update_err}")
                 else:
                     logger.warning(f"Failed to upload file to storage for file {file_uuid}")
 
