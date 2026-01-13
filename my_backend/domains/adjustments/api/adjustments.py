@@ -186,13 +186,17 @@ def adjust_data() -> Tuple[Response, int]:
             methods = adjustment_chunks[upload_id]['params'].get('methods', {})
 
         intrpl_max_values = {}
+        decimal_precision_values = {}
         for filename, method_info in methods.items():
-            if isinstance(method_info, dict) and 'intrpl_max' in method_info:
-                try:
-                    intrpl_max_values[filename] = float(method_info['intrpl_max'])
-                except (TypeError, ValueError) as e:
-                    logger.warning(f"Could not convert intrplMax for {filename}: {e}")
-                    intrpl_max_values[filename] = None
+            if isinstance(method_info, dict):
+                if 'intrpl_max' in method_info:
+                    try:
+                        intrpl_max_values[filename] = float(method_info['intrpl_max'])
+                    except (TypeError, ValueError) as e:
+                        logger.warning(f"Could not convert intrplMax for {filename}: {e}")
+                        intrpl_max_values[filename] = None
+                if 'decimal_precision' in method_info:
+                    decimal_precision_values[filename] = method_info['decimal_precision']
 
         if upload_id not in adjustment_chunks:
             adjustment_chunks[upload_id] = {
@@ -203,6 +207,7 @@ def adjust_data() -> Tuple[Response, int]:
                     'offset': offset,
                     'methods': methods,
                     'intrplMaxValues': intrpl_max_values,
+                    'decimalPrecisionValues': decimal_precision_values,
                     'decimalPrecision': decimal_precision
                 }
             }
@@ -227,6 +232,10 @@ def adjust_data() -> Tuple[Response, int]:
             if 'intrplMaxValues' not in params:
                 params['intrplMaxValues'] = {}
             params['intrplMaxValues'].update(intrpl_max_values)
+
+            if 'decimalPrecisionValues' not in params:
+                params['decimalPrecisionValues'] = {}
+            params['decimalPrecisionValues'].update(decimal_precision_values)
 
         filenames = list(dataframes.keys())
 
@@ -320,6 +329,7 @@ def complete_adjustment() -> Tuple[Response, int]:
         decimal_precision = params.get('decimalPrecision', 'full')
 
         intrpl_max_values = params.get('intrplMaxValues', {})
+        decimal_precision_values = params.get('decimalPrecisionValues', {})
 
         dataframes = adjustment_chunks[upload_id]['dataframes']
         if not dataframes:
@@ -465,6 +475,7 @@ def complete_adjustment() -> Tuple[Response, int]:
                 needs_processing = not (timestep_matches and offset_matches)
 
                 intrpl_max = intrpl_max_values.get(filename)
+                file_decimal_precision = decimal_precision_values.get(filename, decimal_precision)
 
                 if not needs_processing:
                     conversion_progress = ProgressStages.calculate_file_progress(file_index, len(filenames))
@@ -482,7 +493,7 @@ def complete_adjustment() -> Tuple[Response, int]:
                         filename,
                         file_time_step,
                         file_offset,
-                        decimal_precision
+                        file_decimal_precision
                     )
                 else:
                     method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
@@ -509,7 +520,7 @@ def complete_adjustment() -> Tuple[Response, int]:
                         process_offset,
                         methods,
                         intrpl_max,
-                        decimal_precision
+                        file_decimal_precision
                     )
 
                 if result_data is not None and info_record is not None:
