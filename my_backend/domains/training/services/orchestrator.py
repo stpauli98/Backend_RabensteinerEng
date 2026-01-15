@@ -104,13 +104,51 @@ def clean_for_json(obj: Any) -> Any:
             return str(obj)
 
 
+def emit_post_training_progress(
+    socketio_instance,
+    session_id: str,
+    step: str,
+    progress: int,
+    message: str,
+    details: Optional[Dict] = None
+):
+    """
+    Helper to emit post-training progress events.
+
+    Args:
+        socketio_instance: SocketIO instance
+        session_id: Session ID for room targeting
+        step: Current step identifier (e.g., 'evaluating', 'uploading_results')
+        progress: Progress percentage (0-100)
+        message: Human-readable progress message
+        details: Optional dict with additional info (file_size_mb, compression_ratio, etc.)
+    """
+    if socketio_instance:
+        room = f"training_{session_id}"
+        event_data = {
+            'session_id': session_id,
+            'status': 'post_training',
+            'step': step,
+            'message': message,
+            'progress_percent': progress,
+            'phase': 'post_training'
+        }
+        # Add optional details
+        if details:
+            event_data['details'] = details
+
+        socketio_instance.emit('training_progress', event_data, room=room)
+        logger.info(f"📊 Post-training progress: {progress}% - {message}")
+
+
 def save_training_results(
     session_id: str,
     uuid_session_id: str,
     training_results: Dict,
     model_config: Dict,
     training_split: Dict,
-    result: Dict
+    result: Dict,
+    socketio_instance: Optional[Any] = None
 ) -> bool:
     """
     Save training results to Supabase Storage and database.
@@ -125,6 +163,7 @@ def save_training_results(
         model_config: Model configuration dict
         training_split: Training split configuration
         result: Complete result dict from training
+        socketio_instance: SocketIO instance for progress updates (optional)
 
     Returns:
         bool: True if save successful, False otherwise
@@ -172,13 +211,24 @@ def save_training_results(
     })
 
     try:
+        # Progress: Uploading results to storage
+        emit_post_training_progress(socketio_instance, session_id, 'uploading_results', 60, 'Uploading training results...')
+
+        # Create progress callback to emit granular updates during upload
+        def upload_progress_callback(step: str, percent: int, message: str, details: dict = None):
+            emit_post_training_progress(socketio_instance, session_id, step, percent, message, details)
+
         logger.info(f"📤 Uploading training results to storage for session {uuid_session_id}...")
         storage_result = upload_training_results(
             session_id=uuid_session_id,
             results=cleaned_results,
-            compress=True
+            compress=True,
+            progress_callback=upload_progress_callback
         )
         logger.info(f"✅ Storage upload complete: {storage_result['file_size'] / 1024 / 1024:.2f}MB")
+
+        # Progress: Storage upload complete
+        emit_post_training_progress(socketio_instance, session_id, 'results_uploaded', 70, 'Results uploaded successfully')
 
         training_data = {
             'session_id': uuid_session_id,
@@ -192,6 +242,9 @@ def save_training_results(
 
         supabase.table('training_results').insert(training_data).execute()
         logger.info(f"✅ Training metadata saved to database for session {uuid_session_id}")
+
+        # Progress: Database save complete
+        emit_post_training_progress(socketio_instance, session_id, 'database_saved', 75, 'Metadata saved to database')
 
         # Track storage usage for training results
         try:
@@ -232,6 +285,9 @@ def save_training_results(
         raise storage_error
 
     if result.get('violin_plots'):
+        # Progress: Saving violin plots
+        emit_post_training_progress(socketio_instance, session_id, 'saving_plots', 80, 'Saving visualization plots...')
+
         try:
             violin_plots = result.get('violin_plots')
             if isinstance(violin_plots, dict):
@@ -275,6 +331,9 @@ def save_training_results(
             logger.error(traceback.format_exc())
 
     # Auto-save models to trained-models bucket
+    # Progress: Uploading models
+    emit_post_training_progress(socketio_instance, session_id, 'uploading_models', 85, 'Uploading trained models...')
+
     try:
         from domains.training.ml.models import save_models_to_storage
 
@@ -282,6 +341,9 @@ def save_training_results(
         models_result = save_models_to_storage(session_id, user_id=None)
 
         logger.info(f"✅ Auto-saved {models_result['total_uploaded']} model(s) to trained-models bucket")
+
+        # Progress: Models uploaded
+        emit_post_training_progress(socketio_instance, session_id, 'models_uploaded', 95, f"Uploaded {models_result['total_uploaded']} model(s)")
 
         if models_result['failed_models']:
             logger.warning(f"⚠️ {models_result['total_failed']} model(s) failed to save: {models_result['failed_models']}")
@@ -333,8 +395,14 @@ def run_model_training_async(
 
         if result['success']:
             try:
+                # Progress: Evaluating model
+                emit_post_training_progress(socketio_instance, session_id, 'evaluating', 50, 'Evaluating model performance...')
+
                 uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
                 training_results = result.get('results', {})
+
+                # Progress: Preparing to save
+                emit_post_training_progress(socketio_instance, session_id, 'preparing_save', 55, 'Preparing results for storage...')
 
                 save_training_results(
                     session_id=session_id,
@@ -342,7 +410,8 @@ def run_model_training_async(
                     training_results=training_results,
                     model_config=model_config,
                     training_split=training_split,
-                    result=result
+                    result=result,
+                    socketio_instance=socketio_instance
                 )
 
             except Exception as e:

@@ -38,7 +38,8 @@ _download_locks_lock = Lock()  # Lock for accessing _download_locks dict
 def upload_training_results(
     session_id: str,
     results: dict,
-    compress: bool = True
+    compress: bool = True,
+    progress_callback: Optional[callable] = None
 ) -> Dict[str, any]:
     """
     Upload training results to Supabase Storage
@@ -47,6 +48,8 @@ def upload_training_results(
         session_id: UUID session ID
         results: Training results dictionary containing model, data, metrics, etc.
         compress: Whether to compress with gzip (default True, recommended)
+        progress_callback: Optional callback function(step: str, percent: int, message: str)
+                          for reporting progress during upload stages
 
     Returns:
         dict: {
@@ -63,11 +66,20 @@ def upload_training_results(
         >>> storage_result = upload_training_results(
         ...     session_id="abc-123",
         ...     results={"model_type": "Dense", "metrics": {...}},
-        ...     compress=True
+        ...     compress=True,
+        ...     progress_callback=lambda step, pct, msg: print(f"{step}: {pct}% - {msg}")
         ... )
         >>> print(storage_result['file_path'])
         "abc-123/training_results_20251022_130000.json.gz"
     """
+    def emit_progress(step: str, percent: int, message: str, details: dict = None):
+        """Helper to call progress callback if provided"""
+        if progress_callback:
+            try:
+                progress_callback(step, percent, message, details)
+            except Exception as e:
+                logger.warning(f"Progress callback error: {e}")
+
     try:
         supabase = get_supabase_admin_client()
 
@@ -77,27 +89,50 @@ def upload_training_results(
             file_name += ".gz"
         file_path = f"{session_id}/{file_name}"
 
+        # Stage 1: Preparing data
+        emit_progress('preparing_upload', 61, 'Preparing training data for upload...')
+
         json_str = json.dumps(results, indent=2)
         original_size = len(json_str.encode('utf-8'))
+        original_size_mb = original_size / 1024 / 1024
 
         if compress:
+            # Stage 2: Compressing
+            emit_progress('compressing', 63, f'Compressing {original_size_mb:.1f}MB of training data...', {
+                'original_size_mb': round(original_size_mb, 2),
+                'action': 'compressing'
+            })
             logger.info(f"Compressing training results...")
             compressed_data = gzip.compress(json_str.encode('utf-8'), compresslevel=9)
             upload_data = compressed_data
             content_type = 'application/gzip'
 
+            compressed_size_mb = len(compressed_data) / 1024 / 1024
             compression_ratio = (1 - len(compressed_data) / original_size) * 100
             logger.info(
-                f"Compression complete: {original_size / 1024 / 1024:.2f}MB → "
-                f"{len(compressed_data) / 1024 / 1024:.2f}MB "
+                f"Compression complete: {original_size_mb:.2f}MB → "
+                f"{compressed_size_mb:.2f}MB "
                 f"({compression_ratio:.1f}% reduction)"
             )
+            emit_progress('compression_done', 65, f'Compressed to {compressed_size_mb:.1f}MB ({compression_ratio:.0f}% smaller)', {
+                'original_size_mb': round(original_size_mb, 2),
+                'compressed_size_mb': round(compressed_size_mb, 2),
+                'compression_ratio': round(compression_ratio, 1),
+                'action': 'compression_complete'
+            })
         else:
             upload_data = json_str.encode('utf-8')
             content_type = 'application/json'
 
         file_size = len(upload_data)
-        logger.info(f"Uploading {file_size / 1024 / 1024:.2f}MB to storage: {file_path}")
+        file_size_mb = file_size / 1024 / 1024
+        # Stage 3: Starting upload
+        emit_progress('uploading', 66, f'Uploading {file_size_mb:.1f}MB to cloud storage...', {
+            'file_size_mb': round(file_size_mb, 2),
+            'file_size_bytes': file_size,
+            'action': 'uploading'
+        })
+        logger.info(f"Uploading {file_size_mb:.2f}MB to storage: {file_path}")
 
         max_retries = 3
         last_error = None
@@ -114,6 +149,12 @@ def upload_training_results(
                 )
 
                 logger.info(f"✅ Training results uploaded successfully: {file_path}")
+                # Stage 4: Upload complete
+                emit_progress('upload_complete', 69, 'Upload complete, finalizing...', {
+                    'file_size_mb': round(file_size_mb, 2),
+                    'file_path': file_path,
+                    'action': 'upload_complete'
+                })
                 break
 
             except Exception as upload_error:

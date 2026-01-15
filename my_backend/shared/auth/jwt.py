@@ -50,8 +50,6 @@ def require_auth(f):
             g.user_metadata = response.user.user_metadata
             g.access_token = token
 
-            logger.debug(f"Authenticated user: {g.user_email} ({g.user_id})")
-
             return f(*args, **kwargs)
 
         except Exception as e:
