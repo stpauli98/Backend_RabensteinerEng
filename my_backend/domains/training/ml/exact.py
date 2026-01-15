@@ -14,6 +14,11 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from domains.training.data.loader import DataLoader, load, transf
 from domains.training.data.transformer import create_training_arrays
 from domains.training.ml.scaler import process_and_scale_data
+from domains.training.ml.evaluation import (
+    calculate_evaluation_with_averaging,
+    convert_df_eval_to_dict,
+    convert_df_eval_ts_to_dict
+)
 from domains.training.ml.trainer import (
     train_dense, train_cnn, train_lstm, train_ar_lstm,
     train_svr_dir, train_svr_mimo, train_linear_model
@@ -468,7 +473,57 @@ def run_exact_training_pipeline(
             
             val_metrics = calculate_evaluation_metrics(val_y, val_predictions)
             evaluation_metrics['val_metrics_scaled'] = val_metrics
-            
+
+            # =========================================================================
+            # 12-LEVEL AVERAGING EVALUATION - EXACT COPY FROM ORIGINAL training.py
+            # Lines 3312-3552 from original
+            # =========================================================================
+            try:
+                # Get shapes for evaluation
+                n_tst = tst_y_orig.shape[0] if tst_y_orig is not None else tst_y.shape[0]
+                O_N = MTS().O_N  # Output timesteps (default 13)
+
+                # Prepare tst_y_orig for evaluation - needs shape (n_tst, O_N, num_feat)
+                if tst_y_orig is not None:
+                    eval_y_orig = tst_y_orig
+                else:
+                    eval_y_orig = tst_y
+
+                # Prepare predictions for evaluation - same shape as y_orig
+                eval_fcst = test_predictions
+
+                # Ensure correct shape: (n_tst, O_N, num_feat)
+                if len(eval_y_orig.shape) == 2:
+                    # Shape is (n_tst, O_N) - add feature dimension
+                    eval_y_orig = eval_y_orig[:, :, np.newaxis]
+                if len(eval_fcst.shape) == 2:
+                    eval_fcst = eval_fcst[:, :, np.newaxis]
+
+                # Call the 12-level averaging evaluation
+                dat_eval, df_eval, df_eval_ts = calculate_evaluation_with_averaging(
+                    tst_y_orig=eval_y_orig,
+                    tst_fcst=eval_fcst,
+                    o_dat_inf=o_dat_inf,
+                    O_N=O_N,
+                    n_max=12
+                )
+
+                # Convert to JSON-serializable format
+                df_eval_dict = convert_df_eval_to_dict(df_eval)
+                df_eval_ts_dict = convert_df_eval_ts_to_dict(df_eval_ts)
+
+                evaluation_metrics['df_eval'] = df_eval_dict
+                evaluation_metrics['df_eval_ts'] = df_eval_ts_dict
+
+                logger.info(f"12-level averaging evaluation completed successfully")
+
+            except Exception as eval_error:
+                logger.error(f"Error in 12-level averaging evaluation: {str(eval_error)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                evaluation_metrics['df_eval'] = {}
+                evaluation_metrics['df_eval_ts'] = {}
+
     except Exception as e:
         logger.error(f"Error calculating evaluation metrics: {str(e)}")
         evaluation_metrics = {
@@ -476,7 +531,9 @@ def run_exact_training_pipeline(
             'test_metrics_original': {},
             'val_metrics_scaled': {},
             'model_type': mdl_config.MODE if mdl_config else 'unknown',
-            'error': str(e)
+            'error': str(e),
+            'df_eval': {},
+            'df_eval_ts': {}
         }
 
     return {

@@ -236,10 +236,16 @@ def save_training_results(
             violin_plots = result.get('violin_plots')
             if isinstance(violin_plots, dict):
                 for plot_name, plot_data in violin_plots.items():
-                    if isinstance(plot_data, str) and plot_data.startswith('data:image'):
+                    # Handle new format (dict with data and type) and legacy format (string)
+                    if isinstance(plot_data, dict) and 'data' in plot_data:
+                        base64_data = plot_data.get('data', '')
+                        plot_type_category = plot_data.get('type', 'unknown')
+                    elif isinstance(plot_data, str):
                         base64_data = plot_data
+                        plot_type_category = 'unknown'
                     else:
-                        base64_data = plot_data
+                        base64_data = str(plot_data) if plot_data else ''
+                        plot_type_category = 'unknown'
 
                     viz_data = {
                         'session_id': uuid_session_id,
@@ -251,7 +257,8 @@ def save_training_results(
                         'metadata': {
                             'dataset_count': result.get('dataset_count', 0),
                             'generated_during': 'model_training',
-                            'created_at': datetime.now().isoformat()
+                            'created_at': datetime.now().isoformat(),
+                            'type': plot_type_category  # 'input' | 'output' | 'time'
                         }
                     }
                     # Delete existing plot with same name before insert (upsert behavior)
@@ -343,6 +350,7 @@ def run_model_training_async(
 
             if socketio_instance:
                 room = f"training_{session_id}"
+                # Emit training_progress event for useTrainingProgress hook
                 socketio_instance.emit('training_progress', {
                     'session_id': session_id,
                     'status': 'training_completed',
@@ -350,6 +358,12 @@ def run_model_training_async(
                     'progress_percent': 100,
                     'phase': 'completed',
                     'model_type': model_config.get('MODE', 'Dense')
+                }, room=room)
+                # ALSO emit separate training_completed event for TrainingPage.tsx handler
+                socketio_instance.emit('training_completed', {
+                    'session_id': session_id,
+                    'success': True,
+                    'message': 'Training completed successfully'
                 }, room=room)
                 logger.info(f"✅ Training completed event emitted for session {session_id}")
         else:

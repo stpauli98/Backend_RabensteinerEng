@@ -111,15 +111,23 @@ class ViolinProgressTracker:
 
     def generating_input_plot(self):
         """Emit when starting input violin plot generation."""
-        self.emit(60, "violin.progress.generatingInput")
+        self.emit(55, "violin.progress.generatingInput")
 
     def input_plot_complete(self):
         """Emit when input plot is complete."""
-        self.emit(75, "violin.progress.inputComplete")
+        self.emit(65, "violin.progress.inputComplete")
+
+    def generating_time_plot(self):
+        """Emit when starting time violin plot generation."""
+        self.emit(70, "violin.progress.generatingTime")
+
+    def time_plot_complete(self):
+        """Emit when time plot is complete."""
+        self.emit(80, "violin.progress.timeComplete")
 
     def generating_output_plot(self):
         """Emit when starting output violin plot generation."""
-        self.emit(80, "violin.progress.generatingOutput")
+        self.emit(85, "violin.progress.generatingOutput")
 
     def output_plot_complete(self):
         """Emit when output plot is complete."""

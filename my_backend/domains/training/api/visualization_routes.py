@@ -170,6 +170,27 @@ def get_evaluation_tables(session_id):
         if not eval_metrics or eval_metrics.get('error'):
             eval_metrics = results.get('metrics', {})
 
+        # =====================================================================
+        # PRIORITET: Koristi df_eval i df_eval_ts iz 12-level averaging sistema
+        # ako postoje (generisani u evaluation.py)
+        # =====================================================================
+        df_eval = eval_metrics.get('df_eval', {})
+        df_eval_ts = eval_metrics.get('df_eval_ts', {})
+
+        # Ako df_eval postoji i nije prazan, koristi ga direktno
+        if df_eval and len(df_eval) > 0:
+            logger.info(f"Using 12-level averaging df_eval data for session {session_id}")
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'df_eval': df_eval,
+                'df_eval_ts': df_eval_ts,
+                'model_type': eval_metrics.get('model_type', 'Unknown')
+            })
+
+        # =====================================================================
+        # FALLBACK: Rekonstruiši iz _TS metrika (stari način)
+        # =====================================================================
         if eval_metrics and eval_metrics.get('test_metrics_scaled'):
             pass
         elif not eval_metrics or (eval_metrics.get('error') and not eval_metrics.get('test_metrics_scaled')):
@@ -186,7 +207,8 @@ def get_evaluation_tables(session_id):
         df_eval = {}
         df_eval_ts = {}
 
-        time_deltas = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
+        # Originalne delta vrijednosti: 15*n za n=1..12 (kao u original training.py)
+        time_deltas = [15 * n for n in range(1, 13)]  # [15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180]
 
         for feature_name in output_features:
             delt_list = []

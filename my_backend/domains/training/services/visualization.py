@@ -18,6 +18,53 @@ from domains.training.config import PLOT_SETTINGS
 logger = logging.getLogger(__name__)
 
 
+def get_file_color_map(session_id: str) -> Dict[str, tuple]:
+    """
+    Get color mapping for all files in a session.
+
+    This function provides consistent color assignments for files across
+    violin plots and evaluation diagrams. Each file gets a unique color
+    based on its color_index in the database.
+
+    Color indexing logic:
+    - Input files: indices 0, 1, 2, ...
+    - Output files: input_count, input_count+1, ...
+    - TIME components: input_count + output_count
+
+    Args:
+        session_id: Session identifier (string or UUID)
+
+    Returns:
+        Dict mapping bezeichnung to RGB color tuple.
+        Example: {'load_grid': (0.12, 0.47, 0.71), 'temperature': (1.0, 0.5, 0.05)}
+    """
+    from shared.database.operations import get_supabase_client, create_or_get_session_uuid
+
+    try:
+        supabase = get_supabase_client(use_service_role=True)
+        uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
+
+        response = supabase.table('files').select(
+            'bezeichnung', 'color_index'
+        ).eq('session_id', uuid_session_id).execute()
+
+        if not response.data:
+            return {}
+
+        # Determine palette size based on max color_index
+        max_index = max((f.get('color_index', 0) for f in response.data), default=0)
+        palette = sns.color_palette("tab20", max(max_index + 1, 20))
+
+        return {
+            f['bezeichnung']: palette[f.get('color_index', 0)]
+            for f in response.data
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting file color map for session {session_id}: {e}")
+        return {}
+
+
 class Visualizer:
     """
     Handles creation of visualizations for training results
@@ -507,7 +554,28 @@ class Visualizer:
 
             for viz in response.data:
                 plot_name = viz.get('plot_name', 'unknown')
-                plots[plot_name] = viz.get('image_data', '')
+
+                # Try both column names for backward compatibility
+                image_data = viz.get('image_data', '') or viz.get('plot_data_base64', '')
+
+                # Get type from metadata.type (stored in JSONB column)
+                viz_metadata = viz.get('metadata', {})
+                if isinstance(viz_metadata, dict) and viz_metadata.get('type'):
+                    plot_type = viz_metadata.get('type')
+                else:
+                    # Fallback for legacy plots: infer type from plot_name
+                    if 'output' in plot_name.lower():
+                        plot_type = 'output'
+                    elif 'time' in plot_name.lower():
+                        plot_type = 'time'
+                    else:
+                        plot_type = 'input'
+
+                # Return new format with data and type
+                plots[plot_name] = {
+                    'data': image_data,
+                    'type': plot_type
+                }
 
                 if not metadata:
                     metadata = viz.get('plot_metadata', {})
@@ -841,14 +909,65 @@ def create_visualizer() -> Visualizer:
     return Visualizer()
 
 
-def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str, user_id: str = None) -> bool:
+def delete_old_violin_plots(session_id: str, user_id: str = None) -> int:
+    """
+    Delete all existing violin plots for a session before saving new ones.
+
+    This is necessary because the new violin plot structure has different names
+    than the old structure (input_violin_plot vs "Test1 Violin Plot" per file).
+
+    Args:
+        session_id: Session identifier
+        user_id: User ID for session ownership
+
+    Returns:
+        int: Number of deleted plots
+    """
+    from shared.database.operations import get_supabase_client, create_or_get_session_uuid
+
+    try:
+        # Get user_id from Flask context if not provided
+        if user_id is None:
+            try:
+                from flask import g
+                user_id = g.user_id
+            except (RuntimeError, AttributeError):
+                pass
+
+        supabase = get_supabase_client(use_service_role=True)
+        uuid_session_id = create_or_get_session_uuid(session_id, user_id)
+
+        # Get count of existing violin plots
+        existing = supabase.table('training_visualizations').select('id, plot_name').eq(
+            'session_id', uuid_session_id
+        ).eq('plot_type', 'violin_plot').execute()
+
+        if existing.data:
+            plot_names = [p['plot_name'] for p in existing.data]
+            logger.info(f"Deleting {len(existing.data)} old violin plots for session {session_id}: {plot_names}")
+
+            # Delete all violin plots for this session
+            supabase.table('training_visualizations').delete().eq(
+                'session_id', uuid_session_id
+            ).eq('plot_type', 'violin_plot').execute()
+
+            return len(existing.data)
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Error deleting old violin plots for session {session_id}: {str(e)}")
+        return 0
+
+
+def save_visualization_to_database(session_id: str, viz_name: str, viz_data, user_id: str = None) -> bool:
     """
     Save a visualization to the database (with duplicate check).
 
     Args:
         session_id: Session identifier
         viz_name: Name of the visualization
-        viz_data: Base64 encoded visualization data
+        viz_data: Base64 encoded visualization data (string) or dict with {data, type}
         user_id: User ID for session ownership (optional, uses Flask g if not provided)
 
     Returns:
@@ -869,6 +988,14 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str
             except (RuntimeError, AttributeError):
                 pass  # Not in Flask context
 
+        # Handle new format (dict with data and type) and legacy format (string)
+        if isinstance(viz_data, dict) and 'data' in viz_data:
+            image_data = viz_data.get('data', '')
+            plot_type_category = viz_data.get('type', 'input')  # 'input' | 'output' | 'time'
+        else:
+            image_data = viz_data
+            plot_type_category = 'input'  # Default for legacy
+
         # Use service_role to bypass RLS for visualization inserts
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, user_id)
@@ -879,8 +1006,9 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str
 
         if existing.data:
             viz_record = {
-                'image_data': viz_data,
-                'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
+                'image_data': image_data,
+                'plot_type': 'violin_plot' if 'violin' in viz_name else 'other',
+                'metadata': {'type': plot_type_category},
                 'created_at': datetime.now().isoformat()
             }
             response = supabase.table('training_visualizations').update(viz_record).eq(
@@ -891,8 +1019,9 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data: str
             viz_record = {
                 'session_id': uuid_session_id,
                 'plot_name': viz_name,
-                'image_data': viz_data,
-                'plot_type': 'violin_plot' if 'distribution' in viz_name else 'other',
+                'image_data': image_data,
+                'plot_type': 'violin_plot' if 'violin' in viz_name else 'other',
+                'metadata': {'type': plot_type_category},
                 'created_at': datetime.now().isoformat()
             }
             response = supabase.table('training_visualizations').insert(viz_record).execute()

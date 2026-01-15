@@ -10,13 +10,19 @@ This service handles:
 
 Created: 2025-10-24
 Phase 6a of training.py refactoring
+
+Updated: 2026-01-14
+Refactored to generate 3 separate violin plots:
+- ONE plot for INPUT features only
+- ONE plot for TIME components only
+- ONE plot for OUTPUT features only
 """
 
 import os
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +38,11 @@ def generate_violin_plots_for_session(
 
     This is phase 1 of the training workflow - data visualization only.
     Loads CSV files, processes numeric data, and generates violin plots.
+
+    Creates 3 plots total:
+    - ONE plot for INPUT features only (Eingabedaten)
+    - ONE plot for TIME components only (Zeitkomponenten)
+    - ONE plot for OUTPUT features only (Ausgabedaten)
 
     Args:
         session_id: Training session ID
@@ -71,7 +82,7 @@ def generate_violin_plots_for_session(
         raise ValueError('No data available for visualization. Please upload CSV files first')
 
     # Download files with progress tracking
-    # Now returns dict with bezeichnung as key: {bezeichnung: {path, type, file_name}}
+    # Returns dict with bezeichnung as key: {bezeichnung: {path, type, file_name}}
     downloaded_files = data_loader.download_session_files(session_id, progress_tracker=progress_tracker)
 
     # Emit parsing phase
@@ -109,9 +120,17 @@ def generate_violin_plots_for_session(
     if progress_tracker:
         progress_tracker.parsing_complete()
 
-    # Separate files by type and prepare data lists
-    input_files_data = []
-    output_files_data = []
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STRUCTURE: Separate input, time, and output features
+    # Each feature is a tuple: (feature_name, values_array)
+    # ═══════════════════════════════════════════════════════════════════════════
+    input_features: List[Tuple[str, np.ndarray]] = []
+    time_features: List[Tuple[str, np.ndarray]] = []
+    output_features: List[Tuple[str, np.ndarray]] = []
+
+    input_feature_names = []
+    time_feature_names = []
+    output_feature_names = []
 
     for bezeichnung, data in csv_data.items():
         df = data['df']
@@ -119,111 +138,106 @@ def generate_violin_plots_for_session(
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
         if numeric_cols:
-            file_data = {
-                'bezeichnung': bezeichnung,
-                'data': df[numeric_cols].values,
-                'features': numeric_cols,
-                'type': file_type
-            }
-            if file_type == 'input':
-                input_files_data.append(file_data)
-            else:
-                output_files_data.append(file_data)
+            for col in numeric_cols:
+                if file_type == 'input':
+                    input_features.append((col, df[col].values))
+                    input_feature_names.append(col)
+                else:
+                    output_features.append((col, df[col].values))
+                    output_feature_names.append(col)
 
-    if not input_files_data and not output_files_data:
+            logger.info(f"Added {len(numeric_cols)} features from '{bezeichnung}' ({file_type})")
+
+    if not input_features and not output_features:
         if progress_tracker:
             progress_tracker.error('No numeric data found in CSV files')
         raise ValueError('No numeric data found in CSV files. CSV files must contain numeric columns for visualization')
 
-    # Combine all files data for violin plot generation
-    all_files_data = input_files_data + output_files_data
-
-    # Generate TIME components if enabled in time_info
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Generate TIME components as SEPARATE time_features list
+    # ═══════════════════════════════════════════════════════════════════════════
     time_info = session_data.get('time_info', {})
     if time_info and any([time_info.get('jahr'), time_info.get('monat'),
                           time_info.get('woche'), time_info.get('tag'),
                           time_info.get('feiertag')]):
         try:
             from domains.training.data.processor import TimeFeatures
-            
+
             # Get first input file's DataFrame to extract timestamps
             first_input_df = None
             for bezeichnung, data in csv_data.items():
                 if data['type'] == 'input':
                     first_input_df = data['df']
                     break
-            
+
             if first_input_df is None and csv_data:
                 # Use any file if no input file
                 first_input_df = list(csv_data.values())[0]['df']
-            
+
             if first_input_df is not None and 'UTC' in first_input_df.columns:
                 # Ensure UTC column is datetime
                 df_copy = first_input_df.copy()
                 df_copy['UTC'] = pd.to_datetime(df_copy['UTC'])
-                
+
                 timezone = time_info.get('zeitzone', 'UTC')
                 processor = TimeFeatures(timezone)
-                
+
                 # Generate time features
                 time_features_df = processor.add_time_features(
                     df_copy, 'UTC', time_info
                 )
-                
+
                 # Extract TIME columns (y_sin, y_cos, m_sin, m_cos, w_sin, w_cos, d_sin, d_cos)
-                time_cols = [c for c in time_features_df.columns 
+                time_cols = [c for c in time_features_df.columns
                              if c.endswith('_sin') or c.endswith('_cos')]
-                
+
                 if time_cols:
-                    # Create display names: y_sin -> Y_sin, w_cos -> W_cos
-                    display_names = [c[0].upper() + c[1:] for c in time_cols]
-                    
-                    time_file_data = {
-                        'bezeichnung': 'TIME Components',
-                        'data': time_features_df[time_cols].values,
-                        'features': display_names,
-                        'type': 'time'
-                    }
-                    all_files_data.append(time_file_data)
-                    logger.info(f"Added TIME components to violin plots: {display_names}")
+                    # Add TIME features to SEPARATE time_features list
+                    for col in time_cols:
+                        # Create display names: y_sin -> Y_sin, w_cos -> W_cos
+                        display_name = col[0].upper() + col[1:]
+                        time_features.append((display_name, time_features_df[col].values))
+                        time_feature_names.append(display_name)
+
+                    logger.info(f"Added {len(time_cols)} TIME features: {[c[0].upper() + c[1:] for c in time_cols]}")
                 else:
                     logger.warning("No TIME feature columns generated")
             else:
                 logger.warning("No UTC column found in input files, skipping TIME components")
-                
+
         except Exception as e:
             logger.error(f"Error generating TIME components for violin plots: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
 
-    # Generate plots with progress tracking - one plot per bezeichnung
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Generate plots with progress tracking
+    # Pass input_features, time_features, and output_features separately
+    # ═══════════════════════════════════════════════════════════════════════════
     plot_result = generate_violin_plots_from_data(
         session_id,
-        files_data=all_files_data,
+        input_features=input_features,
+        time_features=time_features,
+        output_features=output_features,
         progress_tracker=progress_tracker
     )
-
-    # Collect features info
-    all_input_features = []
-    all_output_features = []
-    for fd in input_files_data:
-        all_input_features.extend(fd['features'])
-    for fd in output_files_data:
-        all_output_features.extend(fd['features'])
 
     result = {
         'success': plot_result['success'],
         'violin_plots': plot_result.get('plots', {}),
         'message': 'Violin plots generated successfully. Ready for model training.',
         'data_info': {
-            'input_features': list(set(all_input_features)),
-            'output_features': list(set(all_output_features)),
-            'input_files_count': len(input_files_data),
-            'output_files_count': len(output_files_data),
-            'total_files': len(all_files_data)
+            'input_features': list(set(input_feature_names)),
+            'time_features': list(set(time_feature_names)),
+            'output_features': list(set(output_feature_names)),
+            'input_features_count': len(input_features),
+            'time_features_count': len(time_features),
+            'output_features_count': len(output_features),
+            'total_features': len(input_features) + len(time_features) + len(output_features)
         }
     }
 
-    logger.info(f"✅ Violin plots generated for session {session_id}: {len(all_files_data)} files processed")
+    logger.info(f"Violin plots generated for session {session_id}: "
+                f"{len(input_features)} input, {len(time_features)} time, {len(output_features)} output features")
 
     return result

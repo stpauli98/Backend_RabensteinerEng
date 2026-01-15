@@ -22,7 +22,7 @@ from .common import (
     get_logger
 )
 
-from domains.training.services.visualization import save_visualization_to_database
+from domains.training.services.visualization import save_visualization_to_database, delete_old_violin_plots
 from domains.training.data.generator import generate_violin_plots_for_session
 from domains.training.services.orchestrator import run_model_training_async
 
@@ -59,6 +59,12 @@ def generate_datasets(session_id):
         violin_plots = result.get('violin_plots', {})
         if violin_plots:
             progress_tracker.saving_to_database()
+
+            # Clean up old violin plots before saving new ones
+            # This is necessary because the new structure has different names
+            deleted_count = delete_old_violin_plots(session_id)
+            if deleted_count > 0:
+                logger.info(f"Deleted {deleted_count} old violin plots for session {session_id}")
 
             for plot_name, plot_data in violin_plots.items():
                 try:

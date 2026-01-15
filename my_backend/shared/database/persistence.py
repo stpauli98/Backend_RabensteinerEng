@@ -24,6 +24,46 @@ from .session import get_supabase_client, get_session_uuid, create_or_get_sessio
 logger = logging.getLogger(__name__)
 
 
+def _calculate_color_index(supabase, session_id: str, file_type: str) -> int:
+    """
+    Calculate color_index for a new file based on existing files in session.
+
+    Color indexing ensures consistent colors across violin and evaluation plots:
+    - Input files: 0, 1, 2, ...
+    - Output files: input_count, input_count+1, ...
+
+    Args:
+        supabase: Supabase client instance
+        session_id: Database session UUID
+        file_type: File type ('input' or 'output')
+
+    Returns:
+        int: The calculated color_index for this file
+    """
+    try:
+        # Count existing input files
+        input_response = supabase.table(TableNames.FILES).select(
+            'id', count='exact'
+        ).eq('session_id', session_id).eq('type', 'input').execute()
+        input_count = input_response.count or 0
+
+        if file_type == 'input':
+            # New input file gets next input index
+            return input_count
+        else:
+            # Count existing output files
+            output_response = supabase.table(TableNames.FILES).select(
+                'id', count='exact'
+            ).eq('session_id', session_id).eq('type', 'output').execute()
+            output_count = output_response.count or 0
+
+            # Output file index = input_count + output_index
+            return input_count + output_count
+    except Exception as e:
+        logger.warning(f"Could not calculate color_index: {e}, defaulting to 0")
+        return 0
+
+
 def save_time_info(session_id: str, time_info: dict) -> bool:
     """Save time information to the time_info table.
 
@@ -257,7 +297,8 @@ def save_file_info(session_id: str, file_info: dict) -> Tuple[bool, Optional[str
             DomainDefaults.MITTELWERTBILDUNG
         ),
         "storage_path": storage_path,
-        "type": file_info.get("type", "")
+        "type": file_info.get("type", ""),
+        "color_index": _calculate_color_index(supabase, database_session_id, file_type)
     }
 
     utc_min = file_info.get("utcMin")
