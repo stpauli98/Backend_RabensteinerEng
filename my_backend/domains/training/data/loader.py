@@ -107,12 +107,17 @@ class DataLoader:
             response = self.supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
             
             if not response.data:
+                # No time_info record in database - return all components disabled
+                # User must explicitly configure and save time components in the UI
+                logger.warning(f"No time_info record found for session {session_id} - all time components will be disabled")
                 return {
-                    'jahr': True,
-                    'monat': True,
-                    'woche': True,
-                    'feiertag': True,
-                    'zeitzone': 'UTC'
+                    'jahr': False,
+                    'monat': False,
+                    'woche': False,
+                    'tag': False,
+                    'feiertag': False,
+                    'zeitzone': 'UTC',
+                    'category_data': {}
                 }
             
             return response.data[0]

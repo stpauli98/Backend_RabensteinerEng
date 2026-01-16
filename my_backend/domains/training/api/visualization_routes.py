@@ -20,6 +20,7 @@ from .common import (
 )
 
 from domains.training.services.visualization import Visualizer
+from domains.training.constants import calculate_time_deltas
 
 bp = Blueprint('training_visualization', __name__)
 logger = get_logger(__name__)
@@ -46,13 +47,15 @@ def get_plot_variables(session_id):
         return jsonify({'success': False, 'error': str(e)}), 403
     except Exception as e:
         logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
+        # Return error with empty arrays - no hardcoded fallbacks
         return jsonify({
-            'success': True,
+            'success': False,
             'session_id': session_id,
-            'input_variables': ['Temperature', 'Load'],
-            'output_variables': ['Predicted_Load'],
-            'time_components': ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
-        })
+            'error': f'Failed to retrieve plot variables: {str(e)}',
+            'input_variables': [],
+            'output_variables': [],
+            'time_components': []
+        }), 500
 
 
 @bp.route('/visualizations/<session_id>', methods=['GET'])
@@ -200,15 +203,37 @@ def get_evaluation_tables(session_id):
                 'session_id': session_id
             }), 404
 
-        output_features = results.get('output_features', ['Netzlast [kW]'])
+        # Get output_features from results or dynamically from files table
+        output_features = results.get('output_features', [])
         if not output_features:
-            output_features = ['Netzlast [kW]']
+            output_features = results.get('output_columns', [])
+        if not output_features:
+            output_features = results.get('data_info', {}).get('output_columns', [])
+
+        # Fallback: Get from files table if still empty
+        if not output_features:
+            file_response = supabase.table('files').select('columns, file_type').eq('session_id', uuid_session_id).execute()
+            if file_response.data:
+                for f in file_response.data:
+                    if f.get('file_type') == 'output':
+                        columns = f.get('columns', [])
+                        output_features = [c for c in columns if c.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
+                        break
+
+        if not output_features:
+            return jsonify({
+                'success': False,
+                'error': 'No output features found for this session',
+                'session_id': session_id
+            }), 404
 
         df_eval = {}
         df_eval_ts = {}
 
-        # Originalne delta vrijednosti: 15*n za n=1..12 (kao u original training.py)
-        time_deltas = [15 * n for n in range(1, 13)]  # [15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180]
+        # Get time_deltas dynamically from zeitschritte table
+        zeitschritte_response = supabase.table('zeitschritte').select('*').eq('session_id', uuid_session_id).execute()
+        zeitschritte = zeitschritte_response.data[0] if zeitschritte_response.data else {}
+        time_deltas = calculate_time_deltas(zeitschritte)
 
         for feature_name in output_features:
             delt_list = []

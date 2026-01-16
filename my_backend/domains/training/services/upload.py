@@ -857,6 +857,11 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
     import uuid as uuid_lib
     from shared.database.operations import get_supabase_client
 
+    # DEBUG: Log incoming data
+    logger.info(f"📥 UPDATE CSV FILE RECORD - file_id: {file_id}")
+    logger.info(f"📥 Received file_data keys: {list(file_data.keys())}")
+    logger.info(f"📥 Received file_data: {file_data}")
+
     try:
         uuid_lib.UUID(file_id)
     except (ValueError, TypeError):
@@ -890,13 +895,19 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
                 # Handle None, empty string, and 'null' string as SQL NULL
                 if value is None or value == '' or value == 'null' or value == 'None':
                     update_data[field] = None
+                    logger.info(f"📝 Field '{field}': '{value}' → None (numeric, empty/null)")
                 else:
                     try:
                         update_data[field] = float(value)
+                        logger.info(f"📝 Field '{field}': '{value}' → {float(value)} (numeric)")
                     except (ValueError, TypeError):
                         update_data[field] = None
+                        logger.warning(f"📝 Field '{field}': '{value}' → None (numeric, conversion failed)")
             else:
                 update_data[field] = file_data[field]
+                logger.info(f"📝 Field '{field}': '{file_data[field]}' (non-numeric)")
+
+    logger.info(f"📤 Final update_data: {update_data}")
 
     if not update_data:
         raise ValueError('No valid fields to update')
@@ -908,7 +919,8 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
 
     updated_file = response.data[0]
 
-    logger.info(f"Updated CSV file record: {file_id}")
+    logger.info(f"✅ Updated CSV file record: {file_id}")
+    logger.info(f"✅ Response data: {updated_file}")
 
     return updated_file
 

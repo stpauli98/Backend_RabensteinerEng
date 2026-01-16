@@ -8,7 +8,7 @@ from typing import Dict, Optional, Any
 from datetime import datetime
 import traceback
 
-from domains.training.config import MTS, MDL
+from domains.training.config import MTS, MDL, T
 from domains.training.data.loader import create_data_loader
 from domains.training.data.processor import create_data_processor
 from domains.training.ml.trainer import create_model_trainer
@@ -537,32 +537,103 @@ class TrainingPipeline:
     def _create_mts_config(self, session_data: Dict) -> MTS:
         """
         Create MTS configuration from session data
-        
+
         Args:
             session_data: Session data
-            
+
         Returns:
             MTS configuration object
         """
         try:
             config = MTS()
-            
+
             time_info = session_data.get('time_info', {})
             zeitschritte = session_data.get('zeitschritte', {})
-            
-            config.jahr = time_info.get('jahr', True)
-            config.monat = time_info.get('monat', True)
-            config.woche = time_info.get('woche', True)
-            config.feiertag = time_info.get('feiertag', True)
+            category_data = time_info.get('category_data', {})
+
+            # Set MTS config attributes
+            config.jahr = time_info.get('jahr', False)
+            config.monat = time_info.get('monat', False)
+            config.woche = time_info.get('woche', False)
+            config.tag = time_info.get('tag', False)
+            config.feiertag = time_info.get('feiertag', False)
             config.timezone = time_info.get('zeitzone', 'UTC')
-            
+
+            # CRITICAL: Set static T class attributes that transformer.py uses
+            # These must be set BEFORE data processing begins
+            T.Y.IMP = time_info.get('jahr', False)
+            T.M.IMP = time_info.get('monat', False)
+            T.W.IMP = time_info.get('woche', False)
+            T.D.IMP = time_info.get('tag', False)
+            T.H.IMP = time_info.get('feiertag', False)
+            T.TZ = time_info.get('zeitzone', 'UTC')
+
+            # Set detailed time component settings from category_data
+            if category_data:
+                # Jahr (Year) settings
+                if 'jahr' in category_data:
+                    jahr_data = category_data['jahr']
+                    T.Y.SPEC = jahr_data.get('datenform', 'Zeithorizont')
+                    T.Y.TH_STRT = float(jahr_data.get('zeithorizontStart', -24))
+                    T.Y.TH_END = float(jahr_data.get('zeithorizontEnd', 0))
+                    T.Y.SCAL = jahr_data.get('skalierung', 'ja') == 'ja'
+                    T.Y.SCAL_MIN = float(jahr_data.get('skalierungMin', 0))
+                    T.Y.SCAL_MAX = float(jahr_data.get('skalierungMax', 1))
+                    T.Y.LT = jahr_data.get('detaillierteBerechnung', False)
+
+                # Monat (Month) settings
+                if 'monat' in category_data:
+                    monat_data = category_data['monat']
+                    T.M.SPEC = monat_data.get('datenform', 'Zeithorizont')
+                    T.M.TH_STRT = float(monat_data.get('zeithorizontStart', -24))
+                    T.M.TH_END = float(monat_data.get('zeithorizontEnd', 0))
+                    T.M.SCAL = monat_data.get('skalierung', 'ja') == 'ja'
+                    T.M.SCAL_MIN = float(monat_data.get('skalierungMin', 0))
+                    T.M.SCAL_MAX = float(monat_data.get('skalierungMax', 1))
+                    T.M.LT = monat_data.get('detaillierteBerechnung', False)
+
+                # Woche (Week) settings
+                if 'woche' in category_data:
+                    woche_data = category_data['woche']
+                    T.W.SPEC = woche_data.get('datenform', 'Zeithorizont')
+                    T.W.TH_STRT = float(woche_data.get('zeithorizontStart', -24))
+                    T.W.TH_END = float(woche_data.get('zeithorizontEnd', 0))
+                    T.W.SCAL = woche_data.get('skalierung', 'ja') == 'ja'
+                    T.W.SCAL_MIN = float(woche_data.get('skalierungMin', 0))
+                    T.W.SCAL_MAX = float(woche_data.get('skalierungMax', 1))
+                    T.W.LT = woche_data.get('detaillierteBerechnung', False)
+
+                # Tag (Day) settings
+                if 'tag' in category_data:
+                    tag_data = category_data['tag']
+                    T.D.SPEC = tag_data.get('datenform', 'Zeithorizont')
+                    T.D.TH_STRT = float(tag_data.get('zeithorizontStart', -24))
+                    T.D.TH_END = float(tag_data.get('zeithorizontEnd', 0))
+                    T.D.SCAL = tag_data.get('skalierung', 'ja') == 'ja'
+                    T.D.SCAL_MIN = float(tag_data.get('skalierungMin', 0))
+                    T.D.SCAL_MAX = float(tag_data.get('skalierungMax', 1))
+                    T.D.LT = tag_data.get('detaillierteBerechnung', False)
+
+                # Feiertag (Holiday) settings
+                if 'feiertag' in category_data:
+                    feiertag_data = category_data['feiertag']
+                    T.H.SPEC = feiertag_data.get('datenform', 'Zeithorizont')
+                    T.H.TH_STRT = float(feiertag_data.get('zeithorizontStart', -24))
+                    T.H.TH_END = float(feiertag_data.get('zeithorizontEnd', 0))
+                    T.H.SCAL = feiertag_data.get('skalierung', 'ja') == 'ja'
+                    T.H.SCAL_MIN = float(feiertag_data.get('skalierungMin', 0))
+                    T.H.SCAL_MAX = float(feiertag_data.get('skalierungMax', 1))
+                    T.H.CNTRY = feiertag_data.get('land', 'Österreich')
+
+            logger.info(f"Time components configured: Y={T.Y.IMP}, M={T.M.IMP}, W={T.W.IMP}, D={T.D.IMP}, H={T.H.IMP}")
+
             config.time_steps_in = int(zeitschritte.get('eingabe', 24))
             config.time_steps_out = int(zeitschritte.get('ausgabe', 1))
             config.time_step_size = int(zeitschritte.get('zeitschrittweite', 1))
             config.offset = int(zeitschritte.get('offset', 0))
-            
+
             return config
-            
+
         except Exception as e:
             logger.error(f"Error creating MTS config: {str(e)}")
             raise

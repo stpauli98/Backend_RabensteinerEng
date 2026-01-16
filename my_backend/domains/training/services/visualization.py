@@ -14,6 +14,11 @@ from typing import Dict, List, Optional, Tuple
 import logging
 
 from domains.training.config import PLOT_SETTINGS
+from domains.training.constants import (
+    TIME_COMPONENT_NAMES,
+    TIMESTAMP_COLUMN_NAMES,
+    get_active_time_components
+)
 
 logger = logging.getLogger(__name__)
 
@@ -434,23 +439,35 @@ class Visualizer:
         """
         Get available input and output variables for plotting from session data.
 
+        DYNAMIC: All values are fetched from database, no hardcoded fallbacks.
+
         Args:
             session_id: Session identifier
+            user_id: User ID for session lookup
 
         Returns:
             dict: {
-                'input_variables': list,
-                'output_variables': list
+                'input_variables': list (from files/training_results),
+                'output_variables': list (from files/training_results),
+                'time_components': list (from time_info table)
             }
         """
         try:
             from utils.training_storage import fetch_training_results_with_storage
             from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
-            results = fetch_training_results_with_storage(session_id)
+            supabase = get_supabase_client()
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
 
             input_variables = []
             output_variables = []
+            time_components = []
+
+            logger.info(f"get_available_variables called for session_id={session_id}, uuid={uuid_session_id}")
+
+            # 1. Try to get from training_results first (most reliable after training)
+            results = fetch_training_results_with_storage(session_id)
+            logger.info(f"training_results keys: {list(results.keys()) if results else 'None'}")
 
             if results:
                 input_variables = (
@@ -463,40 +480,60 @@ class Visualizer:
                     results.get('output_columns') or
                     results.get('data_info', {}).get('output_columns', [])
                 )
+                logger.info(f"From training_results: inputs={input_variables}, outputs={output_variables}")
 
-            if not input_variables and not output_variables:
-                supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
+            # 2. Fallback: Get from files table (before training is complete)
+            if not input_variables or not output_variables:
                 file_response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
+                logger.info(f"Files table returned {len(file_response.data) if file_response.data else 0} files")
 
                 if file_response.data:
                     for file_data in file_response.data:
-                        file_type = file_data.get('file_type', '')
+                        file_type = file_data.get('type', '') or file_data.get('file_type', '')
+                        datentyp = file_data.get('datentyp', '')
                         columns = file_data.get('columns', [])
+                        bezeichnung = file_data.get('bezeichnung', '')
+                        logger.info(f"File: {bezeichnung}, type={file_type}, columns={columns[:3] if columns else []}")
 
-                        if file_type == 'input' and not input_variables:
-                            input_variables = [col for col in columns if col.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
-                        elif file_type == 'output' and not output_variables:
-                            output_variables = [col for col in columns if col.lower() not in ['timestamp', 'utc', 'zeit', 'datetime']]
+                        # Check both file_type and datentyp for compatibility
+                        is_input = file_type == 'input' or datentyp in ['input', 'Eingabedaten']
+                        is_output = file_type == 'output' or datentyp in ['output', 'Ausgabedaten']
 
-            if not input_variables:
-                input_variables = ['Temperature', 'Load']
-            if not output_variables:
-                output_variables = ['Predicted_Load']
+                        # Use columns if available, otherwise use bezeichnung as the feature name
+                        feature_names = columns if columns else [bezeichnung] if bezeichnung else []
 
-            # Define known TIME component names
-            time_component_names = ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
-            
-            # Separate regular input variables from TIME components
+                        if is_input:
+                            feature_list = [
+                                col for col in feature_names
+                                if col.lower() not in TIMESTAMP_COLUMN_NAMES
+                            ]
+                            if feature_list:
+                                input_variables.extend(feature_list)
+                        elif is_output:
+                            feature_list = [
+                                col for col in feature_names
+                                if col.lower() not in TIMESTAMP_COLUMN_NAMES
+                            ]
+                            if feature_list:
+                                output_variables.extend(feature_list)
+
+            # 3. Get TIME components from time_info table (DYNAMIC based on user configuration)
+            time_info_response = supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
+            logger.info(f"time_info table returned: {time_info_response.data[0] if time_info_response.data else 'None'}")
+
+            if time_info_response.data:
+                time_info = time_info_response.data[0]
+                time_components = get_active_time_components(time_info)
+
+            # 4. Separate regular inputs from TIME components (if TIME components are in input_variables)
             input_vars_list = input_variables if isinstance(input_variables, list) else []
-            regular_inputs = [v for v in input_vars_list if v not in time_component_names]
-            time_components = [v for v in input_vars_list if v in time_component_names]
-            
-            # If no TIME components found in stored data, return default TIME component names
-            # (they may exist in the data but not be named in metadata)
-            if not time_components:
-                time_components = time_component_names
-            
+            regular_inputs = [v for v in input_vars_list if v not in TIME_COMPONENT_NAMES]
+
+            # Also check if TIME components are stored in input_variables
+            stored_time_components = [v for v in input_vars_list if v in TIME_COMPONENT_NAMES]
+            if stored_time_components and not time_components:
+                time_components = stored_time_components
+
             logger.info(f"get_available_variables: inputs={regular_inputs}, time={time_components}, outputs={output_variables}")
 
             return {
@@ -507,10 +544,12 @@ class Visualizer:
 
         except Exception as e:
             logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
+            # Return empty arrays on error - no hardcoded fallbacks
             return {
-                'input_variables': ['Temperature', 'Load'],
-                'output_variables': ['Predicted_Load'],
-                'time_components': ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
+                'input_variables': [],
+                'output_variables': [],
+                'time_components': [],
+                'error': str(e)
             }
 
     def get_session_visualizations(self, session_id: str, user_id: str = None) -> Dict:
@@ -663,12 +702,45 @@ class Visualizer:
             test_data = results.get('test_data', {})
             metadata = results.get('metadata', {})
             scalers = results.get('scalers', {})
-            
-            # Get input features for name-to-index mapping
-            input_features = results.get('input_features', [])
-            output_features = results.get('output_features', [])
-            logger.info(f"Input features from storage: {input_features}")
-            logger.info(f"Output features from storage: {output_features}")
+
+            # Build input_features and output_features DYNAMICALLY from database
+            # This matches the original training.py structure where features are ordered:
+            # [input_files...] + [TIME_components...] for input
+            # [output_files...] for output
+            from shared.database.operations import get_supabase_client, create_or_get_session_uuid
+
+            supabase = get_supabase_client()
+            uuid_session_id = create_or_get_session_uuid(session_id)
+
+            # Get file names from files table (ordered by color_index for consistent ordering)
+            file_response = supabase.table('files').select('bezeichnung, type, color_index').eq('session_id', uuid_session_id).order('color_index').execute()
+
+            input_file_names = []
+            output_file_names = []
+
+            if file_response.data:
+                for f in file_response.data:
+                    bezeichnung = f.get('bezeichnung', '')
+                    file_type = f.get('type', '')
+                    if file_type == 'input' and bezeichnung:
+                        input_file_names.append(bezeichnung)
+                    elif file_type == 'output' and bezeichnung:
+                        output_file_names.append(bezeichnung)
+
+            # Get TIME components from time_info table
+            time_info_response = supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
+            time_components = []
+            if time_info_response.data:
+                time_info = time_info_response.data[0]
+                time_components = get_active_time_components(time_info)
+
+            # Build complete input_features list: [input_files] + [TIME_components]
+            # This matches original training.py ordering
+            input_features = input_file_names + time_components
+            output_features = output_file_names
+
+            logger.info(f"Dynamic input features: {input_features} (files: {input_file_names}, time: {time_components})")
+            logger.info(f"Dynamic output features: {output_features}")
 
             has_test_data = False
             if test_data:
@@ -772,8 +844,7 @@ class Visualizer:
                                     y_values = tst_x[i_sbpl, :, feat_idx]
 
                                 # Determine label prefix based on whether it's a TIME component
-                                time_components = ['Y_sin', 'Y_cos', 'M_sin', 'M_cos', 'W_sin', 'W_cos', 'D_sin', 'D_cos', 'Holiday']
-                                label_prefix = 'TIME' if var_name in time_components else 'IN'
+                                label_prefix = 'TIME' if var_name in TIME_COMPONENT_NAMES else 'IN'
                                 
                                 ax.plot(x_values, y_values,
                                        label=f'{label_prefix}: {var_name}',
