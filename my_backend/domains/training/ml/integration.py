@@ -133,6 +133,14 @@ class RealDataProcessor:
             delt = float(zeitschritte.get('zeitschrittweite', 15))
             ofst = float(zeitschritte.get('offset', 0))
 
+            # Get time_info for TIME components (y_sin, y_cos, w_sin, etc.)
+            time_info = session_data.get('time_info', {})
+            category_data = time_info.get('category_data', {})
+
+            logger.info(f"TIME components config: jahr={time_info.get('jahr')}, "
+                       f"woche={time_info.get('woche')}, tag={time_info.get('tag')}, "
+                       f"monat={time_info.get('monat')}, feiertag={time_info.get('feiertag')}")
+
             # Build file_info lookup by file_name
             file_info_map = {}
             if files_info:
@@ -169,22 +177,40 @@ class RealDataProcessor:
                                     input_df, output_df,
                                     time_steps_in, time_steps_out,
                                     delt, ofst,
-                                    input_file_info, output_file_info
+                                    input_file_info, output_file_info,
+                                    time_info, category_data  # Pass TIME components config!
                                 )
 
                                 if X is not None and len(X) > 0:
+                                    # Build feature names list (file names + TIME components)
+                                    input_feature_names = [input_name]
+
+                                    # Add TIME component names based on config
+                                    if time_info.get('jahr'):
+                                        input_feature_names.extend(['y_sin', 'y_cos'])
+                                    if time_info.get('monat'):
+                                        input_feature_names.extend(['m_sin', 'm_cos'])
+                                    if time_info.get('woche'):
+                                        input_feature_names.extend(['w_sin', 'w_cos'])
+                                    if time_info.get('tag'):
+                                        input_feature_names.extend(['d_sin', 'd_cos'])
+                                    if time_info.get('feiertag'):
+                                        input_feature_names.append('h')
+
                                     datasets[dataset_name] = {
                                         'X': X,
                                         'y': y,
                                         'time_steps_in': time_steps_in,
                                         'time_steps_out': time_steps_out,
                                         'input_features': X.shape[-1] if len(X.shape) > 2 else 1,
+                                        'input_feature_names': input_feature_names,  # Store actual names!
                                         'output_features': y.shape[-1] if len(y.shape) > 2 else 1,
+                                        'output_feature_names': [output_name],
                                         'input_file_info': input_file_info,
                                         'output_file_info': output_file_info,
                                         'zeithorizont_used': True
                                     }
-                                    logger.info(f"Created zeithorizont dataset {dataset_name}: X={X.shape}, y={y.shape}")
+                                    logger.info(f"Created zeithorizont dataset {dataset_name}: X={X.shape}, y={y.shape}, features={input_feature_names}")
                                     continue
 
                             except Exception as zh_error:
@@ -218,13 +244,18 @@ class RealDataProcessor:
                                         y[i:i+time_steps_out] for i in range(samples)
                                     ])
 
+                                    # Build feature names for fallback method (no TIME components in fallback)
+                                    fallback_input_names = [input_name]
+
                                     datasets[dataset_name] = {
                                         'X': X_reshaped,
                                         'y': y_reshaped,
                                         'time_steps_in': time_steps_in,
                                         'time_steps_out': time_steps_out,
                                         'input_features': X.shape[1],
+                                        'input_feature_names': fallback_input_names,
                                         'output_features': y.shape[1] if len(y.shape) > 1 else 1,
+                                        'output_feature_names': [output_name],
                                         'input_file_info': input_file_info,
                                         'output_file_info': output_file_info,
                                         'zeithorizont_used': False

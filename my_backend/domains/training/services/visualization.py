@@ -16,6 +16,7 @@ import logging
 from domains.training.config import PLOT_SETTINGS
 from domains.training.constants import (
     TIME_COMPONENT_NAMES,
+    TIME_NAME_DISPLAY_MAP,
     TIMESTAMP_COLUMN_NAMES,
     get_active_time_components
 )
@@ -637,6 +638,15 @@ class Visualizer:
         """
         Generate custom plot based on user selections.
 
+        MATCHED TO ORIGINAL training.py (lines 2401-3309):
+        - Random subplot selection
+        - tst_inf dictionary structure with DataFrames
+        - "separate Achsen" implementation with twinx()
+        - Color palette indexing: input at i_feat, output at n_input + i_feat
+        - Reference UTC marker (vertical dashed line)
+        - FCST with marker='x', linestyle='--'
+        - Subplot title with UTC timestamp
+
         Args:
             session_id: Session identifier
             plot_settings: Plot configuration {num_sbpl, x_sbpl, y_sbpl_fmt, y_sbpl_set}
@@ -654,6 +664,9 @@ class Visualizer:
         try:
             from utils.training_storage import fetch_training_results_with_storage
             import pickle
+            import math
+            import random
+            import datetime
             import matplotlib
             matplotlib.use('Agg')
             import matplotlib.pyplot as plt
@@ -703,16 +716,22 @@ class Visualizer:
             metadata = results.get('metadata', {})
             scalers = results.get('scalers', {})
 
-            # Build input_features and output_features DYNAMICALLY from database
-            # This matches the original training.py structure where features are ordered:
-            # [input_files...] + [TIME_components...] for input
-            # [output_files...] for output
+            # ===================================================================
+            # GET FEATURE NAMES - PRIORITIZE STORED FEATURES OVER DATABASE
+            # ===================================================================
+            # The stored training results contain the actual features that were
+            # used during training. The database might have different configuration
+            # (e.g., TIME components added after training).
             from shared.database.operations import get_supabase_client, create_or_get_session_uuid
 
             supabase = get_supabase_client()
             uuid_session_id = create_or_get_session_uuid(session_id)
 
-            # Get file names from files table (ordered by color_index for consistent ordering)
+            # First try to get features from stored results (most reliable)
+            stored_input_features = results.get('input_features', [])
+            stored_output_features = results.get('output_features', [])
+
+            # Get file names from files table (for fallback and reference)
             file_response = supabase.table('files').select('bezeichnung, type, color_index').eq('session_id', uuid_session_id).order('color_index').execute()
 
             input_file_names = []
@@ -729,21 +748,48 @@ class Visualizer:
 
             # Get TIME components from time_info table
             time_info_response = supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
-            time_components = []
+            time_components_from_db = []
             if time_info_response.data:
                 time_info = time_info_response.data[0]
-                time_components = get_active_time_components(time_info)
+                time_components_from_db = get_active_time_components(time_info)
 
-            # Build complete input_features list: [input_files] + [TIME_components]
-            # This matches original training.py ordering
-            input_features = input_file_names + time_components
-            output_features = output_file_names
+            # Decide which features to use:
+            # 1. If stored features are available and non-empty, use them
+            # 2. Otherwise, build from database
+            if stored_input_features:
+                input_features = stored_input_features
+                # Separate into files and time components for plotting keys
+                input_file_names_actual = [f for f in input_features if f not in TIME_COMPONENT_NAMES]
+                time_components = [f for f in input_features if f in TIME_COMPONENT_NAMES]
+                logger.info(f"Using STORED input features: {input_features}")
+            else:
+                # Build from database
+                input_features = input_file_names + time_components_from_db
+                input_file_names_actual = input_file_names
+                time_components = time_components_from_db
+                logger.info(f"Building input features from database: {input_features}")
 
-            logger.info(f"Dynamic input features: {input_features} (files: {input_file_names}, time: {time_components})")
-            logger.info(f"Dynamic output features: {output_features}")
+            if stored_output_features:
+                output_features = stored_output_features
+                logger.info(f"Using STORED output features: {output_features}")
+            else:
+                output_features = output_file_names
+                logger.info(f"Building output features from database: {output_features}")
 
+            # Update input_file_names with actual values for plotting
+            input_file_names = input_file_names_actual
+
+            logger.info(f"Final features - input files: {input_file_names}, time: {time_components}, output: {output_features}")
+
+            # ===================================================================
+            # LOAD TEST DATA - BOTH SCALED AND ORIGINAL (MATCHES ORIGINAL)
+            # ===================================================================
             has_test_data = False
+            tst_x_orig = None
+            tst_y_orig = None
+
             if test_data:
+                # Load scaled data
                 if 'X' in test_data and 'y' in test_data:
                     tst_x = np.array(test_data.get('X'))
                     tst_y = np.array(test_data.get('y'))
@@ -753,22 +799,99 @@ class Visualizer:
                     tst_y = np.array(test_data.get('y_test'))
                     has_test_data = True
 
+                # Load original (unscaled) data - MATCHES ORIGINAL training.py
+                if 'X_orig' in test_data:
+                    tst_x_orig = np.array(test_data.get('X_orig'))
+                    logger.info(f"Loaded X_orig with shape: {tst_x_orig.shape}")
+                else:
+                    tst_x_orig = tst_x  # Fallback to scaled
+                    logger.info("X_orig not found, using scaled X as fallback")
+
+                if 'y_orig' in test_data:
+                    tst_y_orig = np.array(test_data.get('y_orig'))
+                    logger.info(f"Loaded y_orig with shape: {tst_y_orig.shape}")
+                else:
+                    tst_y_orig = tst_y  # Fallback to scaled
+                    logger.info("y_orig not found, using scaled y as fallback")
+
             if not has_test_data:
                 logger.error(f"No test data found in database for session {session_id}")
                 raise ValueError('No training data available for this session. Please train a model first before generating plots')
-            
-            # Log data shapes for debugging
-            logger.info(f"tst_x shape: {tst_x.shape}, tst_y shape: {tst_y.shape}")
-            logger.info(f"Number of input features in array: {tst_x.shape[-1]}")
-            logger.info(f"Number of named input features: {len(input_features)}")
 
+            # Get utc_ref_log from metadata - MATCHES ORIGINAL (line 2468)
+            utc_ref_log = metadata.get('utc_ref_log', [])
+            n_tst = tst_x.shape[0]
+
+            # Convert string timestamps to datetime if needed
+            utc_ref_log_tst = []
+            if utc_ref_log:
+                utc_ref_log_tst = utc_ref_log[-n_tst:] if len(utc_ref_log) >= n_tst else utc_ref_log
+                # Convert strings to datetime objects
+                for i, ts in enumerate(utc_ref_log_tst):
+                    if isinstance(ts, str):
+                        try:
+                            utc_ref_log_tst[i] = pd.to_datetime(ts)
+                        except Exception:
+                            utc_ref_log_tst[i] = None
+
+            logger.info(f"tst_x shape: {tst_x.shape}, tst_y shape: {tst_y.shape}")
+            logger.info(f"utc_ref_log entries: {len(utc_ref_log_tst)}")
+
+            # ===================================================================
+            # VALIDATE AND ADJUST FEATURES TO MATCH ACTUAL DATA DIMENSIONS
+            # ===================================================================
+            actual_input_features = tst_x.shape[-1]
+            actual_output_features = tst_y.shape[-1]
+
+            # Validate input features match actual data dimensions
+            if len(input_features) != actual_input_features:
+                if len(input_features) > actual_input_features:
+                    # Truncate to match array (TIME components might not be in stored data)
+                    logger.warning(f"More feature names ({len(input_features)}) than array dimensions ({actual_input_features}). "
+                                  f"Truncating to match stored data.")
+                    input_features = input_features[:actual_input_features]
+                    # Re-separate files and time components
+                    input_file_names = [f for f in input_features if f not in TIME_COMPONENT_NAMES]
+                    time_components = [f for f in input_features if f in TIME_COMPONENT_NAMES]
+                    logger.info(f"Truncated input features to: {input_features}")
+                else:
+                    # Array has more features than we have names - ERROR
+                    raise ValueError(
+                        f"Input feature mismatch: Array has {actual_input_features} features but only "
+                        f"{len(input_features)} feature names found ({input_features}). "
+                        f"This indicates corrupted or incomplete training data."
+                    )
+
+            # Validate output features match actual data dimensions
+            if len(output_features) != actual_output_features:
+                if len(output_features) > actual_output_features:
+                    logger.warning(f"More output names ({len(output_features)}) than array dimensions ({actual_output_features}). "
+                                  f"Truncating to match stored data.")
+                    output_features = output_features[:actual_output_features]
+                else:
+                    # Array has more features than we have names - ERROR
+                    raise ValueError(
+                        f"Output feature mismatch: Array has {actual_output_features} features but only "
+                        f"{len(output_features)} feature names found ({output_features}). "
+                        f"This indicates corrupted or incomplete training data."
+                    )
+
+            logger.info(f"Validated features - inputs: {len(input_features)}, outputs: {len(output_features)}")
+
+            # Get time series parameters from metadata
+            I_N = tst_x.shape[1]  # Input timesteps
+            O_N = tst_y.shape[1]  # Output timesteps
+            DELT = metadata.get('delt', 15)  # Default 15 minutes
+
+            # ===================================================================
+            # GENERATE PREDICTIONS
+            # ===================================================================
             if trained_model and hasattr(trained_model, 'predict'):
                 model_type = results.get('model_type', 'Unknown')
 
                 if model_type in ['SVR_dir', 'SVR_MIMO', 'LIN']:
                     logger.info(f"Using SVR/LIN prediction logic for model type: {model_type}")
                     n_samples = tst_x.shape[0]
-                    n_outputs = tst_y.shape[-1] if len(tst_y.shape) > 2 else 1
 
                     tst_fcst = []
 
@@ -796,158 +919,564 @@ class Visualizer:
                         tst_fcst = np.squeeze(tst_fcst, axis=-1)
                         logger.info(f"Shape after squeeze: {tst_fcst.shape}")
             else:
-                logger.error(f"Model is not available as an object for session {session_id} (stored as: {type(trained_model).__name__})")
-                raise ValueError('Model not available for predictions. The trained model cannot be used for predictions. Please retrain the model.')
+                logger.error(f"Model is not available as an object for session {session_id}")
+                raise ValueError('Model not available for predictions. Please retrain the model.')
 
-            num_sbpl = min(num_sbpl, len(tst_x))
-            num_sbpl_x = int(np.ceil(np.sqrt(num_sbpl)))
-            num_sbpl_y = int(np.ceil(num_sbpl / num_sbpl_x))
+            # Inverse transform forecast if scalers available - for "original" format
+            tst_fcst_orig = tst_fcst.copy()
+            if y_sbpl_fmt == 'original' and scalers:
+                o_scalers = scalers.get('output_scalers', [])
+                if o_scalers and len(tst_fcst.shape) == 3:
+                    for i_feat in range(min(len(o_scalers), tst_fcst.shape[-1])):
+                        if o_scalers[i_feat] is not None:
+                            try:
+                                for i_sample in range(tst_fcst.shape[0]):
+                                    tst_fcst_orig[i_sample, :, i_feat] = o_scalers[i_feat].inverse_transform(
+                                        tst_fcst[i_sample, :, i_feat].reshape(-1, 1)
+                                    ).ravel()
+                            except Exception as e:
+                                logger.warning(f"Could not inverse transform forecast feature {i_feat}: {e}")
+
+            # ===================================================================
+            # SUBPLOT SETUP - MATCHES ORIGINAL (lines 2432-2465)
+            # ===================================================================
+
+            # Calculate number of axes for "separate Achsen" mode
+            n_ax = 0
+            n_ax_l = 1
+            n_ax_r = 0
+
+            if y_sbpl_set == "separate Achsen":
+                # Count selected input variables
+                n_ax = sum(1 for v in df_plot_in.values() if v)
+                # Count output/forecast (combined - same axis for both)
+                for var_name in df_plot_out.keys():
+                    if df_plot_out.get(var_name) or df_plot_fcst.get(var_name):
+                        n_ax += 1
+
+                n_ax_l = max(1, math.floor(n_ax / 2))
+                n_ax_r = n_ax - n_ax_l
+                logger.info(f"Separate axes mode: n_ax={n_ax}, n_ax_l={n_ax_l}, n_ax_r={n_ax_r}")
+
+            # Limit subplots to available test data
+            num_sbpl = min(num_sbpl, n_tst)
+
+            # Calculate subplot grid - MATCHES ORIGINAL (lines 2448-2452)
+            num_sbpl_x = math.ceil(math.sqrt(num_sbpl))
+            num_sbpl_y = math.ceil(num_sbpl / num_sbpl_x)
 
             fig, axs = plt.subplots(num_sbpl_y, num_sbpl_x,
                                    figsize=(20, 13),
                                    layout='constrained')
 
-            if num_sbpl == 1:
-                axs = [axs]
-            else:
-                axs = axs.flatten()
+            # Handle single subplot case
+            if num_sbpl_y == 1 and num_sbpl_x == 1:
+                axs = np.array([[axs]])
+            elif num_sbpl_y == 1:
+                axs = axs.reshape(1, -1)
+            elif num_sbpl_x == 1:
+                axs = axs.reshape(-1, 1)
 
-            total_vars = len([k for k, v in df_plot_in.items() if v]) + \
-                        len([k for k, v in df_plot_out.items() if v]) + \
-                        len([k for k, v in df_plot_fcst.items() if v])
-            palette = sns.color_palette("tab20", max(20, total_vars))
+            # Remove empty subplots - MATCHES ORIGINAL (lines 2459-2462)
+            sbpl_del = num_sbpl_x * num_sbpl_y - num_sbpl
+            for i in range(sbpl_del):
+                axs[num_sbpl_y - 1, num_sbpl_x - 1 - i].axis('off')
+
+            # Random selection of test datasets - MATCHES ORIGINAL (line 2465)
+            tst_random = random.sample(range(n_tst), num_sbpl)
+            logger.info(f"Random test sample indices: {tst_random[:5]}...")
+
+            # ===================================================================
+            # BUILD tst_inf DICTIONARY - MATCHES ORIGINAL (lines 2475-2939)
+            # ===================================================================
+            tst_inf = {}
+
+            for random_num in tst_random:
+                # Get UTC reference for this sample
+                utc_ref = None
+                if utc_ref_log_tst and random_num < len(utc_ref_log_tst):
+                    utc_ref = utc_ref_log_tst[random_num]
+
+                tst_inf[random_num] = {"utc_ref": utc_ref}
+
+                # Generate UTC timestamps for input data
+                if utc_ref:
+                    try:
+                        utc_th_in = pd.date_range(
+                            end=utc_ref,
+                            periods=I_N,
+                            freq=f'{DELT}min'
+                        ).to_list()
+                    except Exception:
+                        utc_th_in = [utc_ref] * I_N
+                else:
+                    # Fallback: generate timestamps starting from now
+                    utc_th_in = pd.date_range(
+                        start=pd.Timestamp.now() - pd.Timedelta(minutes=DELT * I_N),
+                        periods=I_N,
+                        freq=f'{DELT}min'
+                    ).to_list()
+
+                # Generate UTC timestamps for output data
+                if utc_ref:
+                    try:
+                        utc_th_out = pd.date_range(
+                            start=utc_ref,
+                            periods=O_N,
+                            freq=f'{DELT}min'
+                        ).to_list()
+                    except Exception:
+                        utc_th_out = [utc_ref] * O_N
+                else:
+                    utc_th_out = pd.date_range(
+                        start=pd.Timestamp.now(),
+                        periods=O_N,
+                        freq=f'{DELT}min'
+                    ).to_list()
+
+                # INPUT DATA - MATCHES ORIGINAL (lines 2488-2530)
+                for i_feat, feat_name in enumerate(input_file_names):
+                    if i_feat < tst_x.shape[-1]:
+                        if y_sbpl_fmt == "original":
+                            value = tst_x_orig[random_num, :, i_feat]
+                        else:
+                            value = tst_x[random_num, :, i_feat]
+
+                        df = pd.DataFrame({
+                            "UTC": utc_th_in,
+                            "ts": list(range(-I_N + 1, 1)),
+                            "value": value
+                        })
+                        tst_inf[random_num]["IN: " + feat_name] = df
+
+                # TIME COMPONENTS - MATCHES ORIGINAL (lines 2585-2897)
+                # Convert lowercase TIME names to UPPERCASE for display (Y_sin, Y_cos, etc.)
+                time_start_idx = len(input_file_names)
+                for i_time, time_name in enumerate(time_components):
+                    time_idx = time_start_idx + i_time
+                    if time_idx < tst_x.shape[-1]:
+                        if y_sbpl_fmt == "original":
+                            value = tst_x_orig[random_num, :, time_idx]
+                        else:
+                            value = tst_x[random_num, :, time_idx]
+
+                        df = pd.DataFrame({
+                            "UTC": utc_th_in,
+                            "ts": list(range(-I_N + 1, 1)),
+                            "value": value
+                        })
+                        # Use UPPERCASE display name (Y_sin, Y_cos) - MATCHES ORIGINAL
+                        display_name = TIME_NAME_DISPLAY_MAP.get(time_name, time_name)
+                        tst_inf[random_num]["TIME: " + display_name] = df
+
+                # OUTPUT DATA - MATCHES ORIGINAL (lines 2538-2580)
+                for i_feat, feat_name in enumerate(output_features):
+                    if i_feat < tst_y.shape[-1]:
+                        if y_sbpl_fmt == "original":
+                            value = tst_y_orig[random_num, :, i_feat]
+                        else:
+                            value = tst_y[random_num, :, i_feat]
+
+                        df = pd.DataFrame({
+                            "UTC": utc_th_out,
+                            "ts": list(range(0, O_N)),
+                            "value": value
+                        })
+                        tst_inf[random_num]["OUT: " + feat_name] = df
+
+                # FORECAST DATA - MATCHES ORIGINAL (lines 2899-2939)
+                for i_feat, feat_name in enumerate(output_features):
+                    n_fcst_features = tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1
+                    if i_feat < n_fcst_features:
+                        if len(tst_fcst.shape) == 3:
+                            if y_sbpl_fmt == "original":
+                                value = tst_fcst_orig[random_num, :, i_feat]
+                            else:
+                                value = tst_fcst[random_num, :, i_feat]
+                        else:
+                            value = tst_fcst[random_num, :]
+
+                        df = pd.DataFrame({
+                            "UTC": utc_th_out,
+                            "ts": list(range(0, O_N)),
+                            "value": value
+                        })
+                        tst_inf[random_num]["FCST: " + feat_name] = df
+
+            # ===================================================================
+            # COLOR PALETTE - MATCHES ORIGINAL (line 2973, 3068, 3163)
+            # ===================================================================
+            n_total_features = len(input_features) + len(output_features)
+            palette = sns.color_palette("tab20", max(20, n_total_features * 2))
+
+            # ===================================================================
+            # PLOT FILLING - MATCHES ORIGINAL (lines 2946-3269)
+            # ===================================================================
+
+            # Collect lines and labels for legend (only from first subplot)
+            all_lines = []
+            all_labels = []
 
             for i_sbpl in range(num_sbpl):
-                ax = axs[i_sbpl] if num_sbpl > 1 else axs[0]
+                # Row and column of current subplot - MATCHES ORIGINAL (lines 2949-2952)
+                i_y_sbpl = math.floor(i_sbpl / num_sbpl_x)
+                i_x_sbpl = i_sbpl - i_y_sbpl * num_sbpl_x
 
-                if x_sbpl == 'UTC':
-                    x_values = pd.date_range(start='2024-01-01',
-                                            periods=tst_x.shape[1],
-                                            freq='1h')
-                else:
-                    x_values = np.arange(tst_x.shape[1])
+                # Get the key for this subplot's data
+                key_1 = list(tst_inf.keys())[i_sbpl]
 
-                # Build name-to-index mapping from stored input_features
-                # This allows proper indexing by variable name instead of sequential order
+                # Main axis of subplot - MATCHES ORIGINAL (lines 2957-2959)
+                ax_sbpl_orig = axs[i_y_sbpl, i_x_sbpl]
+                ax_sbpl = [ax_sbpl_orig]
+
+                # Counters for axis positioning - MATCHES ORIGINAL (lines 2961-2964)
+                i_line = 0
+                i_ax_l = 0
+                i_ax_r = 0
+
+                # Build name-to-index mapping
                 name_to_idx = {name: idx for idx, name in enumerate(input_features)}
-                
-                color_idx = 0
+                output_name_to_idx = {name: idx for idx, name in enumerate(output_features)}
+
+                # ===============================================================
+                # PLOT INPUT DATA AND TIME COMPONENTS - MATCHES ORIGINAL (lines 2967-3059)
+                # ===============================================================
+                i_feat_plot = 0
                 for var_name, selected in df_plot_in.items():
                     if selected:
-                        # Find actual index for this variable using name mapping
-                        if var_name in name_to_idx:
-                            feat_idx = name_to_idx[var_name]
-                            if feat_idx < tst_x.shape[-1]:
-                                if y_sbpl_fmt == 'original':
-                                    y_values = tst_x[i_sbpl, :, feat_idx]
-                                else:
-                                    y_values = tst_x[i_sbpl, :, feat_idx]
-
-                                # Determine label prefix based on whether it's a TIME component
-                                label_prefix = 'TIME' if var_name in TIME_COMPONENT_NAMES else 'IN'
-                                
-                                ax.plot(x_values, y_values,
-                                       label=f'{label_prefix}: {var_name}',
-                                       color=palette[color_idx % len(palette)],
-                                       marker='o', markersize=2,
-                                       linewidth=1)
-                                color_idx += 1
-                            else:
-                                logger.warning(f"Variable {var_name} index {feat_idx} exceeds tst_x dimension {tst_x.shape[-1]}")
+                        # Determine key prefix - MATCHES ORIGINAL (lines 2976-2979)
+                        if var_name in input_file_names:
+                            key_2 = "IN: " + var_name
+                            i_feat = input_file_names.index(var_name)
+                        elif var_name in time_components:
+                            # Use UPPERCASE display name for TIME components (Y_sin, Y_cos, etc.)
+                            display_name = TIME_NAME_DISPLAY_MAP.get(var_name, var_name)
+                            key_2 = "TIME: " + display_name
+                            i_feat = len(input_file_names) + time_components.index(var_name)
                         else:
-                            logger.warning(f"Variable {var_name} not found in input_features mapping. Available: {list(name_to_idx.keys())[:10]}...")
+                            continue
 
-                # Build output name-to-index mapping
-                output_name_to_idx = {name: idx for idx, name in enumerate(output_features)}
-                
+                        if key_2 not in tst_inf[key_1]:
+                            logger.warning(f"Key {key_2} not found in tst_inf for sample {key_1}")
+                            continue
+
+                        # Color - MATCHES ORIGINAL (line 2973): palette[i_feat]
+                        color_plt = palette[i_feat]
+
+                        # Get x and y values - MATCHES ORIGINAL (lines 2983-2988)
+                        if x_sbpl == "UTC":
+                            x_value = tst_inf[key_1][key_2]["UTC"]
+                        else:
+                            x_value = tst_inf[key_1][key_2]["ts"]
+
+                        y_value = tst_inf[key_1][key_2]["value"]
+
+                        if y_sbpl_set == "gemeinsame Achse":
+                            # Single shared axis - MATCHES ORIGINAL (lines 2990-2999)
+                            line, = ax_sbpl_orig.plot(
+                                x_value, y_value,
+                                label=key_2 if i_sbpl == 0 else None,
+                                color=color_plt,
+                                marker='o',
+                                linewidth=1,
+                                markersize=2
+                            )
+                            if i_sbpl == 0:
+                                all_lines.append(line)
+                                all_labels.append(key_2)
+
+                        elif y_sbpl_set == "separate Achsen":
+                            # Create new axis if not first line - MATCHES ORIGINAL (line 3004)
+                            if i_line > 0:
+                                ax_sbpl.append(ax_sbpl_orig.twinx())
+
+                            # Plot - MATCHES ORIGINAL (lines 3006-3013)
+                            line, = ax_sbpl[-1].plot(
+                                x_value, y_value,
+                                label=key_2 if i_sbpl == 0 else None,
+                                color=color_plt,
+                                marker='o',
+                                linewidth=1,
+                                markersize=2
+                            )
+                            if i_sbpl == 0:
+                                all_lines.append(line)
+                                all_labels.append(key_2)
+
+                            # Position axis - MATCHES ORIGINAL (lines 3015-3056)
+                            if i_line < n_ax_l:
+                                pos = 'left'
+                                i_ax = i_ax_l
+                                i_ax_l += 1
+                            else:
+                                pos = 'right'
+                                i_ax = i_ax_r
+                                i_ax_r += 1
+
+                            # Move axis line outward
+                            ax_sbpl[-1].spines[pos].set_position(('outward', i_ax * 30))
+
+                            # Hide top and opposite spine
+                            for spine in ['top', 'left' if pos == 'right' else 'right']:
+                                ax_sbpl[-1].spines[spine].set_visible(False)
+
+                            # Y-axis tick position
+                            ax_sbpl[-1].yaxis.set_ticks_position(pos)
+
+                            # Color the axis
+                            ax_sbpl[-1].spines[pos].set_color(color_plt)
+                            ax_sbpl[-1].tick_params(
+                                axis='y',
+                                direction='inout',
+                                colors=color_plt,
+                                labelcolor=color_plt,
+                                labelsize=8
+                            )
+
+                            # X-axis configuration
+                            ax_sbpl[0].tick_params(axis="x", labelsize=8)
+                            plt.setp(ax_sbpl[0].get_xticklabels(), rotation=45)
+
+                            i_line += 1
+
+                        i_feat_plot += 1
+
+                # ===============================================================
+                # PLOT OUTPUT DATA - MATCHES ORIGINAL (lines 3061-3153)
+                # ===============================================================
                 for var_name, selected in df_plot_out.items():
                     if selected:
-                        # Find actual index for this output variable
+                        key_2 = "OUT: " + var_name
+
+                        if key_2 not in tst_inf[key_1]:
+                            logger.warning(f"Key {key_2} not found in tst_inf for sample {key_1}")
+                            continue
+
                         if var_name in output_name_to_idx:
-                            out_idx = output_name_to_idx[var_name]
-                            if out_idx < tst_y.shape[-1]:
-                                if y_sbpl_fmt == 'original':
-                                    y_values = tst_y[i_sbpl, :, out_idx]
-                                else:
-                                    y_values = tst_y[i_sbpl, :, out_idx]
-
-                                ax.plot(x_values[:len(y_values)], y_values,
-                                       label=f'OUT: {var_name}',
-                                       color=palette[color_idx % len(palette)],
-                                       marker='s', markersize=2,
-                                       linewidth=1)
-                                color_idx += 1
-                            else:
-                                logger.warning(f"Output variable {var_name} index {out_idx} exceeds tst_y dimension {tst_y.shape[-1]}")
+                            i_feat = output_name_to_idx[var_name]
                         else:
-                            # Fallback to sequential index if name not found
-                            i_out = list(df_plot_out.keys()).index(var_name)
-                            if i_out < tst_y.shape[-1]:
-                                y_values = tst_y[i_sbpl, :, i_out]
-                                ax.plot(x_values[:len(y_values)], y_values,
-                                       label=f'OUT: {var_name}',
-                                       color=palette[color_idx % len(palette)],
-                                       marker='s', markersize=2,
-                                       linewidth=1)
-                                color_idx += 1
+                            continue
 
+                        # Color - MATCHES ORIGINAL (line 3068): palette[n_input + i_feat]
+                        color_plt = palette[len(input_features) + i_feat]
+
+                        if x_sbpl == "UTC":
+                            x_value = tst_inf[key_1][key_2]["UTC"]
+                        else:
+                            x_value = tst_inf[key_1][key_2]["ts"]
+
+                        y_value = tst_inf[key_1][key_2]["value"]
+
+                        if y_sbpl_set == "gemeinsame Achse":
+                            line, = ax_sbpl_orig.plot(
+                                x_value, y_value,
+                                label=key_2 if i_sbpl == 0 else None,
+                                color=color_plt,
+                                marker='o',
+                                linewidth=1,
+                                markersize=2
+                            )
+                            if i_sbpl == 0:
+                                all_lines.append(line)
+                                all_labels.append(key_2)
+
+                        elif y_sbpl_set == "separate Achsen":
+                            if i_line > 0:
+                                ax_sbpl.append(ax_sbpl_orig.twinx())
+
+                            line, = ax_sbpl[-1].plot(
+                                x_value, y_value,
+                                label=key_2 if i_sbpl == 0 else None,
+                                color=color_plt,
+                                marker='o',
+                                linewidth=1,
+                                markersize=2
+                            )
+                            if i_sbpl == 0:
+                                all_lines.append(line)
+                                all_labels.append(key_2)
+
+                            if i_line < n_ax_l:
+                                pos = 'left'
+                                i_ax = i_ax_l
+                                i_ax_l += 1
+                            else:
+                                pos = 'right'
+                                i_ax = i_ax_r
+                                i_ax_r += 1
+
+                            ax_sbpl[-1].spines[pos].set_position(('outward', i_ax * 30))
+                            for spine in ['top', 'left' if pos == 'right' else 'right']:
+                                ax_sbpl[-1].spines[spine].set_visible(False)
+                            ax_sbpl[-1].yaxis.set_ticks_position(pos)
+                            ax_sbpl[-1].spines[pos].set_color(color_plt)
+                            ax_sbpl[-1].tick_params(
+                                axis='y', direction='inout',
+                                colors=color_plt, labelcolor=color_plt, labelsize=8
+                            )
+                            ax_sbpl[0].tick_params(axis="x", labelsize=8)
+                            plt.setp(ax_sbpl[0].get_xticklabels(), rotation=45)
+
+                            i_line += 1
+
+                # ===============================================================
+                # PLOT FORECAST DATA - MATCHES ORIGINAL (lines 3155-3255)
+                # ===============================================================
                 for var_name, selected in df_plot_fcst.items():
                     if selected:
-                        # Find actual index for forecast (uses same mapping as output)
+                        key_2 = "FCST: " + var_name
+
+                        if key_2 not in tst_inf[key_1]:
+                            logger.warning(f"Key {key_2} not found in tst_inf for sample {key_1}")
+                            continue
+
                         if var_name in output_name_to_idx:
-                            fcst_idx = output_name_to_idx[var_name]
-                            n_fcst_features = tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1
-                            if fcst_idx < n_fcst_features:
-                                if len(tst_fcst.shape) == 3:
-                                    y_values = tst_fcst[i_sbpl, :, fcst_idx]
-                                elif len(tst_fcst.shape) == 2:
-                                    y_values = tst_fcst[i_sbpl, :]
-                                else:
-                                    y_values = tst_fcst
-
-                                ax.plot(x_values[:len(y_values)], y_values,
-                                       label=f'FCST: {var_name}',
-                                       color=palette[color_idx % len(palette)],
-                                       marker='^', markersize=2,
-                                       linewidth=1, linestyle='--')
-                                color_idx += 1
+                            i_feat = output_name_to_idx[var_name]
                         else:
-                            # Fallback to sequential index
-                            i_fcst = list(df_plot_fcst.keys()).index(var_name)
-                            n_fcst_features = tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1
-                            if i_fcst < n_fcst_features:
-                                if len(tst_fcst.shape) == 3:
-                                    y_values = tst_fcst[i_sbpl, :, i_fcst]
-                                elif len(tst_fcst.shape) == 2:
-                                    y_values = tst_fcst[i_sbpl, :]
+                            continue
+
+                        # Color - MATCHES ORIGINAL (line 3163): same as output
+                        color_plt = palette[len(input_features) + i_feat]
+
+                        if x_sbpl == "UTC":
+                            x_value = tst_inf[key_1][key_2]["UTC"]
+                        else:
+                            x_value = tst_inf[key_1][key_2]["ts"]
+
+                        y_value = tst_inf[key_1][key_2]["value"]
+
+                        if y_sbpl_set == "gemeinsame Achse":
+                            # FCST with marker='x' and linestyle='--' - MATCHES ORIGINAL (lines 3180-3187)
+                            line, = ax_sbpl_orig.plot(
+                                x_value, y_value,
+                                label=key_2 if i_sbpl == 0 else None,
+                                color=color_plt,
+                                marker='x',
+                                linestyle='--',
+                                linewidth=1,
+                                markersize=4
+                            )
+                            if i_sbpl == 0:
+                                all_lines.append(line)
+                                all_labels.append(key_2)
+
+                        elif y_sbpl_set == "separate Achsen":
+                            # Check if output for same variable is already plotted
+                            out_selected = df_plot_out.get(var_name, False)
+
+                            if not out_selected:
+                                # Create new axis
+                                ax_sbpl.append(ax_sbpl_orig.twinx())
+                                i_pos = len(ax_sbpl) - 1
+                            else:
+                                # Use same axis as output - MATCHES ORIGINAL (lines 3192-3196)
+                                n_in_selected = sum(1 for v in df_plot_in.values() if v)
+                                n_out_before = sum(1 for k, v in list(df_plot_out.items())[:list(df_plot_out.keys()).index(var_name) + 1] if v)
+                                i_pos = n_in_selected + n_out_before - 1
+                                if i_pos >= len(ax_sbpl):
+                                    i_pos = len(ax_sbpl) - 1
+
+                            # FCST plot - MATCHES ORIGINAL (lines 3200-3207)
+                            line, = ax_sbpl[i_pos].plot(
+                                x_value, y_value,
+                                label=key_2 if i_sbpl == 0 else None,
+                                color=color_plt,
+                                marker='x',
+                                linestyle='--',
+                                linewidth=1,
+                                markersize=4
+                            )
+                            if i_sbpl == 0:
+                                all_lines.append(line)
+                                all_labels.append(key_2)
+
+                            # Configure axis only if new axis was created
+                            if not out_selected:
+                                if i_line < n_ax_l:
+                                    pos = 'left'
+                                    i_ax = i_ax_l
+                                    i_ax_l += 1
                                 else:
-                                    y_values = tst_fcst
-                                    
-                                ax.plot(x_values[:len(y_values)], y_values,
-                                       label=f'FCST: {var_name}',
-                                       color=palette[color_idx % len(palette)],
-                                       marker='^', markersize=2,
-                                       linewidth=1, linestyle='--')
-                                color_idx += 1
+                                    pos = 'right'
+                                    i_ax = i_ax_r
+                                    i_ax_r += 1
 
-                ax.set_title(f'Sample {i_sbpl + 1}', fontsize=10)
-                ax.legend(loc='upper left', fontsize=8)
-                ax.grid(True, alpha=0.3)
+                                ax_sbpl[-1].spines[pos].set_position(('outward', i_ax * 30))
+                                for spine in ['top', 'left' if pos == 'right' else 'right']:
+                                    ax_sbpl[-1].spines[spine].set_visible(False)
+                                ax_sbpl[-1].yaxis.set_ticks_position(pos)
+                                ax_sbpl[-1].spines[pos].set_color(color_plt)
+                                ax_sbpl[-1].tick_params(
+                                    axis='y', direction='inout',
+                                    colors=color_plt, labelcolor=color_plt, labelsize=8
+                                )
+                                ax_sbpl[0].tick_params(axis="x", labelsize=8)
+                                plt.setp(ax_sbpl[0].get_xticklabels(), rotation=45)
 
-                if x_sbpl == 'UTC':
-                    ax.set_xlabel('Time (UTC)', fontsize=9)
-                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+                                i_line += 1
+
+                # ===============================================================
+                # VERTICAL REFERENCE LINE - MATCHES ORIGINAL (lines 3257-3267)
+                # ===============================================================
+                if x_sbpl == "UTC" and tst_inf[key_1]["utc_ref"] is not None:
+                    ax_sbpl_orig.axvline(
+                        x=tst_inf[key_1]["utc_ref"],
+                        color="black",
+                        linestyle='--',
+                        label=None
+                    )
                 else:
-                    ax.set_xlabel('Timestep', fontsize=9)
+                    ax_sbpl_orig.axvline(
+                        x=0,
+                        color="black",
+                        linestyle='--',
+                        label=None
+                    )
 
-                ax.set_ylabel('Value', fontsize=9)
+                # ===============================================================
+                # SUBPLOT TITLE - MATCHES ORIGINAL (line 3269)
+                # ===============================================================
+                if tst_inf[key_1]["utc_ref"] is not None:
+                    try:
+                        title = "UTC: " + tst_inf[key_1]["utc_ref"].strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        title = f"Sample {key_1 + 1}"
+                else:
+                    title = f"Sample {key_1 + 1}"
 
-                if y_sbpl_set == 'separate Achsen':
-                    pass
+                ax_sbpl_orig.set_title(title, fontsize=10)
 
-            for i in range(num_sbpl, len(axs)):
-                fig.delaxes(axs[i])
+            # ===================================================================
+            # LEGEND - MATCHES ORIGINAL (lines 3290-3297)
+            # ===================================================================
+            # Remove duplicate labels from child axes
+            unique_labels = []
+            unique_lines = []
+            for line, label in zip(all_lines, all_labels):
+                if label and not label.startswith('_') and label not in unique_labels:
+                    unique_labels.append(label)
+                    unique_lines.append(line)
 
+            if unique_lines:
+                fig.legend(
+                    unique_lines, unique_labels,
+                    loc="upper right",
+                    ncol=5,
+                    fontsize=8
+                )
+
+            # ===================================================================
+            # TITLE - MATCHES ORIGINAL (lines 3299-3303)
+            # ===================================================================
+            plt.suptitle(
+                "Auswertung der Testdatensätze",
+                fontsize=20,
+                fontweight='bold'
+            )
+
+            # ===================================================================
+            # SAVE PLOT
+            # ===================================================================
             buffer = io.BytesIO()
             plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
             buffer.seek(0)

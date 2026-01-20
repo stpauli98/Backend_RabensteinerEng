@@ -23,25 +23,31 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                           o_dat_inf: pd.DataFrame, utc_strt: datetime.datetime,
                           utc_end: datetime.datetime,
                           socketio=None,
-                          session_id: str = None) -> Tuple:
+                          session_id: str = None,
+                          mts_config: 'MTS' = None) -> Tuple:
     """
     Create training arrays exactly as in training_original.py lines 1068-1760
     This function implements the main time loop that builds i_arrays and o_arrays
-    
+
     Args:
         i_dat: Input data dictionary
-        o_dat: Output data dictionary  
+        o_dat: Output data dictionary
         i_dat_inf: Input data info DataFrame
         o_dat_inf: Output data info DataFrame
         utc_strt: Start UTC timestamp
         utc_end: End UTC timestamp
-        
+        socketio: Optional SocketIO instance for progress updates
+        session_id: Optional session ID for progress tracking
+        mts_config: Optional configured MTS instance (if None, uses default MTS())
+
     Returns:
         Tuple of (i_array_3D, o_array_3D, i_combined_array, o_combined_array, utc_ref_log)
     """
     
-    mts = MTS()
-    
+    # Use provided mts_config or create default MTS instance
+    mts = mts_config if mts_config is not None else MTS()
+    logger.info(f"📍 create_training_arrays using MTS: I_N={mts.I_N}, O_N={mts.O_N}, DELT={mts.DELT}")
+
     utc_ref = utc_strt - datetime.timedelta(minutes=mts.DELT)
     while utc_ref < utc_strt:
         utc_ref += datetime.timedelta(minutes=mts.DELT)
@@ -58,8 +64,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     iteration_count = 0
     total_iterations = int((utc_end - utc_ref).total_seconds() / 60 / mts.DELT)
 
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"      Starting main time loop: {total_iterations} iterations expected")
     logger.info(f"      Time range: {utc_strt} to {utc_end}")
     logger.info(f"      Input files: {list(i_dat.keys())}")

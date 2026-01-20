@@ -6,23 +6,45 @@ These are the KNOWN possible time component names based on the original training
 """
 
 # TIME component names - these are the possible time features that can be generated
-# Based on original training.py class T structure (Y, M, W, D, Holiday)
+# Based on original training.py class T structure (Y, M, W, D, H)
+# NOTE: These MUST be lowercase to match what transformer.py and exact.py produce
 TIME_COMPONENT_NAMES = [
-    'Y_sin', 'Y_cos',  # Year sin/cos
+    'y_sin', 'y_cos',  # Year sin/cos
+    'm_sin', 'm_cos',  # Month sin/cos
+    'w_sin', 'w_cos',  # Week sin/cos
+    'd_sin', 'd_cos',  # Day sin/cos
+    'h'                # Holiday flag (feiertag)
+]
+
+# UPPERCASE TIME component names for violin plot display (matches original training.py)
+# Original uses UPPERCASE for display: Y_sin, Y_cos, M_sin, M_cos, etc.
+TIME_COMPONENT_NAMES_DISPLAY = [
+    'Y_sin', 'Y_cos',  # Year sin/cos (UPPERCASE for display)
     'M_sin', 'M_cos',  # Month sin/cos
     'W_sin', 'W_cos',  # Week sin/cos
     'D_sin', 'D_cos',  # Day sin/cos
-    'Holiday'          # Holiday flag
+    'Holiday'          # Holiday flag (Feiertag)
 ]
+
+# Mapping from lowercase TIME component names to UPPERCASE display names
+# Used for violin plots to match original training.py display format
+TIME_NAME_DISPLAY_MAP = {
+    'y_sin': 'Y_sin', 'y_cos': 'Y_cos',
+    'm_sin': 'M_sin', 'm_cos': 'M_cos',
+    'w_sin': 'W_sin', 'w_cos': 'W_cos',
+    'd_sin': 'D_sin', 'd_cos': 'D_cos',
+    'h': 'Holiday'
+}
 
 # Mapping from time_info table column names to component names
 # These match the actual column names in the time_info Supabase table
+# NOTE: Component names are lowercase to match training output
 TIME_INFO_TO_COMPONENTS = {
-    'jahr': ['Y_sin', 'Y_cos'],      # Year sin/cos components
-    'monat': ['M_sin', 'M_cos'],     # Month sin/cos components
-    'woche': ['W_sin', 'W_cos'],     # Week sin/cos components
-    'tag': ['D_sin', 'D_cos'],       # Day sin/cos components
-    'feiertag': ['Holiday']          # Holiday flag
+    'jahr': ['y_sin', 'y_cos'],      # Year sin/cos components
+    'monat': ['m_sin', 'm_cos'],     # Month sin/cos components
+    'woche': ['w_sin', 'w_cos'],     # Week sin/cos components
+    'tag': ['d_sin', 'd_cos'],       # Day sin/cos components
+    'feiertag': ['h']                # Holiday flag
 }
 
 # Default timestep configuration (matching MTS class in original training.py)

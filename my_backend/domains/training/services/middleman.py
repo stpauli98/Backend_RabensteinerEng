@@ -16,7 +16,7 @@ from shared.database.client import get_supabase_admin_client
 
 from domains.training.ml.exact import run_exact_training_pipeline
 from domains.training.data.loader import DataLoader
-from domains.training.config import MDL
+from domains.training.config import MDL, T
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -73,6 +73,82 @@ class ModernMiddlemanRunner:
             
             session_data = data_loader.load_session_data(session_id)
 
+            # ===================================================================
+            # CONFIGURE TIME COMPONENTS FROM DATABASE (CRITICAL!)
+            # Without this, T.Y.IMP etc. stay False and TIME features aren't added
+            # ===================================================================
+            time_info = session_data.get('time_info', {})
+            category_data = time_info.get('category_data', {})
+
+            # Set main import flags
+            T.Y.IMP = time_info.get('jahr', False)
+            T.M.IMP = time_info.get('monat', False)
+            T.W.IMP = time_info.get('woche', False)
+            T.D.IMP = time_info.get('tag', False)
+            T.H.IMP = time_info.get('feiertag', False)
+
+            # Set timezone
+            T.TZ = time_info.get('zeitzone', 'UTC')
+
+            # Configure detailed settings from category_data
+            if category_data:
+                # Year (jahr) settings
+                if 'jahr' in category_data:
+                    jahr_cfg = category_data['jahr']
+                    T.Y.SPEC = jahr_cfg.get('datenform', 'Zeithorizont')
+                    T.Y.TH_STRT = safe_float_to_int(jahr_cfg.get('zeithorizontStart'), -24)
+                    T.Y.TH_END = safe_float_to_int(jahr_cfg.get('zeithorizontEnd'), 0)
+                    T.Y.SCAL = jahr_cfg.get('skalierung') == 'ja'
+                    T.Y.SCAL_MIN = float(jahr_cfg.get('skalierungMin', 0))
+                    T.Y.SCAL_MAX = float(jahr_cfg.get('skalierungMax', 1))
+                    T.Y.LT = jahr_cfg.get('detaillierteBerechnung', False)
+
+                # Month (monat) settings
+                if 'monat' in category_data:
+                    monat_cfg = category_data['monat']
+                    T.M.SPEC = monat_cfg.get('datenform', 'Zeithorizont')
+                    T.M.TH_STRT = safe_float_to_int(monat_cfg.get('zeithorizontStart'), -1)
+                    T.M.TH_END = safe_float_to_int(monat_cfg.get('zeithorizontEnd'), 0)
+                    T.M.SCAL = monat_cfg.get('skalierung') == 'ja'
+                    T.M.SCAL_MIN = float(monat_cfg.get('skalierungMin', 0))
+                    T.M.SCAL_MAX = float(monat_cfg.get('skalierungMax', 1))
+                    T.M.LT = monat_cfg.get('detaillierteBerechnung', False)
+
+                # Week (woche) settings
+                if 'woche' in category_data:
+                    woche_cfg = category_data['woche']
+                    T.W.SPEC = woche_cfg.get('datenform', 'Zeithorizont')
+                    T.W.TH_STRT = safe_float_to_int(woche_cfg.get('zeithorizontStart'), -24)
+                    T.W.TH_END = safe_float_to_int(woche_cfg.get('zeithorizontEnd'), 0)
+                    T.W.SCAL = woche_cfg.get('skalierung') == 'ja'
+                    T.W.SCAL_MIN = float(woche_cfg.get('skalierungMin', 0))
+                    T.W.SCAL_MAX = float(woche_cfg.get('skalierungMax', 1))
+                    T.W.LT = woche_cfg.get('detaillierteBerechnung', False)
+
+                # Day (tag) settings
+                if 'tag' in category_data:
+                    tag_cfg = category_data['tag']
+                    T.D.SPEC = tag_cfg.get('datenform', 'Zeithorizont')
+                    T.D.TH_STRT = safe_float_to_int(tag_cfg.get('zeithorizontStart'), -24)
+                    T.D.TH_END = safe_float_to_int(tag_cfg.get('zeithorizontEnd'), 0)
+                    T.D.SCAL = tag_cfg.get('skalierung') == 'ja'
+                    T.D.SCAL_MIN = float(tag_cfg.get('skalierungMin', 0))
+                    T.D.SCAL_MAX = float(tag_cfg.get('skalierungMax', 1))
+                    T.D.LT = tag_cfg.get('detaillierteBerechnung', False)
+
+                # Holiday (feiertag) settings
+                if 'feiertag' in category_data:
+                    feiertag_cfg = category_data['feiertag']
+                    T.H.SPEC = feiertag_cfg.get('datenform', 'Zeithorizont')
+                    T.H.TH_STRT = safe_float_to_int(feiertag_cfg.get('zeithorizontStart'), -24)
+                    T.H.TH_END = safe_float_to_int(feiertag_cfg.get('zeithorizontEnd'), 0)
+                    T.H.SCAL = feiertag_cfg.get('skalierung') == 'ja'
+                    T.H.SCAL_MIN = float(feiertag_cfg.get('skalierungMin', 0))
+                    T.H.SCAL_MAX = float(feiertag_cfg.get('skalierungMax', 1))
+                    T.H.LAND = feiertag_cfg.get('land', 'AT')
+
+            logger.info(f"📍 TIME components configured: Y={T.Y.IMP}, M={T.M.IMP}, W={T.W.IMP}, D={T.D.IMP}, H={T.H.IMP}")
+
             if found_files:
                 input_files = [f for f in found_files if "Leistung" in f]
                 output_files = [f for f in found_files if "Temp" in f]
@@ -128,8 +204,20 @@ class ModernMiddlemanRunner:
             
             from domains.training.data.loader import load, transf
             from domains.training.config import MTS
-            
+
+            # ===================================================================
+            # CONFIGURE MTS FROM DATABASE (CRITICAL!)
+            # zeitschritte contains eingabe, ausgabe, zeitschrittweite, offset
+            # ===================================================================
+            zeitschritte = session_data.get('zeitschritte', {})
+
             mts_config = MTS()
+            mts_config.I_N = int(zeitschritte.get('eingabe', mts_config.I_N))
+            mts_config.O_N = int(zeitschritte.get('ausgabe', mts_config.O_N))
+            mts_config.DELT = float(zeitschritte.get('zeitschrittweite', mts_config.DELT))
+            mts_config.OFST = float(zeitschritte.get('offset', mts_config.OFST))
+
+            logger.info(f"📍 MTS configured from database: I_N={mts_config.I_N}, O_N={mts_config.O_N}, DELT={mts_config.DELT}, OFST={mts_config.OFST}")
             
             i_dat_inf = pd.DataFrame(columns=[
                 "utc_min", "utc_max", "delt", "ofst", "n_all", "n_num", 
@@ -356,6 +444,7 @@ class ModernMiddlemanRunner:
                     utc_end=utc_end,
                     random_dat=model_params.get('random_dat', False) if model_params else False,
                     mdl_config=mdl_config,
+                    mts_config=mts_config,
                     socketio=self.socketio,
                     session_id=session_id
                 )
@@ -375,32 +464,45 @@ class ModernMiddlemanRunner:
             violin_plots = {}
             try:
                 from domains.training.services.violin import create_violin_plots_from_viz_data
-                
+                import numpy as np
+
                 viz_data = {
                     'i_combined_array': results.get('scalers', {}).get('i_combined_array'),
                     'o_combined_array': results.get('scalers', {}).get('o_combined_array')
                 }
-                
+
                 if viz_data['i_combined_array'] is None:
-                    import numpy as np
                     train_x = results.get('train_data', {}).get('X_orig')
                     val_x = results.get('val_data', {}).get('X_orig')
                     test_x = results.get('test_data', {}).get('X_orig')
-                    
+
                     if train_x is not None and val_x is not None and test_x is not None:
                         all_x = np.vstack([train_x, val_x, test_x])
                         viz_data['i_combined_array'] = all_x.reshape(-1, all_x.shape[-1])
-                    
+
                     train_y = results.get('train_data', {}).get('y_orig')
                     val_y = results.get('val_data', {}).get('y_orig')
                     test_y = results.get('test_data', {}).get('y_orig')
-                    
+
                     if train_y is not None and val_y is not None and test_y is not None:
                         all_y = np.vstack([train_y, val_y, test_y])
                         viz_data['o_combined_array'] = all_y.reshape(-1, all_y.shape[-1])
-                
+
+                # Get feature names from results metadata (matches original training.py)
+                # These come from i_dat_inf.index and o_dat_inf.index
+                metadata = results.get('metadata', {})
+                input_feature_names = metadata.get('input_features', [])
+                output_feature_names = metadata.get('output_features', [])
+
+                logger.info(f"Violin plot feature names from metadata: input={input_feature_names}, output={output_feature_names}")
+
                 if viz_data['i_combined_array'] is not None or viz_data['o_combined_array'] is not None:
-                    violin_plots = create_violin_plots_from_viz_data(session_id, viz_data)
+                    violin_plots = create_violin_plots_from_viz_data(
+                        session_id,
+                        viz_data,
+                        input_feature_names=input_feature_names,
+                        output_feature_names=output_feature_names
+                    )
                 else:
                     logger.warning("No data available for creating violin plots")
                     

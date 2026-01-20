@@ -3,6 +3,7 @@ EXACT pipeline implementation matching training_original.py 100%
 This module provides the complete training pipeline exactly as in the original script
 """
 
+import os
 import numpy as np
 import pandas as pd
 import copy
@@ -26,6 +27,39 @@ from domains.training.ml.trainer import (
 from domains.training.config import MDL, MTS, T, HOL
 
 logger = logging.getLogger(__name__)
+
+
+def _build_input_feature_names(i_dat_inf, i_dat) -> list:
+    """
+    Build complete list of input feature names including TIME components.
+
+    This matches how training arrays are built in transformer.py:
+    1. File-based features (from i_dat_inf.index or i_dat.keys())
+    2. TIME components if enabled in T config (y_sin, y_cos, m_sin, m_cos, etc.)
+
+    Returns:
+        List of feature names in the order they appear in training arrays
+    """
+    # Start with file-based features
+    if hasattr(i_dat_inf, 'index'):
+        feature_names = i_dat_inf.index.tolist()
+    else:
+        feature_names = list(i_dat.keys())
+
+    # Add TIME component names based on T config (matches transformer.py order)
+    if T.Y.IMP:
+        feature_names.extend(['y_sin', 'y_cos'])
+    if T.M.IMP:
+        feature_names.extend(['m_sin', 'm_cos'])
+    if T.W.IMP:
+        feature_names.extend(['w_sin', 'w_cos'])
+    if T.D.IMP:
+        feature_names.extend(['d_sin', 'd_cos'])
+    if T.H.IMP:
+        feature_names.append('h')
+
+    logger.info(f"Built input feature names: {feature_names}")
+    return feature_names
 
 
 def calculate_evaluation_metrics(y_true, y_pred):
@@ -69,28 +103,40 @@ def calculate_evaluation_metrics(y_true, y_pred):
     else:
         nrmse = 0.0
 
-    sum_abs_true = np.sum(np.abs(y_true_flat))
-    if sum_abs_true > 0:
-        wape = np.sum(np.abs(y_true_flat - y_pred_flat)) / sum_abs_true * 100
+    # WAPE - EXACT MATCH: returns np.nan when denominator=0 (original lines 564-575)
+    numerator = np.sum(np.abs(y_true_flat - y_pred_flat))
+    denominator = np.sum(np.abs(y_true_flat))
+    if denominator == 0:
+        wape = np.nan
     else:
-        wape = 0.0
+        wape = (numerator / denominator) * 100
 
-    denominator = np.abs(y_true_flat) + np.abs(y_pred_flat)
-    mask = denominator != 0
-    if np.any(mask):
-        smape = np.mean(2.0 * np.abs(y_true_flat[mask] - y_pred_flat[mask]) / denominator[mask]) * 100
-    else:
-        smape = 0.0
-
-    if len(y_true_flat) > 1:
-        naive_errors = np.abs(np.diff(y_true_flat))
-        mae_naive = np.mean(naive_errors)
-        if mae_naive > 0:
-            mase = mae / mae_naive
+    # sMAPE - EXACT MATCH: includes zeros in average (original lines 579-594)
+    n = len(y_true_flat)
+    smape_values = []
+    for yt, yp in zip(y_true_flat, y_pred_flat):
+        denom = (abs(yt) + abs(yp)) / 2
+        if denom == 0:
+            smape_values.append(0)  # Include zero in average
         else:
-            mase = 1.0
-    else:
-        mase = 1.0
+            smape_values.append(abs(yp - yt) / denom)
+    smape = sum(smape_values) / n * 100
+
+    # MASE - EXACT MATCH: raises exceptions (original lines 597-617)
+    m = 1  # Saisonalität
+    n_mase = len(y_true_flat)
+    mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true_flat, y_pred_flat)) / n_mase
+
+    if n_mase <= m:
+        raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
+
+    naive_errors = [abs(y_true_flat[t] - y_true_flat[t - m]) for t in range(m, n_mase)]
+    mae_naive = sum(naive_errors) / len(naive_errors)
+
+    if mae_naive == 0:
+        raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
+
+    mase = mae_forecast / mae_naive
 
     # =========================================================================
     # _TS VERZIJE - METRIKE PO VREMENSKIM KORACIMA (ZEITSCHRITTE)
@@ -196,31 +242,40 @@ def _calculate_single_timestep_metrics(v_true, v_pred):
     else:
         ts_nrmse = 0.0
 
-    # WAPE
-    sum_abs = np.sum(np.abs(v_true))
-    if sum_abs > 0:
-        ts_wape = float(np.sum(np.abs(v_true - v_pred)) / sum_abs * 100)
+    # WAPE - EXACT MATCH: returns np.nan when denominator=0 (original lines 564-575)
+    numerator = np.sum(np.abs(v_true - v_pred))
+    denominator = np.sum(np.abs(v_true))
+    if denominator == 0:
+        ts_wape = float('nan')
     else:
-        ts_wape = 0.0
+        ts_wape = float((numerator / denominator) * 100)
 
-    # sMAPE
-    denom = np.abs(v_true) + np.abs(v_pred)
-    mask = denom != 0
-    if np.any(mask):
-        ts_smape = float(np.mean(2.0 * np.abs(v_true[mask] - v_pred[mask]) / denom[mask]) * 100)
-    else:
-        ts_smape = 0.0
-
-    # MASE
-    if len(v_true) > 1:
-        naive_errors = np.abs(np.diff(v_true))
-        mae_naive = np.mean(naive_errors)
-        if mae_naive > 0:
-            ts_mase = float(ts_mae / mae_naive)
+    # sMAPE - EXACT MATCH: includes zeros in average (original lines 579-594)
+    n_smape = len(v_true)
+    smape_values = []
+    for yt, yp in zip(v_true, v_pred):
+        denom = (abs(yt) + abs(yp)) / 2
+        if denom == 0:
+            smape_values.append(0)  # Include zero in average
         else:
-            ts_mase = 1.0
-    else:
-        ts_mase = 1.0
+            smape_values.append(abs(yp - yt) / denom)
+    ts_smape = float(sum(smape_values) / n_smape * 100)
+
+    # MASE - EXACT MATCH: raises exceptions (original lines 597-617)
+    m = 1  # Saisonalität
+    n_mase = len(v_true)
+    mae_forecast = sum(abs(yt - yp) for yt, yp in zip(v_true, v_pred)) / n_mase
+
+    if n_mase <= m:
+        raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
+
+    naive_errors = [abs(v_true[t] - v_true[t - m]) for t in range(m, n_mase)]
+    mae_naive_val = sum(naive_errors) / len(naive_errors)
+
+    if mae_naive_val == 0:
+        raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
+
+    ts_mase = float(mae_forecast / mae_naive_val)
 
     return {
         'mae': ts_mae,
@@ -243,6 +298,7 @@ def run_exact_training_pipeline(
     utc_end: datetime,
     random_dat: bool = False,
     mdl_config: Optional[MDL] = None,
+    mts_config: Optional['MTS'] = None,
     socketio=None,
     session_id: str = None
 ) -> Dict:
@@ -264,6 +320,7 @@ def run_exact_training_pipeline(
         utc_end: End UTC timestamp
         random_dat: Whether to shuffle data (default: False)
         mdl_config: Model configuration (if None, uses default MDL())
+        mts_config: MTS configuration (if None, uses default MTS())
         
     Returns:
         Dictionary containing:
@@ -285,7 +342,8 @@ def run_exact_training_pipeline(
          utc_ref_log) = create_training_arrays(
             i_dat, o_dat, i_dat_inf, o_dat_inf, utc_strt, utc_end,
             socketio=socketio,
-            session_id=session_id
+            session_id=session_id,
+            mts_config=mts_config
         )
         logger.info(f"   Pipeline Step 1 complete: Created arrays with shape {i_array_3D.shape if hasattr(i_array_3D, 'shape') else 'unknown'}")
     except Exception as e:
@@ -481,7 +539,7 @@ def run_exact_training_pipeline(
             try:
                 # Get shapes for evaluation
                 n_tst = tst_y_orig.shape[0] if tst_y_orig is not None else tst_y.shape[0]
-                O_N = MTS().O_N  # Output timesteps (default 13)
+                O_N = o_array_3D.shape[1]  # Actual output timesteps from data
 
                 # Prepare tst_y_orig for evaluation - needs shape (n_tst, O_N, num_feat)
                 if tst_y_orig is not None:
@@ -569,7 +627,10 @@ def run_exact_training_pipeline(
             'n_test': n_test,
             'utc_ref_log': utc_ref_log,
             'model_config': mdl_config,
-            'random_data': random_dat
+            'random_data': random_dat,
+            # Build complete input feature names (files + TIME components)
+            'input_features': _build_input_feature_names(i_dat_inf, i_dat),
+            'output_features': o_dat_inf.index.tolist() if hasattr(o_dat_inf, 'index') else list(o_dat.keys())
         },
         'evaluation_metrics': evaluation_metrics,
         'metrics': evaluation_metrics
@@ -600,8 +661,10 @@ def prepare_data_for_training(session_data: Dict) -> Tuple[Dict, Dict, pd.DataFr
                     cols.remove('UTC')
                     cols = ['UTC'] + cols
                     df = df[cols]
-            i_dat[file_path] = df
-    
+            # Use just filename without path and extension (matches original training.py)
+            feature_name = os.path.splitext(os.path.basename(file_path))[0]
+            i_dat[feature_name] = df
+
     if 'output_files' in session_data:
         for file_path in session_data['output_files']:
             df = pd.read_csv(file_path)
@@ -611,7 +674,9 @@ def prepare_data_for_training(session_data: Dict) -> Tuple[Dict, Dict, pd.DataFr
                     cols.remove('UTC')
                     cols = ['UTC'] + cols
                     df = df[cols]
-            o_dat[file_path] = df
+            # Use just filename without path and extension (matches original training.py)
+            feature_name = os.path.splitext(os.path.basename(file_path))[0]
+            o_dat[feature_name] = df
     
     i_dat_inf = pd.DataFrame()
     o_dat_inf = pd.DataFrame()
@@ -650,7 +715,14 @@ def prepare_data_for_training(session_data: Dict) -> Tuple[Dict, Dict, pd.DataFr
             o_dat_inf.loc[key, "scal_max"] = 1
             o_dat_inf.loc[key, "scal_min"] = 0
     
+    # Configure MTS from session_data if zeitschritte is available
+    zeitschritte = session_data.get('zeitschritte', {})
     mts_config = MTS()
+    mts_config.I_N = int(zeitschritte.get('eingabe', mts_config.I_N))
+    mts_config.O_N = int(zeitschritte.get('ausgabe', mts_config.O_N))
+    mts_config.DELT = float(zeitschritte.get('zeitschrittweite', mts_config.DELT))
+    mts_config.OFST = float(zeitschritte.get('offset', mts_config.OFST))
+
     i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
     o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
     
