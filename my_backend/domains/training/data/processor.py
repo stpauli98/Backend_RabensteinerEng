@@ -696,9 +696,9 @@ class DataProcessor:
         try:
             zeitschritte = session_data.get('zeitschritte', {})
 
-            time_steps_in = int(zeitschritte.get('eingabe', 24))
-            time_steps_out = int(zeitschritte.get('ausgabe', 1))
-            delt = float(zeitschritte.get('zeitschrittweite', 15))  # MTS.DELT
+            time_steps_in = int(zeitschritte.get('eingabe', 0))
+            time_steps_out = int(zeitschritte.get('ausgabe', 0))
+            delt = float(zeitschritte.get('zeitschrittweite', 0))  # MTS.DELT
             ofst = float(zeitschritte.get('offset', 0))  # MTS.OFST
 
             # Build file_info lookup - use bezeichnung as primary key

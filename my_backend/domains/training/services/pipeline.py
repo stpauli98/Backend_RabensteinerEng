@@ -627,9 +627,9 @@ class TrainingPipeline:
 
             logger.info(f"Time components configured: Y={T.Y.IMP}, M={T.M.IMP}, W={T.W.IMP}, D={T.D.IMP}, H={T.H.IMP}")
 
-            config.time_steps_in = int(zeitschritte.get('eingabe', 24))
-            config.time_steps_out = int(zeitschritte.get('ausgabe', 1))
-            config.time_step_size = int(zeitschritte.get('zeitschrittweite', 1))
+            config.time_steps_in = int(zeitschritte.get('eingabe', 0))
+            config.time_steps_out = int(zeitschritte.get('ausgabe', 0))
+            config.time_step_size = int(zeitschritte.get('zeitschrittweite', 0))
             config.offset = int(zeitschritte.get('offset', 0))
 
             return config

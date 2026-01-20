@@ -14,13 +14,15 @@ class MTS:
     """
     
     def __init__(self):
-        self.I_N  = 13
+        # Fallback defaults: 0,0,0,0 when zeitschritte not in database
+        # Actual values should come from zeitschritte table via session_data
+        self.I_N  = 0   # Input timesteps (eingabe)
         
-        self.O_N  = 13
+        self.O_N  = 0   # Output timesteps (ausgabe)
         
-        self.DELT = 3
+        self.DELT = 0   # Timestep width in minutes (zeitschrittweite)
         
-        self.OFST = 0
+        self.OFST = 0   # Offset (offset)
         
         self.timezone = 'UTC'
         self.use_time_features = True
@@ -99,7 +101,7 @@ class T:
 
         IMP = False
         
-        LT = True
+        LT = False
         
         SPEC = "Zeithorizont"
         

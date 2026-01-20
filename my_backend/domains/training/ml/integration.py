@@ -128,9 +128,9 @@ class RealDataProcessor:
         try:
             datasets = {}
             zeitschritte = session_data.get('zeitschritte', {})
-            time_steps_in = int(zeitschritte.get('eingabe', 13))
-            time_steps_out = int(zeitschritte.get('ausgabe', 13))
-            delt = float(zeitschritte.get('zeitschrittweite', 15))
+            time_steps_in = int(zeitschritte.get('eingabe', 0))
+            time_steps_out = int(zeitschritte.get('ausgabe', 0))
+            delt = float(zeitschritte.get('zeitschrittweite', 0))
             ofst = float(zeitschritte.get('offset', 0))
 
             # Get time_info for TIME components (y_sin, y_cos, w_sin, etc.)
