@@ -186,16 +186,17 @@ class RealDataProcessor:
                                     input_feature_names = [input_name]
 
                                     # Add TIME component names based on config
+                                    # NOTE: UPPERCASE names to match original training.py
                                     if time_info.get('jahr'):
-                                        input_feature_names.extend(['y_sin', 'y_cos'])
+                                        input_feature_names.extend(['Y_sin', 'Y_cos'])
                                     if time_info.get('monat'):
-                                        input_feature_names.extend(['m_sin', 'm_cos'])
+                                        input_feature_names.extend(['M_sin', 'M_cos'])
                                     if time_info.get('woche'):
-                                        input_feature_names.extend(['w_sin', 'w_cos'])
+                                        input_feature_names.extend(['W_sin', 'W_cos'])
                                     if time_info.get('tag'):
-                                        input_feature_names.extend(['d_sin', 'd_cos'])
+                                        input_feature_names.extend(['D_sin', 'D_cos'])
                                     if time_info.get('feiertag'):
-                                        input_feature_names.append('h')
+                                        input_feature_names.append('H')
 
                                     datasets[dataset_name] = {
                                         'X': X,

@@ -67,23 +67,23 @@ class TimeFeatures:
 
             # Add Year features (Y)
             if time_info.get('jahr', True):
-                df['y_sin'] = np.sin(sec / self.YEAR_SECONDS * 2 * np.pi)
-                df['y_cos'] = np.cos(sec / self.YEAR_SECONDS * 2 * np.pi)
+                df['Y_sin'] = np.sin(sec / self.YEAR_SECONDS * 2 * np.pi)
+                df['Y_cos'] = np.cos(sec / self.YEAR_SECONDS * 2 * np.pi)
 
             # Add Month features (M)
             if time_info.get('monat', True):
-                df['m_sin'] = np.sin(sec / self.MONTH_SECONDS * 2 * np.pi)
-                df['m_cos'] = np.cos(sec / self.MONTH_SECONDS * 2 * np.pi)
+                df['M_sin'] = np.sin(sec / self.MONTH_SECONDS * 2 * np.pi)
+                df['M_cos'] = np.cos(sec / self.MONTH_SECONDS * 2 * np.pi)
 
             # Add Week features (W)
             if time_info.get('woche', True):
-                df['w_sin'] = np.sin(sec / self.WEEK_SECONDS * 2 * np.pi)
-                df['w_cos'] = np.cos(sec / self.WEEK_SECONDS * 2 * np.pi)
+                df['W_sin'] = np.sin(sec / self.WEEK_SECONDS * 2 * np.pi)
+                df['W_cos'] = np.cos(sec / self.WEEK_SECONDS * 2 * np.pi)
 
             # Add Day features (D)
             if time_info.get('tag', True):
-                df['d_sin'] = np.sin(sec / self.DAY_SECONDS * 2 * np.pi)
-                df['d_cos'] = np.cos(sec / self.DAY_SECONDS * 2 * np.pi)
+                df['D_sin'] = np.sin(sec / self.DAY_SECONDS * 2 * np.pi)
+                df['D_cos'] = np.cos(sec / self.DAY_SECONDS * 2 * np.pi)
 
             # Add basic time columns for reference
             df['year'] = timestamps.dt.year
@@ -197,50 +197,43 @@ class TimeFeatures:
             sec_y = np.where(is_leap, 31622400, 31536000)  # 366 or 365 days in seconds
 
             return {
-                'y_sin': np.sin(sec / sec_y * 2 * np.pi),
-                'y_cos': np.cos(sec / sec_y * 2 * np.pi)
+                'Y_sin': np.sin(sec / sec_y * 2 * np.pi),
+                'Y_cos': np.cos(sec / sec_y * 2 * np.pi)
             }
         else:
             # UTC - use Unix timestamp
             sec = np.array([dt.timestamp() if hasattr(dt, 'timestamp') else pd.Timestamp(dt).timestamp()
                             for dt in utc_th])
             return {
-                'y_sin': np.sin(sec / self.YEAR_SECONDS * 2 * np.pi),
-                'y_cos': np.cos(sec / self.YEAR_SECONDS * 2 * np.pi)
+                'Y_sin': np.sin(sec / self.YEAR_SECONDS * 2 * np.pi),
+                'Y_cos': np.cos(sec / self.YEAR_SECONDS * 2 * np.pi)
             }
 
     def _calc_month_features(self, utc_th: List, lt: bool) -> Dict[str, np.ndarray]:
         """
         Calculate month sin/cos features
+        MATCHES ORIGINAL: Uses constant MONTH_SECONDS (2629800) for all modes
         Original: time_features_processing.py lines 127-208
         """
         if lt:
             # Convert to local time
-            utc_th = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in utc_th]
-            lt_th = [dt.astimezone(self.tz) for dt in utc_th]
+            utc_th_tz = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in utc_th]
+            lt_th = [dt.astimezone(self.tz) for dt in utc_th_tz]
 
-            # Calculate seconds from start of month (local time)
-            sec = np.array([(dt.day - 1) * 86400 +
-                            dt.hour * 3600 +
-                            dt.minute * 60 +
-                            dt.second for dt in lt_th])
-
-            # Get days in each month
-            years = np.array([dt.year for dt in lt_th])
-            months = np.array([dt.month for dt in lt_th])
-            sec_m = 86400 * np.array([calendar.monthrange(y, m)[1] for y, m in zip(years, months)])
+            # MATCHES ORIGINAL: Use Unix timestamp of local time / constant MONTH_SECONDS
+            sec = np.array([dt.timestamp() for dt in lt_th])
 
             return {
-                'm_sin': np.sin(sec / sec_m * 2 * np.pi),
-                'm_cos': np.cos(sec / sec_m * 2 * np.pi)
+                'M_sin': np.sin(sec / self.MONTH_SECONDS * 2 * np.pi),
+                'M_cos': np.cos(sec / self.MONTH_SECONDS * 2 * np.pi)
             }
         else:
             # UTC - use Unix timestamp
             sec = np.array([dt.timestamp() if hasattr(dt, 'timestamp') else pd.Timestamp(dt).timestamp()
                             for dt in utc_th])
             return {
-                'm_sin': np.sin(sec / self.MONTH_SECONDS * 2 * np.pi),
-                'm_cos': np.cos(sec / self.MONTH_SECONDS * 2 * np.pi)
+                'M_sin': np.sin(sec / self.MONTH_SECONDS * 2 * np.pi),
+                'M_cos': np.cos(sec / self.MONTH_SECONDS * 2 * np.pi)
             }
 
     def _calc_week_features(self, utc_th: List, lt: bool) -> Dict[str, np.ndarray]:
@@ -260,16 +253,16 @@ class TimeFeatures:
                             dt.second for dt in lt_th])
 
             return {
-                'w_sin': np.sin(sec / self.WEEK_SECONDS * 2 * np.pi),
-                'w_cos': np.cos(sec / self.WEEK_SECONDS * 2 * np.pi)
+                'W_sin': np.sin(sec / self.WEEK_SECONDS * 2 * np.pi),
+                'W_cos': np.cos(sec / self.WEEK_SECONDS * 2 * np.pi)
             }
         else:
             # UTC - use Unix timestamp
             sec = np.array([dt.timestamp() if hasattr(dt, 'timestamp') else pd.Timestamp(dt).timestamp()
                             for dt in utc_th])
             return {
-                'w_sin': np.sin(sec / self.WEEK_SECONDS * 2 * np.pi),
-                'w_cos': np.cos(sec / self.WEEK_SECONDS * 2 * np.pi)
+                'W_sin': np.sin(sec / self.WEEK_SECONDS * 2 * np.pi),
+                'W_cos': np.cos(sec / self.WEEK_SECONDS * 2 * np.pi)
             }
 
     def _calc_day_features(self, utc_th: List, lt: bool) -> Dict[str, np.ndarray]:
@@ -288,16 +281,16 @@ class TimeFeatures:
                             dt.second for dt in lt_th])
 
             return {
-                'd_sin': np.sin(sec / self.DAY_SECONDS * 2 * np.pi),
-                'd_cos': np.cos(sec / self.DAY_SECONDS * 2 * np.pi)
+                'D_sin': np.sin(sec / self.DAY_SECONDS * 2 * np.pi),
+                'D_cos': np.cos(sec / self.DAY_SECONDS * 2 * np.pi)
             }
         else:
             # UTC - use Unix timestamp
             sec = np.array([dt.timestamp() if hasattr(dt, 'timestamp') else pd.Timestamp(dt).timestamp()
                             for dt in utc_th])
             return {
-                'd_sin': np.sin(sec / self.DAY_SECONDS * 2 * np.pi),
-                'd_cos': np.cos(sec / self.DAY_SECONDS * 2 * np.pi)
+                'D_sin': np.sin(sec / self.DAY_SECONDS * 2 * np.pi),
+                'D_cos': np.cos(sec / self.DAY_SECONDS * 2 * np.pi)
             }
 
     def _calc_holiday_features(self, utc_th: List, lt: bool, country: str) -> Dict[str, np.ndarray]:
@@ -306,7 +299,7 @@ class TimeFeatures:
         Original: time_features_processing.py lines 350-409
         """
         if country not in HOL:
-            return {'h': np.zeros(len(utc_th))}
+            return {'H': np.zeros(len(utc_th))}
 
         hol_dates_set = set(d.date() if hasattr(d, 'date') else d for d in HOL[country])
 
@@ -319,7 +312,7 @@ class TimeFeatures:
             h_values = np.array([1 if (dt.date() if hasattr(dt, 'date') else dt) in hol_dates_set else 0
                                  for dt in utc_th])
 
-        return {'h': h_values}
+        return {'H': h_values}
 
     def generate_all_time_features(self, utc_ref, n_timesteps: int,
                                     time_info: Dict, category_data: Dict = None) -> Dict[str, np.ndarray]:
@@ -403,7 +396,7 @@ class TimeFeatures:
             DataFrame with holiday feature added
         """
         try:
-            df['h'] = 0  # Holiday flag column
+            df['H'] = 0  # Holiday flag column
 
             if country in HOL:
                 holiday_dates = HOL[country]
@@ -415,7 +408,7 @@ class TimeFeatures:
                     ts = df.loc[idx, time_column]
                     if hasattr(ts, 'date'):
                         if ts.date() in hol_dates_set:
-                            df.loc[idx, 'h'] = 1
+                            df.loc[idx, 'H'] = 1
 
             return df
 

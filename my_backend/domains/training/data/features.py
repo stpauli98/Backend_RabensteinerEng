@@ -14,6 +14,12 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Time constants - MUST match original training.py exactly
+YEAR_SECONDS = 31557600    # 60×60×24×365.25 seconds in a year
+MONTH_SECONDS = 2629800    # 60×60×24×365.25/12 seconds in a month  
+WEEK_SECONDS = 604800      # 60×60×24×7 seconds in a week
+DAY_SECONDS = 86400        # 60×60×24 seconds in a day
+
 
 class TimeFeatureExtractor:
     """
@@ -51,8 +57,8 @@ class TimeFeatureExtractor:
                 if not use_local_time:
                     sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                     
-                    features["y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
-                    features["y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
+                    features["Y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
+                    features["Y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
                     
                 else:
                     utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
@@ -72,8 +78,8 @@ class TimeFeatureExtractor:
                     
                     sec_y = np.where(is_leap, 31622400, 31536000)
                     
-                    features["y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
-                    features["y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
+                    features["Y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
+                    features["Y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
                     
             elif mode == "Aktuelle Zeit":
                 if len(timestamps) > 0:
@@ -81,8 +87,8 @@ class TimeFeatureExtractor:
                     
                     if not use_local_time:
                         sec = utc_ref.timestamp()
-                        features["y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
-                        features["y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
+                        features["Y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
+                        features["Y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
                         
                     else:
                         if utc_ref.tzinfo is None:
@@ -99,14 +105,14 @@ class TimeFeatureExtractor:
                         else:
                             sec_y = 31536000
                             
-                        features["y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
-                        features["y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
+                        features["Y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
+                        features["Y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
             
             return features
             
         except Exception as e:
             logger.error(f"Error extracting yearly features: {str(e)}")
-            return {"y_sin": np.array([]), "y_cos": np.array([])}
+            return {"Y_sin": np.array([]), "Y_cos": np.array([])}
     
     def extract_monthly_features(self, timestamps: List[datetime.datetime],
                                 use_local_time: bool = False,
@@ -114,76 +120,62 @@ class TimeFeatureExtractor:
         """
         Extract monthly cyclical features (sin/cos components)
         
+        MATCHES ORIGINAL: Uses constant MONTH_SECONDS (2629800) instead of dynamic month length
+        
         Args:
             timestamps: List of datetime objects
             use_local_time: Whether to use local time or UTC
             mode: "Zeithorizont" or "Aktuelle Zeit"
             
         Returns:
-            Dict with m_sin and m_cos arrays
+            Dict with M_sin and M_cos arrays
         """
         try:
             features = {}
             
             if mode == "Zeithorizont":
                 if not use_local_time:
-                    # Dinamički izračun sekundi u mjesecu za svaki timestamp
-                    sec_in_month = np.array([
-                        (dt.day - 1) * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second
-                        for dt in timestamps
-                    ])
-                    # Točan broj sekundi u svakom mjesecu (28-31 dana)
-                    sec_m = np.array([
-                        calendar.monthrange(dt.year, dt.month)[1] * 86400
-                        for dt in timestamps
-                    ])
-
-                    features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
-                    features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
+                    # MATCHES ORIGINAL: Use Unix timestamp / constant MONTH_SECONDS
+                    sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
+                    
+                    features["M_sin"] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
+                    features["M_cos"] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
 
                 else:
                     utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
                     local_timestamps = [dt.astimezone(pytz.timezone(self.timezone)) for dt in utc_timestamps]
 
-                    # Dinamički izračun za local time
-                    sec_in_month = np.array([
-                        (dt.day - 1) * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second
-                        for dt in local_timestamps
-                    ])
-                    sec_m = np.array([
-                        calendar.monthrange(dt.year, dt.month)[1] * 86400
-                        for dt in local_timestamps
-                    ])
+                    # MATCHES ORIGINAL: Use Unix timestamp of local time / constant
+                    sec = np.array([dt.timestamp() for dt in local_timestamps])
 
-                    features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
-                    features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
+                    features["M_sin"] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
+                    features["M_cos"] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
                     
             elif mode == "Aktuelle Zeit":
                 if len(timestamps) > 0:
                     utc_ref = timestamps[0]
 
                     if not use_local_time:
-                        # Dinamički izračun za Aktuelle Zeit
-                        sec_in_month = (utc_ref.day - 1) * 86400 + utc_ref.hour * 3600 + utc_ref.minute * 60 + utc_ref.second
-                        sec_m = calendar.monthrange(utc_ref.year, utc_ref.month)[1] * 86400
-                        features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
-                        features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
+                        # MATCHES ORIGINAL: Use Unix timestamp / constant MONTH_SECONDS
+                        sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
+                        features["M_sin"] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
+                        features["M_cos"] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
                     else:
                         if utc_ref.tzinfo is None:
                             utc_ref = pytz.utc.localize(utc_ref)
                         local_time = utc_ref.astimezone(pytz.timezone(self.timezone))
 
-                        sec_in_month = (local_time.day - 1) * 86400 + local_time.hour * 3600 + local_time.minute * 60 + local_time.second
-                        sec_m = calendar.monthrange(local_time.year, local_time.month)[1] * 86400
+                        # MATCHES ORIGINAL: Use Unix timestamp of local time / constant
+                        sec = local_time.timestamp()
 
-                        features["m_sin"] = np.sin(sec_in_month / sec_m * 2 * np.pi)
-                        features["m_cos"] = np.cos(sec_in_month / sec_m * 2 * np.pi)
+                        features["M_sin"] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
+                        features["M_cos"] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
             
             return features
             
         except Exception as e:
             logger.error(f"Error extracting monthly features: {str(e)}")
-            return {"m_sin": np.array([]), "m_cos": np.array([])}
+            return {"M_sin": np.array([]), "M_cos": np.array([])}
     
     def extract_weekly_features(self, timestamps: List[datetime.datetime],
                                use_local_time: bool = False) -> Dict[str, np.ndarray]:
@@ -203,8 +195,8 @@ class TimeFeatureExtractor:
             if not use_local_time:
                 sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                 
-                features["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
-                features["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
+                features["W_sin"] = np.sin(sec / 604800 * 2 * np.pi)
+                features["W_cos"] = np.cos(sec / 604800 * 2 * np.pi)
                 
             else:
                 utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
@@ -218,14 +210,14 @@ class TimeFeatureExtractor:
                     for dt in local_timestamps
                 ])
                 
-                features["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
-                features["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
+                features["W_sin"] = np.sin(sec / 604800 * 2 * np.pi)
+                features["W_cos"] = np.cos(sec / 604800 * 2 * np.pi)
             
             return features
             
         except Exception as e:
             logger.error(f"Error extracting weekly features: {str(e)}")
-            return {"w_sin": np.array([]), "w_cos": np.array([])}
+            return {"W_sin": np.array([]), "W_cos": np.array([])}
     
     def extract_daily_features(self, timestamps: List[datetime.datetime],
                               use_local_time: bool = False) -> Dict[str, np.ndarray]:
@@ -245,8 +237,8 @@ class TimeFeatureExtractor:
             if not use_local_time:
                 sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                 
-                features["d_sin"] = np.sin((sec % 86400) / 86400 * 2 * np.pi)
-                features["d_cos"] = np.cos((sec % 86400) / 86400 * 2 * np.pi)
+                features["D_sin"] = np.sin((sec % 86400) / 86400 * 2 * np.pi)
+                features["D_cos"] = np.cos((sec % 86400) / 86400 * 2 * np.pi)
                 
             else:
                 utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
@@ -259,14 +251,14 @@ class TimeFeatureExtractor:
                     for dt in local_timestamps
                 ])
                 
-                features["d_sin"] = np.sin(sec / 86400 * 2 * np.pi)
-                features["d_cos"] = np.cos(sec / 86400 * 2 * np.pi)
+                features["D_sin"] = np.sin(sec / 86400 * 2 * np.pi)
+                features["D_cos"] = np.cos(sec / 86400 * 2 * np.pi)
             
             return features
             
         except Exception as e:
             logger.error(f"Error extracting daily features: {str(e)}")
-            return {"d_sin": np.array([]), "d_cos": np.array([])}
+            return {"D_sin": np.array([]), "D_cos": np.array([])}
     
     def extract_hourly_features(self, timestamps: List[datetime.datetime],
                                use_local_time: bool = False) -> Dict[str, np.ndarray]:
@@ -286,8 +278,8 @@ class TimeFeatureExtractor:
             if not use_local_time:
                 sec = pd.Series(timestamps).map(pd.Timestamp.timestamp)
                 
-                features["h_sin"] = np.sin((sec % 3600) / 3600 * 2 * np.pi)
-                features["h_cos"] = np.cos((sec % 3600) / 3600 * 2 * np.pi)
+                features["H_sin"] = np.sin((sec % 3600) / 3600 * 2 * np.pi)
+                features["H_cos"] = np.cos((sec % 3600) / 3600 * 2 * np.pi)
                 
             else:
                 utc_timestamps = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in timestamps]
@@ -298,14 +290,14 @@ class TimeFeatureExtractor:
                     for dt in local_timestamps
                 ])
                 
-                features["h_sin"] = np.sin(sec / 3600 * 2 * np.pi)
-                features["h_cos"] = np.cos(sec / 3600 * 2 * np.pi)
+                features["H_sin"] = np.sin(sec / 3600 * 2 * np.pi)
+                features["H_cos"] = np.cos(sec / 3600 * 2 * np.pi)
             
             return features
             
         except Exception as e:
             logger.error(f"Error extracting hourly features: {str(e)}")
-            return {"h_sin": np.array([]), "h_cos": np.array([])}
+            return {"H_sin": np.array([]), "H_cos": np.array([])}
     
     def extract_all_time_features(self, timestamps: List[datetime.datetime],
                                  features_config: Dict[str, bool] = None,

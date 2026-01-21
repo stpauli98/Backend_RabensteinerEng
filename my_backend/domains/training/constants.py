@@ -7,28 +7,35 @@ These are the KNOWN possible time component names based on the original training
 
 # TIME component names - these are the possible time features that can be generated
 # Based on original training.py class T structure (Y, M, W, D, H)
-# NOTE: These MUST be lowercase to match what transformer.py and exact.py produce
+# NOTE: These MUST be UPPERCASE to match original training.py output
 TIME_COMPONENT_NAMES = [
-    'y_sin', 'y_cos',  # Year sin/cos
-    'm_sin', 'm_cos',  # Month sin/cos
-    'w_sin', 'w_cos',  # Week sin/cos
-    'd_sin', 'd_cos',  # Day sin/cos
-    'h'                # Holiday flag (feiertag)
-]
-
-# UPPERCASE TIME component names for violin plot display (matches original training.py)
-# Original uses UPPERCASE for display: Y_sin, Y_cos, M_sin, M_cos, etc.
-TIME_COMPONENT_NAMES_DISPLAY = [
-    'Y_sin', 'Y_cos',  # Year sin/cos (UPPERCASE for display)
+    'Y_sin', 'Y_cos',  # Year sin/cos (UPPERCASE - matches original)
     'M_sin', 'M_cos',  # Month sin/cos
     'W_sin', 'W_cos',  # Week sin/cos
     'D_sin', 'D_cos',  # Day sin/cos
-    'Holiday'          # Holiday flag (Feiertag)
+    'H'                # Holiday flag (feiertag)
 ]
 
-# Mapping from lowercase TIME component names to UPPERCASE display names
-# Used for violin plots to match original training.py display format
+# UPPERCASE TIME component names for display (same as TIME_COMPONENT_NAMES now)
+# Kept for backward compatibility with code that references this list
+TIME_COMPONENT_NAMES_DISPLAY = [
+    'Y_sin', 'Y_cos',  # Year sin/cos
+    'M_sin', 'M_cos',  # Month sin/cos
+    'W_sin', 'W_cos',  # Week sin/cos
+    'D_sin', 'D_cos',  # Day sin/cos
+    'Holiday'          # Holiday flag (Feiertag) - display name
+]
+
+# Mapping from TIME component names to display names
+# Now mostly identity mapping since we use UPPERCASE internally
+# 'H' maps to 'Holiday' for display purposes
 TIME_NAME_DISPLAY_MAP = {
+    'Y_sin': 'Y_sin', 'Y_cos': 'Y_cos',
+    'M_sin': 'M_sin', 'M_cos': 'M_cos',
+    'W_sin': 'W_sin', 'W_cos': 'W_cos',
+    'D_sin': 'D_sin', 'D_cos': 'D_cos',
+    'H': 'Holiday',
+    # Legacy lowercase mappings for backward compatibility
     'y_sin': 'Y_sin', 'y_cos': 'Y_cos',
     'm_sin': 'M_sin', 'm_cos': 'M_cos',
     'w_sin': 'W_sin', 'w_cos': 'W_cos',
@@ -38,13 +45,13 @@ TIME_NAME_DISPLAY_MAP = {
 
 # Mapping from time_info table column names to component names
 # These match the actual column names in the time_info Supabase table
-# NOTE: Component names are lowercase to match training output
+# NOTE: Component names are UPPERCASE to match original training.py
 TIME_INFO_TO_COMPONENTS = {
-    'jahr': ['y_sin', 'y_cos'],      # Year sin/cos components
-    'monat': ['m_sin', 'm_cos'],     # Month sin/cos components
-    'woche': ['w_sin', 'w_cos'],     # Week sin/cos components
-    'tag': ['d_sin', 'd_cos'],       # Day sin/cos components
-    'feiertag': ['h']                # Holiday flag
+    'jahr': ['Y_sin', 'Y_cos'],      # Year sin/cos components
+    'monat': ['M_sin', 'M_cos'],     # Month sin/cos components
+    'woche': ['W_sin', 'W_cos'],     # Week sin/cos components
+    'tag': ['D_sin', 'D_cos'],       # Day sin/cos components
+    'feiertag': ['H']                # Holiday flag
 }
 
 # Default timestep configuration (matching MTS class in original training.py)

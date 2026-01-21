@@ -18,6 +18,12 @@ from domains.training.data.loader import utc_idx_pre, utc_idx_post
 logger = logging.getLogger(__name__)
 # Log level now controlled by LOG_LEVEL environment variable in app_factory.py
 
+# Time constants - MUST match original training.py exactly
+YEAR_SECONDS = 31557600    # 60×60×24×365.25 seconds in a year
+MONTH_SECONDS = 2629800    # 60×60×24×365.25/12 seconds in a month  
+WEEK_SECONDS = 604800      # 60×60×24×7 seconds in a week
+DAY_SECONDS = 86400        # 60×60×24 seconds in a day
+
 
 def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                           o_dat_inf: pd.DataFrame, utc_strt: datetime.datetime,
@@ -157,6 +163,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             end=utc_th_end,
                             freq=f'{i_dat_inf.loc[key, "delt_transf"]}min'
                         ).to_list()
+                        # Ensure exactly mts.I_N elements (date_range with freq can create N+1)
+                        utc_th = utc_th[:mts.I_N]
                     except:
                         # Fallback: manual time series generation
                         delt = pd.to_timedelta(i_dat_inf.loc[key, "delt_transf"], unit="min")
@@ -246,6 +254,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                             end=utc_th_end,
                             freq=f'{o_dat_inf.loc[key, "delt_transf"]}min'
                         ).to_list()
+                        # Ensure exactly mts.O_N elements (date_range with freq can create N+1)
+                        utc_th = utc_th[:mts.O_N]
                     except:
                         # Fallback: manual time series generation
                         delt = pd.to_timedelta(o_dat_inf.loc[key, "delt_transf"], unit="min")
@@ -317,8 +327,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
 
                     if T.Y.LT == False:
                         sec = pd.Series(utc_th).map(pd.Timestamp.timestamp)
-                        df_int_i["y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
-                        df_int_i["y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
+                        df_int_i["Y_sin"] = np.sin(sec / 31557600 * 2 * np.pi)
+                        df_int_i["Y_cos"] = np.cos(sec / 31557600 * 2 * np.pi)
                     
                     else:
                         utc_th = [pytz.utc.localize(dt) for dt in utc_th]
@@ -333,14 +343,14 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         is_leap = np.vectorize(calendar.isleap)(y)
                         sec_y = np.where(is_leap, 31622400, 31536000)
                         
-                        df_int_i["y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
-                        df_int_i["y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
+                        df_int_i["Y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
+                        df_int_i["Y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
                 
                 elif T.Y.SPEC == "Aktuelle Zeit":
                     if T.Y.LT == False:
                         sec = utc_ref.timestamp()
-                        df_int_i["y_sin"] = [np.sin(sec / 31557600 * 2 * np.pi)] * mts.I_N
-                        df_int_i["y_cos"] = [np.cos(sec / 31557600 * 2 * np.pi)] * mts.I_N
+                        df_int_i["Y_sin"] = [np.sin(sec / 31557600 * 2 * np.pi)] * mts.I_N
+                        df_int_i["Y_cos"] = [np.cos(sec / 31557600 * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
                         sec = (lt.timetuple().tm_yday - 1) * 86400 + lt.hour * 3600 + lt.minute * 60 + lt.second
@@ -350,8 +360,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         else:
                             sec_y = 31536000
                         
-                        df_int_i["y_sin"] = [np.sin(sec / sec_y * 2 * np.pi)] * mts.I_N
-                        df_int_i["y_cos"] = [np.cos(sec / sec_y * 2 * np.pi)] * mts.I_N
+                        df_int_i["Y_sin"] = [np.sin(sec / sec_y * 2 * np.pi)] * mts.I_N
+                        df_int_i["Y_cos"] = [np.cos(sec / sec_y * 2 * np.pi)] * mts.I_N
             
             if T.M.IMP:
                 if T.M.SPEC == "Zeithorizont":
@@ -366,47 +376,36 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     ).to_list()
 
                     if T.M.LT == False:
-                        m = pd.Series(utc_th).dt.month.values
-                        d = pd.Series(utc_th).dt.day.values
-                        h = pd.Series(utc_th).dt.hour.values
+                        # MATCHES ORIGINAL: Use Unix timestamp / constant MONTH_SECONDS
+                        sec = pd.Series(utc_th).map(pd.Timestamp.timestamp)
                         
-                        sec = (d - 1) * 86400 + h * 3600
-                        sec_m = np.array([calendar.monthrange(utc_th[i].year, m[i])[1] * 86400 
-                                         for i in range(len(utc_th))])
-                        
-                        df_int_i["m_sin"] = np.sin(sec / sec_m * 2 * np.pi)
-                        df_int_i["m_cos"] = np.cos(sec / sec_m * 2 * np.pi)
+                        df_int_i["M_sin"] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
+                        df_int_i["M_cos"] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
                     else:
-                        utc_th = [pytz.utc.localize(dt) for dt in utc_th]
-                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
-
-                        sec = np.array([(dt.day - 1) * 86400 +
-                                       dt.hour * 3600 +
-                                       dt.minute * 60 +
-                                       dt.second for dt in lt_th])
-
-                        sec_m = np.array([calendar.monthrange(dt.year, dt.month)[1] * 86400
-                                         for dt in lt_th])
+                        # LT mode: Convert to local time, then use timestamp / MONTH_SECONDS
+                        utc_th_tz = [pytz.utc.localize(dt) for dt in utc_th]
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th_tz]
                         
-                        df_int_i["m_sin"] = np.sin(sec / sec_m * 2 * np.pi)
-                        df_int_i["m_cos"] = np.cos(sec / sec_m * 2 * np.pi)
+                        # MATCHES ORIGINAL: Use Unix timestamp of local time / constant
+                        sec = np.array([dt.timestamp() for dt in lt_th])
+                        
+                        df_int_i["M_sin"] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
+                        df_int_i["M_cos"] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
                 
                 elif T.M.SPEC == "Aktuelle Zeit":
                     if T.M.LT == False:
-                        d = utc_ref.day
-                        h = utc_ref.hour
-                        sec = (d - 1) * 86400 + h * 3600
-                        sec_m = calendar.monthrange(utc_ref.year, utc_ref.month)[1] * 86400
+                        # MATCHES ORIGINAL: Use Unix timestamp / constant MONTH_SECONDS
+                        sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
                         
-                        df_int_i["m_sin"] = [np.sin(sec / sec_m * 2 * np.pi)] * mts.I_N
-                        df_int_i["m_cos"] = [np.cos(sec / sec_m * 2 * np.pi)] * mts.I_N
+                        df_int_i["M_sin"] = [np.sin(sec / MONTH_SECONDS * 2 * np.pi)] * mts.I_N
+                        df_int_i["M_cos"] = [np.cos(sec / MONTH_SECONDS * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        sec = (lt.day - 1) * 86400 + lt.hour * 3600 + lt.minute * 60 + lt.second
-                        sec_m = calendar.monthrange(lt.year, lt.month)[1] * 86400
+                        # MATCHES ORIGINAL: Use Unix timestamp of local time / constant
+                        sec = lt.timestamp()
                         
-                        df_int_i["m_sin"] = [np.sin(sec / sec_m * 2 * np.pi)] * mts.I_N
-                        df_int_i["m_cos"] = [np.cos(sec / sec_m * 2 * np.pi)] * mts.I_N
+                        df_int_i["M_sin"] = [np.sin(sec / MONTH_SECONDS * 2 * np.pi)] * mts.I_N
+                        df_int_i["M_cos"] = [np.cos(sec / MONTH_SECONDS * 2 * np.pi)] * mts.I_N
             
             if T.W.IMP:
                 if T.W.SPEC == "Zeithorizont":
@@ -421,40 +420,31 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     ).to_list()
 
                     if T.W.LT == False:
-                        wd = pd.Series(utc_th).dt.weekday.values
-                        h = pd.Series(utc_th).dt.hour.values
-                        m = pd.Series(utc_th).dt.minute.values
-                        
-                        sec = wd * 86400 + h * 3600 + m * 60
-                        df_int_i["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
-                        df_int_i["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
+                        # MATCHES ORIGINAL: Use Unix timestamp / WEEK_SECONDS
+                        sec = pd.Series(utc_th).map(pd.Timestamp.timestamp)
+                        df_int_i["W_sin"] = np.sin(sec / WEEK_SECONDS * 2 * np.pi)
+                        df_int_i["W_cos"] = np.cos(sec / WEEK_SECONDS * 2 * np.pi)
                     else:
-                        utc_th = [pytz.utc.localize(dt) for dt in utc_th]
-                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
-
-                        sec = np.array([dt.weekday() * 86400 +
-                                       dt.hour * 3600 +
-                                       dt.minute * 60 +
-                                       dt.second for dt in lt_th])
-                        
-                        df_int_i["w_sin"] = np.sin(sec / 604800 * 2 * np.pi)
-                        df_int_i["w_cos"] = np.cos(sec / 604800 * 2 * np.pi)
+                        # LT mode: Convert to local time, use Unix timestamp
+                        utc_th_tz = [pytz.utc.localize(dt) for dt in utc_th]
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th_tz]
+                        # MATCHES ORIGINAL: Use Unix timestamp of local time
+                        sec = np.array([dt.timestamp() for dt in lt_th])
+                        df_int_i["W_sin"] = np.sin(sec / WEEK_SECONDS * 2 * np.pi)
+                        df_int_i["W_cos"] = np.cos(sec / WEEK_SECONDS * 2 * np.pi)
                 
                 elif T.W.SPEC == "Aktuelle Zeit":
                     if T.W.LT == False:
-                        wd = utc_ref.weekday()
-                        h = utc_ref.hour
-                        m = utc_ref.minute
-                        sec = wd * 86400 + h * 3600 + m * 60
-                        
-                        df_int_i["w_sin"] = [np.sin(sec / 604800 * 2 * np.pi)] * mts.I_N
-                        df_int_i["w_cos"] = [np.cos(sec / 604800 * 2 * np.pi)] * mts.I_N
+                        # MATCHES ORIGINAL: Use Unix timestamp / WEEK_SECONDS
+                        sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
+                        df_int_i["W_sin"] = [np.sin(sec / WEEK_SECONDS * 2 * np.pi)] * mts.I_N
+                        df_int_i["W_cos"] = [np.cos(sec / WEEK_SECONDS * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        sec = lt.weekday() * 86400 + lt.hour * 3600 + lt.minute * 60 + lt.second
-                        
-                        df_int_i["w_sin"] = [np.sin(sec / 604800 * 2 * np.pi)] * mts.I_N
-                        df_int_i["w_cos"] = [np.cos(sec / 604800 * 2 * np.pi)] * mts.I_N
+                        # MATCHES ORIGINAL: Use Unix timestamp of local time
+                        sec = lt.timestamp()
+                        df_int_i["W_sin"] = [np.sin(sec / WEEK_SECONDS * 2 * np.pi)] * mts.I_N
+                        df_int_i["W_cos"] = [np.cos(sec / WEEK_SECONDS * 2 * np.pi)] * mts.I_N
             
             if T.D.IMP:
                 if T.D.SPEC == "Zeithorizont":
@@ -469,38 +459,31 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                     ).to_list()
 
                     if T.D.LT == False:
-                        h = pd.Series(utc_th).dt.hour.values
-                        m = pd.Series(utc_th).dt.minute.values
-                        
-                        sec = h * 3600 + m * 60
-                        df_int_i["d_sin"] = np.sin(sec / 86400 * 2 * np.pi)
-                        df_int_i["d_cos"] = np.cos(sec / 86400 * 2 * np.pi)
+                        # MATCHES ORIGINAL: Use Unix timestamp / DAY_SECONDS
+                        sec = pd.Series(utc_th).map(pd.Timestamp.timestamp)
+                        df_int_i["D_sin"] = np.sin(sec / DAY_SECONDS * 2 * np.pi)
+                        df_int_i["D_cos"] = np.cos(sec / DAY_SECONDS * 2 * np.pi)
                     else:
-                        utc_th = [pytz.utc.localize(dt) for dt in utc_th]
-                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th]
-
-                        sec = np.array([dt.hour * 3600 +
-                                       dt.minute * 60 +
-                                       dt.second for dt in lt_th])
-                        
-                        df_int_i["d_sin"] = np.sin(sec / 86400 * 2 * np.pi)
-                        df_int_i["d_cos"] = np.cos(sec / 86400 * 2 * np.pi)
+                        # LT mode: Convert to local time, use Unix timestamp
+                        utc_th_tz = [pytz.utc.localize(dt) for dt in utc_th]
+                        lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th_tz]
+                        # MATCHES ORIGINAL: Use Unix timestamp of local time
+                        sec = np.array([dt.timestamp() for dt in lt_th])
+                        df_int_i["D_sin"] = np.sin(sec / DAY_SECONDS * 2 * np.pi)
+                        df_int_i["D_cos"] = np.cos(sec / DAY_SECONDS * 2 * np.pi)
                 
                 elif T.D.SPEC == "Aktuelle Zeit":
                     if T.D.LT == False:
-                        h = utc_ref.hour
-                        m = utc_ref.minute
-                        s = utc_ref.second
-                        sec = h * 3600 + m * 60 + s
-                        
-                        df_int_i["d_sin"] = [np.sin(sec / 86400 * 2 * np.pi)] * mts.I_N
-                        df_int_i["d_cos"] = [np.cos(sec / 86400 * 2 * np.pi)] * mts.I_N
+                        # MATCHES ORIGINAL: Use Unix timestamp / DAY_SECONDS
+                        sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
+                        df_int_i["D_sin"] = [np.sin(sec / DAY_SECONDS * 2 * np.pi)] * mts.I_N
+                        df_int_i["D_cos"] = [np.cos(sec / DAY_SECONDS * 2 * np.pi)] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        sec = lt.hour * 3600 + lt.minute * 60 + lt.second
-                        
-                        df_int_i["d_sin"] = [np.sin(sec / 86400 * 2 * np.pi)] * mts.I_N
-                        df_int_i["d_cos"] = [np.cos(sec / 86400 * 2 * np.pi)] * mts.I_N
+                        # MATCHES ORIGINAL: Use Unix timestamp of local time
+                        sec = lt.timestamp()
+                        df_int_i["D_sin"] = [np.sin(sec / DAY_SECONDS * 2 * np.pi)] * mts.I_N
+                        df_int_i["D_cos"] = [np.cos(sec / DAY_SECONDS * 2 * np.pi)] * mts.I_N
             
             if T.H.IMP:
                 if T.H.SPEC == "Zeithorizont":
@@ -517,20 +500,20 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
 
                     if T.H.LT == False:
                         # Compare UTC dates against holidays
-                        df_int_i["h"] = np.array([1 if dt.date() in hol_d else 0 for dt in utc_th])
+                        df_int_i["H"] = np.array([1 if dt.date() in hol_d else 0 for dt in utc_th])
                     else:
                         # Convert to local time first
                         utc_th_loc = [pytz.utc.localize(dt) if dt.tzinfo is None else dt for dt in utc_th]
                         lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th_loc]
                         # Compare local dates against holidays
-                        df_int_i["h"] = np.array([1 if dt.date() in hol_d else 0 for dt in lt_th])
+                        df_int_i["H"] = np.array([1 if dt.date() in hol_d else 0 for dt in lt_th])
 
                 elif T.H.SPEC == "Aktuelle Zeit":
                     if T.H.LT == False:
-                        df_int_i["h"] = [1 if utc_ref.date() in hol_d else 0] * mts.I_N
+                        df_int_i["H"] = [1 if utc_ref.date() in hol_d else 0] * mts.I_N
                     else:
                         lt = pytz.utc.localize(utc_ref).astimezone(pytz.timezone(T.TZ))
-                        df_int_i["h"] = [1 if lt.date() in hol_d else 0] * mts.I_N
+                        df_int_i["H"] = [1 if lt.date() in hol_d else 0] * mts.I_N
         
         
         if df_int_i.shape[1] > 0 and df_int_o.shape[1] > 0:

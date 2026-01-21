@@ -47,16 +47,17 @@ def _build_input_feature_names(i_dat_inf, i_dat) -> list:
         feature_names = list(i_dat.keys())
 
     # Add TIME component names based on T config (matches transformer.py order)
+    # NOTE: UPPERCASE names to match original training.py
     if T.Y.IMP:
-        feature_names.extend(['y_sin', 'y_cos'])
+        feature_names.extend(['Y_sin', 'Y_cos'])
     if T.M.IMP:
-        feature_names.extend(['m_sin', 'm_cos'])
+        feature_names.extend(['M_sin', 'M_cos'])
     if T.W.IMP:
-        feature_names.extend(['w_sin', 'w_cos'])
+        feature_names.extend(['W_sin', 'W_cos'])
     if T.D.IMP:
-        feature_names.extend(['d_sin', 'd_cos'])
+        feature_names.extend(['D_sin', 'D_cos'])
     if T.H.IMP:
-        feature_names.append('h')
+        feature_names.append('H')
 
     logger.info(f"Built input feature names: {feature_names}")
     return feature_names
