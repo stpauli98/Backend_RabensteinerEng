@@ -614,3 +614,17 @@ def utc_idx_post(dat, utc):
 
     return None
         
+
+
+def create_data_loader(supabase_client=None):
+    """
+    Factory function to create a DataLoader instance.
+    
+    Args:
+        supabase_client: Optional Supabase client. If not provided, creates new one.
+        
+    Returns:
+        DataLoader instance
+    """
+    return DataLoader(supabase_client)
+

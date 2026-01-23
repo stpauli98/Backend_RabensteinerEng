@@ -52,9 +52,14 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     
     # Use provided mts_config or create default MTS instance
     mts = mts_config if mts_config is not None else MTS()
-    logger.info(f"📍 create_training_arrays using MTS: I_N={mts.I_N}, O_N={mts.O_N}, DELT={mts.DELT}")
+    logger.info(f"📍 create_training_arrays using MTS: I_N={mts.I_N}, O_N={mts.O_N}, DELT={mts.DELT}, OFST={mts.OFST}")
 
-    utc_ref = utc_strt - datetime.timedelta(minutes=mts.DELT)
+    # EXACT COPY from training_original.py lines 1062-1069
+    # Berechnung der Referenzzeit
+    utc_ref = utc_strt.replace(minute=0, second=0, microsecond=0) \
+        - datetime.timedelta(hours=1) \
+        + datetime.timedelta(minutes=mts.OFST)
+
     while utc_ref < utc_strt:
         utc_ref += datetime.timedelta(minutes=mts.DELT)
     
@@ -313,7 +318,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
         if error == False:
             
             if T.Y.IMP:
-                
+                logger.info(f"📍 T.Y: SPEC={T.Y.SPEC}, TH_STRT={T.Y.TH_STRT}, TH_END={T.Y.TH_END}")
+
                 if T.Y.SPEC == "Zeithorizont":
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.Y.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.Y.TH_END)
@@ -408,6 +414,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["M_cos"] = [np.cos(sec / MONTH_SECONDS * 2 * np.pi)] * mts.I_N
             
             if T.W.IMP:
+                logger.info(f"📍 T.W: SPEC={T.W.SPEC}, TH_STRT={T.W.TH_STRT}, TH_END={T.W.TH_END}")
+
                 if T.W.SPEC == "Zeithorizont":
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.W.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.W.TH_END)
@@ -447,6 +455,8 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["W_cos"] = [np.cos(sec / WEEK_SECONDS * 2 * np.pi)] * mts.I_N
             
             if T.D.IMP:
+                logger.info(f"📍 T.D: SPEC={T.D.SPEC}, TH_STRT={T.D.TH_STRT}, TH_END={T.D.TH_END}")
+
                 if T.D.SPEC == "Zeithorizont":
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.D.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.D.TH_END)
@@ -516,23 +526,32 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["H"] = [1 if lt.date() in hol_d else 0] * mts.I_N
         
         
-        if df_int_i.shape[1] > 0 and df_int_o.shape[1] > 0:
+        # MATCHES ORIGINAL: Only append if no error occurred during this iteration
+        # This ensures partial data from failed interpolations isn't included
+        if error == False:
             i_arrays.append(df_int_i.values)
             o_arrays.append(df_int_o.values)
             utc_ref_log.append(utc_ref)
         else:
-            pass
-        
+            # CRITICAL: Reset error for next iteration (matches original line 1786)
+            # Without this, once error=True, ALL subsequent iterations would be skipped
+            error = False
+
+        # ALWAYS advance utc_ref (matches original line 1788)
+        # This is OUTSIDE the if/else, so it runs regardless of error state
         utc_ref = utc_ref + datetime.timedelta(minutes=mts.DELT)
-    else:
-        error = False
     
     if len(i_arrays) > 0 and len(o_arrays) > 0:
         i_array_3D = np.array(i_arrays)
         o_array_3D = np.array(o_arrays)
-        
+
         n_dat = i_array_3D.shape[0]
-        
+        n_features_in = i_array_3D.shape[2] if len(i_array_3D.shape) > 2 else 0
+        n_features_out = o_array_3D.shape[2] if len(o_array_3D.shape) > 2 else 0
+
+        logger.info(f"📍 TRANSFORMER RESULT: {n_dat} samples, {n_features_in} input features, {n_features_out} output features")
+        logger.info(f"📍 TIME config used: Y.SPEC={T.Y.SPEC if T.Y.IMP else 'N/A'}, W.SPEC={T.W.SPEC if T.W.IMP else 'N/A'}, D.SPEC={T.D.SPEC if T.D.IMP else 'N/A'}")
+
         i_combined_array = np.vstack(i_arrays)
         o_combined_array = np.vstack(o_arrays)
     else:

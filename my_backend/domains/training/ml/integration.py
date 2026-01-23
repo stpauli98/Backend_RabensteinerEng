@@ -1,6 +1,6 @@
 """
 Pipeline integration module
-Connects TrainingPipeline with real extracted functions from training_backend_test_22.py
+Connects run_exact_training_pipeline with real extracted functions
 """
 
 import logging
@@ -790,7 +790,7 @@ def run_dataset_generation_pipeline(session_id: str, supabase_client, socketio_i
 def run_real_training_pipeline(session_id: str, supabase_client, socketio_instance=None) -> Dict:
     """
     Run complete training pipeline using real extracted functions
-    This replaces the TrainingPipeline methods with real implementations
+    Uses run_exact_training_pipeline with real implementations
     
     Args:
         session_id: Session identifier

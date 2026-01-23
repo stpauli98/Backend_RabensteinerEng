@@ -4,13 +4,18 @@ This module provides the complete training pipeline exactly as in the original s
 """
 
 import os
+import random
 import numpy as np
 import pandas as pd
 import copy
 import logging
+import tensorflow as tf
 from typing import Dict, Tuple, Optional
 from datetime import datetime
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+# Fixed random seed for reproducibility
+RANDOM_SEED = 42
 
 from domains.training.data.loader import DataLoader, load, transf
 from domains.training.data.transformer import create_training_arrays
@@ -336,6 +341,12 @@ def run_exact_training_pipeline(
     import logging
     logger = logging.getLogger(__name__)
 
+    # Set random seeds for reproducibility
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
+    tf.random.set_seed(RANDOM_SEED)
+    logger.info(f"   Random seeds set to {RANDOM_SEED} for reproducibility")
+
     logger.info(f"   Pipeline Step 1: Creating training arrays from {utc_strt} to {utc_end}")
     try:
         (i_array_3D, o_array_3D,
@@ -354,7 +365,15 @@ def run_exact_training_pipeline(
         raise
     
     n_dat = i_array_3D.shape[0]
-    
+    n_timesteps = i_array_3D.shape[1]
+    n_features_in = i_array_3D.shape[2]
+    n_features_out = o_array_3D.shape[2]
+
+    logger.info(f"=== ARRAY SHAPES BEFORE SCALING ===")
+    logger.info(f"Input:  n_dat={n_dat}, n_timesteps={n_timesteps}, n_features={n_features_in}")
+    logger.info(f"Output: n_dat={n_dat}, n_timesteps={o_array_3D.shape[1]}, n_features={n_features_out}")
+    logger.info(f"=== END ARRAY SHAPES ===")
+
     scaling_result = process_and_scale_data(
         i_array_3D, o_array_3D,
         i_combined_array, o_combined_array,
@@ -549,7 +568,32 @@ def run_exact_training_pipeline(
                     eval_y_orig = tst_y
 
                 # Prepare predictions for evaluation - same shape as y_orig
-                eval_fcst = test_predictions
+                # CRITICAL: Inverse scale predictions to match original scale
+                # This matches training_original.py lines 2313-2331 RE-SCALING section
+                if o_scalers is not None and len(o_scalers) > 0:
+                    test_predictions_orig = np.copy(test_predictions)
+                    n_tst_samples = test_predictions.shape[0]
+                    n_ft_o = test_predictions.shape[-1] if len(test_predictions.shape) > 2 else 1
+
+                    logger.info(f"Inverse scaling predictions: {n_tst_samples} samples, {n_ft_o} features")
+
+                    for i in range(n_tst_samples):
+                        for i1 in range(n_ft_o):
+                            if i1 in o_scalers and o_scalers[i1] is not None:
+                                if len(test_predictions.shape) == 3:
+                                    test_predictions_orig[i, :, i1] = o_scalers[i1].inverse_transform(
+                                        test_predictions[i, :, i1].reshape(-1, 1)
+                                    ).ravel()
+                                elif len(test_predictions.shape) == 2:
+                                    test_predictions_orig[i, :] = o_scalers[0].inverse_transform(
+                                        test_predictions[i, :].reshape(-1, 1)
+                                    ).ravel()
+
+                    eval_fcst = test_predictions_orig
+                    logger.info(f"Predictions inverse scaled. Original range: [{np.min(test_predictions):.4f}, {np.max(test_predictions):.4f}] -> [{np.min(eval_fcst):.2f}, {np.max(eval_fcst):.2f}]")
+                else:
+                    eval_fcst = test_predictions
+                    logger.warning("No output scalers available - using scaled predictions for evaluation")
 
                 # Ensure correct shape: (n_tst, O_N, num_feat)
                 if len(eval_y_orig.shape) == 2:

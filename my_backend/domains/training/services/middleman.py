@@ -34,7 +34,7 @@ def safe_float_to_int(value: Any, default: int) -> int:
 
 class ModernMiddlemanRunner:
     """
-    Modern middleman runner that uses TrainingPipeline instead of subprocess
+    Modern middleman runner that uses run_exact_training_pipeline
     Maintains the same API but uses extracted modules internally
     """
     
@@ -148,6 +148,7 @@ class ModernMiddlemanRunner:
                     T.H.LAND = feiertag_cfg.get('land', 'AT')
 
             logger.info(f"📍 TIME components configured: Y={T.Y.IMP}, M={T.M.IMP}, W={T.W.IMP}, D={T.D.IMP}, H={T.H.IMP}")
+            logger.info(f"📍 T.Y.SPEC={T.Y.SPEC}, T.W.SPEC={T.W.SPEC}, T.D.SPEC={T.D.SPEC}")
 
             if found_files:
                 input_files = [f for f in found_files if "Leistung" in f]
@@ -340,60 +341,23 @@ class ModernMiddlemanRunner:
 
             logger.info(f"📍 Step 6 complete: Zeithorizont configuration logged (span: {max_zeithorizont_span}h)")
 
+            # EXACT MATCH to original training.py lines 1097-1100:
+            # utc_strt = i_dat_inf["utc_min"].min()  → minimum of all min timestamps
+            # utc_end = i_dat_inf["utc_max"].min()   → MINIMUM of all max timestamps (NOT max!)
+            # This ensures data is available for ALL input files at every timestep
             utc_strt = i_dat_inf["utc_min"].min()
-            utc_end = i_dat_inf["utc_max"].max()
+            utc_end = i_dat_inf["utc_max"].min()  # CRITICAL: .min() not .max()!
 
             if not o_dat_inf.empty:
                 utc_strt = max(utc_strt, o_dat_inf["utc_min"].min())
-                utc_end = min(utc_end, o_dat_inf["utc_max"].max())
+                utc_end = min(utc_end, o_dat_inf["utc_max"].min())  # CRITICAL: .min() not .max()!
 
-            # Dynamic offset calculation based on zeithorizont values
-            # Find minimum zeithorizont_start to determine safe offset
-            min_th_start = min(
-                i_dat_inf["th_strt"].min(),
-                o_dat_inf["th_strt"].min() if not o_dat_inf.empty else 0
-            )
-
-            # If zeithorizont looks backward (negative), offset start time forward
-            # Otherwise, use minimal offset to avoid edge cases
-            logger.debug(f"utc_strt BEFORE offset: {utc_strt} (type: {type(utc_strt)})")
-            logger.debug(f"min_th_start: {min_th_start}")
-
-            if min_th_start < 0:
-                offset_hours = abs(min_th_start) + 0.5  # Add 0.5 hour safety margin
-                logger.info(f"   Applying dynamic offset: {offset_hours} hours (based on zeithorizont {min_th_start})")
-                utc_strt = utc_strt + pd.Timedelta(hours=offset_hours)
-                logger.info(f"   ✅ AFTER OFFSET: utc_strt = {utc_strt}")
-            else:
-                # Minimal offset for forward-looking zeithorizont
-                logger.info(f"   Applying minimal offset: 0.5 hours (zeithorizont >= 0)")
-                utc_strt = utc_strt + pd.Timedelta(hours=0.5)
-                logger.info(f"   ✅ AFTER OFFSET: utc_strt = {utc_strt}")
-
-            # Adjust utc_end backward for forward-looking zeithorizont
-            # This prevents requesting data beyond available range
-            max_th_end = max(
-                i_dat_inf["th_end"].max(),
-                o_dat_inf["th_end"].max() if not o_dat_inf.empty else 0
-            )
-
-            logger.debug(f"utc_end BEFORE offset: {utc_end}")
-            logger.debug(f"max_th_end: {max_th_end}")
-
-            if max_th_end > 0:
-                offset_hours_end = max_th_end + 0.5  # Add 0.5 hour safety margin
-                logger.info(f"   Applying backward offset to utc_end: {offset_hours_end} hours (based on zeithorizont {max_th_end})")
-                utc_end = utc_end - pd.Timedelta(hours=offset_hours_end)
-                logger.info(f"   ✅ AFTER OFFSET: utc_end = {utc_end}")
-            else:
-                logger.info(f"   No backward offset needed: zeithorizont_end <= 0")
-
-            # Validate that we have enough data after adjustments
-            adjusted_data_span_hours = (utc_end - utc_strt).total_seconds() / 3600
-            logger.info(f"   📊 Adjusted data span: {adjusted_data_span_hours:.1f} hours")
-
-            if adjusted_data_span_hours < 1:
-                raise ValueError(f"Insufficient data after zeithorizont adjustments: only {adjusted_data_span_hours:.1f} hours available")
+            # NO OFFSET - exactly matching original training.py
+            # Original lines 1097-1100 do NOT apply any offsets.
+            # Iterations that fail interpolation are simply skipped.
+            data_span_hours = (utc_end - utc_strt).total_seconds() / 3600
+            logger.info(f"   📊 Data span (exact match to original, NO offsets): {data_span_hours:.1f} hours")
+            logger.info(f"   utc_strt = {utc_strt}, utc_end = {utc_end}")
 
             mdl_config = None
             if model_params:
@@ -604,7 +568,7 @@ class ModernMiddlemanRunner:
 def run_training_script(session_id: str) -> Dict:
     """
     Legacy function that maintains the same API as the old middleman_runner
-    Now uses the modern TrainingPipeline approach
+    Now uses the modern run_exact_training_pipeline approach
     
     Args:
         session_id: Session identifier

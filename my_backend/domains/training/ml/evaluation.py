@@ -6,6 +6,7 @@ This module calculates evaluation metrics with multiple averaging levels,
 exactly matching the original training.py implementation.
 
 Created: 2026-01-15
+Updated: 2026-01-21 - Fixed to use sklearn functions directly like original
 """
 
 import math
@@ -13,36 +14,25 @@ import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+# CRITICAL: Import sklearn functions EXACTLY like the original training.py (lines 18-21)
+from sklearn.metrics import mean_absolute_error as mae
+from sklearn.metrics import mean_absolute_percentage_error as mape
+from sklearn.metrics import mean_squared_error as mse
+from sklearn.metrics import root_mean_squared_error as rmse
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# METRIC FUNCTIONS - Matching original training.py
+# METRIC FUNCTIONS - Using sklearn directly like original training.py
 # =============================================================================
-
-def mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Mean Absolute Error"""
-    return float(mean_absolute_error(y_true, y_pred))
-
-
-def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Mean Squared Error"""
-    return float(mean_squared_error(y_true, y_pred))
-
-
-def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Root Mean Squared Error"""
-    return float(np.sqrt(mean_squared_error(y_true, y_pred)))
-
-
-def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Mean Absolute Percentage Error"""
-    mask = y_true != 0
-    if not np.any(mask):
-        return 0.0
-    return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])))
+# NOTE: mae, mape, mse, rmse are now imported directly from sklearn
+# This matches the original training.py lines 18-21:
+#   from sklearn.metrics import mean_absolute_error as mae
+#   from sklearn.metrics import mean_absolute_percentage_error as mape
+#   from sklearn.metrics import mean_squared_error as mse
+#   from sklearn.metrics import root_mean_squared_error as rmse
 
 
 def wape(y_true, y_pred):
@@ -219,11 +209,8 @@ def calculate_evaluation_with_averaging(
                 mape_int.append(100 * mape(v_true[mask], v_fcst[mask]))
                 mse_int.append(mse(v_true[mask], v_fcst[mask]))
                 rmse_int.append(rmse(v_true[mask], v_fcst[mask]))
-                mean_true = np.mean(v_true[mask_1])
-                if mean_true != 0:
-                    nrmse_int.append(rmse(v_true[mask], v_fcst[mask]) / mean_true)
-                else:
-                    nrmse_int.append(0.0)
+                # EXACT COPY from original line 3321 - NO if/else check
+                nrmse_int.append(rmse(v_true[mask], v_fcst[mask]) / np.mean(v_true[mask_1]))
                 wape_int.append(wape(v_true[mask], v_fcst[mask]))
                 smape_int.append(smape(v_true[mask], v_fcst[mask]))
                 mase_int.append(mase(v_true[mask], v_fcst[mask]))
@@ -256,26 +243,20 @@ def calculate_evaluation_with_averaging(
             nrmse_int, wape_int, smape_int, mase_int = [], [], [], []
 
             # Durchlauf aller Zeitschritte
+            # EXACT COPY from original lines 3369-3382 - NO try/except
             for i_ts in range(dat_eval[i + 1]["y"].shape[1]):
                 v_true = y_all[i, :, i_ts, i_feat]
                 v_fcst = fcst_all[i, :, i_ts, i_feat]
 
-                try:
-                    mae_int.append(mae(v_true, v_fcst))
-                    mape_int.append(100 * mape(v_true, v_fcst))
-                    mse_int.append(mse(v_true, v_fcst))
-                    rmse_int.append(rmse(v_true, v_fcst))
-                    mean_true = np.mean(v_true)
-                    if mean_true != 0:
-                        nrmse_int.append(rmse(v_true, v_fcst) / mean_true)
-                    else:
-                        nrmse_int.append(0.0)
-                    wape_int.append(wape(v_true, v_fcst))
-                    smape_int.append(smape(v_true, v_fcst))
-                    mase_int.append(mase(v_true, v_fcst))
-                except:
-                    # Original per-timestep code has no try/except, but we keep pass for safety
-                    pass
+                mae_int.append(mae(v_true, v_fcst))
+                mape_int.append(100 * mape(v_true, v_fcst))
+                mse_int.append(mse(v_true, v_fcst))
+                rmse_int.append(rmse(v_true, v_fcst))
+                # EXACT COPY from original line 3379 - NO if/else check
+                nrmse_int.append(rmse(v_true, v_fcst) / np.mean(v_true))
+                wape_int.append(wape(v_true, v_fcst))
+                smape_int.append(smape(v_true, v_fcst))
+                mase_int.append(mase(v_true, v_fcst))
 
             mae_ts.append(mae_int)
             mape_ts.append(mape_int)
@@ -364,6 +345,13 @@ def calculate_evaluation_with_averaging(
             })
 
             df_eval_ts[feature_name][float(dat_eval[i + 1]["delt"][i_feat])] = df_eval_ts_int
+
+    # Log key metrics for first averaging level (n_avg=1)
+    for feature_name, df in df_eval.items():
+        mae_1 = df['MAE'].iloc[0]  # First row = n_avg=1
+        mape_1 = df['MAPE'].iloc[0]
+        rmse_1 = df['RMSE'].iloc[0]
+        logger.info(f"📊 EVALUATION RESULTS [{feature_name}] n_avg=1: MAE={mae_1:.2f}, MAPE={mape_1:.2f}%, RMSE={rmse_1:.2f}")
 
     logger.info(f"Evaluation complete. Generated {len(df_eval)} features with {n_max} averaging levels each.")
 
