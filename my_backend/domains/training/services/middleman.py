@@ -345,12 +345,9 @@ class ModernMiddlemanRunner:
             # utc_strt = i_dat_inf["utc_min"].min()  → minimum of all min timestamps
             # utc_end = i_dat_inf["utc_max"].min()   → MINIMUM of all max timestamps (NOT max!)
             # This ensures data is available for ALL input files at every timestep
+            # NOTE: Original does NOT adjust based on o_dat_inf - only uses i_dat_inf!
             utc_strt = i_dat_inf["utc_min"].min()
             utc_end = i_dat_inf["utc_max"].min()  # CRITICAL: .min() not .max()!
-
-            if not o_dat_inf.empty:
-                utc_strt = max(utc_strt, o_dat_inf["utc_min"].min())
-                utc_end = min(utc_end, o_dat_inf["utc_max"].min())  # CRITICAL: .min() not .max()!
 
             # NO OFFSET - exactly matching original training.py
             # Original lines 1097-1100 do NOT apply any offsets.
