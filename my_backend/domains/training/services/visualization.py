@@ -924,18 +924,52 @@ class Visualizer:
 
             # Inverse transform forecast if scalers available - for "original" format
             tst_fcst_orig = tst_fcst.copy()
+            logger.info(f"FCST inverse transform: y_sbpl_fmt={y_sbpl_fmt}, scalers keys={list(scalers.keys()) if scalers else 'None'}")
             if y_sbpl_fmt == 'original' and scalers:
-                o_scalers = scalers.get('output_scalers', [])
+                # Scalers are stored under 'output' key as dict - need to deserialize from base64 pickle
+                o_scalers_raw = scalers.get('output', {})
+                logger.info(f"FCST inverse transform: o_scalers_raw type={type(o_scalers_raw)}, keys={list(o_scalers_raw.keys()) if isinstance(o_scalers_raw, dict) else 'not dict'}")
+
+                # Deserialize scalers from base64 pickle format
+                import pickle as pkl
+                o_scalers = {}
+                for key, scaler_data in o_scalers_raw.items():
+                    if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
+                        try:
+                            scaler = pkl.loads(base64.b64decode(scaler_data['_model_data']))
+                            o_scalers[int(key)] = scaler
+                            logger.info(f"FCST: Deserialized scaler for key {key}")
+                        except Exception as e:
+                            logger.error(f"Error deserializing scaler {key}: {e}")
+                            o_scalers[int(key)] = None
+                    elif scaler_data and hasattr(scaler_data, 'inverse_transform'):
+                        # Already a scaler object
+                        o_scalers[int(key)] = scaler_data
+                    else:
+                        o_scalers[int(key)] = None
+
+                logger.info(f"FCST inverse transform: deserialized o_scalers keys={list(o_scalers.keys())}")
+
                 if o_scalers and len(tst_fcst.shape) == 3:
-                    for i_feat in range(min(len(o_scalers), tst_fcst.shape[-1])):
-                        if o_scalers[i_feat] is not None:
+                    logger.info(f"FCST inverse transform: tst_fcst shape={tst_fcst.shape}, will process {tst_fcst.shape[-1]} features")
+                    for i_feat in range(tst_fcst.shape[-1]):
+                        has_scaler = i_feat in o_scalers and o_scalers[i_feat] is not None
+                        logger.info(f"FCST inverse transform: checking i_feat={i_feat}, has_scaler={has_scaler}")
+                        if has_scaler:
                             try:
+                                before_val = tst_fcst_orig[0, 0, i_feat]
                                 for i_sample in range(tst_fcst.shape[0]):
                                     tst_fcst_orig[i_sample, :, i_feat] = o_scalers[i_feat].inverse_transform(
                                         tst_fcst[i_sample, :, i_feat].reshape(-1, 1)
                                     ).ravel()
+                                after_val = tst_fcst_orig[0, 0, i_feat]
+                                logger.info(f"FCST inverse transform SUCCESS: feature {i_feat}, before={before_val:.4f}, after={after_val:.4f}")
                             except Exception as e:
                                 logger.warning(f"Could not inverse transform forecast feature {i_feat}: {e}")
+                        else:
+                            logger.warning(f"FCST inverse transform SKIPPED: i_feat={i_feat} not in o_scalers or is None")
+                else:
+                    logger.warning(f"FCST inverse transform SKIPPED: o_scalers empty or wrong shape")
 
             # ===================================================================
             # SUBPLOT SETUP - MATCHES ORIGINAL (lines 2432-2465)
@@ -1365,8 +1399,10 @@ class Visualizer:
                             out_selected = df_plot_out.get(var_name, False)
 
                             if not out_selected:
-                                # Create new axis
-                                ax_sbpl.append(ax_sbpl_orig.twinx())
+                                # Create new axis only if not the first line
+                                # First line uses ax_sbpl_orig directly
+                                if i_line > 0:
+                                    ax_sbpl.append(ax_sbpl_orig.twinx())
                                 i_pos = len(ax_sbpl) - 1
                             else:
                                 # Use same axis as output - MATCHES ORIGINAL (lines 3192-3196)
