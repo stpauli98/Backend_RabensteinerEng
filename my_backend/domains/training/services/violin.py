@@ -74,8 +74,6 @@ def create_violin_plots_from_viz_data(
                         time_features_list.append((display_name, input_data[:, i]))
                     else:
                         input_features_list.append((display_name, input_data[:, i]))
-
-                logger.info(f"Separated features: {len(input_features_list)} input, {len(time_features_list)} time")
             else:
                 # Fallback to generic names - all go to input
                 input_features_list = [
@@ -92,7 +90,6 @@ def create_violin_plots_from_viz_data(
                     (output_feature_names[i], output_data[:, i])
                     for i in range(output_data.shape[1])
                 ]
-                logger.info(f"Using actual output feature names: {output_feature_names}")
             else:
                 output_features_list = [
                     (f"Output_Feature_{i+1}", output_data[:, i])
@@ -156,9 +153,6 @@ def generate_violin_plots_from_data(
         total_features = n_input + n_time + n_output
         palette = sns.color_palette("tab20", max(total_features, 20))
 
-        logger.info(f"Generating 3 violin plots: {n_input} input, {n_time} time, {n_output} output features")
-        logger.info(f"Palette size: {len(palette)}, Total features: {total_features}")
-
         # ═══════════════════════════════════════════════════════════════════
         # INPUT PLOT - Input features only
         # Title: "Datenverteilung \nder Eingabedaten"
@@ -215,8 +209,6 @@ def generate_violin_plots_from_data(
 
             if progress_tracker:
                 progress_tracker.input_plot_complete()
-
-            logger.info(f"Input violin plot generated: {n_ft} features")
 
         # ═══════════════════════════════════════════════════════════════════
         # TIME PLOT - TIME components only
@@ -277,8 +269,6 @@ def generate_violin_plots_from_data(
             if progress_tracker:
                 progress_tracker.time_plot_complete()
 
-            logger.info(f"Time violin plot generated: {n_ft} features")
-
         # ═══════════════════════════════════════════════════════════════════
         # OUTPUT PLOT - Output features only
         # Title: "Datenverteilung \nder Ausgabedaten"
@@ -337,8 +327,6 @@ def generate_violin_plots_from_data(
 
             if progress_tracker:
                 progress_tracker.output_plot_complete()
-
-            logger.info(f"Output violin plot generated: {n_ft} features")
 
         return {
             'success': True,

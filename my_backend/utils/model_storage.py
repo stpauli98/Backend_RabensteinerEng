@@ -71,8 +71,6 @@ def upload_trained_model(
         storage_filename = f"{model_type}_{dataset_name}_{timestamp}{file_extension}"
         file_path = f"{session_id}/{storage_filename}"
 
-        logger.info(f"📤 Uploading model to storage: {file_path} ({file_size / 1024 / 1024:.2f}MB)")
-
         with open(model_file_path, 'rb') as f:
             model_data = f.read()
 
@@ -89,8 +87,6 @@ def upload_trained_model(
                 }
             )
 
-            logger.info(f"✅ Model uploaded successfully: {file_path}")
-
             return {
                 'file_path': file_path,
                 'file_size': file_size,
@@ -102,8 +98,6 @@ def upload_trained_model(
 
         except Exception as upload_error:
             if "Bucket not found" in str(upload_error):
-                logger.error(f"❌ Bucket '{bucket_name}' does not exist. Creating it...")
-
                 try:
                     supabase.storage.create_bucket(
                         bucket_name,
@@ -112,7 +106,6 @@ def upload_trained_model(
                             "file_size_limit": 524288000
                         }
                     )
-                    logger.info(f"✅ Bucket '{bucket_name}' created successfully")
 
                     response = supabase.storage.from_(bucket_name).upload(
                 path=file_path,
@@ -123,8 +116,6 @@ def upload_trained_model(
                     "upsert": "true"
                 }
             )
-
-                    logger.info(f"✅ Model uploaded successfully after bucket creation: {file_path}")
 
                     return {
                         'file_path': file_path,
@@ -169,11 +160,7 @@ def download_trained_model(
         supabase = get_supabase_admin_client()
         bucket_name = 'trained-models'
 
-        logger.info(f"📥 Downloading model from storage: {file_path}")
-
         response = supabase.storage.from_(bucket_name).download(file_path)
-
-        logger.info(f"✅ Model downloaded successfully: {file_path}")
 
         return response
 
@@ -205,9 +192,7 @@ def load_model_from_storage(session_id: str, model_filename: str):
     
     # Construct storage path
     file_path = f"{session_id}/{model_filename}"
-    
-    logger.info(f"📥 Loading model from storage: {file_path}")
-    
+
     try:
         # Download model bytes
         model_bytes = download_trained_model(session_id, file_path)
@@ -230,8 +215,7 @@ def load_model_from_storage(session_id: str, model_filename: str):
                 
                 # Load the model
                 model = keras.models.load_model(tmp_path, compile=False)
-                
-                logger.info(f"✅ Keras model loaded: {model.name if hasattr(model, 'name') else 'unnamed'}")
+
                 return model
                 
             finally:
@@ -244,8 +228,7 @@ def load_model_from_storage(session_id: str, model_filename: str):
             import joblib
             
             model = joblib.load(io.BytesIO(model_bytes))
-            
-            logger.info(f"✅ sklearn model loaded: {type(model).__name__}")
+
             return model
             
         else:
@@ -269,8 +252,6 @@ def list_session_models(session_id: str) -> List[Dict]:
     try:
         supabase = get_supabase_admin_client()
         bucket_name = 'trained-models'
-
-        logger.info(f"📋 Listing models for session: {session_id}")
 
         files = supabase.storage.from_(bucket_name).list(session_id)
 
@@ -297,8 +278,6 @@ def list_session_models(session_id: str) -> List[Dict]:
                     'file_size_mb': size_mb,
                     'modified_time': file_info.get('updated_at')
                 })
-
-        logger.info(f"✅ Found {len(models)} models for session {session_id}")
 
         return models
 
@@ -328,13 +307,10 @@ def delete_session_models(session_id: str) -> Dict:
         supabase = get_supabase_admin_client()
         bucket_name = 'trained-models'
 
-        logger.info(f"🗑️ Deleting old models for session: {session_id}")
-
         # List all files in the session folder
         files = supabase.storage.from_(bucket_name).list(session_id)
 
         if not files:
-            logger.info(f"No existing models to delete for session {session_id}")
             return {
                 'deleted_count': 0,
                 'deleted_files': [],
@@ -352,13 +328,10 @@ def delete_session_models(session_id: str) -> Dict:
                 try:
                     supabase.storage.from_(bucket_name).remove([file_path])
                     deleted_files.append(filename)
-                    logger.info(f"🗑️ Deleted: {file_path}")
                 except Exception as delete_error:
                     error_msg = f"Failed to delete {file_path}: {str(delete_error)}"
                     errors.append(error_msg)
                     logger.warning(error_msg)
-
-        logger.info(f"✅ Deleted {len(deleted_files)} old models for session {session_id}")
 
         return {
             'deleted_count': len(deleted_files),

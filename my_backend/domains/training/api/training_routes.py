@@ -81,7 +81,8 @@ def generate_datasets(session_id):
         return jsonify({
             'success': True,
             'message': 'Datasets generated successfully',
-            'dataset_count': 10,
+            'dataset_count': result.get('n_dat', 0),
+            'n_dat': result.get('n_dat', 0),
             'violin_plots': violin_plots
         })
 

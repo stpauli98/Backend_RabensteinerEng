@@ -307,7 +307,6 @@ def _format_sessions_response(sessions_data: List[Dict]) -> List[Dict]:
         }
         sessions.append(session_info)
 
-    logger.info(f"Formatted {len(sessions)} sessions for response")
     return sessions
 
 

@@ -122,7 +122,6 @@ def train_dense(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
         metrics = [tf.keras.metrics.RootMeanSquaredError()])
     
     
-    print("Modell wird trainiert.")
     
     # Build callbacks list with optional SocketIO progress callback
     callbacks = [earlystopping]
@@ -138,7 +137,6 @@ def train_dense(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
         validation_data = (val_x, val_y)
         )
          
-    print("Modell wurde trainiert.")
             
     return model
 
@@ -197,7 +195,6 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
     )
     
     
-    print("Modell wird trainiert.")
     
     # Build callbacks list with optional SocketIO progress callback
     callbacks = [earlystopping]
@@ -213,7 +210,6 @@ def train_cnn(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
         validation_data = (val_x, val_y)
     )
     
-    print("Modell wurde trainiert.")
     
     return model
 
@@ -259,7 +255,6 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
         metrics = [tf.keras.metrics.RootMeanSquaredError()])
     
     
-    print("Modell wird trainiert.")
     
     # Build callbacks list with optional SocketIO progress callback
     callbacks = [earlystopping]
@@ -275,7 +270,6 @@ def train_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
         validation_data = (val_x, val_y)
         )
          
-    print("Modell wurde trainiert.")
             
     return model
 
@@ -317,7 +311,6 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
         metrics = [tf.keras.metrics.RootMeanSquaredError()])
     
     
-    print("Modell wird trainiert.")
     
     # Build callbacks list with optional SocketIO progress callback
     callbacks = [earlystopping]
@@ -333,7 +326,6 @@ def train_ar_lstm(train_x, train_y, val_x, val_y, MDL, socketio_callback=None):
         validation_data = (val_x, val_y)
         )
          
-    print("Modell wurde trainiert.")
             
     return model
 
@@ -357,7 +349,6 @@ def train_svr_dir(train_x, train_y, MDL):
         y.append(train_y[:, :, i].reshape(-1))
 
 
-    print("Modell wird trainiert.")
     
     model = []
     for i in range(n_features):
@@ -367,7 +358,6 @@ def train_svr_dir(train_x, train_y, MDL):
                                        epsilon = MDL.EPSILON)))
         model[-1].fit(X, y[i])
 
-    print("Modell wurde trainiert.")  
     
     return model
 
@@ -385,7 +375,6 @@ def train_svr_mimo(train_x, train_y, MDL):
     X = train_x.reshape(n_samples * n_timesteps, n_features_in)
     
     
-    print("Modell wird trainiert.")
     
     model = []
     for i in range(n_features_out):
@@ -398,7 +387,6 @@ def train_svr_mimo(train_x, train_y, MDL):
         svr.fit(X, y_i)
         model.append(svr)
     
-    print("Modell wurde trainiert.")
     return model
 
 
@@ -416,14 +404,12 @@ def train_linear_model(trn_x, trn_y):
     X = trn_x.reshape(n_samples * n_timesteps, n_features_in)
     
     
-    print("Modell wird trainiert.")
     models = []
     for i in range(n_features_out):
         y_i = trn_y[:, :, i].reshape(-1)
         model = LinearRegression()
         model.fit(X, y_i)
         models.append(model)
-    print("Modell wurde trainiert.")
     return models
 
 

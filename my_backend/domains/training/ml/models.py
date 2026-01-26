@@ -115,8 +115,6 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
     from utils.training_storage import fetch_training_results_with_storage
     from utils.model_storage import upload_trained_model, delete_session_models
 
-    logger.info(f"📦 Saving models to storage - session: {session_id}")
-
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
@@ -131,12 +129,8 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
     if not serialized_models:
         raise ValueError('No trained models found in results')
 
-    logger.info(f"Found {len(serialized_models)} serialized model(s) in training results")
-
     # Delete old models before uploading new ones (overwrite behavior)
-    delete_result = delete_session_models(str(uuid_session_id))
-    if delete_result['deleted_count'] > 0:
-        logger.info(f"🗑️ Deleted {delete_result['deleted_count']} old model(s) before saving new ones")
+    delete_session_models(str(uuid_session_id))
 
     uploaded_models = []
     failed_models = []
@@ -149,7 +143,6 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
             # Handle scaler dictionaries as single files (matches OriginalTraining format)
             if model_info.get('is_scaler_dict'):
                 scaler_dict_data = model_info['scaler_dict_data']
-                logger.info(f"📥 Processing scaler dictionary: {path} with {len(scaler_dict_data)} scalers")
 
                 # Deserialize each scaler in the dictionary
                 # SECURITY NOTE: pickle.loads() can execute arbitrary code.
@@ -178,7 +171,6 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                 try:
                     with open(temp_file_path, 'wb') as f:
                         pickle.dump(deserialized_scalers, f)
-                    logger.info(f"💾 Saved scaler dictionary to {temp_file_path} ({len(deserialized_scalers)} scalers)")
 
                     storage_result = upload_trained_model(
                         session_id=str(uuid_session_id),
@@ -198,26 +190,20 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                         'scaler_count': len(deserialized_scalers)
                     })
 
-                    logger.info(f"✅ Uploaded scaler dictionary: {storage_result['file_path']}")
-
                 finally:
                     if os.path.exists(temp_file_path):
                         os.unlink(temp_file_path)
-                        logger.debug(f"🗑️ Cleaned up temporary file: {temp_file_path}")
 
                 continue  # Skip to next model
 
             # Handle regular models (Keras, sklearn, etc.)
             model_data = model_info['model_data']
-            logger.info(f"📥 Deserializing model {idx + 1}/{len(serialized_models)}: {model_class}")
 
             model_bytes = base64.b64decode(model_data)
             # SECURITY NOTE: pickle.loads() can execute arbitrary code.
             # This is safe here because models are only stored by authenticated users
             # via our training pipeline and retrieved from trusted Supabase storage.
             model_obj = pickle.loads(model_bytes)
-
-            logger.info(f"✅ Model deserialized successfully: {model_class}")
 
             is_keras_model = hasattr(model_obj, 'save') and hasattr(model_obj, 'predict')
             file_extension = '.h5' if is_keras_model else '.pkl'
@@ -228,13 +214,9 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
             try:
                 if is_keras_model:
                     model_obj.save(temp_file_path)
-                    logger.info(f"💾 Saved Keras model to {temp_file_path}")
                 else:
                     with open(temp_file_path, 'wb') as f:
                         pickle.dump(model_obj, f)
-                    logger.info(f"💾 Saved sklearn model to {temp_file_path}")
-
-                logger.info(f"📤 Uploading {model_class} model to storage...")
 
                 # For regular models, use a simple dataset name
                 dataset_name = path.replace('.', '_') if path else 'model'
@@ -256,12 +238,9 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                     'file_format': 'h5' if is_keras_model else 'pkl'
                 })
 
-                logger.info(f"✅ Uploaded {model_class} model: {storage_result['file_path']}")
-
             finally:
                 if os.path.exists(temp_file_path):
                     os.unlink(temp_file_path)
-                    logger.debug(f"🗑️ Cleaned up temporary file: {temp_file_path}")
 
         except Exception as model_error:
             logger.error(f"❌ Failed to process {model_class}: {model_error}")
@@ -275,8 +254,6 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
 
     if not uploaded_models and failed_models:
         raise Exception('All model uploads failed')
-
-    logger.info(f"✅ Saved {len(uploaded_models)} models to storage for session {session_id}")
 
     return {
         'uploaded_models': uploaded_models,
@@ -302,15 +279,11 @@ def get_models_list(session_id: str, user_id: str = None) -> List[Dict]:
     from shared.database.operations import create_or_get_session_uuid
     from utils.model_storage import list_session_models
 
-    logger.info(f"📋 Listing models from Storage - session: {session_id}")
-
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=user_id)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
     models = list_session_models(str(uuid_session_id))
-
-    logger.info(f"✅ Found {len(models)} model(s) in Storage for session {session_id}")
 
     return models
 
@@ -333,8 +306,6 @@ def download_model_file(session_id: str, filename: str = None) -> Tuple[bytes, s
     from shared.database.operations import create_or_get_session_uuid
     from utils.model_storage import list_session_models, download_trained_model
 
-    logger.info(f"📥 Download request - session: {session_id}, filename: {filename or 'first .h5 model'}")
-
     uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
@@ -355,13 +326,9 @@ def download_model_file(session_id: str, filename: str = None) -> Tuple[bytes, s
             raise ValueError('No .h5 models found for this session')
         target_model = h5_models[0]
 
-    logger.info(f"📥 Downloading model: {target_model['filename']}")
-
     file_data = download_trained_model(
         session_id=str(uuid_session_id),
         file_path=target_model['storage_path']
     )
-
-    logger.info(f"✅ Model downloaded successfully: {target_model['filename']}")
 
     return (file_data, target_model['filename'])

@@ -52,7 +52,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     
     # Use provided mts_config or create default MTS instance
     mts = mts_config if mts_config is not None else MTS()
-    logger.info(f"📍 create_training_arrays using MTS: I_N={mts.I_N}, O_N={mts.O_N}, DELT={mts.DELT}, OFST={mts.OFST}")
 
     # EXACT COPY from training_original.py lines 1062-1069
     # Berechnung der Referenzzeit
@@ -75,23 +74,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
     iteration_count = 0
     total_iterations = int((utc_end - utc_ref).total_seconds() / 60 / mts.DELT)
 
-    logger.info(f"      Starting main time loop: {total_iterations} iterations expected")
-    logger.info(f"      Time range: {utc_strt} to {utc_end}")
-    logger.info(f"      Input files: {list(i_dat.keys())}")
-    logger.info(f"      Output files: {list(o_dat.keys())}")
-
-    # Log data ranges
-    for key in i_dat.keys():
-        logger.info(f"      Input '{key}': data from {i_dat[key].iloc[0, 0]} to {i_dat[key].iloc[-1, 0]}")
-    for key in o_dat.keys():
-        logger.info(f"      Output '{key}': data from {o_dat[key].iloc[0, 0]} to {o_dat[key].iloc[-1, 0]}")
-
-    # Log zeithorizont windows
-    for key in i_dat_inf.index:
-        logger.info(f"      Input '{key}': zeithorizont {i_dat_inf.loc[key, 'th_strt']} to {i_dat_inf.loc[key, 'th_end']}")
-    for key in o_dat_inf.index:
-        logger.info(f"      Output '{key}': zeithorizont {o_dat_inf.loc[key, 'th_strt']} to {o_dat_inf.loc[key, 'th_end']}")
-
     import time
     loop_start_time = time.time()
 
@@ -101,7 +83,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
             break
 
         iteration_count += 1
-        if iteration_count % 500 == 0:
+        if iteration_count % 2000 == 0:
             elapsed = time.time() - loop_start_time
             progress = (iteration_count / total_iterations * 100) if total_iterations > 0 else 0
 
@@ -112,8 +94,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                 eta_seconds = remaining / rate if rate > 0 else 0
             else:
                 eta_seconds = 0
-
-            logger.info(f"      Progress: {iteration_count}/{total_iterations} ({progress:.1f}%) - {elapsed:.1f}s elapsed - ETA: {eta_seconds:.0f}s")
 
             # Emit progress via Socket.IO
             if socketio and session_id:
@@ -318,8 +298,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
         if error == False:
             
             if T.Y.IMP:
-                logger.info(f"📍 T.Y: SPEC={T.Y.SPEC}, TH_STRT={T.Y.TH_STRT}, TH_END={T.Y.TH_END}")
-
                 if T.Y.SPEC == "Zeithorizont":
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.Y.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.Y.TH_END)
@@ -414,8 +392,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["M_cos"] = [np.cos(sec / MONTH_SECONDS * 2 * np.pi)] * mts.I_N
             
             if T.W.IMP:
-                logger.info(f"📍 T.W: SPEC={T.W.SPEC}, TH_STRT={T.W.TH_STRT}, TH_END={T.W.TH_END}")
-
                 if T.W.SPEC == "Zeithorizont":
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.W.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.W.TH_END)
@@ -455,8 +431,6 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
                         df_int_i["W_cos"] = [np.cos(sec / WEEK_SECONDS * 2 * np.pi)] * mts.I_N
             
             if T.D.IMP:
-                logger.info(f"📍 T.D: SPEC={T.D.SPEC}, TH_STRT={T.D.TH_STRT}, TH_END={T.D.TH_END}")
-
                 if T.D.SPEC == "Zeithorizont":
                     utc_th_strt = utc_ref + datetime.timedelta(hours=T.D.TH_STRT)
                     utc_th_end = utc_ref + datetime.timedelta(hours=T.D.TH_END)
@@ -549,8 +523,7 @@ def create_training_arrays(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.DataFrame,
         n_features_in = i_array_3D.shape[2] if len(i_array_3D.shape) > 2 else 0
         n_features_out = o_array_3D.shape[2] if len(o_array_3D.shape) > 2 else 0
 
-        logger.info(f"📍 TRANSFORMER RESULT: {n_dat} samples, {n_features_in} input features, {n_features_out} output features")
-        logger.info(f"📍 TIME config used: Y.SPEC={T.Y.SPEC if T.Y.IMP else 'N/A'}, W.SPEC={T.W.SPEC if T.W.IMP else 'N/A'}, D.SPEC={T.D.SPEC if T.D.IMP else 'N/A'}")
+        logger.info(f"Transformer complete: {n_dat} samples, {n_features_in} input features, {n_features_out} output features")
 
         i_combined_array = np.vstack(i_arrays)
         o_combined_array = np.vstack(o_arrays)

@@ -58,7 +58,7 @@ class ModernMiddlemanRunner:
             Dict containing training results and status
         """
         try:
-            logger.info(f"📍 Step 1: Starting run_training_script for session {session_id}")
+            logger.info(f"Training started for session {session_id}")
 
             import glob
             temp_dir = "temp_training_data"
@@ -147,17 +147,12 @@ class ModernMiddlemanRunner:
                     T.H.SCAL_MAX = float(feiertag_cfg.get('skalierungMax', 1))
                     T.H.LAND = feiertag_cfg.get('land', 'AT')
 
-            logger.info(f"📍 TIME components configured: Y={T.Y.IMP}, M={T.M.IMP}, W={T.W.IMP}, D={T.D.IMP}, H={T.H.IMP}")
-            logger.info(f"📍 T.Y.SPEC={T.Y.SPEC}, T.W.SPEC={T.W.SPEC}, T.D.SPEC={T.D.SPEC}")
-
             if found_files:
                 input_files = [f for f in found_files if "Leistung" in f]
                 output_files = [f for f in found_files if "Temp" in f]
             else:
                 input_files, output_files = data_loader.prepare_file_paths(session_id)
             
-            logger.info(f"📍 Step 2: Loading CSV data from {len(input_files)} input files and {len(output_files)} output files")
-
             i_dat = {}
             o_dat = {}
 
@@ -169,7 +164,6 @@ class ModernMiddlemanRunner:
                 bezeichnung = file_info.get('bezeichnung', base_name)
                 files_metadata[bezeichnung] = file_info
                 filename_to_bezeichnung[base_name] = bezeichnung
-                logger.info(f"   Loaded metadata for '{bezeichnung}' (file: {base_name}): type={file_info['type']}, zeithorizont={file_info.get('zeithorizont_start')}-{file_info.get('zeithorizont_end')}")
 
             for file_path in input_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
@@ -185,7 +179,6 @@ class ModernMiddlemanRunner:
                 else:
                     bezeichnung = local_name
                 i_dat[bezeichnung] = df
-                logger.info(f"   📊 Loaded input file '{bezeichnung}': shape={df.shape}, columns={list(df.columns[:3])}")
 
             for file_path in output_files:
                 df = data_loader.load_csv_data(file_path, delimiter=';')
@@ -201,7 +194,6 @@ class ModernMiddlemanRunner:
                 else:
                     bezeichnung = local_name
                 o_dat[bezeichnung] = df
-                logger.info(f"   📊 Loaded output file '{bezeichnung}': shape={df.shape}, columns={list(df.columns[:3])}")
             
             from domains.training.data.loader import load, transf
             from domains.training.config import MTS
@@ -218,8 +210,6 @@ class ModernMiddlemanRunner:
             mts_config.DELT = float(zeitschritte.get('zeitschrittweite', mts_config.DELT))
             mts_config.OFST = float(zeitschritte.get('offset', mts_config.OFST))
 
-            logger.info(f"📍 MTS configured from database: I_N={mts_config.I_N}, O_N={mts_config.O_N}, DELT={mts_config.DELT}, OFST={mts_config.OFST}")
-            
             i_dat_inf = pd.DataFrame(columns=[
                 "utc_min", "utc_max", "delt", "ofst", "n_all", "n_num", 
                 "rate_num", "val_min", "val_max", "spec", "th_strt", 
@@ -234,20 +224,13 @@ class ModernMiddlemanRunner:
                 "scal", "scal_max", "scal_min"
             ])
             
-            logger.info(f"📍 Step 3: Processing input files through load() function")
-
-            for file_name, df in i_dat.items():
-                logger.info(f"   Input file '{file_name}': {len(df)} rows, {len(df.columns)} columns")
-
             try:
                 import time
                 start_time = time.time()
                 i_dat, i_dat_inf = load(i_dat, i_dat_inf)
-                elapsed = time.time() - start_time
-                logger.info(f"📍 Step 3 complete: Input files processed successfully in {elapsed:.2f}s")
             except Exception as e:
                 error_msg = f"Failed to process input files: {str(e)}"
-                logger.error(f"❌ Step 3 FAILED: {error_msg}")
+                logger.error(f"Failed to process input files: {error_msg}")
                 logger.error(f"Exception details: {traceback.format_exc()}")
                 return {
                     'success': False,
@@ -256,20 +239,11 @@ class ModernMiddlemanRunner:
                     'stage': 'load_input_files'
                 }
 
-            logger.info(f"📍 Step 4: Processing output files through load() function")
-
-            for file_name, df in o_dat.items():
-                logger.info(f"   Output file '{file_name}': {len(df)} rows, {len(df.columns)} columns")
-
             try:
-                import time
-                start_time = time.time()
                 o_dat, o_dat_inf = load(o_dat, o_dat_inf)
-                elapsed = time.time() - start_time
-                logger.info(f"📍 Step 4 complete: Output files processed successfully in {elapsed:.2f}s")
             except Exception as e:
                 error_msg = f"Failed to process output files: {str(e)}"
-                logger.error(f"❌ Step 4 FAILED: {error_msg}")
+                logger.error(f"Failed to process output files: {error_msg}")
                 logger.error(f"Exception details: {traceback.format_exc()}")
                 return {
                     'success': False,
@@ -283,8 +257,7 @@ class ModernMiddlemanRunner:
                 metadata = files_metadata.get(key, {})
                 th_start = safe_float_to_int(metadata.get('zeithorizont_start'), -1)
                 th_end = safe_float_to_int(metadata.get('zeithorizont_end'), 0)
-                logger.info(f"   Input file '{key}': th_strt={th_start}, th_end={th_end}")
-                
+
                 i_dat_inf.loc[key, "spec"] = "Historische Daten"
                 i_dat_inf.loc[key, "th_strt"] = th_start
                 i_dat_inf.loc[key, "th_end"] = th_end
@@ -299,8 +272,7 @@ class ModernMiddlemanRunner:
                 metadata = files_metadata.get(key, {})
                 th_start = safe_float_to_int(metadata.get('zeithorizont_start'), 0)
                 th_end = safe_float_to_int(metadata.get('zeithorizont_end'), 1)
-                logger.info(f"   Output file '{key}': th_strt={th_start}, th_end={th_end}")
-                
+
                 o_dat_inf.loc[key, "spec"] = "Historische Daten"
                 o_dat_inf.loc[key, "th_strt"] = th_start
                 o_dat_inf.loc[key, "th_end"] = th_end
@@ -310,36 +282,8 @@ class ModernMiddlemanRunner:
                 o_dat_inf.loc[key, "scal_max"] = 1
                 o_dat_inf.loc[key, "scal_min"] = 0
             
-            logger.info(f"📍 Step 5: Applying transformations")
             i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
             o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
-            logger.info(f"📍 Step 5 complete: Transformations applied")
-
-            # Validate zeithorizont values before proceeding
-            logger.info(f"📍 Step 6: Validating zeithorizont configuration")
-            max_zeithorizont_span = 0
-            zeithorizont_details = []
-
-            for key in i_dat_inf.index:
-                th_start = i_dat_inf.loc[key, "th_strt"]
-                th_end = i_dat_inf.loc[key, "th_end"]
-                span = abs(th_end - th_start)
-                max_zeithorizont_span = max(max_zeithorizont_span, span)
-                zeithorizont_details.append(f"Input '{key}': {th_start}h to {th_end}h (span: {span}h)")
-
-            for key in o_dat_inf.index:
-                th_start = o_dat_inf.loc[key, "th_strt"]
-                th_end = o_dat_inf.loc[key, "th_end"]
-                span = abs(th_end - th_start)
-                max_zeithorizont_span = max(max_zeithorizont_span, span)
-                zeithorizont_details.append(f"Output '{key}': {th_start}h to {th_end}h (span: {span}h)")
-
-            logger.info(f"   Zeithorizont configuration:")
-            for detail in zeithorizont_details:
-                logger.info(f"      {detail}")
-            logger.info(f"   Maximum zeithorizont span: {max_zeithorizont_span}h")
-
-            logger.info(f"📍 Step 6 complete: Zeithorizont configuration logged (span: {max_zeithorizont_span}h)")
 
             # EXACT MATCH to original training.py lines 1097-1100:
             # utc_strt = i_dat_inf["utc_min"].min()  → minimum of all min timestamps
@@ -352,9 +296,6 @@ class ModernMiddlemanRunner:
             # NO OFFSET - exactly matching original training.py
             # Original lines 1097-1100 do NOT apply any offsets.
             # Iterations that fail interpolation are simply skipped.
-            data_span_hours = (utc_end - utc_strt).total_seconds() / 3600
-            logger.info(f"   📊 Data span (exact match to original, NO offsets): {data_span_hours:.1f} hours")
-            logger.info(f"   utc_strt = {utc_strt}, utc_end = {utc_end}")
 
             mdl_config = None
             if model_params:
@@ -392,9 +333,6 @@ class ModernMiddlemanRunner:
                     if 'EPSILON' in model_params:
                         mdl_config.EPSILON = model_params['EPSILON']
             
-            logger.info(f"📍 Step 6: Running training pipeline with utc_strt={utc_strt}, utc_end={utc_end}")
-            logger.info(f"   Model config: MODE={getattr(mdl_config, 'MODE', 'default')}, LAY={getattr(mdl_config, 'LAY', None)}, N={getattr(mdl_config, 'N', None)}")
-
             try:
                 results = run_exact_training_pipeline(
                     i_dat=i_dat,
@@ -409,10 +347,10 @@ class ModernMiddlemanRunner:
                     socketio=self.socketio,
                     session_id=session_id
                 )
-                logger.info(f"📍 Step 6 complete: Training pipeline finished successfully")
+                logger.info(f"Training pipeline completed for session {session_id}")
             except Exception as e:
                 error_msg = f"Training pipeline failed: {str(e)}"
-                logger.error(f"❌ Step 6 FAILED: {error_msg}")
+                logger.error(f"Training pipeline failed: {error_msg}")
                 logger.error(f"Exception details: {traceback.format_exc()}")
                 return {
                     'success': False,
@@ -454,8 +392,6 @@ class ModernMiddlemanRunner:
                 metadata = results.get('metadata', {})
                 input_feature_names = metadata.get('input_features', [])
                 output_feature_names = metadata.get('output_features', [])
-
-                logger.info(f"Violin plot feature names from metadata: input={input_feature_names}, output={output_feature_names}")
 
                 if viz_data['i_combined_array'] is not None or viz_data['o_combined_array'] is not None:
                     violin_plots = create_violin_plots_from_viz_data(

@@ -53,7 +53,6 @@ class RealDataProcessor:
 
             # Get files_info with zeithorizont, datenanpassung, scaling parameters
             files_info = session_data.get('files', [])
-            logger.info(f"Loaded {len(files_info)} files with config from DB")
 
             input_files, output_files = self.data_loader.prepare_file_paths(session_id)
 
@@ -136,10 +135,6 @@ class RealDataProcessor:
             # Get time_info for TIME components (y_sin, y_cos, w_sin, etc.)
             time_info = session_data.get('time_info', {})
             category_data = time_info.get('category_data', {})
-
-            logger.info(f"TIME components config: jahr={time_info.get('jahr')}, "
-                       f"woche={time_info.get('woche')}, tag={time_info.get('tag')}, "
-                       f"monat={time_info.get('monat')}, feiertag={time_info.get('feiertag')}")
 
             # Build file_info lookup by file_name
             file_info_map = {}
@@ -338,17 +333,12 @@ class RealModelTrainer:
                 output_scal_min = output_file_info.get('scal_min', 0.0) if output_file_info else 0.0
                 output_scal_max = output_file_info.get('scal_max', 1.0) if output_file_info else 1.0
 
-                logger.info(f"Scaling config - Input: enabled={input_scal_enabled}, range=({input_scal_min}, {input_scal_max})")
-                logger.info(f"Scaling config - Output: enabled={output_scal_enabled}, range=({output_scal_min}, {output_scal_max})")
-
                 # Apply input scaling with custom range
                 if input_scal_enabled:
                     for i in range(X_combined.shape[1]):
                         scaler = MinMaxScaler(feature_range=(input_scal_min, input_scal_max))
                         X_combined[:, i:i+1] = scaler.fit_transform(X_combined[:, i:i+1])
                         X_scalers[i] = scaler
-                else:
-                    logger.info("Input scaling disabled, using raw values")
 
                 # Apply output scaling with custom range
                 if output_scal_enabled:
@@ -356,8 +346,6 @@ class RealModelTrainer:
                         scaler = MinMaxScaler(feature_range=(output_scal_min, output_scal_max))
                         y_combined[:, i:i+1] = scaler.fit_transform(y_combined[:, i:i+1])
                         y_scalers[i] = scaler
-                else:
-                    logger.info("Output scaling disabled, using raw values")
 
                 X = X_combined.reshape(X.shape) if len(X.shape) > 2 else X_combined
                 y = y_combined.reshape(y.shape) if len(y.shape) > 2 else y_combined

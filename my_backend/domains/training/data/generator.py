@@ -22,9 +22,164 @@ import os
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_float_to_int(value: Any, default: int) -> int:
+    """Safely convert a value to int, handling empty strings and None."""
+    if value is None or value == '' or value == 'None':
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
+
+def _calculate_n_dat(session_data: Dict, csv_data: Dict) -> int:
+    """
+    Calculate the exact n_dat using create_training_arrays.
+    Replicates the data preparation logic from middleman.py.
+
+    Args:
+        session_data: Session data loaded from database
+        csv_data: Parsed CSV data dict with bezeichnung as key
+
+    Returns:
+        n_dat: Number of valid training samples (i_array_3D.shape[0])
+    """
+    from domains.training.data.loader import load, transf
+    from domains.training.data.transformer import create_training_arrays
+    from domains.training.config import MTS, T
+
+    try:
+        # 1. Configure MTS from zeitschritte
+        zeitschritte = session_data.get('zeitschritte', {})
+        mts_config = MTS()
+        mts_config.I_N = int(zeitschritte.get('eingabe', mts_config.I_N))
+        mts_config.O_N = int(zeitschritte.get('ausgabe', mts_config.O_N))
+        mts_config.DELT = float(zeitschritte.get('zeitschrittweite', mts_config.DELT))
+        mts_config.OFST = float(zeitschritte.get('offset', mts_config.OFST))
+
+
+        # 2. Configure TIME components from time_info
+        time_info = session_data.get('time_info', {})
+        T.Y.IMP = time_info.get('jahr', False)
+        T.M.IMP = time_info.get('monat', False)
+        T.W.IMP = time_info.get('woche', False)
+        T.D.IMP = time_info.get('tag', False)
+        T.H.IMP = time_info.get('feiertag', False)
+        T.TZ = time_info.get('zeitzone', 'UTC')
+
+        # Configure detailed TIME settings from category_data
+        category_data = time_info.get('category_data', {})
+        if category_data:
+            if 'jahr' in category_data:
+                jahr_cfg = category_data['jahr']
+                T.Y.SPEC = jahr_cfg.get('datenform', 'Zeithorizont')
+                T.Y.TH_STRT = _safe_float_to_int(jahr_cfg.get('zeithorizontStart'), -24)
+                T.Y.TH_END = _safe_float_to_int(jahr_cfg.get('zeithorizontEnd'), 0)
+            if 'woche' in category_data:
+                woche_cfg = category_data['woche']
+                T.W.SPEC = woche_cfg.get('datenform', 'Zeithorizont')
+                T.W.TH_STRT = _safe_float_to_int(woche_cfg.get('zeithorizontStart'), -24)
+                T.W.TH_END = _safe_float_to_int(woche_cfg.get('zeithorizontEnd'), 0)
+            if 'tag' in category_data:
+                tag_cfg = category_data['tag']
+                T.D.SPEC = tag_cfg.get('datenform', 'Zeithorizont')
+                T.D.TH_STRT = _safe_float_to_int(tag_cfg.get('zeithorizontStart'), -24)
+                T.D.TH_END = _safe_float_to_int(tag_cfg.get('zeithorizontEnd'), 0)
+
+        # 3. Prepare i_dat, o_dat from csv_data
+        i_dat = {}
+        o_dat = {}
+        for bezeichnung, data in csv_data.items():
+            df_copy = data['df'].copy()
+            # Ensure columns are named correctly for load() function
+            if len(df_copy.columns) >= 2:
+                df_copy.columns = ['UTC', 'data_value'] + list(df_copy.columns[2:])
+            if data['type'] == 'input':
+                i_dat[bezeichnung] = df_copy
+            else:
+                o_dat[bezeichnung] = df_copy
+
+        if not i_dat or not o_dat:
+            logger.warning("n_dat calculation: Missing input or output data")
+            return 0
+
+        # 4. Create files metadata mapping
+        files_metadata = {}
+        for file_info in session_data.get('files', []):
+            bezeichnung = file_info.get('bezeichnung', file_info['file_name'].replace('.csv', ''))
+            files_metadata[bezeichnung] = file_info
+
+        # 5. Initialize i_dat_inf and o_dat_inf DataFrames
+        inf_columns = [
+            "utc_min", "utc_max", "delt", "ofst", "n_all", "n_num",
+            "rate_num", "val_min", "val_max", "spec", "th_strt",
+            "th_end", "meth", "avg", "delt_transf", "ofst_transf",
+            "scal", "scal_max", "scal_min"
+        ]
+        i_dat_inf = pd.DataFrame(columns=inf_columns)
+        o_dat_inf = pd.DataFrame(columns=inf_columns)
+
+        # 6. Process with load()
+        i_dat, i_dat_inf = load(i_dat, i_dat_inf)
+        o_dat, o_dat_inf = load(o_dat, o_dat_inf)
+
+        # 7. Set zeithorizont from metadata (AFTER load())
+        for key in i_dat_inf.index:
+            metadata = files_metadata.get(key, {})
+            i_dat_inf.loc[key, "spec"] = "Historische Daten"
+            i_dat_inf.loc[key, "th_strt"] = _safe_float_to_int(metadata.get('zeithorizont_start'), -1)
+            i_dat_inf.loc[key, "th_end"] = _safe_float_to_int(metadata.get('zeithorizont_end'), 0)
+            i_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
+            i_dat_inf.loc[key, "avg"] = False
+            i_dat_inf.loc[key, "scal"] = True
+            i_dat_inf.loc[key, "scal_max"] = 1
+            i_dat_inf.loc[key, "scal_min"] = 0
+
+        for key in o_dat_inf.index:
+            metadata = files_metadata.get(key, {})
+            o_dat_inf.loc[key, "spec"] = "Historische Daten"
+            o_dat_inf.loc[key, "th_strt"] = _safe_float_to_int(metadata.get('zeithorizont_start'), 0)
+            o_dat_inf.loc[key, "th_end"] = _safe_float_to_int(metadata.get('zeithorizont_end'), 1)
+            o_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
+            o_dat_inf.loc[key, "avg"] = False
+            o_dat_inf.loc[key, "scal"] = True
+            o_dat_inf.loc[key, "scal_max"] = 1
+            o_dat_inf.loc[key, "scal_min"] = 0
+
+        # 8. Apply transf()
+        i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
+        o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
+
+        # 9. Determine time range (CRITICAL: .min() for utc_end!)
+        utc_strt = i_dat_inf["utc_min"].min()
+        utc_end = i_dat_inf["utc_max"].min()  # CRITICAL: Use .min() not .max()!
+
+
+        # 10. Call create_training_arrays
+        i_array_3D, o_array_3D, _, _, _ = create_training_arrays(
+            i_dat=i_dat,
+            o_dat=o_dat,
+            i_dat_inf=i_dat_inf,
+            o_dat_inf=o_dat_inf,
+            utc_strt=utc_strt,
+            utc_end=utc_end,
+            mts_config=mts_config
+        )
+
+        n_dat = i_array_3D.shape[0] if len(i_array_3D) > 0 else 0
+        return n_dat
+
+    except Exception as e:
+        logger.error(f"Error calculating n_dat: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return 0
 
 
 def generate_violin_plots_for_session(
@@ -64,8 +219,6 @@ def generate_violin_plots_for_session(
     """
     from domains.training.data.loader import DataLoader
     from domains.training.services.violin import generate_violin_plots_from_data
-
-    logger.info(f"Generating violin plots for session {session_id} WITHOUT training")
 
     # Emit start progress
     if progress_tracker:
@@ -109,7 +262,6 @@ def generate_violin_plots_for_session(
                 'type': file_type,
                 'file_name': file_name
             }
-            logger.info(f"Loaded '{bezeichnung}' ({file_type}) with {len(df)} rows and {len(df.columns)} columns")
 
     if not csv_data:
         if progress_tracker:
@@ -145,8 +297,6 @@ def generate_violin_plots_for_session(
                 else:
                     output_features.append((col, df[col].values))
                     output_feature_names.append(col)
-
-            logger.info(f"Added {len(numeric_cols)} features from '{bezeichnung}' ({file_type})")
 
     if not input_features and not output_features:
         if progress_tracker:
@@ -198,8 +348,6 @@ def generate_violin_plots_for_session(
                         display_name = col[0].upper() + col[1:]
                         time_features.append((display_name, time_features_df[col].values))
                         time_feature_names.append(display_name)
-
-                    logger.info(f"Added {len(time_cols)} TIME features: {[c[0].upper() + c[1:] for c in time_cols]}")
                 else:
                     logger.warning("No TIME feature columns generated")
             else:
@@ -222,10 +370,24 @@ def generate_violin_plots_for_session(
         progress_tracker=progress_tracker
     )
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Calculate n_dat (number of valid training samples after 3D transformation)
+    # This is the actual dataset count that will be used for training
+    # ═══════════════════════════════════════════════════════════════════════════
+    if progress_tracker:
+        progress_tracker.calculating_dataset_count()
+
+    n_dat = _calculate_n_dat(session_data, csv_data)
+
+    if progress_tracker:
+        progress_tracker.dataset_count_complete(n_dat)
+        progress_tracker.complete()
+
     result = {
         'success': plot_result['success'],
         'violin_plots': plot_result.get('plots', {}),
         'message': 'Violin plots generated successfully. Ready for model training.',
+        'n_dat': n_dat,
         'data_info': {
             'input_features': list(set(input_feature_names)),
             'time_features': list(set(time_feature_names)),
@@ -236,8 +398,5 @@ def generate_violin_plots_for_session(
             'total_features': len(input_features) + len(time_features) + len(output_features)
         }
     }
-
-    logger.info(f"Violin plots generated for session {session_id}: "
-                f"{len(input_features)} input, {len(time_features)} time, {len(output_features)} output features")
 
     return result
