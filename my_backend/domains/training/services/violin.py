@@ -135,9 +135,11 @@ def generate_violin_plots_from_data(
 
     Args:
         session_id: Session identifier
-        input_features: List of (feature_name, values_array) tuples for inputs
+        input_features: List of tuples for inputs. Supports:
+            - 2-tuple: (feature_name, values_array) - feature_name used as title, no y-label
+            - 3-tuple: (bezeichnung, column_name, values_array) - bezeichnung as title, column_name as y-label
         time_features: List of (feature_name, values_array) tuples for TIME components
-        output_features: List of (feature_name, values_array) tuples for outputs
+        output_features: Same format as input_features
         progress_tracker: Optional ViolinProgressTracker for emitting progress updates
 
     Returns:
@@ -169,7 +171,14 @@ def generate_violin_plots_from_data(
             if n_ft == 1:
                 axes = [axes]
 
-            for i, (feature_name, values) in enumerate(input_features):
+            for i, feature_tuple in enumerate(input_features):
+                # Support both 2-tuple (name, values) and 3-tuple (bezeichnung, column_name, values)
+                if len(feature_tuple) == 3:
+                    bezeichnung, column_name, values = feature_tuple
+                else:
+                    bezeichnung, values = feature_tuple
+                    column_name = ""
+
                 if isinstance(values, pd.Series):
                     is_all_nan = values.isna().all()
                 else:
@@ -184,14 +193,14 @@ def generate_violin_plots_from_data(
                         inner="quartile",
                         linewidth=1.5
                     )
-                    axes[i].set_title(feature_name)
+                    axes[i].set_title(bezeichnung)
                     axes[i].set_xlabel("")
-                    axes[i].set_ylabel("")
+                    axes[i].set_ylabel(column_name)
                 else:
                     axes[i].text(0.5, 0.5, 'No data',
                                ha='center', va='center',
                                transform=axes[i].transAxes)
-                    axes[i].set_title(feature_name)
+                    axes[i].set_title(bezeichnung)
 
             plt.suptitle("Datenverteilung \nder Eingabedaten",
                         fontsize=15, fontweight="bold")
@@ -285,7 +294,14 @@ def generate_violin_plots_from_data(
             if n_ft == 1:
                 axes = [axes]
 
-            for i, (feature_name, values) in enumerate(output_features):
+            for i, feature_tuple in enumerate(output_features):
+                # Support both 2-tuple (name, values) and 3-tuple (bezeichnung, column_name, values)
+                if len(feature_tuple) == 3:
+                    bezeichnung, column_name, values = feature_tuple
+                else:
+                    bezeichnung, values = feature_tuple
+                    column_name = ""
+
                 if isinstance(values, pd.Series):
                     is_all_nan = values.isna().all()
                 else:
@@ -302,14 +318,14 @@ def generate_violin_plots_from_data(
                         inner="quartile",
                         linewidth=1.5
                     )
-                    axes[i].set_title(feature_name)
+                    axes[i].set_title(bezeichnung)
                     axes[i].set_xlabel("")
-                    axes[i].set_ylabel("")
+                    axes[i].set_ylabel(column_name)
                 else:
                     axes[i].text(0.5, 0.5, 'No data',
                                ha='center', va='center',
                                transform=axes[i].transAxes)
-                    axes[i].set_title(feature_name)
+                    axes[i].set_title(bezeichnung)
 
             plt.suptitle("Datenverteilung \nder Ausgabedaten",
                         fontsize=15, fontweight="bold")

@@ -274,11 +274,12 @@ def generate_violin_plots_for_session(
 
     # ═══════════════════════════════════════════════════════════════════════════
     # STRUCTURE: Separate input, time, and output features
-    # Each feature is a tuple: (feature_name, values_array)
+    # Input/Output features: (bezeichnung, column_name, values_array)
+    # Time features: (display_name, values_array) - no column_name for generated features
     # ═══════════════════════════════════════════════════════════════════════════
-    input_features: List[Tuple[str, np.ndarray]] = []
+    input_features: List[Tuple[str, str, np.ndarray]] = []  # (bezeichnung, column_name, values)
     time_features: List[Tuple[str, np.ndarray]] = []
-    output_features: List[Tuple[str, np.ndarray]] = []
+    output_features: List[Tuple[str, str, np.ndarray]] = []  # (bezeichnung, column_name, values)
 
     input_feature_names = []
     time_feature_names = []
@@ -292,11 +293,11 @@ def generate_violin_plots_for_session(
         if numeric_cols:
             for col in numeric_cols:
                 if file_type == 'input':
-                    input_features.append((col, df[col].values))
-                    input_feature_names.append(col)
+                    input_features.append((bezeichnung, col, df[col].values))
+                    input_feature_names.append(bezeichnung)
                 else:
-                    output_features.append((col, df[col].values))
-                    output_feature_names.append(col)
+                    output_features.append((bezeichnung, col, df[col].values))
+                    output_feature_names.append(bezeichnung)
 
     if not input_features and not output_features:
         if progress_tracker:
