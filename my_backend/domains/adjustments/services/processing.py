@@ -611,14 +611,24 @@ def convert_data_without_processing(
     filename: str,
     time_step: float,
     offset: float,
-    decimal_precision: str = 'full'
+    decimal_precision: str = 'full',
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
     Direct data conversion without processing when parameters are the same.
+    Now also filters by time range to ensure all files have consistent time boundaries.
     """
     try:
         df = df.copy()
         df['UTC'] = pd.to_datetime(df['UTC'])
+
+        # Filter by time range to ensure consistent boundaries across all files
+        df = filter_by_time_range(df, start_time, end_time)
+
+        if len(df) == 0:
+            logger.warning(f"No data in time range for {filename}")
+            return [], None
 
         measurement_cols = [col for col in df.columns if col != 'UTC']
 

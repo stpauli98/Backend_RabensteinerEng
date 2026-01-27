@@ -493,7 +493,9 @@ def complete_adjustment() -> Tuple[Response, int]:
                         filename,
                         file_time_step,
                         file_offset,
-                        file_decimal_precision
+                        file_decimal_precision,
+                        start_time,
+                        end_time
                     )
                 else:
                     method_name = methods.get(filename, {}).get('method', 'default') if isinstance(methods.get(filename), dict) else 'default'
