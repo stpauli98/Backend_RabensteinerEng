@@ -14,8 +14,7 @@ from typing import Dict, Tuple, Optional
 from datetime import datetime
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# Fixed random seed for reproducibility
-RANDOM_SEED = 42
+# No fixed seed - matches original training.py which has natural variation
 
 from domains.training.data.loader import DataLoader, load, transf
 from domains.training.data.transformer import create_training_arrays
@@ -341,11 +340,7 @@ def run_exact_training_pipeline(
     import logging
     logger = logging.getLogger(__name__)
 
-    # Set random seeds for reproducibility
-    random.seed(RANDOM_SEED)
-    np.random.seed(RANDOM_SEED)
-    tf.random.set_seed(RANDOM_SEED)
-    logger.info(f"   Random seeds set to {RANDOM_SEED} for reproducibility")
+    # No fixed seeds - matches original training.py which has natural variation each run
 
     logger.info(f"   Pipeline Step 1: Creating training arrays from {utc_strt} to {utc_end}")
     try:
