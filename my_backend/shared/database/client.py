@@ -35,7 +35,7 @@ def get_supabase_client() -> Client:
     if not supabase_url or not supabase_key:
         raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
 
-    logger.info(f"Initializing Supabase client for URL: {supabase_url}")
+    logger.debug(f"Initializing Supabase client for URL: {supabase_url}")
 
     return create_client(supabase_url, supabase_key)
 
@@ -85,7 +85,7 @@ def get_supabase_admin_client() -> Client:
     if not supabase_url or not supabase_service_key:
         raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set for admin operations")
 
-    logger.info(f"Initializing Supabase admin client for URL: {supabase_url}")
+    logger.debug(f"Initializing Supabase admin client for URL: {supabase_url}")
 
     # Create with extended timeout for large storage uploads (120 seconds)
     # Supabase Storage can be slow under load, especially with concurrent uploads

@@ -70,7 +70,7 @@ class ViolinProgressTracker:
                     'message': step,
                     'eta_seconds': eta_seconds
                 }, room=self.room)
-                logger.info(f"Progress emit: {progress}% - {step} (ETA: {eta_seconds}s)")
+                logger.debug(f"Progress emit: {progress}% - {step} (ETA: {eta_seconds}s)")
             except Exception as e:
                 logger.error(f"Failed to emit progress: {str(e)}")
 
@@ -135,12 +135,28 @@ class ViolinProgressTracker:
         self.emit(75, "violin.progress.outputComplete")
 
     # =========================================================================
-    # Phase 4: Dataset Count Calculation (75-95%)
+    # Phase 4: Dataset Count Calculation (80-95%) - Granular tracking
     # =========================================================================
 
     def calculating_dataset_count(self):
         """Emit when starting n_dat calculation."""
         self.emit(80, "violin.progress.calculatingDatasets")
+
+    def ndat_loading_data(self):
+        """Emit when loading data for n_dat calculation."""
+        self.emit(82, "violin.progress.ndatLoading")
+
+    def ndat_transforming(self):
+        """Emit when transforming data for n_dat."""
+        self.emit(85, "violin.progress.ndatTransforming")
+
+    def ndat_creating_arrays(self):
+        """Emit when creating training arrays (slowest step)."""
+        self.emit(88, "violin.progress.ndatCreatingArrays")
+
+    def ndat_arrays_complete(self):
+        """Emit when training arrays are created."""
+        self.emit(93, "violin.progress.ndatArraysComplete")
 
     def dataset_count_complete(self, n_dat: int = 0):
         """Emit when n_dat calculation is complete."""

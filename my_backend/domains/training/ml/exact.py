@@ -613,7 +613,7 @@ def run_exact_training_pipeline(
                 evaluation_metrics['df_eval'] = df_eval_dict
                 evaluation_metrics['df_eval_ts'] = df_eval_ts_dict
 
-                logger.info(f"12-level averaging evaluation completed successfully")
+
 
             except Exception as eval_error:
                 logger.error(f"Error in 12-level averaging evaluation: {str(eval_error)}")

@@ -464,11 +464,11 @@ class Visualizer:
             output_variables = []
             time_components = []
 
-            logger.info(f"get_available_variables called for session_id={session_id}, uuid={uuid_session_id}")
+            logger.debug(f"get_available_variables called for session_id={session_id}, uuid={uuid_session_id}")
 
             # 1. Try to get from training_results first (most reliable after training)
             results = fetch_training_results_with_storage(session_id)
-            logger.info(f"training_results keys: {list(results.keys()) if results else 'None'}")
+            logger.debug(f"training_results keys: {list(results.keys()) if results else 'None'}")
 
             if results:
                 input_variables = (
@@ -481,12 +481,12 @@ class Visualizer:
                     results.get('output_columns') or
                     results.get('data_info', {}).get('output_columns', [])
                 )
-                logger.info(f"From training_results: inputs={input_variables}, outputs={output_variables}")
+                logger.debug(f"From training_results: inputs={input_variables}, outputs={output_variables}")
 
             # 2. Fallback: Get from files table (before training is complete)
             if not input_variables or not output_variables:
                 file_response = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
-                logger.info(f"Files table returned {len(file_response.data) if file_response.data else 0} files")
+                logger.debug(f"Files table returned {len(file_response.data) if file_response.data else 0} files")
 
                 if file_response.data:
                     for file_data in file_response.data:
@@ -494,7 +494,7 @@ class Visualizer:
                         datentyp = file_data.get('datentyp', '')
                         columns = file_data.get('columns', [])
                         bezeichnung = file_data.get('bezeichnung', '')
-                        logger.info(f"File: {bezeichnung}, type={file_type}, columns={columns[:3] if columns else []}")
+                        logger.debug(f"File: {bezeichnung}, type={file_type}, columns={columns[:3] if columns else []}")
 
                         # Check both file_type and datentyp for compatibility
                         is_input = file_type == 'input' or datentyp in ['input', 'Eingabedaten']
@@ -520,7 +520,7 @@ class Visualizer:
 
             # 3. Get TIME components from time_info table (DYNAMIC based on user configuration)
             time_info_response = supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
-            logger.info(f"time_info table returned: {time_info_response.data[0] if time_info_response.data else 'None'}")
+            logger.debug(f"time_info table returned: {time_info_response.data[0] if time_info_response.data else 'None'}")
 
             if time_info_response.data:
                 time_info = time_info_response.data[0]
@@ -535,7 +535,7 @@ class Visualizer:
             if stored_time_components and not time_components:
                 time_components = stored_time_components
 
-            logger.info(f"get_available_variables: inputs={regular_inputs}, time={time_components}, outputs={output_variables}")
+            logger.debug(f"get_available_variables: inputs={regular_inputs}, time={time_components}, outputs={output_variables}")
 
             return {
                 'input_variables': regular_inputs,
@@ -680,11 +680,11 @@ class Visualizer:
 
             logger.info(f"Generate plot for session {session_id}" +
                        (f" with model_id {model_id}" if model_id else " (using most recent model)"))
-            logger.info(f"Plot settings: num_sbpl={num_sbpl}, x_sbpl={x_sbpl}, "
+            logger.debug(f"Plot settings: num_sbpl={num_sbpl}, x_sbpl={x_sbpl}, "
                        f"y_sbpl_fmt={y_sbpl_fmt}, y_sbpl_set={y_sbpl_set}")
-            logger.info(f"Input variables selected: {[k for k, v in df_plot_in.items() if v]}")
-            logger.info(f"Output variables selected: {[k for k, v in df_plot_out.items() if v]}")
-            logger.info(f"Forecast variables selected: {[k for k, v in df_plot_fcst.items() if v]}")
+            logger.debug(f"Input variables selected: {[k for k, v in df_plot_in.items() if v]}")
+            logger.debug(f"Output variables selected: {[k for k, v in df_plot_out.items() if v]}")
+            logger.debug(f"Forecast variables selected: {[k for k, v in df_plot_fcst.items() if v]}")
 
             results = fetch_training_results_with_storage(session_id, model_id=model_id)
 
@@ -705,7 +705,7 @@ class Visualizer:
                         # This is safe here because models are only stored by authenticated users
                         # via our training pipeline and retrieved from trusted Supabase storage.
                         trained_model = pickle.loads(model_bytes)
-                        logger.info(f"Successfully deserialized model of type {model_data.get('_model_class')}")
+                        logger.debug(f"Successfully deserialized model of type {model_data.get('_model_class')}")
                     except Exception as e:
                         logger.error(f"Failed to deserialize model: {e}")
                         trained_model = None
@@ -761,25 +761,25 @@ class Visualizer:
                 # Separate into files and time components for plotting keys
                 input_file_names_actual = [f for f in input_features if f not in TIME_COMPONENT_NAMES]
                 time_components = [f for f in input_features if f in TIME_COMPONENT_NAMES]
-                logger.info(f"Using STORED input features: {input_features}")
+                logger.debug(f"Using STORED input features: {input_features}")
             else:
                 # Build from database
                 input_features = input_file_names + time_components_from_db
                 input_file_names_actual = input_file_names
                 time_components = time_components_from_db
-                logger.info(f"Building input features from database: {input_features}")
+                logger.debug(f"Building input features from database: {input_features}")
 
             if stored_output_features:
                 output_features = stored_output_features
-                logger.info(f"Using STORED output features: {output_features}")
+                logger.debug(f"Using STORED output features: {output_features}")
             else:
                 output_features = output_file_names
-                logger.info(f"Building output features from database: {output_features}")
+                logger.debug(f"Building output features from database: {output_features}")
 
             # Update input_file_names with actual values for plotting
             input_file_names = input_file_names_actual
 
-            logger.info(f"Final features - input files: {input_file_names}, time: {time_components}, output: {output_features}")
+            logger.debug(f"Final features - input files: {input_file_names}, time: {time_components}, output: {output_features}")
 
             # ===================================================================
             # LOAD TEST DATA - BOTH SCALED AND ORIGINAL (MATCHES ORIGINAL)
@@ -802,17 +802,17 @@ class Visualizer:
                 # Load original (unscaled) data - MATCHES ORIGINAL training.py
                 if 'X_orig' in test_data:
                     tst_x_orig = np.array(test_data.get('X_orig'))
-                    logger.info(f"Loaded X_orig with shape: {tst_x_orig.shape}")
+                    logger.debug(f"Loaded X_orig with shape: {tst_x_orig.shape}")
                 else:
                     tst_x_orig = tst_x  # Fallback to scaled
-                    logger.info("X_orig not found, using scaled X as fallback")
+                    logger.debug("X_orig not found, using scaled X as fallback")
 
                 if 'y_orig' in test_data:
                     tst_y_orig = np.array(test_data.get('y_orig'))
-                    logger.info(f"Loaded y_orig with shape: {tst_y_orig.shape}")
+                    logger.debug(f"Loaded y_orig with shape: {tst_y_orig.shape}")
                 else:
                     tst_y_orig = tst_y  # Fallback to scaled
-                    logger.info("y_orig not found, using scaled y as fallback")
+                    logger.debug("y_orig not found, using scaled y as fallback")
 
             if not has_test_data:
                 logger.error(f"No test data found in database for session {session_id}")
@@ -834,8 +834,8 @@ class Visualizer:
                         except Exception:
                             utc_ref_log_tst[i] = None
 
-            logger.info(f"tst_x shape: {tst_x.shape}, tst_y shape: {tst_y.shape}")
-            logger.info(f"utc_ref_log entries: {len(utc_ref_log_tst)}")
+            logger.debug(f"tst_x shape: {tst_x.shape}, tst_y shape: {tst_y.shape}")
+            logger.debug(f"utc_ref_log entries: {len(utc_ref_log_tst)}")
 
             # ===================================================================
             # VALIDATE AND ADJUST FEATURES TO MATCH ACTUAL DATA DIMENSIONS
@@ -853,7 +853,7 @@ class Visualizer:
                     # Re-separate files and time components
                     input_file_names = [f for f in input_features if f not in TIME_COMPONENT_NAMES]
                     time_components = [f for f in input_features if f in TIME_COMPONENT_NAMES]
-                    logger.info(f"Truncated input features to: {input_features}")
+                    logger.debug(f"Truncated input features to: {input_features}")
                 else:
                     # Array has more features than we have names - ERROR
                     raise ValueError(
@@ -876,7 +876,7 @@ class Visualizer:
                         f"This indicates corrupted or incomplete training data."
                     )
 
-            logger.info(f"Validated features - inputs: {len(input_features)}, outputs: {len(output_features)}")
+            logger.debug(f"Validated features - inputs: {len(input_features)}, outputs: {len(output_features)}")
 
             # Get time series parameters from metadata
             I_N = tst_x.shape[1]  # Input timesteps
@@ -890,7 +890,7 @@ class Visualizer:
                 model_type = results.get('model_type', 'Unknown')
 
                 if model_type in ['SVR_dir', 'SVR_MIMO', 'LIN']:
-                    logger.info(f"Using SVR/LIN prediction logic for model type: {model_type}")
+                    logger.debug(f"Using SVR/LIN prediction logic for model type: {model_type}")
                     n_samples = tst_x.shape[0]
 
                     tst_fcst = []
@@ -911,24 +911,24 @@ class Visualizer:
 
                     tst_fcst = np.array(tst_fcst)
                 else:
-                    logger.info(f"Using standard prediction logic for model type: {model_type}")
+                    logger.debug(f"Using standard prediction logic for model type: {model_type}")
                     tst_fcst = trained_model.predict(tst_x)
 
                     if model_type == 'CNN':
-                        logger.info(f"Squeezing last dimension for CNN model, shape before: {tst_fcst.shape}")
+                        logger.debug(f"Squeezing last dimension for CNN model, shape before: {tst_fcst.shape}")
                         tst_fcst = np.squeeze(tst_fcst, axis=-1)
-                        logger.info(f"Shape after squeeze: {tst_fcst.shape}")
+                        logger.debug(f"Shape after squeeze: {tst_fcst.shape}")
             else:
                 logger.error(f"Model is not available as an object for session {session_id}")
                 raise ValueError('Model not available for predictions. Please retrain the model.')
 
             # Inverse transform forecast if scalers available - for "original" format
             tst_fcst_orig = tst_fcst.copy()
-            logger.info(f"FCST inverse transform: y_sbpl_fmt={y_sbpl_fmt}, scalers keys={list(scalers.keys()) if scalers else 'None'}")
+            logger.debug(f"FCST inverse transform: y_sbpl_fmt={y_sbpl_fmt}, scalers keys={list(scalers.keys()) if scalers else 'None'}")
             if y_sbpl_fmt == 'original' and scalers:
                 # Scalers are stored under 'output' key as dict - need to deserialize from base64 pickle
                 o_scalers_raw = scalers.get('output', {})
-                logger.info(f"FCST inverse transform: o_scalers_raw type={type(o_scalers_raw)}, keys={list(o_scalers_raw.keys()) if isinstance(o_scalers_raw, dict) else 'not dict'}")
+                logger.debug(f"FCST inverse transform: o_scalers_raw type={type(o_scalers_raw)}, keys={list(o_scalers_raw.keys()) if isinstance(o_scalers_raw, dict) else 'not dict'}")
 
                 # Deserialize scalers from base64 pickle format
                 import pickle as pkl
@@ -938,7 +938,7 @@ class Visualizer:
                         try:
                             scaler = pkl.loads(base64.b64decode(scaler_data['_model_data']))
                             o_scalers[int(key)] = scaler
-                            logger.info(f"FCST: Deserialized scaler for key {key}")
+                            logger.debug(f"FCST: Deserialized scaler for key {key}")
                         except Exception as e:
                             logger.error(f"Error deserializing scaler {key}: {e}")
                             o_scalers[int(key)] = None
@@ -948,13 +948,13 @@ class Visualizer:
                     else:
                         o_scalers[int(key)] = None
 
-                logger.info(f"FCST inverse transform: deserialized o_scalers keys={list(o_scalers.keys())}")
+                logger.debug(f"FCST inverse transform: deserialized o_scalers keys={list(o_scalers.keys())}")
 
                 if o_scalers and len(tst_fcst.shape) == 3:
-                    logger.info(f"FCST inverse transform: tst_fcst shape={tst_fcst.shape}, will process {tst_fcst.shape[-1]} features")
+                    logger.debug(f"FCST inverse transform: tst_fcst shape={tst_fcst.shape}, will process {tst_fcst.shape[-1]} features")
                     for i_feat in range(tst_fcst.shape[-1]):
                         has_scaler = i_feat in o_scalers and o_scalers[i_feat] is not None
-                        logger.info(f"FCST inverse transform: checking i_feat={i_feat}, has_scaler={has_scaler}")
+                        logger.debug(f"FCST inverse transform: checking i_feat={i_feat}, has_scaler={has_scaler}")
                         if has_scaler:
                             try:
                                 before_val = tst_fcst_orig[0, 0, i_feat]
@@ -963,7 +963,7 @@ class Visualizer:
                                         tst_fcst[i_sample, :, i_feat].reshape(-1, 1)
                                     ).ravel()
                                 after_val = tst_fcst_orig[0, 0, i_feat]
-                                logger.info(f"FCST inverse transform SUCCESS: feature {i_feat}, before={before_val:.4f}, after={after_val:.4f}")
+                                logger.debug(f"FCST inverse transform SUCCESS: feature {i_feat}, before={before_val:.4f}, after={after_val:.4f}")
                             except Exception as e:
                                 logger.warning(f"Could not inverse transform forecast feature {i_feat}: {e}")
                         else:
@@ -990,7 +990,7 @@ class Visualizer:
 
                 n_ax_l = max(1, math.floor(n_ax / 2))
                 n_ax_r = n_ax - n_ax_l
-                logger.info(f"Separate axes mode: n_ax={n_ax}, n_ax_l={n_ax_l}, n_ax_r={n_ax_r}")
+                logger.debug(f"Separate axes mode: n_ax={n_ax}, n_ax_l={n_ax_l}, n_ax_r={n_ax_r}")
 
             # Limit subplots to available test data
             num_sbpl = min(num_sbpl, n_tst)
@@ -1018,7 +1018,7 @@ class Visualizer:
 
             # Random selection of test datasets - MATCHES ORIGINAL (line 2465)
             tst_random = random.sample(range(n_tst), num_sbpl)
-            logger.info(f"Random test sample indices: {tst_random[:5]}...")
+            logger.debug(f"Random test sample indices: {tst_random[:5]}...")
 
             # ===================================================================
             # BUILD tst_inf DICTIONARY - MATCHES ORIGINAL (lines 2475-2939)

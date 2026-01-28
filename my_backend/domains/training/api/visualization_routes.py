@@ -182,7 +182,7 @@ def get_evaluation_tables(session_id):
 
         # Ako df_eval postoji i nije prazan, koristi ga direktno
         if df_eval and len(df_eval) > 0:
-            logger.info(f"Using 12-level averaging df_eval data for session {session_id}")
+
             return jsonify({
                 'success': True,
                 'session_id': session_id,

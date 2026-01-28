@@ -38,7 +38,7 @@ def _safe_float_to_int(value: Any, default: int) -> int:
 
 
 
-def _calculate_n_dat(session_data: Dict, csv_data: Dict) -> int:
+def _calculate_n_dat(session_data: Dict, csv_data: Dict, progress_tracker=None) -> int:
     """
     Calculate the exact n_dat using create_training_arrays.
     Replicates the data preparation logic from middleman.py.
@@ -126,6 +126,8 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict) -> int:
         o_dat_inf = pd.DataFrame(columns=inf_columns)
 
         # 6. Process with load()
+        if progress_tracker:
+            progress_tracker.ndat_loading_data()
         i_dat, i_dat_inf = load(i_dat, i_dat_inf)
         o_dat, o_dat_inf = load(o_dat, o_dat_inf)
 
@@ -153,6 +155,8 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict) -> int:
             o_dat_inf.loc[key, "scal_min"] = 0
 
         # 8. Apply transf()
+        if progress_tracker:
+            progress_tracker.ndat_transforming()
         i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
         o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
 
@@ -161,7 +165,9 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict) -> int:
         utc_end = i_dat_inf["utc_max"].min()  # CRITICAL: Use .min() not .max()!
 
 
-        # 10. Call create_training_arrays
+        # 10. Call create_training_arrays (slowest step)
+        if progress_tracker:
+            progress_tracker.ndat_creating_arrays()
         i_array_3D, o_array_3D, _, _, _ = create_training_arrays(
             i_dat=i_dat,
             o_dat=o_dat,
@@ -173,6 +179,10 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict) -> int:
         )
 
         n_dat = i_array_3D.shape[0] if len(i_array_3D) > 0 else 0
+        
+        if progress_tracker:
+            progress_tracker.ndat_arrays_complete()
+        
         return n_dat
 
     except Exception as e:
@@ -378,11 +388,11 @@ def generate_violin_plots_for_session(
     if progress_tracker:
         progress_tracker.calculating_dataset_count()
 
-    n_dat = _calculate_n_dat(session_data, csv_data)
+    n_dat = _calculate_n_dat(session_data, csv_data, progress_tracker)
 
     if progress_tracker:
         progress_tracker.dataset_count_complete(n_dat)
-        progress_tracker.complete()
+        # Note: complete() is called in training_routes.py after saving to database
 
     result = {
         'success': plot_result['success'],

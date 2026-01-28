@@ -21,12 +21,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Suppress noisy third-party loggers (they flood logs with INFO level messages)
+# Suppress noisy third-party loggers (they flood logs with DEBUG/INFO messages)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('hpack').setLevel(logging.WARNING)
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('apscheduler').setLevel(logging.WARNING)
+logging.getLogger('tensorflow').setLevel(logging.WARNING)
+logging.getLogger('h5py').setLevel(logging.WARNING)
+logging.getLogger('tzlocal').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)
 
 def create_app():
     """Application factory function"""

@@ -244,7 +244,7 @@ def get_training_results(session_id):
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
-        logger.info(f"Getting training results for session {session_id} (UUID: {uuid_session_id})")
+
 
         response = supabase.table('training_results')\
             .select('id, session_id, status, created_at, updated_at, '
@@ -259,13 +259,13 @@ def get_training_results(session_id):
 
             if record.get('results_file_path'):
                 try:
-                    logger.info(f"Downloading full results from storage: {record['results_file_path']}")
+
                     full_results = download_training_results(
                         file_path=record['results_file_path'],
                         decompress=record.get('compressed', False)
                     )
                     record['results'] = full_results
-                    logger.info(f"Full results loaded from storage successfully")
+
                 except Exception as download_error:
                     logger.error(f"Failed to download results from storage: {download_error}")
                     record['results'] = record.get('results_metadata', {})
