@@ -370,22 +370,13 @@ class ModernMiddlemanRunner:
                     'o_combined_array': results.get('scalers', {}).get('o_combined_array')
                 }
 
+                # Fallback removed - i_combined_array and o_combined_array are always
+                # available in scalers dict (saved in exact.py). train_data/val_data
+                # no longer stored to save ~1GB memory and ~80% storage.
                 if viz_data['i_combined_array'] is None:
-                    train_x = results.get('train_data', {}).get('X_orig')
-                    val_x = results.get('val_data', {}).get('X_orig')
-                    test_x = results.get('test_data', {}).get('X_orig')
-
-                    if train_x is not None and val_x is not None and test_x is not None:
-                        all_x = np.vstack([train_x, val_x, test_x])
-                        viz_data['i_combined_array'] = all_x.reshape(-1, all_x.shape[-1])
-
-                    train_y = results.get('train_data', {}).get('y_orig')
-                    val_y = results.get('val_data', {}).get('y_orig')
-                    test_y = results.get('test_data', {}).get('y_orig')
-
-                    if train_y is not None and val_y is not None and test_y is not None:
-                        all_y = np.vstack([train_y, val_y, test_y])
-                        viz_data['o_combined_array'] = all_y.reshape(-1, all_y.shape[-1])
+                    logger.warning("i_combined_array not found in scalers - violin plots may be incomplete")
+                if viz_data['o_combined_array'] is None:
+                    logger.warning("o_combined_array not found in scalers - violin plots may be incomplete")
 
                 # Get feature names from results metadata (matches original training.py)
                 # These come from i_dat_inf.index and o_dat_inf.index

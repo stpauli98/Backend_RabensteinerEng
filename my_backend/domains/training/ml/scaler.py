@@ -328,24 +328,14 @@ def create_scaler_download_package(session_id: str) -> str:
         raise ValueError(f'No scalers found for session {session_id}')
 
     def deserialize_scalers_dict(scaler_dict):
-        """Deserialize scalers from base64-encoded pickle data.
+        """Deserialize scalers - supports both old JSON and new pickle formats.
 
         SECURITY NOTE: pickle.loads() can execute arbitrary code.
         This is safe here because scalers are only stored by authenticated users
         via our training pipeline and retrieved from trusted Supabase storage.
         """
-        result = {}
-        for key, scaler_data in scaler_dict.items():
-            if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
-                try:
-                    scaler = pickle.loads(base64.b64decode(scaler_data['_model_data']))
-                    result[int(key)] = scaler
-                except Exception as e:
-                    logger.error(f"Error deserializing scaler {key}: {str(e)}")
-                    result[int(key)] = None
-            else:
-                result[int(key)] = None
-        return result
+        from utils.serialization_helpers import deserialize_scalers_dict as _deserialize
+        return _deserialize(scaler_dict)
 
     input_scalers = deserialize_scalers_dict(scalers.get('input', {}))
     output_scalers = deserialize_scalers_dict(scalers.get('output', {}))
@@ -421,24 +411,14 @@ def scale_new_data(session_id: str, input_data, save_scaled: bool = False) -> Di
 
     def deserialize_scaler(scaler_data):
         """Convert serialized scaler back to usable object.
+        Supports both old JSON format and new pickle format.
 
         SECURITY NOTE: pickle.loads() can execute arbitrary code.
         This is safe here because scalers are only stored by authenticated users
         via our training pipeline and retrieved from trusted Supabase storage.
         """
-        if scaler_data is None:
-            return None
-        elif isinstance(scaler_data, dict) and '_model_type' in scaler_data:
-            try:
-                model_b64 = scaler_data['_model_data']
-                model_bytes = base64.b64decode(model_b64)
-                scaler = pickle.loads(model_bytes)
-                return scaler
-            except Exception as e:
-                logger.error(f"Error deserializing scaler: {str(e)}")
-                return None
-        else:
-            return scaler_data
+        from utils.serialization_helpers import deserialize_model_or_scaler
+        return deserialize_model_or_scaler(scaler_data)
 
     scaled_data = input_array.copy()
     scaling_info = {}

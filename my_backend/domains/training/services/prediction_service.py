@@ -195,32 +195,20 @@ class PredictionService:
     
     def _deserialize_scalers(self, scaler_dict: Dict) -> Dict:
         """
-        Deserialize scalers from base64-encoded pickle data.
-        
+        Deserialize scalers - supports both old JSON and new pickle formats.
+
         Args:
             scaler_dict: Dictionary of serialized scalers
-            
+
         Returns:
             Dictionary of deserialized scaler objects
-            
+
         SECURITY NOTE: pickle.loads() can execute arbitrary code.
         This is safe here because scalers are only stored by authenticated users
         via our training pipeline and retrieved from trusted Supabase storage.
         """
-        result = {}
-        
-        for key, scaler_data in scaler_dict.items():
-            if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
-                try:
-                    scaler = pickle.loads(base64.b64decode(scaler_data['_model_data']))
-                    result[int(key)] = scaler
-                except Exception as e:
-                    logger.error(f"Error deserializing scaler {key}: {e}")
-                    result[int(key)] = None
-            else:
-                result[int(key)] = None
-        
-        return result
+        from utils.serialization_helpers import deserialize_scalers_dict
+        return deserialize_scalers_dict(scaler_dict)
     
     def preprocess_input(
         self,

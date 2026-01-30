@@ -634,20 +634,17 @@ def run_exact_training_pipeline(
             'df_eval_ts': {}
         }
 
+    # Free memory from training/validation data - no longer needed after training
+    # This saves ~1GB memory (train_data ~800MB + val_data ~250MB)
+    del trn_x, trn_y, trn_x_orig, trn_y_orig
+    del val_x, val_y, val_x_orig, val_y_orig
+    import gc
+    gc.collect()
+
     return {
         'trained_model': mdl,
-        'train_data': {
-            'X': trn_x,
-            'y': trn_y,
-            'X_orig': trn_x_orig,
-            'y_orig': trn_y_orig
-        },
-        'val_data': {
-            'X': val_x,
-            'y': val_y,
-            'X_orig': val_x_orig,
-            'y_orig': val_y_orig
-        },
+        # train_data REMOVED - not used after training, saves ~800MB
+        # val_data REMOVED - not used after training, saves ~250MB
         'test_data': {
             'X': tst_x,
             'y': tst_y,

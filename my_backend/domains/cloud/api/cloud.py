@@ -11,7 +11,12 @@ import traceback
 from io import StringIO
 
 import pandas as pd
-from flask import request, jsonify, Blueprint, Response
+from flask import request, jsonify, Blueprint, Response, g
+
+# Authentication and authorization
+from shared.auth.jwt import require_auth
+from shared.auth.subscription import require_subscription, check_processing_limit
+from shared.tracking.usage import increment_processing_count
 
 from domains.cloud.config import (
     VALID_FILE_TYPES,
@@ -35,6 +40,8 @@ bp = Blueprint('cloud', __name__)
 
 
 @bp.route('/upload-chunk', methods=['POST'])
+@require_auth
+@require_subscription
 def upload_chunk():
     """
     Handle chunk upload for large files (5MB chunks).
@@ -96,6 +103,8 @@ def upload_chunk():
 
 
 @bp.route('/complete', methods=['POST', 'OPTIONS'])
+@require_auth
+@require_subscription
 def complete_redirect():
     """Handle chunked upload completion directly instead of redirecting."""
     try:
@@ -262,6 +271,8 @@ def complete_redirect():
 
 
 @bp.route('/clouddata', methods=['POST'])
+@require_auth
+@require_subscription
 def clouddata():
     """Handle direct cloud data processing (non-chunked)."""
     if request.method == 'OPTIONS':
@@ -334,6 +345,9 @@ def _process_data():
 
 
 @bp.route('/interpolate-chunked', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
 def interpolate_chunked():
     """
     Process a chunked file upload for interpolation.
@@ -621,6 +635,10 @@ def interpolate_chunked():
                 logger.info(f"Cleanup completed for upload {upload_id}")
             except Exception as e:
                 logger.warning(f"Cleanup error for {upload_id}: {e}")
+
+        # Track usage for this processing job
+        increment_processing_count(g.user_id)
+        logger.info(f"Tracked cloud interpolation for user {g.user_id}")
 
         response = Response(generate_chunks(), mimetype='application/x-ndjson')
         response.call_on_close(cleanup)

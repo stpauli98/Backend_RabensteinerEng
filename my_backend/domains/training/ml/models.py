@@ -145,16 +145,11 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                 scaler_dict_data = model_info['scaler_dict_data']
 
                 # Deserialize each scaler in the dictionary
-                # SECURITY NOTE: pickle.loads() can execute arbitrary code.
-                # This is safe here because scalers are only stored by authenticated users
-                # via our training pipeline and retrieved from trusted Supabase storage.
+                # Supports both old JSON format (base64) and new pickle format (direct objects)
+                from utils.serialization_helpers import deserialize_model_or_scaler
                 deserialized_scalers = {}
                 for key, scaler_data in scaler_dict_data.items():
-                    if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
-                        scaler_bytes = base64.b64decode(scaler_data['_model_data'])
-                        deserialized_scalers[int(key)] = pickle.loads(scaler_bytes)
-                    else:
-                        deserialized_scalers[int(key)] = None
+                    deserialized_scalers[int(key)] = deserialize_model_or_scaler(scaler_data)
 
                 # Determine filename: i_scaler.save or o_scaler.save
                 if 'input' in path:

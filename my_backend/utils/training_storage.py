@@ -17,6 +17,7 @@ import json
 import gzip
 import logging
 import time
+import pickle
 from datetime import datetime
 from threading import Lock
 from typing import Dict, List, Optional, Any, Tuple
@@ -43,7 +44,7 @@ def upload_training_results(
     progress_callback: Optional[callable] = None
 ) -> Dict[str, any]:
     """
-    Upload training results to Supabase Storage
+    Upload training results to Supabase Storage using pickle format (faster, smaller).
 
     Args:
         session_id: UUID session ID
@@ -54,7 +55,7 @@ def upload_training_results(
 
     Returns:
         dict: {
-            'file_path': str,       # Path in bucket: "session_id/training_results_timestamp.json[.gz]"
+            'file_path': str,       # Path in bucket: "session_id/training_results_timestamp.pkl[.gz]"
             'file_size': int,       # Size in bytes
             'compressed': bool,     # Whether compressed
             'metadata': dict        # Quick-access metadata for database
@@ -71,7 +72,7 @@ def upload_training_results(
         ...     progress_callback=lambda step, pct, msg: print(f"{step}: {pct}% - {msg}")
         ... )
         >>> print(storage_result['file_path'])
-        "abc-123/training_results_20251022_130000.json.gz"
+        "abc-123/training_results_20260129_130000.pkl.gz"
     """
     def emit_progress(step: str, percent: int, message: str, details: dict = None):
         """Helper to call progress callback if provided"""
@@ -85,7 +86,8 @@ def upload_training_results(
         supabase = get_supabase_admin_client()
 
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-        file_name = f"training_results_{timestamp}.json"
+        # CHANGE: Use .pkl extension instead of .json
+        file_name = f"training_results_{timestamp}.pkl"
         if compress:
             file_name += ".gz"
         file_path = f"{session_id}/{file_name}"
@@ -93,34 +95,41 @@ def upload_training_results(
         # Stage 1: Preparing data
         emit_progress('preparing_upload', 61, 'Preparing training data for upload...')
 
-        if compress:
-            # Stage 2: Streaming compression - no intermediate string/bytes copies
-            emit_progress('compressing', 63, 'Compressing training data (streaming)...')
-            logger.debug("Compressing training results using streaming approach...")
+        # DEBUG LOG: Start of pickle serialization
+        logger.info(f"🔍 DEBUG: Starting pickle serialization for session {session_id}")
+        logger.info(f"🔍 DEBUG: Results keys: {list(results.keys())}")
 
-            # Streaming compression - writes directly to gzip buffer without creating
-            # intermediate JSON string or bytes copies. Reduces peak memory from ~1.5GB to ~550MB.
+        start_time = time.time()
+
+        if compress:
+            # Stage 2: Pickle + gzip compression
+            emit_progress('compressing', 63, 'Compressing training data (pickle + gzip)...')
+            logger.info("🔍 DEBUG: Using pickle + gzip compression")
+
             buffer = io.BytesIO()
             with gzip.GzipFile(fileobj=buffer, mode='wb', compresslevel=6) as gz_file:
-                with io.TextIOWrapper(gz_file, encoding='utf-8') as text_wrapper:
-                    json.dump(results, text_wrapper)
+                # CHANGE: pickle.dump instead of json.dump - keeps numpy arrays as-is
+                pickle.dump(results, gz_file, protocol=pickle.HIGHEST_PROTOCOL)
 
             upload_data = buffer.getvalue()
             content_type = 'application/gzip'
 
+            serialization_time = time.time() - start_time
             compressed_size_mb = len(upload_data) / 1024 / 1024
-            logger.debug(f"Streaming compression complete: {compressed_size_mb:.2f}MB compressed")
-            emit_progress('compression_done', 65, f'Compressed to {compressed_size_mb:.1f}MB (streaming)', {
+            logger.info(f"🔍 DEBUG: Pickle + gzip complete in {serialization_time:.2f}s: {compressed_size_mb:.2f}MB")
+
+            emit_progress('compression_done', 65, f'Compressed to {compressed_size_mb:.1f}MB (pickle)', {
                 'compressed_size_mb': round(compressed_size_mb, 2),
+                'serialization_time_seconds': round(serialization_time, 2),
                 'action': 'compression_complete'
             })
         else:
-            # Non-compressed: also use streaming to avoid intermediate copies
+            # Non-compressed pickle
+            logger.info("🔍 DEBUG: Using pickle without compression")
             buffer = io.BytesIO()
-            with io.TextIOWrapper(buffer, encoding='utf-8') as text_wrapper:
-                json.dump(results, text_wrapper)
+            pickle.dump(results, buffer, protocol=pickle.HIGHEST_PROTOCOL)
             upload_data = buffer.getvalue()
-            content_type = 'application/json'
+            content_type = 'application/octet-stream'
 
         file_size = len(upload_data)
         file_size_mb = file_size / 1024 / 1024
@@ -162,7 +171,6 @@ def upload_training_results(
                         f"Upload attempt {attempt + 1}/{max_retries} failed: {upload_error}. "
                         f"Retrying..."
                     )
-                    import time
                     time.sleep(2 ** attempt)
                 else:
                     logger.error(f"❌ All {max_retries} upload attempts failed")
@@ -236,10 +244,11 @@ def download_training_results(
     decompress: Optional[bool] = None
 ) -> dict:
     """
-    Download training results from Supabase Storage
+    Download training results from Supabase Storage.
+    Auto-detects pickle vs JSON format based on file extension.
 
     Args:
-        file_path: Path to file in storage bucket (e.g., "session_id/training_results_*.json[.gz]")
+        file_path: Path to file in storage bucket (e.g., "session_id/training_results_*.pkl.gz")
         decompress: Whether to decompress gzipped data. If None, auto-detect from file extension.
 
     Returns:
@@ -249,7 +258,7 @@ def download_training_results(
         Exception: If download or decompression fails
 
     Example:
-        >>> results = download_training_results("abc-123/training_results_20251022_130000.json.gz")
+        >>> results = download_training_results("abc-123/training_results_20260129_130000.pkl.gz")
         >>> print(results['model_type'])
         "Dense"
     """
@@ -269,34 +278,57 @@ def download_training_results(
         # Double-check cache after acquiring lock (another thread may have downloaded)
         cached = _get_cached_results(file_path)
         if cached is not None:
-
             return cached
 
         # Actually download the file
         try:
             supabase = get_supabase_admin_client()
 
-
+            # DEBUG LOG
+            logger.info(f"🔍 DEBUG: Downloading training results from: {file_path}")
+            start_time = time.time()
 
             response = supabase.storage.from_('training-results').download(file_path)
 
-            if decompress is None:
-                decompress = file_path.endswith('.gz')
+            download_time = time.time() - start_time
+            logger.info(f"🔍 DEBUG: Download complete in {download_time:.2f}s, size: {len(response)/1024/1024:.2f}MB")
 
-            if decompress:
+            # CHANGE: Auto-detect format based on extension
+            is_pickle = file_path.endswith('.pkl.gz') or file_path.endswith('.pkl')
+            is_compressed = file_path.endswith('.gz')
 
-                # Streaming decompression - avoids creating intermediate bytes copies
-                with gzip.GzipFile(fileobj=io.BytesIO(response)) as gz_file:
-                    with io.TextIOWrapper(gz_file, encoding='utf-8') as text_wrapper:
-                        results = json.load(text_wrapper)
-                logger.debug("Streaming decompression complete")
+            logger.info(f"🔍 DEBUG: Format detection - pickle: {is_pickle}, compressed: {is_compressed}")
+
+            start_deserialize = time.time()
+
+            if is_pickle:
+                # NEW FORMAT: Pickle
+                # SECURITY NOTE: pickle.load() can execute arbitrary code.
+                # This is safe here because results are only stored by authenticated users
+                # via our training pipeline and retrieved from trusted Supabase storage.
+                if is_compressed:
+                    with gzip.GzipFile(fileobj=io.BytesIO(response)) as gz_file:
+                        results = pickle.load(gz_file)
+                else:
+                    results = pickle.loads(response)
+                logger.info(f"🔍 DEBUG: Pickle deserialization complete in {time.time() - start_deserialize:.2f}s")
             else:
-                results = json.loads(response.decode('utf-8'))
+                # OLD FORMAT: JSON (backward compatibility)
+                if decompress is None:
+                    decompress = file_path.endswith('.gz')
+
+                if decompress:
+                    with gzip.GzipFile(fileobj=io.BytesIO(response)) as gz_file:
+                        with io.TextIOWrapper(gz_file, encoding='utf-8') as text_wrapper:
+                            results = json.load(text_wrapper)
+                else:
+                    results = json.loads(response.decode('utf-8'))
+                logger.info(f"🔍 DEBUG: JSON deserialization complete in {time.time() - start_deserialize:.2f}s")
 
             # Cache results before returning
             _set_cached_results(file_path, results)
 
-
+            logger.info(f"🔍 DEBUG: Total download + deserialize: {time.time() - start_time:.2f}s")
             return results
 
         except Exception as e:

@@ -663,7 +663,6 @@ class Visualizer:
         """
         try:
             from utils.training_storage import fetch_training_results_with_storage
-            import pickle
             import math
             import random
             import datetime
@@ -698,19 +697,13 @@ class Visualizer:
                 if isinstance(model_data, list) and len(model_data) > 0:
                     model_data = model_data[0]
 
-                if isinstance(model_data, dict) and model_data.get('_model_type') == 'serialized_model':
-                    try:
-                        model_bytes = base64.b64decode(model_data['_model_data'])
-                        # SECURITY NOTE: pickle.loads() can execute arbitrary code.
-                        # This is safe here because models are only stored by authenticated users
-                        # via our training pipeline and retrieved from trusted Supabase storage.
-                        trained_model = pickle.loads(model_bytes)
-                        logger.debug(f"Successfully deserialized model of type {model_data.get('_model_class')}")
-                    except Exception as e:
-                        logger.error(f"Failed to deserialize model: {e}")
-                        trained_model = None
+                # Deserialize model - supports both old JSON format and new pickle format
+                from utils.serialization_helpers import deserialize_model_or_scaler
+                trained_model = deserialize_model_or_scaler(model_data)
+                if trained_model is None:
+                    logger.error(f"Failed to deserialize trained model")
                 else:
-                    trained_model = model_data
+                    logger.debug(f"Successfully deserialized model of type {type(trained_model).__name__}")
 
             test_data = results.get('test_data', {})
             metadata = results.get('metadata', {})
@@ -930,23 +923,10 @@ class Visualizer:
                 o_scalers_raw = scalers.get('output', {})
                 logger.debug(f"FCST inverse transform: o_scalers_raw type={type(o_scalers_raw)}, keys={list(o_scalers_raw.keys()) if isinstance(o_scalers_raw, dict) else 'not dict'}")
 
-                # Deserialize scalers from base64 pickle format
-                import pickle as pkl
-                o_scalers = {}
-                for key, scaler_data in o_scalers_raw.items():
-                    if scaler_data and isinstance(scaler_data, dict) and '_model_type' in scaler_data:
-                        try:
-                            scaler = pkl.loads(base64.b64decode(scaler_data['_model_data']))
-                            o_scalers[int(key)] = scaler
-                            logger.debug(f"FCST: Deserialized scaler for key {key}")
-                        except Exception as e:
-                            logger.error(f"Error deserializing scaler {key}: {e}")
-                            o_scalers[int(key)] = None
-                    elif scaler_data and hasattr(scaler_data, 'inverse_transform'):
-                        # Already a scaler object
-                        o_scalers[int(key)] = scaler_data
-                    else:
-                        o_scalers[int(key)] = None
+                # Deserialize scalers - supports both old JSON and new pickle formats
+                from utils.serialization_helpers import deserialize_scalers_dict
+                o_scalers = deserialize_scalers_dict(o_scalers_raw)
+                logger.debug(f"FCST: Deserialized {len([s for s in o_scalers.values() if s is not None])} scalers")
 
                 logger.debug(f"FCST inverse transform: deserialized o_scalers keys={list(o_scalers.keys())}")
 
