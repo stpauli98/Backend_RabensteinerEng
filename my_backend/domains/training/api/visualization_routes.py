@@ -67,10 +67,22 @@ def get_training_visualizations(session_id):
         visualizer = Visualizer()
         viz_data = visualizer.get_session_visualizations(session_id, user_id=user_id)
 
+        # Fetch n_dat from sessions table
+        n_dat = 0
+        try:
+            supabase = get_supabase_client(use_service_role=True)
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id)
+            session_response = supabase.table('sessions').select('n_dat').eq('id', uuid_session_id).single().execute()
+            if session_response.data:
+                n_dat = session_response.data.get('n_dat', 0) or 0
+        except Exception as e:
+            logger.warning(f"Could not fetch n_dat for session {session_id}: {e}")
+
         if not viz_data.get('plots'):
             return jsonify({
                 'session_id': session_id,
                 'plots': {},
+                'n_dat': n_dat,
                 'message': viz_data.get('message', 'No visualizations found for this session')
             }), 404
 
@@ -79,6 +91,7 @@ def get_training_visualizations(session_id):
             'plots': viz_data['plots'],
             'metadata': viz_data['metadata'],
             'created_at': viz_data['created_at'],
+            'n_dat': n_dat,
             'message': viz_data['message']
         })
 

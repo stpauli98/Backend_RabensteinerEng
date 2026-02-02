@@ -45,6 +45,10 @@ def generate_datasets(session_id):
         training_split = data.get('training_split', {})
 
         from domains.training.services.violin_tracker import ViolinProgressTracker
+        from shared.database.lifecycle import finalize_session as db_finalize_session
+
+        # Get UUID for database persistence
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         socketio = current_app.extensions.get('socketio')
         progress_tracker = ViolinProgressTracker(socketio, session_id)
@@ -72,6 +76,14 @@ def generate_datasets(session_id):
                         save_visualization_to_database(session_id, plot_name, plot_data)
                 except Exception as viz_error:
                     logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
+
+        # Save n_dat to sessions table
+        n_dat = result.get('n_dat', 0)
+        if n_dat > 0:
+            try:
+                db_finalize_session(uuid_session_id, n_dat=n_dat)
+            except Exception as e:
+                logger.error(f"Failed to save n_dat to database: {e}")
 
         progress_tracker.complete()
 
@@ -244,7 +256,14 @@ def get_training_results(session_id):
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
-
+        # Fetch n_dat from sessions table
+        n_dat = 0
+        try:
+            session_response = supabase.table('sessions').select('n_dat').eq('id', uuid_session_id).single().execute()
+            if session_response.data:
+                n_dat = session_response.data.get('n_dat', 0) or 0
+        except Exception as e:
+            logger.warning(f"Could not fetch n_dat for session {session_id}: {e}")
 
         response = supabase.table('training_results')\
             .select('id, session_id, status, created_at, updated_at, '
@@ -283,14 +302,16 @@ def get_training_results(session_id):
             return jsonify({
                 'success': True,
                 'results': [record],
-                'count': 1
+                'count': 1,
+                'n_dat': n_dat
             })
         else:
             return jsonify({
                 'success': True,
                 'message': 'No training results yet - training may not have been started',
                 'results': [],
-                'count': 0
+                'count': 0,
+                'n_dat': n_dat
             }), 200
 
     except PermissionError as e:

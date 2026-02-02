@@ -179,10 +179,10 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict, progress_tracker=None) 
         )
 
         n_dat = i_array_3D.shape[0] if len(i_array_3D) > 0 else 0
-        
+
         if progress_tracker:
             progress_tracker.ndat_arrays_complete()
-        
+
         return n_dat
 
     except Exception as e:
