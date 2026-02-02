@@ -250,7 +250,6 @@ class DataLoader:
                     'file_name': file_name,
                     'color_index': file_info.get('color_index', 0)
                 }
-                logger.info(f"Downloaded file '{file_name}' with bezeichnung '{bezeichnung}' (type: {file_type})")
 
             # Emit download complete
             if progress_tracker:

@@ -26,6 +26,9 @@ from typing import Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+# Debug flag - set to True to trace training progress events
+DEBUG_TRAINING_PROGRESS = True
+
 
 def clean_for_json(obj: Any) -> Any:
     """
@@ -188,6 +191,9 @@ def emit_post_training_progress(
         if details:
             event_data['details'] = details
 
+        if DEBUG_TRAINING_PROGRESS:
+            logger.info(f"[DEBUG_PROGRESS] 📤 EMIT training_progress: step={step}, progress={progress}%, room={room}")
+
         socketio_instance.emit('training_progress', event_data, room=room)
         logger.info(f"📊 Post-training progress: {progress}% - {message}")
 
@@ -226,7 +232,10 @@ def save_training_results(
     from shared.database.client import get_supabase_admin_client
     from utils.training_storage import upload_training_results
 
+    logger.info(f"[SAVE_RESULTS] Starting save_training_results for session {session_id}, uuid: {uuid_session_id}")
+
     supabase = get_supabase_admin_client()
+    logger.info(f"[SAVE_RESULTS] Supabase client obtained successfully")
 
     if not uuid_session_id:
         logger.error(f"Failed to get UUID for session {session_id}")
@@ -438,29 +447,82 @@ def run_model_training_async(
         socketio_instance: SocketIO instance for real-time updates (optional)
     """
     from domains.training.services.middleman import ModernMiddlemanRunner
+    from domains.training.services.training_tracker import TrainingProgressTracker
     from shared.database.operations import create_or_get_session_uuid
+
+    # Create progress tracker for post-training phases (50-100%)
+    # Training execution (0-50%) is handled by SocketIOProgressCallback in exact.py
+    progress_tracker = None
 
     try:
         logger.info(f"🚀 TRAINING THREAD STARTED for session {session_id}")
         logger.info(f"Model config: {model_config}")
 
+        # Get UUID for database operations
+        uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
+
+        # Create progress tracker for post-training database persistence
+        if socketio_instance and uuid_session_id:
+            progress_tracker = TrainingProgressTracker(
+                socketio=socketio_instance,
+                session_id=session_id,
+                uuid_session_id=uuid_session_id,
+                total_epochs=model_config.get('EP', 100),
+                model_name=model_config.get('MODE', 'Dense')
+            )
+            logger.info(f"[TRAINING_TRACKER] Created for post-training phases, session {session_id}")
+
+        # IMMEDIATE: Emit training_starting event so frontend shows progress tracker right away
+        # This happens BEFORE data loading which can take 5-30 seconds
+        if socketio_instance:
+            room = f"training_{session_id}"
+            socketio_instance.emit('training_progress', {
+                'session_id': session_id,
+                'status': 'training_starting',
+                'message': 'Preparing training data...',
+                'progress_percent': 0,
+                'phase': 'training_execution',
+                'model_name': model_config.get('MODE', 'Dense'),
+                'total_epochs': model_config.get('EP', 100)
+            }, room=room)
+            logger.info(f"[TRAINING_TRACKER] Emitted immediate training_starting event for session {session_id}")
+
+            # Also persist to database immediately for page refresh recovery
+            if progress_tracker:
+                progress_tracker.emit(0, 'Preparing training data...', 'processing')
+
         runner = ModernMiddlemanRunner()
         if socketio_instance:
             runner.set_socketio(socketio_instance)
 
+        if DEBUG_TRAINING_PROGRESS:
+            logger.info(f"[DEBUG_PROGRESS] 🏃 Starting runner.run_training_script for session {session_id}")
+
         result = runner.run_training_script(session_id, model_config)
-        logger.info(f"✅ runner.run_training_script completed with success={result.get('success')}")
+
+        if DEBUG_TRAINING_PROGRESS:
+            logger.info(f"[DEBUG_PROGRESS] ✅ runner.run_training_script RETURNED with success={result.get('success')}")
+            logger.info(f"[DEBUG_PROGRESS] 🔄 NOW STARTING POST-TRAINING PHASES...")
 
         if result['success']:
             try:
-                # Progress: Evaluating model
-                emit_post_training_progress(socketio_instance, session_id, 'evaluating', 50, 'Evaluating model performance...')
+                if DEBUG_TRAINING_PROGRESS:
+                    logger.info(f"[DEBUG_PROGRESS] ⏰ ENTERING POST-TRAINING SUCCESS BRANCH")
+                    logger.info(f"[DEBUG_PROGRESS] 📊 Step 1: Evaluating model (50-55%)")
 
-                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
+                # Progress: Evaluating model (50-55%)
+                if progress_tracker:
+                    progress_tracker.evaluating_model()
+                else:
+                    emit_post_training_progress(socketio_instance, session_id, 'evaluating', 50, 'Evaluating model performance...')
+
                 training_results = result.get('results', {})
 
-                # Progress: Preparing to save
-                emit_post_training_progress(socketio_instance, session_id, 'preparing_save', 55, 'Preparing results for storage...')
+                # Progress: Preparing to save (55-60%)
+                if progress_tracker:
+                    progress_tracker.preparing_results()
+                else:
+                    emit_post_training_progress(socketio_instance, session_id, 'preparing_save', 55, 'Preparing results for storage...')
 
                 save_training_results(
                     session_id=session_id,
@@ -472,8 +534,14 @@ def run_model_training_async(
                     socketio_instance=socketio_instance
                 )
 
+                # Mark training as complete and cleanup database entry
+                if progress_tracker:
+                    progress_tracker.complete()
+
             except Exception as e:
                 logger.error(f"Failed to save training results: {str(e)}")
+                if progress_tracker:
+                    progress_tracker.error(str(e))
 
             if socketio_instance:
                 room = f"training_{session_id}"
@@ -495,6 +563,8 @@ def run_model_training_async(
                 logger.info(f"✅ Training completed event emitted for session {session_id}")
         else:
             logger.error(f"Training failed: {result.get('error')}")
+            if progress_tracker:
+                progress_tracker.error(result.get('error', 'Unknown error'))
             if socketio_instance:
                 socketio_instance.emit('training_error', {
                     'session_id': session_id,
@@ -504,6 +574,8 @@ def run_model_training_async(
 
     except Exception as e:
         logger.error(f"Async training error: {str(e)}")
+        if progress_tracker:
+            progress_tracker.error(str(e))
         if socketio_instance:
             socketio_instance.emit('training_error', {
                 'session_id': session_id,

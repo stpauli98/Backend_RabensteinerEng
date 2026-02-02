@@ -95,16 +95,11 @@ def upload_training_results(
         # Stage 1: Preparing data
         emit_progress('preparing_upload', 61, 'Preparing training data for upload...')
 
-        # DEBUG LOG: Start of pickle serialization
-        logger.info(f"🔍 DEBUG: Starting pickle serialization for session {session_id}")
-        logger.info(f"🔍 DEBUG: Results keys: {list(results.keys())}")
-
         start_time = time.time()
 
         if compress:
             # Stage 2: Pickle + gzip compression
             emit_progress('compressing', 63, 'Compressing training data (pickle + gzip)...')
-            logger.info("🔍 DEBUG: Using pickle + gzip compression")
 
             buffer = io.BytesIO()
             with gzip.GzipFile(fileobj=buffer, mode='wb', compresslevel=6) as gz_file:
@@ -116,7 +111,6 @@ def upload_training_results(
 
             serialization_time = time.time() - start_time
             compressed_size_mb = len(upload_data) / 1024 / 1024
-            logger.info(f"🔍 DEBUG: Pickle + gzip complete in {serialization_time:.2f}s: {compressed_size_mb:.2f}MB")
 
             emit_progress('compression_done', 65, f'Compressed to {compressed_size_mb:.1f}MB (pickle)', {
                 'compressed_size_mb': round(compressed_size_mb, 2),
@@ -125,7 +119,6 @@ def upload_training_results(
             })
         else:
             # Non-compressed pickle
-            logger.info("🔍 DEBUG: Using pickle without compression")
             buffer = io.BytesIO()
             pickle.dump(results, buffer, protocol=pickle.HIGHEST_PROTOCOL)
             upload_data = buffer.getvalue()
@@ -155,7 +148,6 @@ def upload_training_results(
                     }
                 )
 
-                logger.info(f"✅ Training results uploaded successfully: {file_path}")
                 # Stage 4: Upload complete
                 emit_progress('upload_complete', 69, 'Upload complete, finalizing...', {
                     'file_size_mb': round(file_size_mb, 2),
@@ -285,21 +277,11 @@ def download_training_results(
             supabase = get_supabase_admin_client()
 
             # DEBUG LOG
-            logger.info(f"🔍 DEBUG: Downloading training results from: {file_path}")
-            start_time = time.time()
-
             response = supabase.storage.from_('training-results').download(file_path)
 
-            download_time = time.time() - start_time
-            logger.info(f"🔍 DEBUG: Download complete in {download_time:.2f}s, size: {len(response)/1024/1024:.2f}MB")
-
-            # CHANGE: Auto-detect format based on extension
+            # Auto-detect format based on extension
             is_pickle = file_path.endswith('.pkl.gz') or file_path.endswith('.pkl')
             is_compressed = file_path.endswith('.gz')
-
-            logger.info(f"🔍 DEBUG: Format detection - pickle: {is_pickle}, compressed: {is_compressed}")
-
-            start_deserialize = time.time()
 
             if is_pickle:
                 # NEW FORMAT: Pickle
@@ -311,7 +293,6 @@ def download_training_results(
                         results = pickle.load(gz_file)
                 else:
                     results = pickle.loads(response)
-                logger.info(f"🔍 DEBUG: Pickle deserialization complete in {time.time() - start_deserialize:.2f}s")
             else:
                 # OLD FORMAT: JSON (backward compatibility)
                 if decompress is None:
@@ -323,12 +304,10 @@ def download_training_results(
                             results = json.load(text_wrapper)
                 else:
                     results = json.loads(response.decode('utf-8'))
-                logger.info(f"🔍 DEBUG: JSON deserialization complete in {time.time() - start_deserialize:.2f}s")
 
             # Cache results before returning
             _set_cached_results(file_path, results)
 
-            logger.info(f"🔍 DEBUG: Total download + deserialize: {time.time() - start_time:.2f}s")
             return results
 
         except Exception as e:
@@ -361,7 +340,6 @@ def delete_training_results(file_path: str) -> bool:
         logger.debug(f"Deleting training results: {file_path}")
         response = supabase.storage.from_('training-results').remove([file_path])
 
-        logger.info(f"✅ Deleted training results: {file_path}")
         return True
 
     except Exception as e:

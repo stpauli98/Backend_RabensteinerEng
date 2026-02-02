@@ -21,6 +21,9 @@ from domains.training.config import MDL, T
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Debug flag - set to True to trace training flow
+DEBUG_MIDDLEMAN = True
+
 BACKEND_URL = "http://127.0.0.1:8080"
 
 def safe_float_to_int(value: Any, default: int) -> int:
@@ -334,6 +337,8 @@ class ModernMiddlemanRunner:
                         mdl_config.EPSILON = model_params['EPSILON']
             
             try:
+                if DEBUG_MIDDLEMAN:
+                    logger.info(f"[DEBUG_MIDDLEMAN] 🚀 Calling run_exact_training_pipeline...")
                 results = run_exact_training_pipeline(
                     i_dat=i_dat,
                     o_dat=o_dat,
@@ -347,6 +352,9 @@ class ModernMiddlemanRunner:
                     socketio=self.socketio,
                     session_id=session_id
                 )
+                if DEBUG_MIDDLEMAN:
+                    logger.info(f"[DEBUG_MIDDLEMAN] ✅ run_exact_training_pipeline RETURNED")
+                    logger.info(f"[DEBUG_MIDDLEMAN] 🔄 Preparing return dict for orchestrator...")
                 logger.info(f"Training pipeline completed for session {session_id}")
             except Exception as e:
                 error_msg = f"Training pipeline failed: {str(e)}"
@@ -360,48 +368,20 @@ class ModernMiddlemanRunner:
                 }
             
             
+            # NOTE: Violin plots are ALREADY created during dataset generation phase
+            # (in training_routes.py /generate-datasets endpoint via ViolinPlotService).
+            # Creating them again here is redundant and blocks training completion
+            # for large datasets (10M+ points can take 10+ minutes).
+            # We skip this and return empty violin_plots - the ones from dataset generation
+            # are already saved in the database.
             violin_plots = {}
-            try:
-                from domains.training.services.violin import create_violin_plots_from_viz_data
-                import numpy as np
-
-                viz_data = {
-                    'i_combined_array': results.get('scalers', {}).get('i_combined_array'),
-                    'o_combined_array': results.get('scalers', {}).get('o_combined_array')
-                }
-
-                # Fallback removed - i_combined_array and o_combined_array are always
-                # available in scalers dict (saved in exact.py). train_data/val_data
-                # no longer stored to save ~1GB memory and ~80% storage.
-                if viz_data['i_combined_array'] is None:
-                    logger.warning("i_combined_array not found in scalers - violin plots may be incomplete")
-                if viz_data['o_combined_array'] is None:
-                    logger.warning("o_combined_array not found in scalers - violin plots may be incomplete")
-
-                # Get feature names from results metadata (matches original training.py)
-                # These come from i_dat_inf.index and o_dat_inf.index
-                metadata = results.get('metadata', {})
-                input_feature_names = metadata.get('input_features', [])
-                output_feature_names = metadata.get('output_features', [])
-
-                if viz_data['i_combined_array'] is not None or viz_data['o_combined_array'] is not None:
-                    violin_plots = create_violin_plots_from_viz_data(
-                        session_id,
-                        viz_data,
-                        input_feature_names=input_feature_names,
-                        output_feature_names=output_feature_names
-                    )
-                else:
-                    logger.warning("No data available for creating violin plots")
-                    
-            except Exception as e:
-                logger.error(f"Error generating visualizations: {str(e)}")
-                import traceback as tb
-                logger.error(tb.format_exc())
+            logger.info("Skipping violin plot creation (already done during dataset generation)")
             
             evaluation_metrics = results.get('evaluation_metrics', {})
             metrics = results.get('metrics', evaluation_metrics)
             
+            if DEBUG_MIDDLEMAN:
+                logger.info(f"[DEBUG_MIDDLEMAN] 📦 RETURNING success=True to orchestrator")
             return {
                 'success': True,
                 'session_id': session_id,

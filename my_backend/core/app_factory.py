@@ -173,5 +173,21 @@ def create_app():
     scheduler.add_job(run_processed_files_cleanup, 'interval', hours=6, id='processed_files_cleanup_job')
     scheduler.add_job(run_local_processed_results_cleanup, 'interval', hours=6, id='local_processed_cleanup_job')
     scheduler.start()
-    
+
+    # Clean up orphaned training progress entries on startup
+    # This handles cases where backend crashed/restarted during training
+    def run_training_progress_cleanup():
+        """Clean up stale training_progress entries (orphaned from crashed trainings)"""
+        try:
+            from domains.training.services.training_tracker import cleanup_stale_training_progress
+            cleanup_stale_training_progress()
+        except Exception as e:
+            logger.error(f"Error in training progress cleanup: {str(e)}")
+
+    # Run immediately on startup
+    run_training_progress_cleanup()
+
+    # Also run periodically (every 5 minutes) to catch any missed cleanups
+    scheduler.add_job(run_training_progress_cleanup, 'interval', minutes=5, id='training_progress_cleanup_job')
+
     return app, socketio

@@ -542,8 +542,6 @@ def create_training_arrays_original(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.Data
         n_features_in = i_array_3D.shape[2] if len(i_array_3D.shape) > 2 else 0
         n_features_out = o_array_3D.shape[2] if len(o_array_3D.shape) > 2 else 0
 
-        logger.info(f"Transformer complete: {n_dat} samples, {n_features_in} input features, {n_features_out} output features")
-
         i_combined_array = np.vstack(i_arrays)
         o_combined_array = np.vstack(o_arrays)
     else:
@@ -591,11 +589,6 @@ def preprocess_and_interpolate_file(
     Returns:
         DataFrame indexed by UTC with interpolated values
     """
-    if debug:
-        transformer_debug_logger.debug(f"[PREPROCESS] Starting {key}")
-        transformer_debug_logger.debug(f"  Original shape: {df.shape}")
-        transformer_debug_logger.debug(f"  Original UTC range: {df.iloc[0, 0]} to {df.iloc[-1, 0]}")
-
     # Expand range to cover all possible windows (with buffer)
     th_strt = float(dat_inf.loc[key, "th_strt"])
     th_end = float(dat_inf.loc[key, "th_end"])
@@ -632,13 +625,6 @@ def preprocess_and_interpolate_file(
     # Keep only target frequency timestamps
     df_final = df_interpolated.reindex(full_index)
 
-    if debug:
-        nan_count = df_final.isna().sum().sum()
-        transformer_debug_logger.debug(f"  Interpolated shape: {df_final.shape}")
-        transformer_debug_logger.debug(f"  NaN count after interpolation: {nan_count}")
-        transformer_debug_logger.debug(f"  Final UTC range: {df_final.index.min()} to {df_final.index.max()}")
-        transformer_debug_logger.debug(f"[PREPROCESS] Completed {key}")
-
     return df_final
 
 
@@ -672,10 +658,6 @@ def extract_windows_vectorized(
     n_samples = len(utc_refs)
     result = np.full((n_samples, n_points), np.nan)
 
-    if debug:
-        transformer_debug_logger.debug(f"[EXTRACT] n_samples={n_samples}, n_points={n_points}")
-        transformer_debug_logger.debug(f"  th_strt={th_strt_hours}h, delt={delt_transf_minutes}min")
-
     # Pre-calculate time offsets for all points in a window
     point_offsets_minutes = np.arange(n_points) * delt_transf_minutes
 
@@ -699,17 +681,8 @@ def extract_windows_vectorized(
                     idx = interpolated_df.index.get_indexer([target_time], method='nearest')[0]
                     if idx >= 0 and idx < len(df_values):
                         result[i, j] = df_values[idx]
-            except Exception as e:
+            except Exception:
                 errors += 1
-                if debug and errors <= 5:
-                    transformer_debug_logger.warning(f"  Error at sample {i}, point {j}: {e}")
-
-    if debug:
-        nan_count = np.isnan(result).sum()
-        transformer_debug_logger.debug(f"  Extraction errors: {errors}")
-        transformer_debug_logger.debug(f"  NaN count in result: {nan_count}")
-        if not np.all(np.isnan(result)):
-            transformer_debug_logger.debug(f"  Value range: [{np.nanmin(result):.4f}, {np.nanmax(result):.4f}]")
 
     return result
 
@@ -745,55 +718,33 @@ def extract_windows_fully_vectorized(
 
     n_samples = len(utc_refs)
 
-    if debug:
-        transformer_debug_logger.debug(f"[EXTRACT_V2] Starting fully vectorized extraction")
-        transformer_debug_logger.debug(f"  n_samples={n_samples}, n_points={n_points}")
-        transformer_debug_logger.debug(f"  th_strt={th_strt_hours}h, delt={delt_transf_minutes}min")
-
     # =========================================================================
     # STEP A: Convert all reference timestamps to int64 nanoseconds
     # =========================================================================
-    step_a_start = time.time()
-
     # Convert utc_refs to numpy array of nanoseconds (int64)
     utc_refs_ns = np.array([pd.Timestamp(r).value for r in utc_refs], dtype=np.int64)
-
-    if debug:
-        transformer_debug_logger.debug(f"  [A] Refs to ns: {time.time()-step_a_start:.4f}s")
 
     # =========================================================================
     # STEP B: Calculate ALL window start timestamps (vectorized)
     # =========================================================================
-    step_b_start = time.time()
-
     # th_strt_hours to nanoseconds
     th_strt_ns = np.int64(th_strt_hours * 3600 * 1e9)
 
     # window_starts_ns: shape (n_samples,)
     window_starts_ns = utc_refs_ns + th_strt_ns
 
-    if debug:
-        transformer_debug_logger.debug(f"  [B] Window starts: {time.time()-step_b_start:.4f}s")
-
     # =========================================================================
     # STEP C: Calculate ALL target timestamps for ALL points (broadcasting)
     # =========================================================================
-    step_c_start = time.time()
-
     # Point offsets in nanoseconds: shape (n_points,)
     point_offsets_ns = (np.arange(n_points, dtype=np.float64) * delt_transf_minutes * 60 * 1e9).astype(np.int64)
 
     # Broadcasting: (n_samples, 1) + (1, n_points) = (n_samples, n_points)
     all_target_times_ns = window_starts_ns[:, np.newaxis] + point_offsets_ns[np.newaxis, :]
 
-    if debug:
-        transformer_debug_logger.debug(f"  [C] All targets ({all_target_times_ns.shape}): {time.time()-step_c_start:.4f}s")
-
     # =========================================================================
     # STEP D: Prepare interpolated data as numpy arrays
     # =========================================================================
-    step_d_start = time.time()
-
     # Get index as int64 nanoseconds
     df_index_ns = interpolated_df.index.astype(np.int64).values
 
@@ -803,30 +754,19 @@ def extract_windows_fully_vectorized(
     else:
         df_values = interpolated_df.values.flatten().astype(np.float64)
 
-    n_data_points = len(df_index_ns)
-
-    if debug:
-        transformer_debug_logger.debug(f"  [D] Data prep (n={n_data_points}): {time.time()-step_d_start:.4f}s")
-        transformer_debug_logger.debug(f"      Index range: {pd.Timestamp(df_index_ns[0])} to {pd.Timestamp(df_index_ns[-1])}")
-
     # =========================================================================
     # STEP E: Find ALL indices using searchsorted (single vectorized call!)
     # =========================================================================
-    step_e_start = time.time()
-
     # Flatten for searchsorted
     flat_targets = all_target_times_ns.ravel()  # shape: (n_samples * n_points,)
 
     # searchsorted returns insertion points (index where target would be inserted)
     insert_indices = np.searchsorted(df_index_ns, flat_targets, side='left')
 
-    if debug:
-        transformer_debug_logger.debug(f"  [E] searchsorted: {time.time()-step_e_start:.4f}s")
-
     # =========================================================================
     # STEP F: Implement NEAREST-NEIGHBOR logic (identical to pandas)
     # =========================================================================
-    step_f_start = time.time()
+    n_data_points = len(df_index_ns)
 
     # Clip indices to valid range
     left_indices = np.clip(insert_indices - 1, 0, n_data_points - 1)
@@ -844,37 +784,14 @@ def extract_windows_fully_vectorized(
     # This matches pandas get_indexer(method='nearest') behavior
     nearest_indices = np.where(left_dist <= right_dist, left_indices, right_indices)
 
-    if debug:
-        transformer_debug_logger.debug(f"  [F] Nearest logic: {time.time()-step_f_start:.4f}s")
-
     # =========================================================================
     # STEP G: Extract values and reshape
     # =========================================================================
-    step_g_start = time.time()
-
     # Get all values at once
     flat_result = df_values[nearest_indices]
 
     # Reshape to (n_samples, n_points)
     result = flat_result.reshape(n_samples, n_points)
-
-    if debug:
-        transformer_debug_logger.debug(f"  [G] Extract & reshape: {time.time()-step_g_start:.4f}s")
-
-    # =========================================================================
-    # STEP H: Final stats and validation
-    # =========================================================================
-    total_time = time.time() - step_start
-
-    nan_count = np.isnan(result).sum()
-
-    if debug:
-        transformer_debug_logger.debug(f"  [EXTRACT_V2] COMPLETED in {total_time:.4f}s")
-        transformer_debug_logger.debug(f"    Result shape: {result.shape}")
-        transformer_debug_logger.debug(f"    NaN count: {nan_count}")
-        if not np.all(np.isnan(result)):
-            transformer_debug_logger.debug(f"    Value range: [{np.nanmin(result):.4f}, {np.nanmax(result):.4f}]")
-        transformer_debug_logger.debug(f"    Speedup vs old: ~{10*60/total_time:.0f}x (estimated)")
 
     return result
 
@@ -946,14 +863,8 @@ def calculate_time_components_vectorized(
     components = {}
     n_samples = len(utc_refs)
 
-    if debug:
-        transformer_debug_logger.debug(f"[TIME_COMPONENTS] n_samples={n_samples}, n_points={n_points}")
-
     # Yearly component
     if T.Y.IMP:
-        if debug:
-            transformer_debug_logger.debug(f"  Adding Y (yearly) - SPEC={T.Y.SPEC}, LT={T.Y.LT}")
-
         y_sin = np.zeros((n_samples, n_points))
         y_cos = np.zeros((n_samples, n_points))
 
@@ -996,9 +907,6 @@ def calculate_time_components_vectorized(
 
     # Monthly component
     if T.M.IMP:
-        if debug:
-            transformer_debug_logger.debug(f"  Adding M (monthly) - SPEC={T.M.SPEC}, LT={T.M.LT}")
-
         m_sin = np.zeros((n_samples, n_points))
         m_cos = np.zeros((n_samples, n_points))
 
@@ -1033,9 +941,6 @@ def calculate_time_components_vectorized(
 
     # Weekly component
     if T.W.IMP:
-        if debug:
-            transformer_debug_logger.debug(f"  Adding W (weekly) - SPEC={T.W.SPEC}, LT={T.W.LT}")
-
         w_sin = np.zeros((n_samples, n_points))
         w_cos = np.zeros((n_samples, n_points))
 
@@ -1070,9 +975,6 @@ def calculate_time_components_vectorized(
 
     # Daily component
     if T.D.IMP:
-        if debug:
-            transformer_debug_logger.debug(f"  Adding D (daily) - SPEC={T.D.SPEC}, LT={T.D.LT}")
-
         d_sin = np.zeros((n_samples, n_points))
         d_cos = np.zeros((n_samples, n_points))
 
@@ -1107,9 +1009,6 @@ def calculate_time_components_vectorized(
 
     # Holiday component
     if T.H.IMP:
-        if debug:
-            transformer_debug_logger.debug(f"  Adding H (holiday) - SPEC={T.H.SPEC}, LT={T.H.LT}, CNTRY={T.H.CNTRY}")
-
         h_array = np.zeros((n_samples, n_points))
         hol_d = {d.date() for d in HOL.get(T.H.CNTRY, [])} if T.H.CNTRY else set()
 
@@ -1136,9 +1035,6 @@ def calculate_time_components_vectorized(
                 h_array[i, :] = h_val
 
         components['H'] = h_array
-
-    if debug:
-        transformer_debug_logger.debug(f"  Total time components: {len(components)}")
 
     return components, len(components)
 
@@ -1170,18 +1066,10 @@ def calculate_time_components_fully_vectorized(
     components = {}
     n_samples = len(utc_refs)
 
-    if debug:
-        transformer_debug_logger.debug(f"[TIME_COMP_V2] Starting fully vectorized calculation")
-        transformer_debug_logger.debug(f"  n_samples={n_samples}, n_points={n_points}")
-
     # =========================================================================
     # STEP A: Convert all utc_refs to nanoseconds (ONCE for all components)
     # =========================================================================
-    step_a_start = time_module.time()
     utc_refs_ns = np.array([pd.Timestamp(r).value for r in utc_refs], dtype=np.int64)
-
-    if debug:
-        transformer_debug_logger.debug(f"  [A] Refs to ns: {time_module.time()-step_a_start:.4f}s")
 
     # Pre-calculate fractions for linspace (same for all components)
     fractions = np.linspace(0, 1, n_points, dtype=np.float64)  # shape: (n_points,)
@@ -1244,10 +1132,6 @@ def calculate_time_components_fully_vectorized(
     # YEARLY COMPONENT (Y)
     # =========================================================================
     if T.Y.IMP:
-        step_y_start = time_module.time()
-
-        if debug:
-            transformer_debug_logger.debug(f"  [Y] Starting yearly component (SPEC={T.Y.SPEC}, LT={T.Y.LT})")
 
         if T.Y.SPEC == "Zeithorizont":
             all_times_ns = generate_all_window_times_ns(T.Y.TH_STRT, T.Y.TH_END)
@@ -1289,17 +1173,10 @@ def calculate_time_components_fully_vectorized(
         components['Y_sin'] = y_sin
         components['Y_cos'] = y_cos
 
-        if debug:
-            transformer_debug_logger.debug(f"  [Y] Completed in {time_module.time()-step_y_start:.4f}s")
-
     # =========================================================================
     # MONTHLY COMPONENT (M)
     # =========================================================================
     if T.M.IMP:
-        step_m_start = time_module.time()
-
-        if debug:
-            transformer_debug_logger.debug(f"  [M] Starting monthly component (SPEC={T.M.SPEC}, LT={T.M.LT})")
 
         if T.M.SPEC == "Zeithorizont":
             all_times_ns = generate_all_window_times_ns(T.M.TH_STRT, T.M.TH_END)
@@ -1330,17 +1207,10 @@ def calculate_time_components_fully_vectorized(
         components['M_sin'] = m_sin
         components['M_cos'] = m_cos
 
-        if debug:
-            transformer_debug_logger.debug(f"  [M] Completed in {time_module.time()-step_m_start:.4f}s")
-
     # =========================================================================
     # WEEKLY COMPONENT (W)
     # =========================================================================
     if T.W.IMP:
-        step_w_start = time_module.time()
-
-        if debug:
-            transformer_debug_logger.debug(f"  [W] Starting weekly component (SPEC={T.W.SPEC}, LT={T.W.LT})")
 
         if T.W.SPEC == "Zeithorizont":
             all_times_ns = generate_all_window_times_ns(T.W.TH_STRT, T.W.TH_END)
@@ -1370,17 +1240,10 @@ def calculate_time_components_fully_vectorized(
         components['W_sin'] = w_sin
         components['W_cos'] = w_cos
 
-        if debug:
-            transformer_debug_logger.debug(f"  [W] Completed in {time_module.time()-step_w_start:.4f}s")
-
     # =========================================================================
     # DAILY COMPONENT (D)
     # =========================================================================
     if T.D.IMP:
-        step_d_start = time_module.time()
-
-        if debug:
-            transformer_debug_logger.debug(f"  [D] Starting daily component (SPEC={T.D.SPEC}, LT={T.D.LT})")
 
         if T.D.SPEC == "Zeithorizont":
             all_times_ns = generate_all_window_times_ns(T.D.TH_STRT, T.D.TH_END)
@@ -1410,18 +1273,10 @@ def calculate_time_components_fully_vectorized(
         components['D_sin'] = d_sin
         components['D_cos'] = d_cos
 
-        if debug:
-            transformer_debug_logger.debug(f"  [D] Completed in {time_module.time()-step_d_start:.4f}s")
-
     # =========================================================================
     # HOLIDAY COMPONENT (H)
     # =========================================================================
     if T.H.IMP:
-        step_h_start = time_module.time()
-
-        if debug:
-            transformer_debug_logger.debug(f"  [H] Starting holiday component (SPEC={T.H.SPEC}, LT={T.H.LT}, CNTRY={T.H.CNTRY})")
-
         hol_dates = {d.date() for d in HOL.get(T.H.CNTRY, [])} if T.H.CNTRY else set()
 
         if T.H.SPEC == "Zeithorizont":
@@ -1449,21 +1304,6 @@ def calculate_time_components_fully_vectorized(
             h_array = np.tile(h_vals[:, np.newaxis], (1, n_points))
 
         components['H'] = h_array
-
-        if debug:
-            transformer_debug_logger.debug(f"  [H] Completed in {time_module.time()-step_h_start:.4f}s")
-
-    # =========================================================================
-    # FINAL SUMMARY
-    # =========================================================================
-    total_time = time_module.time() - func_start
-
-    if debug:
-        transformer_debug_logger.debug(f"  [TIME_COMP_V2] COMPLETED in {total_time:.4f}s")
-        transformer_debug_logger.debug(f"    Total components: {len(components)}")
-        for key, arr in components.items():
-            transformer_debug_logger.debug(f"    {key}: shape={arr.shape}, range=[{arr.min():.4f}, {arr.max():.4f}]")
-        transformer_debug_logger.debug(f"    Speedup vs old: ~{300/max(total_time, 0.001):.0f}x (estimated)")
 
     return components, len(components)
 
@@ -1550,14 +1390,6 @@ def create_training_arrays_optimized(
     start_time = time.time()
     mts = mts_config if mts_config is not None else MTS()
 
-    if debug:
-        transformer_debug_logger.info("=" * 60)
-        transformer_debug_logger.info("[OPTIMIZED] Starting optimized transformer")
-        transformer_debug_logger.info(f"  UTC range: {utc_strt} to {utc_end}")
-        transformer_debug_logger.info(f"  MTS config: DELT={mts.DELT}, OFST={mts.OFST}, I_N={mts.I_N}, O_N={mts.O_N}")
-        transformer_debug_logger.info(f"  Input files: {list(i_dat.keys())}")
-        transformer_debug_logger.info(f"  Output files: {list(o_dat.keys())}")
-
     # STEP 1: Calculate reference timestamps (same as original)
     step1_start = time.time()
     utc_ref_start = utc_strt.replace(minute=0, second=0, microsecond=0) \
@@ -1569,12 +1401,6 @@ def create_training_arrays_optimized(
 
     utc_refs = pd.date_range(start=utc_ref_start, end=utc_end, freq=f'{mts.DELT}min').tolist()
     n_dat = len(utc_refs)
-
-    if debug:
-        transformer_debug_logger.info(f"[STEP 1] Reference timestamps: {time.time()-step1_start:.2f}s")
-        transformer_debug_logger.info(f"  n_dat (samples): {n_dat}")
-        transformer_debug_logger.info(f"  First ref: {utc_refs[0] if utc_refs else 'N/A'}")
-        transformer_debug_logger.info(f"  Last ref: {utc_refs[-1] if utc_refs else 'N/A'}")
 
     if n_dat == 0:
         logger.warning("No valid reference timestamps - returning empty arrays")
@@ -1604,10 +1430,6 @@ def create_training_arrays_optimized(
                 df, key, i_dat_inf, delt, utc_strt, utc_end, debug
             )
 
-    if debug:
-        transformer_debug_logger.info(f"[STEP 2] Input pre-interpolation: {time.time()-step2_start:.2f}s")
-        transformer_debug_logger.info(f"  Interpolated {len(interpolated_inputs)} input files")
-
     # Emit progress
     if socketio and session_id:
         try:
@@ -1630,10 +1452,6 @@ def create_training_arrays_optimized(
             interpolated_outputs[key] = preprocess_and_interpolate_file(
                 df, key, o_dat_inf, delt, utc_strt, utc_end, debug
             )
-
-    if debug:
-        transformer_debug_logger.info(f"[STEP 3] Output pre-interpolation: {time.time()-step3_start:.2f}s")
-        transformer_debug_logger.info(f"  Interpolated {len(interpolated_outputs)} output files")
 
     # Emit progress
     if socketio and session_id:
@@ -1669,11 +1487,6 @@ def create_training_arrays_optimized(
 
         i_arrays_dict[key] = windows
 
-    if debug:
-        transformer_debug_logger.info(f"[STEP 4] Input window extraction: {time.time()-step4_start:.2f}s")
-        for key, arr in i_arrays_dict.items():
-            transformer_debug_logger.info(f"  {key}: shape={arr.shape}")
-
     # Emit progress
     if socketio and session_id:
         try:
@@ -1690,10 +1503,6 @@ def create_training_arrays_optimized(
     # STEP 5: Calculate time components
     step5_start = time.time()
     time_components, n_time_comp = calculate_time_components_fully_vectorized(utc_refs, mts.I_N, mts, debug)
-
-    if debug:
-        transformer_debug_logger.info(f"[STEP 5] Time components: {time.time()-step5_start:.2f}s")
-        transformer_debug_logger.info(f"  Added {len(time_components)} time component arrays")
 
     # Emit progress
     if socketio and session_id:
@@ -1725,11 +1534,6 @@ def create_training_arrays_optimized(
             windows = extract_windows_fully_vectorized(interp_df, utc_refs, th_strt, th_end, mts.O_N, delt, debug)
 
         o_arrays_dict[key] = windows
-
-    if debug:
-        transformer_debug_logger.info(f"[STEP 6] Output window extraction: {time.time()-step6_start:.2f}s")
-        for key, arr in o_arrays_dict.items():
-            transformer_debug_logger.info(f"  {key}: shape={arr.shape}")
 
     # Emit progress
     if socketio and session_id:
@@ -1767,12 +1571,6 @@ def create_training_arrays_optimized(
     n_valid = np.sum(valid_mask)
     n_invalid = n_dat - n_valid
 
-    if debug:
-        transformer_debug_logger.info(f"[STEP 7] Stacking and filtering: {time.time()-step7_start:.2f}s")
-        transformer_debug_logger.info(f"  Total samples: {n_dat}")
-        transformer_debug_logger.info(f"  Valid samples: {n_valid}")
-        transformer_debug_logger.info(f"  Invalid (NaN) samples: {n_invalid}")
-
     # Filter arrays
     i_array_3D = i_array_3D[valid_mask]
     o_array_3D = o_array_3D[valid_mask]
@@ -1783,18 +1581,6 @@ def create_training_arrays_optimized(
     o_combined_array = o_array_3D.reshape(-1, o_array_3D.shape[-1]) if o_array_3D.size > 0 else np.array([])
 
     total_time = time.time() - start_time
-
-    if debug:
-        transformer_debug_logger.info("=" * 60)
-        transformer_debug_logger.info(f"[OPTIMIZED] COMPLETED in {total_time:.2f}s")
-        transformer_debug_logger.info(f"  i_array_3D shape: {i_array_3D.shape}")
-        transformer_debug_logger.info(f"  o_array_3D shape: {o_array_3D.shape}")
-        transformer_debug_logger.info(f"  i_combined_array shape: {i_combined_array.shape}")
-        transformer_debug_logger.info(f"  o_combined_array shape: {o_combined_array.shape}")
-        transformer_debug_logger.info(f"  utc_ref_log length: {len(utc_ref_log)}")
-        transformer_debug_logger.info("=" * 60)
-
-    logger.info(f"Optimized transformer complete: {len(utc_ref_log)} samples in {total_time:.2f}s")
 
     # Final progress emit
     if socketio and session_id:
@@ -1838,43 +1624,21 @@ def validate_transformer_results(
     checks.append(('o_array_3D shape', o_opt.shape == o_orig.shape))
     checks.append(('n_dat (refs)', len(refs_opt) == len(refs_orig)))
 
-    if debug:
-        transformer_debug_logger.info("[VALIDATION] Comparing optimized vs original results")
-        transformer_debug_logger.info(f"  Optimized shapes: i={i_opt.shape}, o={o_opt.shape}, refs={len(refs_opt)}")
-        transformer_debug_logger.info(f"  Original shapes:  i={i_orig.shape}, o={o_orig.shape}, refs={len(refs_orig)}")
-
     # Value checks (only if shapes match)
     if i_opt.shape == i_orig.shape and i_opt.size > 0:
         max_diff_i = np.max(np.abs(i_opt - i_orig))
         checks.append(('i_array values', max_diff_i < 1e-6))
-        if debug:
-            transformer_debug_logger.info(f"  i_array max difference: {max_diff_i}")
 
     if o_opt.shape == o_orig.shape and o_opt.size > 0:
         max_diff_o = np.max(np.abs(o_opt - o_orig))
         checks.append(('o_array values', max_diff_o < 1e-6))
-        if debug:
-            transformer_debug_logger.info(f"  o_array max difference: {max_diff_o}")
 
     # Timestamp checks
     if len(refs_opt) == len(refs_orig) and len(refs_opt) > 0:
         refs_match = all(r_opt == r_orig for r_opt, r_orig in zip(refs_opt, refs_orig))
         checks.append(('timestamps match', refs_match))
-        if debug and not refs_match:
-            # Find first mismatch
-            for i, (r_opt, r_orig) in enumerate(zip(refs_opt, refs_orig)):
-                if r_opt != r_orig:
-                    transformer_debug_logger.warning(f"  First timestamp mismatch at index {i}: {r_opt} vs {r_orig}")
-                    break
 
     all_passed = all(c[1] for c in checks)
-
-    if debug:
-        transformer_debug_logger.info("[VALIDATION] Results:")
-        for name, passed in checks:
-            status = '✅' if passed else '❌'
-            transformer_debug_logger.info(f"  {status} {name}")
-        transformer_debug_logger.info(f"[VALIDATION] {'✅ PASSED' if all_passed else '❌ FAILED'}")
 
     return all_passed
 
@@ -1909,23 +1673,13 @@ def create_training_arrays(
     """
     debug = TRANSFORMER_DEBUG
 
-    if debug:
-        transformer_debug_logger.info(f"[WRAPPER] USE_OPTIMIZED_TRANSFORMER={USE_OPTIMIZED_TRANSFORMER}")
-        transformer_debug_logger.info(f"[WRAPPER] VALIDATE_TRANSFORMER={VALIDATE_TRANSFORMER}")
-
     if USE_OPTIMIZED_TRANSFORMER:
-        if debug:
-            transformer_debug_logger.info("[WRAPPER] Using OPTIMIZED transformer")
-
         result = create_training_arrays_optimized(
             i_dat, o_dat, i_dat_inf, o_dat_inf,
             utc_strt, utc_end, socketio, session_id, mts_config, debug
         )
 
         if VALIDATE_TRANSFORMER:
-            if debug:
-                transformer_debug_logger.info("[WRAPPER] Running validation against original...")
-
             # Run original (without socketio to avoid duplicate progress)
             orig_result = create_training_arrays_original(
                 i_dat, o_dat, i_dat_inf, o_dat_inf,
@@ -1939,9 +1693,6 @@ def create_training_arrays(
 
         return result
     else:
-        if debug:
-            transformer_debug_logger.info("[WRAPPER] Using ORIGINAL transformer")
-
         return create_training_arrays_original(
             i_dat, o_dat, i_dat_inf, o_dat_inf,
             utc_strt, utc_end, socketio, session_id, mts_config

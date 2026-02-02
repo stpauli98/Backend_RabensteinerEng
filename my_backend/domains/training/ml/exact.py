@@ -32,6 +32,9 @@ from domains.training.config import MDL, MTS, T, HOL
 
 logger = logging.getLogger(__name__)
 
+# Debug flag - set to True to trace training pipeline phases
+DEBUG_EXACT_PIPELINE = True
+
 
 def _build_input_feature_names(i_dat_inf, i_dat) -> list:
     """
@@ -413,15 +416,35 @@ def run_exact_training_pipeline(
         mdl_config = MDL()
     
     # Create SocketIO callback for real-time progress updates
+    # Also create TrainingProgressTracker for database persistence (page refresh recovery)
     socketio_callback = None
+    progress_tracker = None
     if socketio is not None and session_id is not None:
         try:
             from domains.training.services.socketio import SocketIOProgressCallback
+            from domains.training.services.training_tracker import TrainingProgressTracker
+            from shared.database.operations import create_or_get_session_uuid
+
+            # Get UUID for database operations
+            uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
+
+            # Create progress tracker for database persistence
+            progress_tracker = TrainingProgressTracker(
+                socketio=socketio,
+                session_id=session_id,
+                uuid_session_id=uuid_session_id,
+                total_epochs=mdl_config.EP,
+                model_name=mdl_config.MODE
+            )
+            logger.info(f"   [TRAINING_TRACKER] Created for session {session_id}")
+
+            # Create SocketIO callback with progress tracker
             socketio_callback = SocketIOProgressCallback(
                 socketio=socketio,
                 session_id=session_id,
                 total_epochs=mdl_config.EP,
-                model_name=mdl_config.MODE
+                model_name=mdl_config.MODE,
+                progress_tracker=progress_tracker
             )
             logger.info(f"   SocketIO callback created for session {session_id}")
         except Exception as e:
@@ -452,11 +475,17 @@ def run_exact_training_pipeline(
     
     else:
         raise ValueError(f"Unknown model mode: {mdl_config.MODE}")
-    
+
+    if DEBUG_EXACT_PIPELINE:
+        logger.info(f"[DEBUG_EXACT] 🏁 MODEL TRAINING RETURNED - model type: {mdl_config.MODE}")
+        logger.info(f"[DEBUG_EXACT] 🔄 Starting evaluation phase...")
+
     evaluation_metrics = {}
-    
+
     try:
         if mdl is not None:
+            if DEBUG_EXACT_PIPELINE:
+                logger.info(f"[DEBUG_EXACT] 📊 Running model.predict on test set ({tst_x.shape[0]} samples)...")
             if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
                 test_predictions = mdl.predict(tst_x, verbose=0)
             elif mdl_config.MODE == "SVR_dir":
@@ -640,6 +669,10 @@ def run_exact_training_pipeline(
     del val_x, val_y, val_x_orig, val_y_orig
     import gc
     gc.collect()
+
+    if DEBUG_EXACT_PIPELINE:
+        logger.info(f"[DEBUG_EXACT] ✅ run_exact_training_pipeline RETURNING to middleman")
+        logger.info(f"[DEBUG_EXACT] 🔄 Control will now go back to orchestrator for post-training phases...")
 
     return {
         'trained_model': mdl,

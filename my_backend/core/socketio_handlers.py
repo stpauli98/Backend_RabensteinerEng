@@ -10,19 +10,11 @@ def register_socketio_handlers(socketio):
     
     @socketio.on('connect')
     def handle_connect():
-        try:
-            logger.info("Client connected")
-        except Exception as e:
-            logger.error(f"Error in connect handler: {str(e)}")
+        pass
 
     @socketio.on('disconnect')
     def handle_disconnect(*args, **kwargs):
-        try:
-            logger.info("Client disconnected")
-            return True
-        except Exception as e:
-            logger.error(f"Error in disconnect handler: {str(e)}")
-            return False
+        return True
 
     @socketio.on('join_upload_room')
     def handle_join_upload_room(data):

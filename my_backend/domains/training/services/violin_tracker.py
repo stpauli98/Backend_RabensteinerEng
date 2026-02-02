@@ -1,6 +1,7 @@
 """
 Progress tracker for violin plot generation.
 Emits WebSocket events to existing frontend progress UI.
+Also persists status to database for page refresh recovery.
 
 Created: 2025-12-08
 Part of violin plot generation progress tracking implementation.
@@ -8,6 +9,7 @@ Part of violin plot generation progress tracking implementation.
 import logging
 import time
 from typing import Optional
+from shared.database.operations import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,23 +27,27 @@ class ViolinProgressTracker:
     - Finalization (95-100%): Complete
     """
 
-    def __init__(self, socketio, session_id: str):
+    def __init__(self, socketio, session_id: str, uuid_session_id: str = None):
         """
         Initialize progress tracker.
 
         Args:
             socketio: Flask-SocketIO instance for emitting events
             session_id: Session identifier for room targeting
+            uuid_session_id: UUID version of session_id for database operations
         """
         self.socketio = socketio
         self.session_id = session_id
+        self.uuid_session_id = uuid_session_id
         self.room = f"training_{session_id}"  # Uses existing room format
         self.current_progress = 0
         self.start_time = None  # For ETA calculation
+        self._last_db_update = 0  # Throttle DB updates
 
     def emit(self, progress: int, step: str, status: str = 'processing'):
         """
         Emit progress update to frontend via existing event.
+        Also persists to database for page refresh recovery.
 
         Args:
             progress: Progress percentage (0-100)
@@ -60,6 +66,7 @@ class ViolinProgressTracker:
             elapsed = time.time() - self.start_time
             eta_seconds = int((elapsed / progress) * (100 - progress))
 
+        # Emit via Socket.IO
         if self.socketio:
             try:
                 self.socketio.emit('dataset_status_update', {
@@ -70,9 +77,57 @@ class ViolinProgressTracker:
                     'message': step,
                     'eta_seconds': eta_seconds
                 }, room=self.room)
-                logger.debug(f"Progress emit: {progress}% - {step} (ETA: {eta_seconds}s)")
             except Exception as e:
                 logger.error(f"Failed to emit progress: {str(e)}")
+
+        # Persist to database (throttled to avoid too many writes)
+        current_time = time.time()
+        should_update_db = (
+            current_time - self._last_db_update > 5 or  # At least 5 seconds between updates
+            progress == 0 or  # Always update on start
+            progress >= 100 or  # Always update on complete
+            status in ['completed', 'error']  # Always update on status change
+        )
+
+        if should_update_db and self.uuid_session_id:
+            self._persist_to_database(progress, step, status)
+
+    def _persist_to_database(self, progress: int, step: str, status: str):
+        """
+        Persist dataset generation progress to training_progress table.
+        This allows the frontend to restore state on page refresh.
+        """
+        try:
+            supabase = get_supabase_client(use_service_role=True)
+
+            # Map status to database status
+            db_status = 'running' if status == 'processing' else status
+
+            data = {
+                'session_id': str(self.uuid_session_id),
+                'status': db_status,
+                'overall_progress': progress,
+                'current_step': f'Dataset generation: {step}',
+                'total_steps': 7,
+                'completed_steps': int(progress / 14),  # Approximate
+                'updated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            }
+
+            # Upsert to training_progress table (specify conflict column for proper upsert)
+            supabase.table('training_progress').upsert(data, on_conflict='session_id').execute()
+            self._last_db_update = time.time()
+
+        except Exception as e:
+            logger.error(f"Failed to persist dataset progress to DB: {str(e)}")
+
+    def cleanup_database_entry(self):
+        """Remove the progress entry when dataset generation completes."""
+        if self.uuid_session_id:
+            try:
+                supabase = get_supabase_client(use_service_role=True)
+                supabase.table('training_progress').delete().eq('session_id', str(self.uuid_session_id)).execute()
+            except Exception as e:
+                logger.error(f"Failed to cleanup dataset progress entry: {str(e)}")
 
     # =========================================================================
     # Phase 1: Download (0-25%)
@@ -171,8 +226,10 @@ class ViolinProgressTracker:
         self.emit(97, "violin.progress.savingToDatabase")
 
     def complete(self):
-        """Emit completion status."""
+        """Emit completion status and cleanup database entry."""
         self.emit(100, "violin.progress.complete", "completed")
+        # Cleanup the progress entry so it doesn't interfere with training status
+        self.cleanup_database_entry()
 
     def error(self, message: str):
         """

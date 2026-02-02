@@ -10,6 +10,7 @@ Contains 5 endpoints for ML model training:
 """
 
 import threading
+import numpy as np
 from flask import Blueprint, current_app
 
 from .common import (
@@ -28,6 +29,23 @@ from domains.training.services.orchestrator import run_model_training_async
 
 bp = Blueprint('training_training', __name__)
 logger = get_logger(__name__)
+
+
+def convert_numpy_to_native(obj):
+    """Recursively convert NumPy arrays and types to native Python types for JSON serialization."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_numpy_to_native(item) for item in obj]
+    return obj
 
 
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
@@ -283,11 +301,11 @@ def get_training_results(session_id):
                         file_path=record['results_file_path'],
                         decompress=record.get('compressed', False)
                     )
-                    record['results'] = full_results
+                    record['results'] = convert_numpy_to_native(full_results)
 
                 except Exception as download_error:
                     logger.error(f"Failed to download results from storage: {download_error}")
-                    record['results'] = record.get('results_metadata', {})
+                    record['results'] = convert_numpy_to_native(record.get('results_metadata', {}))
             else:
                 legacy_response = supabase.table('training_results')\
                     .select('results')\
@@ -295,9 +313,9 @@ def get_training_results(session_id):
                     .single()\
                     .execute()
                 if legacy_response.data and legacy_response.data.get('results'):
-                    record['results'] = legacy_response.data['results']
+                    record['results'] = convert_numpy_to_native(legacy_response.data['results'])
                 else:
-                    record['results'] = record.get('results_metadata', {})
+                    record['results'] = convert_numpy_to_native(record.get('results_metadata', {}))
 
             return jsonify({
                 'success': True,
