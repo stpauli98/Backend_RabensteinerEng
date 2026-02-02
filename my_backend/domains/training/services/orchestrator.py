@@ -308,7 +308,13 @@ def save_training_results(
         }
 
         supabase.table('training_results').insert(training_data).execute()
-        logger.info(f"✅ Training metadata saved to database for session {uuid_session_id}")
+
+        # Cleanup old results (keep only latest) - AFTER successful insert
+        try:
+            from utils.training_storage import cleanup_old_training_results
+            cleanup_old_training_results(uuid_session_id, keep_latest=1)
+        except Exception as cleanup_error:
+            logger.warning(f"Cleanup of old results failed (non-critical): {cleanup_error}")
 
         # Progress: Database save complete
         emit_post_training_progress(socketio_instance, session_id, 'database_saved', 75, 'Metadata saved to database')

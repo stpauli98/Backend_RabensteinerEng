@@ -409,6 +409,79 @@ def get_storage_url(file_path: str, expires_in: int = 3600) -> str:
         raise
 
 
+def cleanup_old_training_results(
+    session_id: str,
+    keep_latest: int = 1,
+    supabase_client=None
+) -> Dict[str, Any]:
+    """
+    Clean up old training results for a session, keeping only the latest N.
+    Deletes both database records AND storage files.
+
+    Args:
+        session_id: UUID session ID
+        keep_latest: Number of latest results to keep (default 1)
+        supabase_client: Optional Supabase client
+
+    Returns:
+        dict: {
+            'deleted_db_records': int,
+            'deleted_storage_files': int,
+            'freed_bytes': int,
+            'errors': list
+        }
+    """
+    if supabase_client is None:
+        supabase_client = get_supabase_admin_client()
+
+    result = {
+        'deleted_db_records': 0,
+        'deleted_storage_files': 0,
+        'freed_bytes': 0,
+        'errors': []
+    }
+
+    try:
+        response = supabase_client.table('training_results') \
+            .select('id, results_file_path, file_size_bytes, created_at') \
+            .eq('session_id', session_id) \
+            .order('created_at.desc') \
+            .execute()
+
+        if not response.data or len(response.data) <= keep_latest:
+            return result
+
+        records_to_delete = response.data[keep_latest:]
+
+        for record in records_to_delete:
+            if record.get('results_file_path'):
+                try:
+                    delete_training_results(record['results_file_path'])
+                    result['deleted_storage_files'] += 1
+                    result['freed_bytes'] += record.get('file_size_bytes', 0) or 0
+                except Exception as storage_error:
+                    result['errors'].append(f"Storage delete failed: {storage_error}")
+
+            try:
+                supabase_client.table('training_results') \
+                    .delete() \
+                    .eq('id', record['id']) \
+                    .execute()
+                result['deleted_db_records'] += 1
+            except Exception as db_error:
+                result['errors'].append(f"DB delete failed: {db_error}")
+
+        if result['deleted_storage_files'] > 0:
+            freed_mb = result['freed_bytes'] / 1024 / 1024
+            logger.info(f"Cleanup: deleted {result['deleted_storage_files']} old results, freed {freed_mb:.1f} MB")
+
+    except Exception as e:
+        logger.error(f"Cleanup failed for session {session_id}: {e}")
+        result['errors'].append(str(e))
+
+    return result
+
+
 def fetch_training_results_with_storage(
     session_id: str,
     supabase: Optional[Any] = None,

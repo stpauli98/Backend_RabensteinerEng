@@ -421,12 +421,36 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
     deleted_files = 0
     deleted_db_records = 0
     storage_files_deleted = 0
+    training_results_deleted = 0
+    trained_models_deleted = 0
 
     upload_dir = os.path.join(UPLOAD_BASE_DIR, session_id)
     if os.path.exists(upload_dir):
         shutil.rmtree(upload_dir)
         deleted_files = 1
-        logger.info(f"Deleted local directory for session {session_id}")
+
+    # Delete training results from storage (training-results bucket)
+    try:
+        from utils.training_storage import list_session_results, delete_training_results
+        results_files = list_session_results(str(uuid_session_id))
+
+        for result_file in results_files:
+            file_path = f"{uuid_session_id}/{result_file['name']}"
+            try:
+                delete_training_results(file_path)
+                training_results_deleted += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete training result {file_path}: {e}")
+    except Exception as e:
+        logger.warning(f"Could not cleanup training results: {e}")
+
+    # Delete trained models from storage (trained-models bucket)
+    try:
+        from utils.model_storage import delete_session_models
+        models_result = delete_session_models(str(uuid_session_id))
+        trained_models_deleted = models_result.get('deleted_count', 0)
+    except Exception as e:
+        logger.warning(f"Could not cleanup trained models: {e}")
 
     # Get all files for this session BEFORE deleting DB records
     try:
@@ -485,6 +509,8 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
         'deleted_files': deleted_files,
         'deleted_db_records': deleted_db_records,
         'storage_files_deleted': storage_files_deleted,
+        'training_results_deleted': training_results_deleted,
+        'trained_models_deleted': trained_models_deleted,
         'message': f"Session {session_id} deleted successfully"
     }
 

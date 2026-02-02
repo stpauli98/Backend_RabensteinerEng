@@ -172,16 +172,8 @@ def train_models(session_id):
         increment_training_count(g.user_id)
         logger.info(f"Tracked training run for user {g.user_id}")
 
-        # Obriši stare rezultate prije novog treninga
-        try:
-            supabase = get_supabase_client(use_service_role=True)
-            uuid_session_id = get_uuid_session_id(session_id, g.user_id)
-            delete_response = supabase.table('training_results').delete().eq('session_id', uuid_session_id).execute()
-            deleted_count = len(delete_response.data) if delete_response.data else 0
-            if deleted_count > 0:
-                logger.info(f"Deleted {deleted_count} old training_results for session {uuid_session_id}")
-        except Exception as e:
-            logger.warning(f"Could not delete old training_results: {e}")
+        # NOTE: Old results are now cleaned up AFTER successful training in orchestrator.py
+        # This prevents orphan storage files when training fails
 
         training_thread = threading.Thread(
             target=run_model_training_async,
