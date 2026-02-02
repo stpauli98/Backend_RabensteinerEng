@@ -33,6 +33,8 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
     SINGLE objects and saved as one file each, not split into individual scalers.
     This matches OriginalTraining behavior: 2 .save files + 1 model.
 
+    Also detects raw Keras models stored directly (not wrapped in serialization dict).
+
     Args:
         training_results: Training results dictionary containing serialized models
 
@@ -40,19 +42,37 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
         List of dicts with model information:
         [{
             'model_class': str,
-            'model_data': str (base64),
+            'model_data': str (base64) or None for raw models,
             'path': str,
             'data_size': int,
-            'is_scaler_dict': bool (optional)
+            'is_scaler_dict': bool (optional),
+            'is_raw_keras': bool (optional),
+            'raw_model': keras model object (optional)
         }, ...]
     """
     def is_scaler_dictionary(path: str) -> bool:
         """Check if this path is a scaler dictionary that should be saved as one file."""
         return path in ['scalers.input', 'scalers.output']
 
+    def is_keras_model(obj) -> bool:
+        """Check if object is a Keras model."""
+        return hasattr(obj, 'save') and hasattr(obj, 'predict') and hasattr(obj, 'layers')
+
     def extract_models_info(obj, path=""):
         """Recursively extract serialized models"""
         found_models = []
+
+        # Check for raw Keras model first
+        if is_keras_model(obj):
+            found_models.append({
+                'model_class': obj.__class__.__name__,
+                'path': path,
+                'is_raw_keras': True,
+                'raw_model': obj,
+                'data_size': 0  # Will be determined when saving
+            })
+            return found_models
+
         if isinstance(obj, dict):
             # CRITICAL: Stop recursion for scaler dictionaries - treat as single object
             if is_scaler_dictionary(path):
@@ -191,7 +211,43 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
 
                 continue  # Skip to next model
 
-            # Handle regular models (Keras, sklearn, etc.)
+            # Handle raw Keras models (stored directly, not serialized)
+            if model_info.get('is_raw_keras'):
+                model_obj = model_info['raw_model']
+                dataset_name = 'best_model' if path == 'trained_model' else path.replace('.', '_')
+
+                with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_file:
+                    temp_file_path = temp_file.name
+
+                try:
+                    model_obj.save(temp_file_path)
+
+                    storage_result = upload_trained_model(
+                        session_id=str(uuid_session_id),
+                        model_file_path=temp_file_path,
+                        model_type=model_class,
+                        dataset_name=dataset_name
+                    )
+
+                    uploaded_models.append({
+                        'dataset_name': dataset_name,
+                        'model_type': model_class.upper(),
+                        'filename': storage_result['original_filename'],
+                        'storage_path': storage_result['file_path'],
+                        'size_mb': round(storage_result['file_size'] / (1024 * 1024), 2),
+                        'path_in_results': path,
+                        'file_format': 'h5'
+                    })
+
+                    logger.info(f"✅ Uploaded raw Keras model: {storage_result['file_path']}")
+
+                finally:
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
+
+                continue  # Skip to next model
+
+            # Handle regular models (Keras, sklearn, etc.) - serialized format
             model_data = model_info['model_data']
 
             model_bytes = base64.b64decode(model_data)
