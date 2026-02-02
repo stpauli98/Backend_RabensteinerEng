@@ -13,7 +13,7 @@ from typing import Optional, Any, List, TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 # Debug flag - set to True to trace Socket.IO emissions
-DEBUG_SOCKETIO = True
+DEBUG_SOCKETIO = False
 
 # Type checking import for TrainingProgressTracker
 if TYPE_CHECKING:
