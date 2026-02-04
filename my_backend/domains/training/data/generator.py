@@ -365,10 +365,14 @@ def generate_violin_plots_for_session(
             except:
                 df = pd.read_csv(file_path)
 
+            # Capture original column name before renaming (e.g., "tl [°C]")
+            column_name = df.columns[1] if len(df.columns) >= 2 else bezeichnung
+
             csv_data[bezeichnung] = {
                 'df': df,
                 'type': file_type,
-                'file_name': file_name
+                'file_name': file_name,
+                'column_name': column_name
             }
 
     if not csv_data:
@@ -408,21 +412,27 @@ def generate_violin_plots_for_session(
     # ═══════════════════════════════════════════════════════════════════════════
     # Build feature tuples from processed arrays
     # i_combined columns: [file1, file2, ..., Y_sin, Y_cos, M_sin, ...]
+    # Input/Output: 3-tuple (bezeichnung, column_name, values) - column_name as y-label
+    # Time: 2-tuple (display_name, values) - no y-label for generated features
     # .copy() creates independent arrays so we can free the large combined arrays
     # ═══════════════════════════════════════════════════════════════════════════
-    input_features: List[Tuple[str, np.ndarray]] = []
+    input_features: List[Tuple] = []
     time_features: List[Tuple[str, np.ndarray]] = []
-    output_features: List[Tuple[str, np.ndarray]] = []
+    output_features: List[Tuple] = []
 
     for i in range(n_input_files):
-        input_features.append((i_list[i], i_combined[:, i].copy()))
+        bezeichnung = i_list[i]
+        column_name = csv_data.get(bezeichnung, {}).get('column_name', bezeichnung)
+        input_features.append((bezeichnung, column_name, i_combined[:, i].copy()))
 
     for i, name in enumerate(time_list):
         col_idx = n_input_files + i
         time_features.append((name, i_combined[:, col_idx].copy()))
 
     for i in range(len(o_list)):
-        output_features.append((o_list[i], o_combined[:, i].copy()))
+        bezeichnung = o_list[i]
+        column_name = csv_data.get(bezeichnung, {}).get('column_name', bezeichnung)
+        output_features.append((bezeichnung, column_name, o_combined[:, i].copy()))
 
     # Free the large combined arrays (~1.5GB) before rendering
     del i_combined, o_combined, processed

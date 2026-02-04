@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _create_violin_plot_group(
-    features: List[Tuple[str, np.ndarray]],
+    features: List,
     title: str,
     palette_colors: List,
 ) -> Optional[str]:
@@ -50,8 +50,10 @@ def _create_violin_plot_group(
     Matches original training.py approach: plt.subplots(1, n, figsize=(2*n, 6))
 
     Args:
-        features: List of (name, values_array) tuples
-        title: Suptitle for the figure
+        features: List of tuples. Supports:
+            - 2-tuple: (name, values_array) - name as title, no y-label
+            - 3-tuple: (bezeichnung, column_name, values_array) - bezeichnung as title, column_name as y-label
+        title: Suptitle for the figure (unused, kept for API compat)
         palette_colors: List of colors for each violin
 
     Returns:
@@ -61,9 +63,6 @@ def _create_violin_plot_group(
     if n == 0:
         return None
 
-    logger.debug(f"VIOLIN RENDER: Creating plot group '{title}'")
-    logger.debug(f"VIOLIN RENDER:   Features count: {n}")
-    logger.debug(f"VIOLIN RENDER:   Figure size: ({2*n}, 6)")
     t_start = time_module.time()
 
     fig, axes = plt.subplots(1, n, figsize=(2 * n, 6))
@@ -72,16 +71,18 @@ def _create_violin_plot_group(
     if n == 1:
         axes = [axes]
 
-    for i, (name, values) in enumerate(features):
+    for i, feature_tuple in enumerate(features):
         ax = axes[i]
+
+        # Support both 2-tuple (name, values) and 3-tuple (bezeichnung, column_name, values)
+        if len(feature_tuple) == 3:
+            name, ylabel, values = feature_tuple
+        else:
+            name, values = feature_tuple
+            ylabel = ""
 
         # NaN check
         is_all_nan = (np.isnan(values).all() if len(values) > 0 else True)
-
-        valid_count = np.count_nonzero(~np.isnan(values)) if len(values) > 0 else 0
-        logger.debug(f"VIOLIN RENDER:   [{i+1}/{n}] '{name}': "
-                     f"{valid_count}/{len(values)} valid points, "
-                     f"color={palette_colors[i]}")
 
         if not is_all_nan:
             sns.violinplot(y=values, ax=ax, color=palette_colors[i],
@@ -92,7 +93,7 @@ def _create_violin_plot_group(
 
         ax.set_title(name)
         ax.set_xlabel("")
-        ax.set_ylabel("")
+        ax.set_ylabel(ylabel)
 
     plt.tight_layout()
 
