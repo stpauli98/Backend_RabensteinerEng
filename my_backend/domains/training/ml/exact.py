@@ -4,6 +4,7 @@ This module provides the complete training pipeline exactly as in the original s
 """
 
 import os
+import gc
 import random
 import numpy as np
 import pandas as pd
@@ -386,30 +387,34 @@ def run_exact_training_pipeline(
     o_array_3D_orig = scaling_result['o_array_3D_orig']
     i_scalers = scaling_result['i_scalers']
     o_scalers = scaling_result['o_scalers']
-    i_combined_array = scaling_result.get('i_combined_array')
-    o_combined_array = scaling_result.get('o_combined_array')
     utc_ref_log = scaling_result['utc_ref_log']
-    
+    # Combined arrays no longer needed - scalers are already fitted
+    del scaling_result
+
     n_train = round(0.7 * n_dat)
     n_val = round(0.2 * n_dat)
     n_test = n_dat - n_train - n_val
-    
-    
-    trn_x = i_array_3D[:n_train]
-    val_x = i_array_3D[n_train:(n_train+n_val)]
-    tst_x = i_array_3D[(n_train+n_val):]
-    
-    trn_y = o_array_3D[:n_train]
-    val_y = o_array_3D[n_train:(n_train+n_val)]
-    tst_y = o_array_3D[(n_train+n_val):]
-    
-    trn_x_orig = i_array_3D_orig[:n_train]
-    val_x_orig = i_array_3D_orig[n_train:(n_train+n_val)]
-    tst_x_orig = i_array_3D_orig[(n_train+n_val):]
-    
-    trn_y_orig = o_array_3D_orig[:n_train]
-    val_y_orig = o_array_3D_orig[n_train:(n_train+n_val)]
-    tst_y_orig = o_array_3D_orig[(n_train+n_val):]
+
+    # Use .copy() to create independent arrays so parent arrays can be freed
+    trn_x = i_array_3D[:n_train].copy()
+    val_x = i_array_3D[n_train:(n_train+n_val)].copy()
+    tst_x = i_array_3D[(n_train+n_val):].copy()
+
+    trn_y = o_array_3D[:n_train].copy()
+    val_y = o_array_3D[n_train:(n_train+n_val)].copy()
+    tst_y = o_array_3D[(n_train+n_val):].copy()
+
+    trn_x_orig = i_array_3D_orig[:n_train].copy()
+    val_x_orig = i_array_3D_orig[n_train:(n_train+n_val)].copy()
+    tst_x_orig = i_array_3D_orig[(n_train+n_val):].copy()
+
+    trn_y_orig = o_array_3D_orig[:n_train].copy()
+    val_y_orig = o_array_3D_orig[n_train:(n_train+n_val)].copy()
+    tst_y_orig = o_array_3D_orig[(n_train+n_val):].copy()
+
+    # Free parent arrays now that we have independent copies
+    del i_array_3D, o_array_3D, i_array_3D_orig, o_array_3D_orig
+    gc.collect()
     
     
     if mdl_config is None:
@@ -583,7 +588,7 @@ def run_exact_training_pipeline(
             try:
                 # Get shapes for evaluation
                 n_tst = tst_y_orig.shape[0] if tst_y_orig is not None else tst_y.shape[0]
-                O_N = o_array_3D.shape[1]  # Actual output timesteps from data
+                O_N = tst_y.shape[1]  # Actual output timesteps from data
 
                 # Prepare tst_y_orig for evaluation - needs shape (n_tst, O_N, num_feat)
                 if tst_y_orig is not None:
@@ -664,10 +669,16 @@ def run_exact_training_pipeline(
         }
 
     # Free memory from training/validation data - no longer needed after training
-    # This saves ~1GB memory (train_data ~800MB + val_data ~250MB)
     del trn_x, trn_y, trn_x_orig, trn_y_orig
     del val_x, val_y, val_x_orig, val_y_orig
-    import gc
+
+    # Clear TensorFlow session to free GPU/CPU memory
+    if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
+        try:
+            tf.keras.backend.clear_session()
+        except Exception:
+            pass
+
     gc.collect()
 
     if DEBUG_EXACT_PIPELINE:
@@ -687,8 +698,6 @@ def run_exact_training_pipeline(
         'scalers': {
             'input': i_scalers,
             'output': o_scalers,
-            'i_combined_array': i_combined_array,
-            'o_combined_array': o_combined_array
         },
         'metadata': {
             'n_dat': n_dat,

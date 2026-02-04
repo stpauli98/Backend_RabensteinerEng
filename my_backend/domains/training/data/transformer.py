@@ -535,15 +535,16 @@ def create_training_arrays_original(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.Data
         utc_ref = utc_ref + datetime.timedelta(minutes=mts.DELT)
     
     if len(i_arrays) > 0 and len(o_arrays) > 0:
-        i_array_3D = np.array(i_arrays)
-        o_array_3D = np.array(o_arrays)
+        i_array_3D = np.array(i_arrays, dtype=np.float32)
+        o_array_3D = np.array(o_arrays, dtype=np.float32)
 
         n_dat = i_array_3D.shape[0]
         n_features_in = i_array_3D.shape[2] if len(i_array_3D.shape) > 2 else 0
         n_features_out = o_array_3D.shape[2] if len(o_array_3D.shape) > 2 else 0
 
-        i_combined_array = np.vstack(i_arrays)
-        o_combined_array = np.vstack(o_arrays)
+        # Zero-copy reshape from 3D array instead of vstack (avoids duplicate allocation)
+        i_combined_array = i_array_3D.reshape(-1, i_array_3D.shape[-1])
+        o_combined_array = o_array_3D.reshape(-1, o_array_3D.shape[-1])
     else:
         logger.warning("No valid datasets created during interpolation")
         i_array_3D = np.array([])
@@ -1555,9 +1556,9 @@ def create_training_arrays_optimized(
         logger.warning("No arrays to stack - returning empty")
         return np.array([]), np.array([]), np.array([]), np.array([]), []
 
-    # Stack to 3D: (n_samples, n_points, n_features)
-    i_array_3D = np.stack(i_arrays_list, axis=2)
-    o_array_3D = np.stack(o_arrays_list, axis=2)
+    # Stack to 3D: (n_samples, n_points, n_features) - use float32 to halve memory
+    i_array_3D = np.stack(i_arrays_list, axis=2).astype(np.float32)
+    o_array_3D = np.stack(o_arrays_list, axis=2).astype(np.float32)
 
     # Find valid samples (no NaN in any feature)
     i_valid = ~np.any(np.isnan(i_array_3D), axis=(1, 2))

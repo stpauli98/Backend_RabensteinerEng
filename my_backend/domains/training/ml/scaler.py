@@ -227,8 +227,8 @@ def process_and_scale_data(i_array_3D: np.ndarray, o_array_3D: np.ndarray,
             utc_ref_log = [utc_ref_log_int[i] for i in indices]
             del utc_ref_log_int
     
-    i_array_3D_orig = copy.deepcopy(i_array_3D)
-    o_array_3D_orig = copy.deepcopy(o_array_3D)
+    i_array_3D_orig = i_array_3D.copy()
+    o_array_3D_orig = o_array_3D.copy()
     
     (i_scal_list, i_scal_max_list, i_scal_min_list,
      o_scal_list, o_scal_max_list, o_scal_min_list) = create_scaling_lists(i_dat_inf, o_dat_inf)

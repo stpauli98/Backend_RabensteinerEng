@@ -45,7 +45,9 @@ def convert_numpy_to_native(obj):
         return {k: convert_numpy_to_native(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
         return [convert_numpy_to_native(item) for item in obj]
-    return obj
+    elif isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    return None
 
 
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
