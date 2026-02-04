@@ -38,23 +38,59 @@ def _safe_float_to_int(value: Any, default: int) -> int:
 
 
 
-def _calculate_n_dat(session_data: Dict, csv_data: Dict, progress_tracker=None) -> int:
+def _save_training_arrays_to_storage(uuid_session_id: str, i_array_3D: np.ndarray, o_array_3D: np.ndarray) -> None:
+    """Save i_array_3D and o_array_3D to Supabase Storage as a compressed pickle for download."""
+    import io
+    import gzip
+    import pickle
+    from shared.database.client import get_supabase_admin_client
+
+    data = {'i_array_3D': i_array_3D, 'o_array_3D': o_array_3D}
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode='wb', compresslevel=6) as gz:
+        pickle.dump(data, gz, protocol=pickle.HIGHEST_PROTOCOL)
+    upload_bytes = buffer.getvalue()
+
+    file_path = f"{uuid_session_id}/training_arrays.pkl.gz"
+    supabase = get_supabase_admin_client()
+
+    # Remove old file if exists (upsert)
+    try:
+        supabase.storage.from_('training-results').remove([file_path])
+    except Exception:
+        pass
+
+    supabase.storage.from_('training-results').upload(
+        path=file_path,
+        file=upload_bytes,
+        file_options={'content-type': 'application/gzip', 'cache-control': '3600'}
+    )
+    size_mb = len(upload_bytes) / 1024 / 1024
+    logger.info(f"VIOLIN: Saved training arrays to storage: {file_path} ({size_mb:.1f}MB)")
+
+
+def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker=None, uuid_session_id: Optional[str] = None) -> Dict:
     """
-    Calculate the exact n_dat using create_training_arrays.
-    Replicates the data preparation logic from middleman.py.
+    Prepare processed data using create_training_arrays.
+    Returns n_dat, combined arrays, and feature name lists for violin plots.
 
     Args:
         session_data: Session data loaded from database
         csv_data: Parsed CSV data dict with bezeichnung as key
 
     Returns:
-        n_dat: Number of valid training samples (i_array_3D.shape[0])
+        Dict with keys: n_dat, i_combined_array, o_combined_array,
+        i_list, o_list, time_list, n_input_files
     """
     from domains.training.data.loader import load, transf
     from domains.training.data.transformer import create_training_arrays
     from domains.training.config import MTS, T
 
     try:
+        logger.debug("=" * 60)
+        logger.debug("VIOLIN: _prepare_processed_data() START")
+        logger.debug("=" * 60)
+
         # 1. Configure MTS from zeitschritte
         zeitschritte = session_data.get('zeitschritte', {})
         mts_config = MTS()
@@ -105,9 +141,16 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict, progress_tracker=None) 
             else:
                 o_dat[bezeichnung] = df_copy
 
+        logger.debug(f"VIOLIN: i_dat keys (input files): {list(i_dat.keys())}")
+        logger.debug(f"VIOLIN: o_dat keys (output files): {list(o_dat.keys())}")
+        for key, df in i_dat.items():
+            logger.debug(f"VIOLIN:   i_dat['{key}'] shape={df.shape}, "
+                         f"UTC range=[{df['UTC'].iloc[0]} -> {df['UTC'].iloc[-1]}], "
+                         f"value range=[{df.iloc[:,1].min():.2f} -> {df.iloc[:,1].max():.2f}]")
+
         if not i_dat or not o_dat:
-            logger.warning("n_dat calculation: Missing input or output data")
-            return 0
+            logger.warning("_prepare_processed_data: Missing input or output data")
+            return None
 
         # 4. Create files metadata mapping
         files_metadata = {}
@@ -130,6 +173,9 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict, progress_tracker=None) 
             progress_tracker.ndat_loading_data()
         i_dat, i_dat_inf = load(i_dat, i_dat_inf)
         o_dat, o_dat_inf = load(o_dat, o_dat_inf)
+
+        logger.debug(f"VIOLIN: i_dat_inf index (order): {list(i_dat_inf.index)}")
+        logger.debug(f"VIOLIN: o_dat_inf index (order): {list(o_dat_inf.index)}")
 
         # 7. Set zeithorizont from metadata (AFTER load())
         for key in i_dat_inf.index:
@@ -160,15 +206,37 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict, progress_tracker=None) 
         i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
         o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
 
+        logger.debug(f"VIOLIN: MTS config: I_N={mts_config.I_N}, O_N={mts_config.O_N}, "
+                     f"DELT={mts_config.DELT}, OFST={mts_config.OFST}")
+
         # 9. Determine time range (CRITICAL: .min() for utc_end!)
         utc_strt = i_dat_inf["utc_min"].min()
         utc_end = i_dat_inf["utc_max"].min()  # CRITICAL: Use .min() not .max()!
 
+        logger.debug(f"VIOLIN: UTC range: {utc_strt} -> {utc_end}")
 
-        # 10. Call create_training_arrays (slowest step)
+        # 10. Build feature name lists matching combined array column order
+        i_list = list(i_dat_inf.index)  # File bezeichnungen in deterministic order
+
+        # TIME component names (same order as create_training_arrays adds them)
+        time_list = []
+        if time_info.get('jahr'):
+            time_list.extend(['Y_sin', 'Y_cos'])
+        if time_info.get('monat'):
+            time_list.extend(['M_sin', 'M_cos'])
+        if time_info.get('woche'):
+            time_list.extend(['W_sin', 'W_cos'])
+        if time_info.get('tag'):
+            time_list.extend(['D_sin', 'D_cos'])
+        if time_info.get('feiertag'):
+            time_list.append('H')
+
+        o_list = list(o_dat_inf.index)  # Output bezeichnungen
+
+        # 11. Call create_training_arrays (uses optimized version when USE_OPTIMIZED_TRANSFORMER=true)
         if progress_tracker:
             progress_tracker.ndat_creating_arrays()
-        i_array_3D, o_array_3D, _, _, _ = create_training_arrays(
+        i_array_3D, o_array_3D, i_combined_array, o_combined_array, _ = create_training_arrays(
             i_dat=i_dat,
             o_dat=o_dat,
             i_dat_inf=i_dat_inf,
@@ -180,23 +248,53 @@ def _calculate_n_dat(session_data: Dict, csv_data: Dict, progress_tracker=None) 
 
         n_dat = i_array_3D.shape[0] if len(i_array_3D) > 0 else 0
 
+        logger.debug(f"VIOLIN: i_array_3D shape: {i_array_3D.shape}")
+        logger.debug(f"VIOLIN: o_array_3D shape: {o_array_3D.shape}")
+        logger.debug(f"VIOLIN: i_combined_array shape: {i_combined_array.shape}")
+        logger.debug(f"VIOLIN: o_combined_array shape: {o_combined_array.shape}")
+        logger.debug(f"VIOLIN: n_dat (training samples): {n_dat}")
+        logger.debug(f"VIOLIN: Feature lists -> i_list={i_list}, time_list={time_list}, o_list={o_list}")
+
+        # Save 3D arrays to Supabase Storage for debugging/comparison downloads
+        if uuid_session_id:
+            try:
+                _save_training_arrays_to_storage(uuid_session_id, i_array_3D, o_array_3D)
+            except Exception as e:
+                logger.warning(f"VIOLIN: Failed to save training arrays to storage: {e}")
+
+        # Free 3D arrays early - only n_dat was needed from them (~820MB freed)
+        del i_array_3D, o_array_3D
+        import gc
+        gc.collect()
+        logger.debug("VIOLIN: Freed 3D arrays, keeping combined arrays only")
+        logger.debug("VIOLIN: _prepare_processed_data() DONE")
+
         if progress_tracker:
             progress_tracker.ndat_arrays_complete()
 
-        return n_dat
+        return {
+            'n_dat': n_dat,
+            'i_combined_array': i_combined_array,
+            'o_combined_array': o_combined_array,
+            'i_list': i_list,
+            'o_list': o_list,
+            'time_list': time_list,
+            'n_input_files': len(i_dat),
+        }
 
     except Exception as e:
-        logger.error(f"Error calculating n_dat: {e}")
+        logger.error(f"Error in _prepare_processed_data: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return 0
+        return None
 
 
 def generate_violin_plots_for_session(
     session_id: str,
     model_parameters: Optional[Dict] = None,
     training_split: Optional[Dict] = None,
-    progress_tracker=None
+    progress_tracker=None,
+    uuid_session_id: Optional[str] = None
 ) -> Dict:
     """
     Generate datasets and violin plots WITHOUT training models.
@@ -283,95 +381,80 @@ def generate_violin_plots_for_session(
         progress_tracker.parsing_complete()
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STRUCTURE: Separate input, time, and output features
-    # Input/Output features: (bezeichnung, column_name, values_array)
-    # Time features: (display_name, values_array) - no column_name for generated features
+    # Run full data processing pipeline to get processed (interpolated/scaled) data
+    # This replaces both raw CSV reading AND the separate _calculate_n_dat() call
     # ═══════════════════════════════════════════════════════════════════════════
-    input_features: List[Tuple[str, str, np.ndarray]] = []  # (bezeichnung, column_name, values)
+    if progress_tracker:
+        progress_tracker.calculating_dataset_count()
+
+    processed = _prepare_processed_data(session_data, csv_data, progress_tracker, uuid_session_id=uuid_session_id)
+
+    if processed is None:
+        if progress_tracker:
+            progress_tracker.error('Data processing failed')
+        raise Exception('Data processing pipeline failed. Check logs for details.')
+
+    n_dat = processed['n_dat']
+    i_combined = processed['i_combined_array']
+    o_combined = processed['o_combined_array']
+    i_list = processed['i_list']
+    o_list = processed['o_list']
+    time_list = processed['time_list']
+    n_input_files = processed['n_input_files']
+
+    if progress_tracker:
+        progress_tracker.dataset_count_complete(n_dat)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Build feature tuples from processed arrays
+    # i_combined columns: [file1, file2, ..., Y_sin, Y_cos, M_sin, ...]
+    # .copy() creates independent arrays so we can free the large combined arrays
+    # ═══════════════════════════════════════════════════════════════════════════
+    input_features: List[Tuple[str, np.ndarray]] = []
     time_features: List[Tuple[str, np.ndarray]] = []
-    output_features: List[Tuple[str, str, np.ndarray]] = []  # (bezeichnung, column_name, values)
+    output_features: List[Tuple[str, np.ndarray]] = []
 
-    input_feature_names = []
-    time_feature_names = []
-    output_feature_names = []
+    for i in range(n_input_files):
+        input_features.append((i_list[i], i_combined[:, i].copy()))
 
-    for bezeichnung, data in csv_data.items():
-        df = data['df']
-        file_type = data['type']
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    for i, name in enumerate(time_list):
+        col_idx = n_input_files + i
+        time_features.append((name, i_combined[:, col_idx].copy()))
 
-        if numeric_cols:
-            for col in numeric_cols:
-                if file_type == 'input':
-                    input_features.append((bezeichnung, col, df[col].values))
-                    input_feature_names.append(bezeichnung)
-                else:
-                    output_features.append((bezeichnung, col, df[col].values))
-                    output_feature_names.append(bezeichnung)
+    for i in range(len(o_list)):
+        output_features.append((o_list[i], o_combined[:, i].copy()))
+
+    # Free the large combined arrays (~1.5GB) before rendering
+    del i_combined, o_combined, processed
+    import gc
+    gc.collect()
+    logger.debug("VIOLIN: Freed combined arrays, column slices retained")
+
+    logger.debug("=" * 60)
+    logger.debug("VIOLIN: Feature tuples built from processed arrays")
+    logger.debug("=" * 60)
+    logger.debug(f"VIOLIN: input_features ({len(input_features)}):")
+    for name, vals in input_features:
+        logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
+                     f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}], "
+                     f"NaN count={np.isnan(vals).sum()}")
+    logger.debug(f"VIOLIN: time_features ({len(time_features)}):")
+    for name, vals in time_features:
+        logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
+                     f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}]")
+    logger.debug(f"VIOLIN: output_features ({len(output_features)}):")
+    for name, vals in output_features:
+        logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
+                     f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}], "
+                     f"NaN count={np.isnan(vals).sum()}")
 
     if not input_features and not output_features:
         if progress_tracker:
-            progress_tracker.error('No numeric data found in CSV files')
-        raise ValueError('No numeric data found in CSV files. CSV files must contain numeric columns for visualization')
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Generate TIME components as SEPARATE time_features list
-    # ═══════════════════════════════════════════════════════════════════════════
-    time_info = session_data.get('time_info', {})
-    if time_info and any([time_info.get('jahr'), time_info.get('monat'),
-                          time_info.get('woche'), time_info.get('tag'),
-                          time_info.get('feiertag')]):
-        try:
-            from domains.training.data.processor import TimeFeatures
-
-            # Get first input file's DataFrame to extract timestamps
-            first_input_df = None
-            for bezeichnung, data in csv_data.items():
-                if data['type'] == 'input':
-                    first_input_df = data['df']
-                    break
-
-            if first_input_df is None and csv_data:
-                # Use any file if no input file
-                first_input_df = list(csv_data.values())[0]['df']
-
-            if first_input_df is not None and 'UTC' in first_input_df.columns:
-                # Ensure UTC column is datetime
-                df_copy = first_input_df.copy()
-                df_copy['UTC'] = pd.to_datetime(df_copy['UTC'])
-
-                timezone = time_info.get('zeitzone', 'UTC')
-                processor = TimeFeatures(timezone)
-
-                # Generate time features
-                time_features_df = processor.add_time_features(
-                    df_copy, 'UTC', time_info
-                )
-
-                # Extract TIME columns (y_sin, y_cos, m_sin, m_cos, w_sin, w_cos, d_sin, d_cos)
-                time_cols = [c for c in time_features_df.columns
-                             if c.endswith('_sin') or c.endswith('_cos')]
-
-                if time_cols:
-                    # Add TIME features to SEPARATE time_features list
-                    for col in time_cols:
-                        # Create display names: y_sin -> Y_sin, w_cos -> W_cos
-                        display_name = col[0].upper() + col[1:]
-                        time_features.append((display_name, time_features_df[col].values))
-                        time_feature_names.append(display_name)
-                else:
-                    logger.warning("No TIME feature columns generated")
-            else:
-                logger.warning("No UTC column found in input files, skipping TIME components")
-
-        except Exception as e:
-            logger.error(f"Error generating TIME components for violin plots: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            progress_tracker.error('No features found in processed data')
+        raise ValueError('No features found in processed data')
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Generate plots with progress tracking
-    # Pass input_features, time_features, and output_features separately
     # ═══════════════════════════════════════════════════════════════════════════
     plot_result = generate_violin_plots_from_data(
         session_id,
@@ -381,18 +464,9 @@ def generate_violin_plots_for_session(
         progress_tracker=progress_tracker
     )
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Calculate n_dat (number of valid training samples after 3D transformation)
-    # This is the actual dataset count that will be used for training
-    # ═══════════════════════════════════════════════════════════════════════════
-    if progress_tracker:
-        progress_tracker.calculating_dataset_count()
-
-    n_dat = _calculate_n_dat(session_data, csv_data, progress_tracker)
-
-    if progress_tracker:
-        progress_tracker.dataset_count_complete(n_dat)
-        # Note: complete() is called in training_routes.py after saving to database
+    input_feature_names = [name for name, _ in input_features]
+    time_feature_names = [name for name, _ in time_features]
+    output_feature_names = [name for name, _ in output_features]
 
     result = {
         'success': plot_result['success'],
@@ -400,9 +474,9 @@ def generate_violin_plots_for_session(
         'message': 'Violin plots generated successfully. Ready for model training.',
         'n_dat': n_dat,
         'data_info': {
-            'input_features': list(set(input_feature_names)),
-            'time_features': list(set(time_feature_names)),
-            'output_features': list(set(output_feature_names)),
+            'input_features': input_feature_names,
+            'time_features': time_feature_names,
+            'output_features': output_feature_names,
             'input_features_count': len(input_features),
             'time_features_count': len(time_features),
             'output_features_count': len(output_features),

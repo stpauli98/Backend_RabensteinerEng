@@ -13,12 +13,13 @@ Uses shared color palette: tab20 with total features count
 
 TIME component names are UPPERCASE (Y_sin, Y_cos, M_sin, etc.)
 
-BATCH PROCESSING: Each violin is created separately and combined at the end
-to prevent OOM with large datasets (12 TIME features × millions of rows).
+Single matplotlib figure per plot group - matches original training.py approach:
+  plt.subplots(1, n, figsize=(2*n, 6))
 """
 
 import logging
 import gc
+import time as time_module
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -28,8 +29,6 @@ import seaborn as sns
 import io
 import base64
 from typing import Dict, List, Any, Optional, Tuple, Union
-from PIL import Image, ImageDraw, ImageFont
-
 
 
 from domains.training.constants import TIME_COMPONENT_NAMES, TIME_NAME_DISPLAY_MAP
@@ -38,104 +37,83 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# BATCH PROCESSING HELPER FUNCTIONS
+# SINGLE-FIGURE RENDERING (matches original training.py)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _combine_images_horizontally(images: List[Image.Image], title: str = None) -> Image.Image:
+def _create_violin_plot_group(
+    features: List[Tuple[str, np.ndarray]],
+    title: str,
+    palette_colors: List,
+) -> Optional[str]:
     """
-    Combine multiple PIL images horizontally into one image.
+    Create a violin plot group using single matplotlib figure.
+    Matches original training.py approach: plt.subplots(1, n, figsize=(2*n, 6))
 
     Args:
-        images: List of PIL Image objects
-        title: Optional title to add at top
+        features: List of (name, values_array) tuples
+        title: Suptitle for the figure
+        palette_colors: List of colors for each violin
 
     Returns:
-        Combined PIL Image
+        base64-encoded PNG data URI string, or None if no features
     """
-    if not images:
+    n = len(features)
+    if n == 0:
         return None
 
-    # Calculate dimensions
-    widths = [img.width for img in images]
-    heights = [img.height for img in images]
-    total_width = sum(widths)
-    max_height = max(heights)
+    logger.debug(f"VIOLIN RENDER: Creating plot group '{title}'")
+    logger.debug(f"VIOLIN RENDER:   Features count: {n}")
+    logger.debug(f"VIOLIN RENDER:   Figure size: ({2*n}, 6)")
+    t_start = time_module.time()
 
-    # Add space for title if needed
-    title_height = 50 if title else 0
+    fig, axes = plt.subplots(1, n, figsize=(2 * n, 6))
 
-    # Create combined image
-    combined = Image.new('RGB', (total_width, max_height + title_height), 'white')
+    # Handle single subplot case (axes is not array)
+    if n == 1:
+        axes = [axes]
 
-    # Paste images
-    x_offset = 0
-    for img in images:
-        combined.paste(img, (x_offset, title_height))
-        x_offset += img.width
+    for i, (name, values) in enumerate(features):
+        ax = axes[i]
 
-    # Add title if provided
-    if title:
-        draw = ImageDraw.Draw(combined)
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-        except:
-            font = ImageFont.load_default()
-        text_bbox = draw.textbbox((0, 0), title, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        draw.text(((total_width - text_width) // 2, 15), title, fill='black', font=font)
+        # NaN check
+        is_all_nan = (np.isnan(values).all() if len(values) > 0 else True)
 
-    return combined
+        valid_count = np.count_nonzero(~np.isnan(values)) if len(values) > 0 else 0
+        logger.debug(f"VIOLIN RENDER:   [{i+1}/{n}] '{name}': "
+                     f"{valid_count}/{len(values)} valid points, "
+                     f"color={palette_colors[i]}")
 
+        if not is_all_nan:
+            sns.violinplot(y=values, ax=ax, color=palette_colors[i],
+                          inner="quartile", linewidth=1.5)
+        else:
+            ax.text(0.5, 0.5, 'No data', ha='center', va='center',
+                   transform=ax.transAxes)
 
-def _create_single_violin(values: np.ndarray, title: str, color,
-                          ylabel: str = "", feature_index: int = 0,
-                          total_features: int = 1, plot_type: str = "unknown") -> Image.Image:
-    """
-    Create a single violin plot and return as PIL Image.
-    Memory-efficient: closes figure immediately after saving.
+        ax.set_title(name)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
 
-    Args:
-        values: Data array for the violin plot
-        title: Title for this subplot
-        color: Color from the palette
-        ylabel: Y-axis label
-        feature_index: Index of this feature (for logging)
-        total_features: Total number of features (for logging)
-        plot_type: Type of plot for logging (INPUT/TIME/OUTPUT)
+    plt.suptitle(title, fontsize=15, fontweight="bold")
+    plt.tight_layout()
 
-    Returns:
-        PIL Image of the single violin plot
-    """
-    fig, ax = plt.subplots(1, 1, figsize=(2, 6))
-
-    # Handle NaN
-    if isinstance(values, pd.Series):
-        is_all_nan = values.isna().all()
-    else:
-        is_all_nan = np.isnan(values).all() if len(values) > 0 else True
-
-    if not is_all_nan:
-        sns.violinplot(y=values, ax=ax, color=color, inner="quartile", linewidth=1.5)
-    else:
-        ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
-
-    ax.set_title(title)
-    ax.set_xlabel("")
-    ax.set_ylabel(ylabel)
-
-    # Save to PIL Image
+    # Convert to base64
     buffer = io.BytesIO()
     plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
     buffer.seek(0)
-    img = Image.open(buffer).copy()  # .copy() to detach from buffer
+    plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
 
-    # Cleanup immediately
+    elapsed = time_module.time() - t_start
+    logger.debug(f"VIOLIN RENDER:   Plot '{title}' complete in {elapsed:.2f}s, "
+                 f"base64 size: {len(plot_base64)} chars")
+
+    # Cleanup
     plt.close(fig)
     buffer.close()
-    del fig, ax
+    del fig
     gc.collect()
 
-    return img
+    return f"data:image/png;base64,{plot_base64}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -233,29 +211,21 @@ def generate_violin_plots_from_data(
     progress_tracker=None
 ) -> Dict[str, Any]:
     """
-    Generate violin plots for data distributions using BATCH PROCESSING.
+    Generate violin plots for data distributions using single matplotlib figure per group.
+    Matches original training.py approach: plt.subplots(1, n, figsize=(2*n, 6))
 
     Creates 3 separate plots:
       1. Eingabedaten: INPUT features only
       2. Zeitmerkmale: TIME components only
       3. Ausgabedaten: OUTPUT features only
 
-    BATCH PROCESSING: Each violin is created separately and combined at the end.
-    This prevents OOM when processing 12 TIME features × millions of rows.
-    Memory usage reduced by ~92% compared to creating all subplots at once.
-
     Shared palette: tab20 with n_input + n_time + n_output colors
-    - Input colors: palette[i] for i in range(n_input)
-    - TIME colors: palette[n_input + i] for i in range(n_time)
-    - Output colors: palette[n_input + n_time + i] for i in range(n_output)
 
     Args:
         session_id: Session identifier
-        input_features: List of tuples for inputs. Supports:
-            - 2-tuple: (feature_name, values_array) - feature_name used as title, no y-label
-            - 3-tuple: (bezeichnung, column_name, values_array) - bezeichnung as title, column_name as y-label
+        input_features: List of (feature_name, values_array) tuples for inputs
         time_features: List of (feature_name, values_array) tuples for TIME components
-        output_features: Same format as input_features
+        output_features: List of (feature_name, values_array) tuples for outputs
         progress_tracker: Optional ViolinProgressTracker for emitting progress updates
 
     Returns:
@@ -271,192 +241,76 @@ def generate_violin_plots_from_data(
         total_features = n_input + n_time + n_output
         palette = sns.color_palette("tab20", max(total_features, 20))
 
+        logger.debug("=" * 60)
+        logger.debug("VIOLIN RENDER: generate_violin_plots_from_data() START")
+        logger.debug(f"VIOLIN RENDER: Palette size: {total_features} "
+                     f"(input={n_input}, time={n_time}, output={n_output})")
+        logger.debug("=" * 60)
+
         # ═══════════════════════════════════════════════════════════════════
-        # INPUT PLOT - Input features only (BATCH PROCESSING)
-        # Title: "Datenverteilung \nder Eingabedaten"
-        # Colors: palette[0] to palette[n_input-1]
+        # INPUT PLOT
         # ═══════════════════════════════════════════════════════════════════
         if input_features and len(input_features) > 0:
             if progress_tracker:
                 progress_tracker.generating_input_plot()
 
-            individual_images = []
-            for i, feature_tuple in enumerate(input_features):
-                # Support both 2-tuple (name, values) and 3-tuple (bezeichnung, column_name, values)
-                if len(feature_tuple) == 3:
-                    bezeichnung, column_name, values = feature_tuple
-                else:
-                    bezeichnung, values = feature_tuple
-                    column_name = ""
-
-                img = _create_single_violin(
-                    values=values,
-                    title=bezeichnung,
-                    color=palette[i],
-                    ylabel=column_name,
-                    feature_index=i,
-                    total_features=len(input_features),
-                    plot_type="INPUT"
-                )
-                individual_images.append(img)
-
-                # Free the values array reference (original data still exists in caller)
-                del values
-                gc.collect()
-
-            # Combine into final image
-            combined = _combine_images_horizontally(
-                individual_images,
-                title="Datenverteilung der Eingabedaten"
+            input_colors = [palette[i] for i in range(n_input)]
+            input_base64 = _create_violin_plot_group(
+                input_features,
+                "Datenverteilung \nder Eingabedaten",
+                input_colors
             )
-
-            # Convert to base64
-            buffer = io.BytesIO()
-            combined.save(buffer, format='PNG')
-            buffer.seek(0)
-            input_plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-            plots['input_violin_plot'] = {
-                'data': f"data:image/png;base64,{input_plot_base64}",
-                'type': 'input'
-            }
-
-            # Cleanup
-            buffer.close()
-            for img in individual_images:
-                img.close()
-            if combined:
-                combined.close()
-            del individual_images, combined
-            gc.collect()
+            if input_base64:
+                plots['input_violin_plot'] = {'data': input_base64, 'type': 'input'}
 
             if progress_tracker:
                 progress_tracker.input_plot_complete()
 
         # ═══════════════════════════════════════════════════════════════════
-        # TIME PLOT - TIME components only (BATCH PROCESSING)
-        # Title: "Datenverteilung \nder Zeitmerkmale"
-        # Colors: palette[n_input] to palette[n_input + n_time - 1]
+        # TIME PLOT
         # ═══════════════════════════════════════════════════════════════════
         if time_features and len(time_features) > 0:
             if progress_tracker:
                 progress_tracker.generating_time_plot()
 
-            individual_images = []
-            for i, (feature_name, values) in enumerate(time_features):
-                # Color offset for TIME: n_input + i
-                color_idx = n_input + i
-
-                img = _create_single_violin(
-                    values=values,
-                    title=feature_name,
-                    color=palette[color_idx],
-                    ylabel="",
-                    feature_index=i,
-                    total_features=len(time_features),
-                    plot_type="TIME"
-                )
-                individual_images.append(img)
-
-                # Free the values array reference
-                del values
-                gc.collect()
-
-            # Combine into final image
-            combined = _combine_images_horizontally(
-                individual_images,
-                title="Datenverteilung der Zeitmerkmale"
+            time_colors = [palette[n_input + i] for i in range(n_time)]
+            time_base64 = _create_violin_plot_group(
+                time_features,
+                "Datenverteilung \nder Zeitmerkmale",
+                time_colors
             )
-
-            # Convert to base64
-            buffer = io.BytesIO()
-            combined.save(buffer, format='PNG')
-            buffer.seek(0)
-            time_plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-            plots['time_violin_plot'] = {
-                'data': f"data:image/png;base64,{time_plot_base64}",
-                'type': 'time'
-            }
-
-            # Cleanup
-            buffer.close()
-            for img in individual_images:
-                img.close()
-            if combined:
-                combined.close()
-            del individual_images, combined
-            gc.collect()
+            if time_base64:
+                plots['time_violin_plot'] = {'data': time_base64, 'type': 'time'}
 
             if progress_tracker:
                 progress_tracker.time_plot_complete()
 
         # ═══════════════════════════════════════════════════════════════════
-        # OUTPUT PLOT - Output features only (BATCH PROCESSING)
-        # Title: "Datenverteilung \nder Ausgabedaten"
-        # Colors: palette[n_input + n_time] to palette[n_input + n_time + n_output - 1]
+        # OUTPUT PLOT
         # ═══════════════════════════════════════════════════════════════════
         if output_features and len(output_features) > 0:
             if progress_tracker:
                 progress_tracker.generating_output_plot()
 
-            individual_images = []
-            for i, feature_tuple in enumerate(output_features):
-                # Support both 2-tuple (name, values) and 3-tuple (bezeichnung, column_name, values)
-                if len(feature_tuple) == 3:
-                    bezeichnung, column_name, values = feature_tuple
-                else:
-                    bezeichnung, values = feature_tuple
-                    column_name = ""
-
-                # Color offset for output: n_input + n_time + i
-                color_idx = n_input + n_time + i
-
-                img = _create_single_violin(
-                    values=values,
-                    title=bezeichnung,
-                    color=palette[color_idx],
-                    ylabel=column_name,
-                    feature_index=i,
-                    total_features=len(output_features),
-                    plot_type="OUTPUT"
-                )
-                individual_images.append(img)
-
-                # Free the values array reference
-                del values
-                gc.collect()
-
-            # Combine into final image
-            combined = _combine_images_horizontally(
-                individual_images,
-                title="Datenverteilung der Ausgabedaten"
+            output_colors = [palette[n_input + n_time + i] for i in range(n_output)]
+            output_base64 = _create_violin_plot_group(
+                output_features,
+                "Datenverteilung \nder Ausgabedaten",
+                output_colors
             )
-
-            # Convert to base64
-            buffer = io.BytesIO()
-            combined.save(buffer, format='PNG')
-            buffer.seek(0)
-            output_plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-            plots['output_violin_plot'] = {
-                'data': f"data:image/png;base64,{output_plot_base64}",
-                'type': 'output'
-            }
-
-            # Cleanup
-            buffer.close()
-            for img in individual_images:
-                img.close()
-            if combined:
-                combined.close()
-            del individual_images, combined
-            gc.collect()
+            if output_base64:
+                plots['output_violin_plot'] = {'data': output_base64, 'type': 'output'}
 
             if progress_tracker:
                 progress_tracker.output_plot_complete()
 
+        logger.debug(f"VIOLIN RENDER: Generated {len(plots)} plots: {list(plots.keys())}")
+        logger.debug("VIOLIN RENDER: generate_violin_plots_from_data() DONE")
+
         return {
             'success': True,
             'plots': plots,
-            'message': 'Violin plots generated successfully (3 plots: input, time, output) - BATCH PROCESSING'
+            'message': 'Violin plots generated successfully (3 plots: input, time, output)'
         }
 
     except Exception as e:

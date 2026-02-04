@@ -11,7 +11,7 @@ Contains 5 endpoints for ML model training:
 
 import threading
 import numpy as np
-from flask import Blueprint, current_app
+from flask import Blueprint, current_app, Response
 
 from .common import (
     request, jsonify, g, logging,
@@ -75,7 +75,8 @@ def generate_datasets(session_id):
             session_id=session_id,
             model_parameters=model_parameters,
             training_split=training_split,
-            progress_tracker=progress_tracker
+            progress_tracker=progress_tracker,
+            uuid_session_id=uuid_session_id
         )
 
         violin_plots = result.get('violin_plots', {})
@@ -344,3 +345,30 @@ def get_training_results(session_id):
 def get_training_results_details(session_id):
     """Get detailed training results for a session (alias)."""
     return get_training_results(session_id)
+
+
+@bp.route('/download-arrays/<session_id>', methods=['GET'])
+@require_auth
+def download_training_arrays(session_id):
+    """Download i_array_3D and o_array_3D as .pkl.gz from Supabase Storage."""
+    try:
+        from shared.database.client import get_supabase_admin_client
+
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        file_path = f"{uuid_session_id}/training_arrays.pkl.gz"
+
+        supabase = get_supabase_admin_client()
+        data = supabase.storage.from_('training-results').download(file_path)
+
+        return Response(
+            data,
+            mimetype='application/gzip',
+            headers={
+                'Content-Disposition': 'attachment; filename=training_arrays.pkl.gz',
+                'Content-Length': str(len(data))
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error downloading training arrays for {session_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 404
