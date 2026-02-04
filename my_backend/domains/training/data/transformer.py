@@ -572,33 +572,26 @@ def preprocess_and_interpolate_file(
     debug: bool = False
 ) -> pd.DataFrame:
     """
-    Pre-interpolate entire file to target frequency ONCE.
+    Prepare original data file for vectorized window extraction.
 
-    This avoids repeated interpolation in the main loop by creating
-    a pre-interpolated DataFrame at the target resolution.
+    Converts UTC column to datetime index and ensures values are numeric.
+    No interpolation is done here - extract_windows_fully_vectorized handles
+    linear interpolation from original data points matching training.py exactly.
 
     Args:
         df: Original DataFrame with UTC column and data column
         key: File key for info lookup
         dat_inf: Data info DataFrame
-        target_freq_minutes: Target frequency in minutes
-        utc_start: Start of time range
-        utc_end: End of time range
+        target_freq_minutes: Target frequency in minutes (unused, kept for API compat)
+        utc_start: Start of time range (unused, kept for API compat)
+        utc_end: End of time range (unused, kept for API compat)
         debug: Enable debug logging
 
     Returns:
-        DataFrame indexed by UTC with interpolated values
+        DataFrame indexed by UTC with original data values
     """
-    # Expand range to cover all possible windows (with buffer)
-    th_strt = float(dat_inf.loc[key, "th_strt"])
-    th_end = float(dat_inf.loc[key, "th_end"])
-    expanded_start = utc_start + pd.Timedelta(hours=th_strt) - pd.Timedelta(hours=2)
-    expanded_end = utc_end + pd.Timedelta(hours=th_end) + pd.Timedelta(hours=2)
-
-    # Work with a copy, set UTC as index
     df_work = df.copy()
     utc_col = df_work.columns[0]
-    val_col = df_work.columns[1]
 
     # Ensure UTC column is datetime
     if not pd.api.types.is_datetime64_any_dtype(df_work[utc_col]):
@@ -606,26 +599,10 @@ def preprocess_and_interpolate_file(
 
     df_work = df_work.set_index(utc_col)
 
-    # Create target time index at desired frequency
-    target_freq = f'{int(target_freq_minutes)}min' if target_freq_minutes == int(target_freq_minutes) else f'{target_freq_minutes}min'
+    # Ensure values are numeric (non-numeric → NaN, matching original's float() check)
+    df_work.iloc[:, 0] = pd.to_numeric(df_work.iloc[:, 0], errors='coerce')
 
-    # Clamp to data availability
-    data_start = df_work.index.min()
-    data_end = df_work.index.max()
-    actual_start = max(expanded_start, data_start)
-    actual_end = min(expanded_end, data_end)
-
-    full_index = pd.date_range(start=actual_start, end=actual_end, freq=target_freq)
-
-    # Reindex to union and interpolate
-    combined_index = df_work.index.union(full_index)
-    df_reindexed = df_work.reindex(combined_index)
-    df_interpolated = df_reindexed.interpolate(method='linear', limit_direction='both')
-
-    # Keep only target frequency timestamps
-    df_final = df_interpolated.reindex(full_index)
-
-    return df_final
+    return df_work
 
 
 def extract_windows_vectorized(
@@ -697,13 +674,17 @@ def extract_windows_fully_vectorized(
     debug: bool = False
 ) -> np.ndarray:
     """
-    FULLY VECTORIZED window extraction - 0 Python loops.
+    FULLY VECTORIZED window extraction with linear interpolation - 0 Python loops.
 
-    Uses numpy broadcasting and searchsorted for ~1000x speedup.
-    Implements nearest-neighbor matching identical to pandas get_indexer(method='nearest').
+    Matches original training.py behavior EXACTLY:
+    - For each target timestamp, finds the two surrounding ORIGINAL data points
+      (equivalent to utc_idx_pre + utc_idx_post)
+    - If either surrounding value is NaN → result is NaN (NaN barrier behavior)
+    - If target is out of data range → result is NaN (idx is None behavior)
+    - Otherwise, linear interpolation between surrounding points
 
     Args:
-        interpolated_df: Pre-interpolated DataFrame indexed by UTC
+        interpolated_df: DataFrame indexed by UTC with original data values
         utc_refs: List of reference timestamps
         th_strt_hours: Time horizon start in hours
         th_end_hours: Time horizon end in hours (not used directly)
@@ -714,81 +695,96 @@ def extract_windows_fully_vectorized(
     Returns:
         2D numpy array of shape (n_samples, n_points)
     """
-    step_start = time.time()
-
     n_samples = len(utc_refs)
 
     # =========================================================================
     # STEP A: Convert all reference timestamps to int64 nanoseconds
     # =========================================================================
-    # Convert utc_refs to numpy array of nanoseconds (int64)
     utc_refs_ns = np.array([pd.Timestamp(r).value for r in utc_refs], dtype=np.int64)
 
     # =========================================================================
     # STEP B: Calculate ALL window start timestamps (vectorized)
     # =========================================================================
-    # th_strt_hours to nanoseconds
     th_strt_ns = np.int64(th_strt_hours * 3600 * 1e9)
-
-    # window_starts_ns: shape (n_samples,)
     window_starts_ns = utc_refs_ns + th_strt_ns
 
     # =========================================================================
     # STEP C: Calculate ALL target timestamps for ALL points (broadcasting)
     # =========================================================================
-    # Point offsets in nanoseconds: shape (n_points,)
     point_offsets_ns = (np.arange(n_points, dtype=np.float64) * delt_transf_minutes * 60 * 1e9).astype(np.int64)
-
-    # Broadcasting: (n_samples, 1) + (1, n_points) = (n_samples, n_points)
     all_target_times_ns = window_starts_ns[:, np.newaxis] + point_offsets_ns[np.newaxis, :]
 
     # =========================================================================
-    # STEP D: Prepare interpolated data as numpy arrays
+    # STEP D: Prepare original data as numpy arrays
     # =========================================================================
-    # Get index as int64 nanoseconds
     df_index_ns = interpolated_df.index.astype(np.int64).values
-
-    # Get values as float array
     if len(interpolated_df.columns) > 0:
         df_values = interpolated_df.iloc[:, 0].values.astype(np.float64)
     else:
         df_values = interpolated_df.values.flatten().astype(np.float64)
 
-    # =========================================================================
-    # STEP E: Find ALL indices using searchsorted (single vectorized call!)
-    # =========================================================================
-    # Flatten for searchsorted
-    flat_targets = all_target_times_ns.ravel()  # shape: (n_samples * n_points,)
-
-    # searchsorted returns insertion points (index where target would be inserted)
-    insert_indices = np.searchsorted(df_index_ns, flat_targets, side='left')
+    n_data = len(df_index_ns)
 
     # =========================================================================
-    # STEP F: Implement NEAREST-NEIGHBOR logic (identical to pandas)
+    # STEP E: Flatten and find surrounding data points via searchsorted
+    # Matches utc_idx_pre (side='right', idx-1) and utc_idx_post (side='left')
     # =========================================================================
-    n_data_points = len(df_index_ns)
+    flat_targets = all_target_times_ns.ravel()
 
-    # Clip indices to valid range
-    left_indices = np.clip(insert_indices - 1, 0, n_data_points - 1)
-    right_indices = np.clip(insert_indices, 0, n_data_points - 1)
+    # utc_idx_post equivalent: first element >= target
+    right_idx = np.searchsorted(df_index_ns, flat_targets, side='left')
+    # utc_idx_pre equivalent: last element <= target
+    left_idx = right_idx - 1
 
-    # Get timestamps at left and right positions
-    left_times = df_index_ns[left_indices]
-    right_times = df_index_ns[right_indices]
-
-    # Calculate distances (absolute difference in nanoseconds)
-    left_dist = np.abs(flat_targets - left_times)
-    right_dist = np.abs(flat_targets - right_times)
-
-    # Choose nearest: if left_dist <= right_dist, use left; otherwise use right
-    # This matches pandas get_indexer(method='nearest') behavior
-    nearest_indices = np.where(left_dist <= right_dist, left_indices, right_indices)
+    # Initialize result as NaN (out-of-range stays NaN automatically)
+    flat_result = np.full(len(flat_targets), np.nan)
 
     # =========================================================================
-    # STEP G: Extract values and reshape
+    # STEP F: Exact match - target falls exactly on an original data point
+    # Matches original: if idx1 == idx2: val = dat.iloc[idx1, 1]
     # =========================================================================
-    # Get all values at once
-    flat_result = df_values[nearest_indices]
+    ri_clipped = np.clip(right_idx, 0, n_data - 1)
+    exact_match = (right_idx < n_data) & (df_index_ns[ri_clipped] == flat_targets)
+
+    if np.any(exact_match):
+        exact_vals = df_values[ri_clipped[exact_match]]
+        # Only assign if value is not NaN (original: math.isnan check)
+        valid_exact = ~np.isnan(exact_vals)
+        exact_indices = np.where(exact_match)[0]
+        flat_result[exact_indices[valid_exact]] = exact_vals[valid_exact]
+
+    # =========================================================================
+    # STEP G: Linear interpolation between surrounding original data points
+    # Matches original: val = (utc-utc1)/(utc2-utc1)*(val2-val1)+val1
+    # If either val1 or val2 is NaN → result is NaN (barrier behavior)
+    # =========================================================================
+    needs_interp = (left_idx >= 0) & (right_idx < n_data) & ~exact_match
+
+    if np.any(needs_interp):
+        li = left_idx[needs_interp]
+        ri = right_idx[needs_interp]
+
+        left_times = df_index_ns[li]
+        right_times = df_index_ns[ri]
+        left_vals = df_values[li]
+        right_vals = df_values[ri]
+
+        # Both surrounding values must be non-NaN (NaN barrier)
+        both_valid = ~np.isnan(left_vals) & ~np.isnan(right_vals)
+
+        # Linear interpolation
+        dt = (right_times - left_times).astype(np.float64)
+        dt[dt == 0] = 1.0  # avoid division by zero
+        frac = (flat_targets[needs_interp] - left_times).astype(np.float64) / dt
+        interpolated = left_vals + frac * (right_vals - left_vals)
+
+        # Additional NaN check on interpolated value (matches original: math.isnan)
+        interp_valid = both_valid & ~np.isnan(interpolated)
+        target_indices = np.where(needs_interp)[0]
+        flat_result[target_indices[interp_valid]] = interpolated[interp_valid]
+
+    # Out-of-range targets (left_idx < 0 or right_idx >= n_data) stay NaN
+    # This matches original: utc_idx_pre returns None or utc_idx_post returns None
 
     # Reshape to (n_samples, n_points)
     result = flat_result.reshape(n_samples, n_points)

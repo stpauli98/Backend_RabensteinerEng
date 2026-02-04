@@ -94,7 +94,6 @@ def _create_violin_plot_group(
         ax.set_xlabel("")
         ax.set_ylabel("")
 
-    plt.suptitle(title, fontsize=15, fontweight="bold")
     plt.tight_layout()
 
     # Convert to base64
