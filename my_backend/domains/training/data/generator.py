@@ -444,16 +444,19 @@ def generate_violin_plots_for_session(
     logger.debug("VIOLIN: Feature tuples built from processed arrays")
     logger.debug("=" * 60)
     logger.debug(f"VIOLIN: input_features ({len(input_features)}):")
-    for name, vals in input_features:
+    for feat in input_features:
+        name, vals = feat[0], feat[-1]
         logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
                      f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}], "
                      f"NaN count={np.isnan(vals).sum()}")
     logger.debug(f"VIOLIN: time_features ({len(time_features)}):")
-    for name, vals in time_features:
+    for feat in time_features:
+        name, vals = feat[0], feat[-1]
         logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
                      f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}]")
     logger.debug(f"VIOLIN: output_features ({len(output_features)}):")
-    for name, vals in output_features:
+    for feat in output_features:
+        name, vals = feat[0], feat[-1]
         logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
                      f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}], "
                      f"NaN count={np.isnan(vals).sum()}")
@@ -474,9 +477,9 @@ def generate_violin_plots_for_session(
         progress_tracker=progress_tracker
     )
 
-    input_feature_names = [name for name, _ in input_features]
-    time_feature_names = [name for name, _ in time_features]
-    output_feature_names = [name for name, _ in output_features]
+    input_feature_names = [feat[0] for feat in input_features]
+    time_feature_names = [feat[0] for feat in time_features]
+    output_feature_names = [feat[0] for feat in output_features]
 
     result = {
         'success': plot_result['success'],

@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 # SINGLE-FIGURE RENDERING (matches original training.py)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+MAX_VIOLIN_POINTS = 50_000  # Subsample limit for KDE - preserves distribution shape
+
+
 def _create_violin_plot_group(
     features: List,
     title: str,
@@ -81,11 +84,19 @@ def _create_violin_plot_group(
             name, values = feature_tuple
             ylabel = ""
 
-        # NaN check
-        is_all_nan = (np.isnan(values).all() if len(values) > 0 else True)
+        # Remove NaN values before subsampling
+        valid_values = values[~np.isnan(values)] if len(values) > 0 else values
 
-        if not is_all_nan:
-            sns.violinplot(y=values, ax=ax, color=palette_colors[i],
+        # Subsample to prevent OOM - KDE doesn't need millions of points
+        if len(valid_values) > MAX_VIOLIN_POINTS:
+            rng = np.random.RandomState(42)
+            indices = rng.choice(len(valid_values), MAX_VIOLIN_POINTS, replace=False)
+            valid_values = valid_values[indices]
+
+        is_empty = len(valid_values) == 0
+
+        if not is_empty:
+            sns.violinplot(y=valid_values, ax=ax, color=palette_colors[i],
                           inner="quartile", linewidth=1.5)
         else:
             ax.text(0.5, 0.5, 'No data', ha='center', va='center',
