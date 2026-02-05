@@ -13,8 +13,12 @@ import time
 import threading
 from typing import Optional, Any
 from shared.database.operations import get_supabase_client
+from shared.database.lifecycle import update_workflow_phase
 
 logger = logging.getLogger(__name__)
+
+# [WORKFLOW_DEBUG] Debug flag for workflow state transitions
+DEBUG_WORKFLOW = True
 
 # Debug flag - set to True to trace all emit calls
 DEBUG_TRACKER = True
@@ -321,8 +325,20 @@ class TrainingProgressTracker:
     # =========================================================================
 
     def training_started(self):
-        """Emit when training starts. Also starts heartbeat."""
+        """
+        Emit when training starts. Also starts heartbeat.
+        [WORKFLOW_DEBUG] Updates workflow_phase to 'phase3' (model training).
+        """
         logger.info(f"[TRAINING_TRACKER] Training started for session {self.session_id}")
+
+        # [WORKFLOW_DEBUG] Update workflow_phase to phase3 (model training)
+        if self.uuid_session_id:
+            try:
+                update_workflow_phase(str(self.uuid_session_id), 'phase3')
+                if DEBUG_WORKFLOW:
+                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase3' for session {self.session_id}")
+            except Exception as e:
+                logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to phase3: {str(e)}")
 
         # Start heartbeat to keep entry fresh
         self.start_heartbeat()
@@ -443,11 +459,29 @@ class TrainingProgressTracker:
         self.emit(95, f"Uploaded {model_count} model(s)")
 
     def complete(self):
-        """Emit completion status and cleanup database entry."""
+        """
+        Emit completion status, update workflow_phase, and cleanup database entry.
+        [WORKFLOW_DEBUG] Persists workflow_phase to 'phase4' (plotting interface) before cleanup.
+        NOTE: 'phase4' = Plotting Interface. 'completed' is set later when user finishes.
+        """
         logger.info(f"[TRAINING_TRACKER] Training completed for session {self.session_id}")
+
+        # [WORKFLOW_DEBUG] Update workflow_phase to 'phase4' (Plotting Interface)
+        # NOT 'completed' - that's set when user finishes viewing plots
+        if self.uuid_session_id:
+            try:
+                update_workflow_phase(str(self.uuid_session_id), 'phase4')
+                if DEBUG_WORKFLOW:
+                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase4' (Plotting Interface) for session {self.session_id}")
+            except Exception as e:
+                logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to phase4: {str(e)}")
+
         self.emit(100, "Training completed successfully", "completed")
         # Cleanup the progress entry so it doesn't interfere with next training
         self.cleanup_database_entry()
+
+        if DEBUG_WORKFLOW:
+            logger.info(f"[WORKFLOW_DEBUG] TrainingProgressTracker cleanup complete for session {self.session_id}")
 
     def error(self, message: str):
         """

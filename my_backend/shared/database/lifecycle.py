@@ -214,6 +214,62 @@ def finalize_session(
         raise DatabaseError(f"Error updating sessions table: {str(e)}")
 
 
+def update_workflow_phase(database_session_id: str, workflow_phase: str) -> bool:
+    """Update workflow_phase in sessions table.
+
+    [WORKFLOW_DEBUG] Persists workflow state for session restoration after page refresh.
+    This allows the frontend to restore to the correct workflow step when user returns.
+
+    Args:
+        database_session_id: UUID format session ID
+        workflow_phase: One of: 'upload', 'phase1', 'phase2', 'phase3', 'phase4', 'completed'
+            - upload: Initial file upload stage
+            - phase1: Dataset generation in progress
+            - phase2: Violin plots displayed, ready for training
+            - phase3: Model training in progress
+            - phase4: Plotting/visualization phase
+            - completed: Training finished successfully
+
+    Returns:
+        bool: True if successful
+
+    Raises:
+        ValidationError: If workflow_phase is invalid
+        DatabaseError: If database operation fails
+    """
+    valid_phases = {'upload', 'phase1', 'phase2', 'phase3', 'phase4', 'completed'}
+
+    if workflow_phase not in valid_phases:
+        logger.error(f"[WORKFLOW_DEBUG] Invalid workflow_phase: {workflow_phase}. Must be one of {valid_phases}")
+        raise ValidationError(f"Invalid workflow_phase: {workflow_phase}. Must be one of {valid_phases}")
+
+    logger.info(f"[WORKFLOW_DEBUG] Updating workflow_phase to '{workflow_phase}' for session {database_session_id}")
+
+    supabase = get_supabase_client()
+
+    try:
+        response = supabase.table(TableNames.SESSIONS)\
+            .update({
+                "workflow_phase": workflow_phase,
+                "updated_at": datetime.now().isoformat()
+            })\
+            .eq("id", database_session_id)\
+            .execute()
+
+        if hasattr(response, 'error') and response.error:
+            logger.error(f"[WORKFLOW_DEBUG] Database error updating workflow_phase: {response.error}")
+            raise DatabaseError(f"Error updating workflow_phase: {response.error}")
+
+        logger.info(f"[WORKFLOW_DEBUG] Successfully updated workflow_phase to '{workflow_phase}' for session {database_session_id}")
+        return True
+
+    except DatabaseError:
+        raise
+    except Exception as e:
+        logger.error(f"[WORKFLOW_DEBUG] Exception updating workflow_phase: {str(e)}")
+        raise DatabaseError(f"Error updating workflow_phase: {str(e)}")
+
+
 def update_session_name(session_id: str, session_name: str, user_id: str = None) -> bool:
     """Update session name in the sessions table.
 

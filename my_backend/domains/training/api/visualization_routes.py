@@ -21,6 +21,7 @@ from .common import (
 
 from domains.training.services.visualization import Visualizer
 from domains.training.constants import calculate_time_deltas
+from shared.database.lifecycle import update_workflow_phase
 
 bp = Blueprint('training_visualization', __name__)
 logger = get_logger(__name__)
@@ -129,6 +130,15 @@ def generate_plot():
             df_plot_fcst=df_plot_fcst,
             model_id=model_id
         )
+
+        # [WORKFLOW_DEBUG] Update workflow_phase to 'completed' after plot generation
+        # This marks the end of the workflow - refresh will reset to 'upload'
+        try:
+            uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+            update_workflow_phase(str(uuid_session_id), 'completed')
+            logger.info(f"[WORKFLOW_DEBUG] generate_plot: workflow_phase updated to 'completed' for session {session_id}")
+        except Exception as wf_error:
+            logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to completed: {str(wf_error)}")
 
         return jsonify({
             'success': True,

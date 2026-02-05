@@ -72,7 +72,8 @@ def generate_datasets(session_id):
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         socketio = current_app.extensions.get('socketio')
-        progress_tracker = ViolinProgressTracker(socketio, session_id)
+        # [WORKFLOW_DEBUG] Pass uuid_session_id for workflow_phase persistence
+        progress_tracker = ViolinProgressTracker(socketio, session_id, uuid_session_id)
 
         result = generate_violin_plots_for_session(
             session_id=session_id,
@@ -275,14 +276,17 @@ def get_results_summary(session_id):
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
-        # 1. Get n_dat from sessions table
+        # [WORKFLOW_DEBUG] 1. Get n_dat and workflow_phase from sessions table
         n_dat = 0
+        workflow_phase = 'upload'  # Default
         try:
-            session_response = supabase.table('sessions').select('n_dat').eq('id', uuid_session_id).single().execute()
+            session_response = supabase.table('sessions').select('n_dat, workflow_phase').eq('id', uuid_session_id).single().execute()
             if session_response.data:
                 n_dat = session_response.data.get('n_dat', 0) or 0
-        except Exception:
-            pass
+                workflow_phase = session_response.data.get('workflow_phase', 'upload') or 'upload'
+                logger.info(f"[WORKFLOW_DEBUG] get_results_summary for {session_id}: n_dat={n_dat}, workflow_phase={workflow_phase}")
+        except Exception as e:
+            logger.warning(f"[WORKFLOW_DEBUG] Failed to get session data for {session_id}: {str(e)}")
 
         # 2. Check if training_results exist (without downloading pickle)
         results_response = supabase.table('training_results')\
@@ -315,10 +319,12 @@ def get_results_summary(session_id):
             violin_plot_types = [v.get('plot_type') for v in viz_response.data if v.get('plot_type')]
             has_violin_plots = len(violin_plot_types) > 0
 
+        # [WORKFLOW_DEBUG] Include workflow_phase in response for frontend session restoration
         return jsonify({
             'success': True,
             'session_id': session_id,
             'n_dat': n_dat,
+            'workflow_phase': workflow_phase,  # [WORKFLOW_DEBUG] Added for session restoration
             'has_training_results': has_training_results,
             'has_trained_model': has_trained_model,
             'model_count': model_count,

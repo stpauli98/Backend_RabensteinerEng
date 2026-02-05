@@ -10,8 +10,12 @@ import logging
 import time
 from typing import Optional
 from shared.database.operations import get_supabase_client
+from shared.database.lifecycle import update_workflow_phase
 
 logger = logging.getLogger(__name__)
+
+# [WORKFLOW_DEBUG] Debug flag for workflow state transitions
+DEBUG_WORKFLOW = True
 
 
 class ViolinProgressTracker:
@@ -134,7 +138,22 @@ class ViolinProgressTracker:
     # =========================================================================
 
     def start(self):
-        """Emit initial progress."""
+        """
+        Emit initial progress and update workflow_phase to 'phase1'.
+        [WORKFLOW_DEBUG] Marks the start of dataset generation phase.
+        """
+        if DEBUG_WORKFLOW:
+            logger.info(f"[WORKFLOW_DEBUG] ViolinProgressTracker.start() called for session {self.session_id}")
+
+        # [WORKFLOW_DEBUG] Update workflow_phase to 'phase1' (dataset generation started)
+        if self.uuid_session_id:
+            try:
+                update_workflow_phase(str(self.uuid_session_id), 'phase1')
+                if DEBUG_WORKFLOW:
+                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase1' for session {self.session_id}")
+            except Exception as e:
+                logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to phase1: {str(e)}")
+
         self.emit(5, "violin.progress.starting")
 
     def downloading_input(self):
@@ -226,10 +245,28 @@ class ViolinProgressTracker:
         self.emit(97, "violin.progress.savingToDatabase")
 
     def complete(self):
-        """Emit completion status and cleanup database entry."""
+        """
+        Emit completion status, update workflow_phase, and cleanup database entry.
+        [WORKFLOW_DEBUG] Persists workflow_phase to 'phase2' before cleanup for session restoration.
+        """
+        if DEBUG_WORKFLOW:
+            logger.info(f"[WORKFLOW_DEBUG] ViolinProgressTracker.complete() called for session {self.session_id}")
+
+        # [WORKFLOW_DEBUG] Update workflow_phase BEFORE cleanup so state persists
+        if self.uuid_session_id:
+            try:
+                update_workflow_phase(str(self.uuid_session_id), 'phase2')
+                if DEBUG_WORKFLOW:
+                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase2' for session {self.session_id}")
+            except Exception as e:
+                logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase: {str(e)}")
+
         self.emit(100, "violin.progress.complete", "completed")
         # Cleanup the progress entry so it doesn't interfere with training status
         self.cleanup_database_entry()
+
+        if DEBUG_WORKFLOW:
+            logger.info(f"[WORKFLOW_DEBUG] ViolinProgressTracker cleanup complete for session {self.session_id}")
 
     def error(self, message: str):
         """
