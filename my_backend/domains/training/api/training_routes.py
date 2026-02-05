@@ -1,11 +1,12 @@
 """
 Training routes for training API.
 
-Contains 5 endpoints for ML model training:
+Contains 6 endpoints for ML model training:
 - generate-datasets/<session_id>
 - train-models/<session_id>
 - status/<session_id>
-- results/<session_id>
+- results-summary/<session_id>  (NEW - lightweight metadata only)
+- results/<session_id>          (DEPRECATED - use results-summary instead)
 - get-training-results/<session_id>
 """
 
@@ -260,10 +261,87 @@ def get_training_status(session_id: str):
         }), 500
 
 
+@bp.route('/results-summary/<session_id>', methods=['GET'])
+@require_auth
+def get_results_summary(session_id):
+    """
+    Get lightweight summary of training results.
+    Returns only metadata - NO large arrays or model data.
+    Used by frontend for session restoration checks.
+
+    Response size: ~500 bytes (vs 50-100MB for /results endpoint)
+    """
+    try:
+        supabase = get_supabase_client(use_service_role=True)
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+
+        # 1. Get n_dat from sessions table
+        n_dat = 0
+        try:
+            session_response = supabase.table('sessions').select('n_dat').eq('id', uuid_session_id).single().execute()
+            if session_response.data:
+                n_dat = session_response.data.get('n_dat', 0) or 0
+        except Exception:
+            pass
+
+        # 2. Check if training_results exist (without downloading pickle)
+        results_response = supabase.table('training_results')\
+            .select('id, status, created_at, results_metadata')\
+            .eq('session_id', uuid_session_id)\
+            .order('created_at.desc')\
+            .limit(1)\
+            .execute()
+
+        has_training_results = bool(results_response.data and len(results_response.data) > 0)
+
+        # 3. Check for trained models
+        models_response = supabase.table('trained_models')\
+            .select('id')\
+            .eq('session_id', uuid_session_id)\
+            .execute()
+
+        has_trained_model = bool(models_response.data and len(models_response.data) > 0)
+        model_count = len(models_response.data) if models_response.data else 0
+
+        # 4. Check for visualizations (violin plots)
+        viz_response = supabase.table('visualizations')\
+            .select('id, plot_type')\
+            .eq('session_id', uuid_session_id)\
+            .execute()
+
+        has_violin_plots = False
+        violin_plot_types = []
+        if viz_response.data:
+            violin_plot_types = [v.get('plot_type') for v in viz_response.data if v.get('plot_type')]
+            has_violin_plots = len(violin_plot_types) > 0
+
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'n_dat': n_dat,
+            'has_training_results': has_training_results,
+            'has_trained_model': has_trained_model,
+            'model_count': model_count,
+            'has_violin_plots': has_violin_plots,
+            'violin_plot_types': violin_plot_types
+        })
+
+    except PermissionError as e:
+        return jsonify({'success': False, 'error': str(e)}), 403
+    except Exception as e:
+        logger.error(f"Error getting results summary for {session_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @bp.route('/results/<session_id>', methods=['GET'])
 @require_auth
 def get_training_results(session_id):
-    """Get training results for a session."""
+    """
+    DEPRECATED: Use /results-summary for metadata checks.
+    This endpoint downloads full results and may timeout on large datasets.
+    Kept for backward compatibility only.
+    """
+    logger.warning(f"DEPRECATED endpoint /results called for session {session_id}")
     try:
         from utils.training_storage import download_training_results
         supabase = get_supabase_client(use_service_role=True)
