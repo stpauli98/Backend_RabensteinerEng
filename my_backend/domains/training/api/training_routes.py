@@ -295,7 +295,7 @@ def get_results_summary(session_id):
         has_training_results = bool(results_response.data and len(results_response.data) > 0)
 
         # 3. Check for trained models
-        models_response = supabase.table('trained_models')\
+        models_response = supabase.table('saved_models')\
             .select('id')\
             .eq('session_id', uuid_session_id)\
             .execute()
@@ -304,7 +304,7 @@ def get_results_summary(session_id):
         model_count = len(models_response.data) if models_response.data else 0
 
         # 4. Check for visualizations (violin plots)
-        viz_response = supabase.table('visualizations')\
+        viz_response = supabase.table('training_visualizations')\
             .select('id, plot_type')\
             .eq('session_id', uuid_session_id)\
             .execute()

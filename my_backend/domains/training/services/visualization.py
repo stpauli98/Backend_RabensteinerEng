@@ -82,14 +82,17 @@ class Visualizer:
         self.plots = {}
     
     def setup_plot_style(self):
-        """Setup matplotlib style settings"""
+        """Setup matplotlib style settings - white background, no gray"""
         try:
-            plt.style.use('seaborn-v0_8')
+            # Use default style with white background (no gray)
+            plt.style.use('default')
             sns.set_palette(PLOT_SETTINGS['color_palette'])
             plt.rcParams['figure.figsize'] = PLOT_SETTINGS['figure_size']
             plt.rcParams['figure.dpi'] = PLOT_SETTINGS['dpi']
             plt.rcParams['font.size'] = PLOT_SETTINGS['font_size']
-            
+            plt.rcParams['axes.facecolor'] = 'white'
+            plt.rcParams['figure.facecolor'] = 'white'
+
         except Exception as e:
             logger.warning(f"Could not set plot style: {str(e)}")
     
@@ -383,7 +386,7 @@ class Visualizer:
         """
         try:
             buffer = BytesIO()
-            fig.savefig(buffer, format='png', bbox_inches='tight', dpi=PLOT_SETTINGS['dpi'])
+            fig.savefig(buffer, format='png', bbox_inches='tight', dpi=PLOT_SETTINGS['dpi'], facecolor='white')
             buffer.seek(0)
             
             image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
@@ -1398,6 +1401,14 @@ class Visualizer:
                     )
 
                 # ===============================================================
+                # X-AXIS CONFIGURATION FOR "gemeinsame Achse" MODE
+                # ===============================================================
+                if y_sbpl_set == "gemeinsame Achse":
+                    # Configure x-axis ticks and labels (same as separate axes mode)
+                    ax_sbpl_orig.tick_params(axis="x", labelsize=8)
+                    plt.setp(ax_sbpl_orig.get_xticklabels(), rotation=45)
+
+                # ===============================================================
                 # SUBPLOT TITLE - MATCHES ORIGINAL (line 3269)
                 # ===============================================================
                 if tst_inf[key_1]["utc_ref"] is not None:
@@ -1442,7 +1453,7 @@ class Visualizer:
             # SAVE PLOT
             # ===================================================================
             buffer = io.BytesIO()
-            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight', facecolor='white')
             buffer.seek(0)
             plot_data = base64.b64encode(buffer.getvalue()).decode()
             plt.close()

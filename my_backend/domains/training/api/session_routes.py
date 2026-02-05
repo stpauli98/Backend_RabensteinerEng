@@ -187,7 +187,7 @@ def get_session_from_database_endpoint(session_id):
             return create_error_response('Session not found in database', 404)
 
         session_data = session_response.data[0]
-        files_response = supabase.table('files').select('*').eq('session_id', database_session_id).execute()
+        files_response = supabase.table('files').select('*').eq('session_id', database_session_id).order('color_index').execute()
         time_info_response = supabase.table('time_info').select('*').eq('session_id', database_session_id).execute()
         zeitschritte_response = supabase.table('zeitschritte').select('*').eq('session_id', database_session_id).execute()
 

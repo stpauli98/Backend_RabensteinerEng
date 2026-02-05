@@ -162,7 +162,7 @@ class DataLoader:
         try:
             uuid_session_id = self._convert_to_uuid(session_id)
 
-            response = self.supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
+            response = self.supabase.table('files').select('*').eq('session_id', uuid_session_id).order('color_index').execute()
 
             files_data = response.data or []
 

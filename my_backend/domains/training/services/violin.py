@@ -72,6 +72,9 @@ def _create_single_violin_plot(
         return None
 
     fig, ax = plt.subplots(figsize=(3, 6))
+    # Set white background (no gray)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
 
     sns.violinplot(y=valid_values, ax=ax, color=color,
                    inner="quartile", linewidth=1.5)
@@ -84,7 +87,7 @@ def _create_single_violin_plot(
 
     # Convert to base64
     buffer = io.BytesIO()
-    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight', facecolor='white')
     buffer.seek(0)
     plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
 
@@ -121,6 +124,8 @@ def _create_violin_plot_group(
         return None
 
     fig, axes = plt.subplots(1, n, figsize=(2 * n, 6))
+    # Set white background (no gray)
+    fig.patch.set_facecolor('white')
 
     # Handle single subplot case (axes is not array)
     if n == 1:
@@ -128,6 +133,7 @@ def _create_violin_plot_group(
 
     for i, feature_tuple in enumerate(features):
         ax = axes[i]
+        ax.set_facecolor('white')  # White background for each subplot
 
         # Support both 2-tuple (name, values) and 3-tuple (bezeichnung, column_name, values)
         if len(feature_tuple) == 3:
@@ -162,7 +168,7 @@ def _create_violin_plot_group(
 
     # Convert to base64
     buffer = io.BytesIO()
-    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight', facecolor='white')
     buffer.seek(0)
     plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
 
