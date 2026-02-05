@@ -1,10 +1,10 @@
 """
 Violin plot generator for data visualization without model training.
 
-Generates 3 separate plots:
-  - INPUT features (Eingabedaten)
-  - TIME components (Zeitmerkmale)
-  - OUTPUT features (Ausgabedaten)
+Generates individual plots per variable:
+  - INPUT features: One plot per input variable (IN1, IN2, IN3...)
+  - TIME components: One plot per time feature (IN4, IN5... continuing from inputs)
+  - OUTPUT features: One plot per output variable (OUT1, OUT2...)
 
 Uses shared color palette: tab20 with total features count
 - Input colors: palette[0] to palette[n_input-1]
@@ -13,8 +13,7 @@ Uses shared color palette: tab20 with total features count
 
 TIME component names are UPPERCASE (Y_sin, Y_cos, M_sin, etc.)
 
-Single matplotlib figure per plot group - matches original training.py approach:
-  plt.subplots(1, n, figsize=(2*n, 6))
+Each variable gets its own single-figure plot: plt.subplots(figsize=(3, 6))
 """
 
 import logging
@@ -41,6 +40,62 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MAX_VIOLIN_POINTS = 50_000  # Subsample limit for KDE - preserves distribution shape
+
+
+def _create_single_violin_plot(
+    name: str,
+    values: np.ndarray,
+    color,
+    ylabel: str = ""
+) -> Optional[str]:
+    """
+    Create a single violin plot for one variable.
+
+    Args:
+        name: Display name for the plot title
+        values: Data values array
+        color: Color for the violin
+        ylabel: Y-axis label (column name)
+
+    Returns:
+        base64-encoded PNG data URI string, or None if empty
+    """
+    # Remove NaN values
+    valid_values = values[~np.isnan(values)] if len(values) > 0 else values
+
+    # Subsample if needed
+    if len(valid_values) > MAX_VIOLIN_POINTS:
+        rng = np.random.RandomState(42)
+        indices = rng.choice(len(valid_values), MAX_VIOLIN_POINTS, replace=False)
+        valid_values = valid_values[indices]
+
+    if len(valid_values) == 0:
+        return None
+
+    fig, ax = plt.subplots(figsize=(3, 6))
+
+    sns.violinplot(y=valid_values, ax=ax, color=color,
+                   inner="quartile", linewidth=1.5)
+
+    ax.set_title(name)
+    ax.set_xlabel("")
+    ax.set_ylabel(ylabel)
+
+    plt.tight_layout()
+
+    # Convert to base64
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    buffer.seek(0)
+    plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+
+    # Cleanup
+    plt.close(fig)
+    buffer.close()
+    del fig
+    gc.collect()
+
+    return f"data:image/png;base64,{plot_base64}"
 
 
 def _create_violin_plot_group(
@@ -113,10 +168,6 @@ def _create_violin_plot_group(
     plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
     buffer.seek(0)
     plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-
-    elapsed = time_module.time() - t_start
-    logger.debug(f"VIOLIN RENDER:   Plot '{title}' complete in {elapsed:.2f}s, "
-                 f"base64 size: {len(plot_base64)} chars")
 
     # Cleanup
     plt.close(fig)
@@ -252,76 +303,96 @@ def generate_violin_plots_from_data(
         total_features = n_input + n_time + n_output
         palette = sns.color_palette("tab20", max(total_features, 20))
 
-        logger.debug("=" * 60)
-        logger.debug("VIOLIN RENDER: generate_violin_plots_from_data() START")
-        logger.debug(f"VIOLIN RENDER: Palette size: {total_features} "
-                     f"(input={n_input}, time={n_time}, output={n_output})")
-        logger.debug("=" * 60)
-
         # ═══════════════════════════════════════════════════════════════════
-        # INPUT PLOT
+        # INPUT PLOTS - Individual plot per variable
         # ═══════════════════════════════════════════════════════════════════
         if input_features and len(input_features) > 0:
             if progress_tracker:
                 progress_tracker.generating_input_plot()
 
-            input_colors = [palette[i] for i in range(n_input)]
-            input_base64 = _create_violin_plot_group(
-                input_features,
-                "Datenverteilung \nder Eingabedaten",
-                input_colors
-            )
-            if input_base64:
-                plots['input_violin_plot'] = {'data': input_base64, 'type': 'input'}
+            for i, feature_tuple in enumerate(input_features):
+                # Support both 2-tuple and 3-tuple format
+                if len(feature_tuple) == 3:
+                    name, ylabel, values = feature_tuple
+                else:
+                    name, values = feature_tuple
+                    ylabel = ""
+
+                color = palette[i]
+                plot_base64 = _create_single_violin_plot(name, values, color, ylabel)
+
+                if plot_base64:
+                    # Use sanitized name as key
+                    safe_name = name.replace(' ', '_').replace('/', '_')
+                    plots[f'input_{safe_name}'] = {
+                        'data': plot_base64,
+                        'type': 'input',
+                        'label': f'IN{i + 1}'
+                    }
 
             if progress_tracker:
                 progress_tracker.input_plot_complete()
 
         # ═══════════════════════════════════════════════════════════════════
-        # TIME PLOT
+        # TIME PLOTS - Individual plot per component (labels continue from input)
         # ═══════════════════════════════════════════════════════════════════
         if time_features and len(time_features) > 0:
             if progress_tracker:
                 progress_tracker.generating_time_plot()
 
-            time_colors = [palette[n_input + i] for i in range(n_time)]
-            time_base64 = _create_violin_plot_group(
-                time_features,
-                "Datenverteilung \nder Zeitmerkmale",
-                time_colors
-            )
-            if time_base64:
-                plots['time_violin_plot'] = {'data': time_base64, 'type': 'time'}
+            for i, feature_tuple in enumerate(time_features):
+                if len(feature_tuple) == 3:
+                    name, ylabel, values = feature_tuple
+                else:
+                    name, values = feature_tuple
+                    ylabel = ""
+
+                color = palette[n_input + i]
+                plot_base64 = _create_single_violin_plot(name, values, color, ylabel)
+
+                if plot_base64:
+                    safe_name = name.replace(' ', '_').replace('/', '_')
+                    plots[f'time_{safe_name}'] = {
+                        'data': plot_base64,
+                        'type': 'time',
+                        'label': f'IN{n_input + i + 1}'
+                    }
 
             if progress_tracker:
                 progress_tracker.time_plot_complete()
 
         # ═══════════════════════════════════════════════════════════════════
-        # OUTPUT PLOT
+        # OUTPUT PLOTS - Individual plot per variable
         # ═══════════════════════════════════════════════════════════════════
         if output_features and len(output_features) > 0:
             if progress_tracker:
                 progress_tracker.generating_output_plot()
 
-            output_colors = [palette[n_input + n_time + i] for i in range(n_output)]
-            output_base64 = _create_violin_plot_group(
-                output_features,
-                "Datenverteilung \nder Ausgabedaten",
-                output_colors
-            )
-            if output_base64:
-                plots['output_violin_plot'] = {'data': output_base64, 'type': 'output'}
+            for i, feature_tuple in enumerate(output_features):
+                if len(feature_tuple) == 3:
+                    name, ylabel, values = feature_tuple
+                else:
+                    name, values = feature_tuple
+                    ylabel = ""
+
+                color = palette[n_input + n_time + i]
+                plot_base64 = _create_single_violin_plot(name, values, color, ylabel)
+
+                if plot_base64:
+                    safe_name = name.replace(' ', '_').replace('/', '_')
+                    plots[f'output_{safe_name}'] = {
+                        'data': plot_base64,
+                        'type': 'output',
+                        'label': f'OUT{i + 1}'
+                    }
 
             if progress_tracker:
                 progress_tracker.output_plot_complete()
 
-        logger.debug(f"VIOLIN RENDER: Generated {len(plots)} plots: {list(plots.keys())}")
-        logger.debug("VIOLIN RENDER: generate_violin_plots_from_data() DONE")
-
         return {
             'success': True,
             'plots': plots,
-            'message': 'Violin plots generated successfully (3 plots: input, time, output)'
+            'message': f'Violin plots generated successfully ({len(plots)} individual plots)'
         }
 
     except Exception as e:
