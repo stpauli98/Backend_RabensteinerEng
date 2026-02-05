@@ -87,10 +87,6 @@ def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker
     from domains.training.config import MTS, T
 
     try:
-        logger.debug("=" * 60)
-        logger.debug("VIOLIN: _prepare_processed_data() START")
-        logger.debug("=" * 60)
-
         # 1. Configure MTS from zeitschritte
         zeitschritte = session_data.get('zeitschritte', {})
         mts_config = MTS()
@@ -141,13 +137,6 @@ def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker
             else:
                 o_dat[bezeichnung] = df_copy
 
-        logger.debug(f"VIOLIN: i_dat keys (input files): {list(i_dat.keys())}")
-        logger.debug(f"VIOLIN: o_dat keys (output files): {list(o_dat.keys())}")
-        for key, df in i_dat.items():
-            logger.debug(f"VIOLIN:   i_dat['{key}'] shape={df.shape}, "
-                         f"UTC range=[{df['UTC'].iloc[0]} -> {df['UTC'].iloc[-1]}], "
-                         f"value range=[{df.iloc[:,1].min():.2f} -> {df.iloc[:,1].max():.2f}]")
-
         if not i_dat or not o_dat:
             logger.warning("_prepare_processed_data: Missing input or output data")
             return None
@@ -173,9 +162,6 @@ def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker
             progress_tracker.ndat_loading_data()
         i_dat, i_dat_inf = load(i_dat, i_dat_inf)
         o_dat, o_dat_inf = load(o_dat, o_dat_inf)
-
-        logger.debug(f"VIOLIN: i_dat_inf index (order): {list(i_dat_inf.index)}")
-        logger.debug(f"VIOLIN: o_dat_inf index (order): {list(o_dat_inf.index)}")
 
         # 7. Set zeithorizont from metadata (AFTER load())
         for key in i_dat_inf.index:
@@ -206,14 +192,9 @@ def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker
         i_dat_inf = transf(i_dat_inf, mts_config.I_N, mts_config.OFST)
         o_dat_inf = transf(o_dat_inf, mts_config.O_N, mts_config.OFST)
 
-        logger.debug(f"VIOLIN: MTS config: I_N={mts_config.I_N}, O_N={mts_config.O_N}, "
-                     f"DELT={mts_config.DELT}, OFST={mts_config.OFST}")
-
         # 9. Determine time range (CRITICAL: .min() for utc_end!)
         utc_strt = i_dat_inf["utc_min"].min()
         utc_end = i_dat_inf["utc_max"].min()  # CRITICAL: Use .min() not .max()!
-
-        logger.debug(f"VIOLIN: UTC range: {utc_strt} -> {utc_end}")
 
         # 10. Build feature name lists matching combined array column order
         i_list = list(i_dat_inf.index)  # File bezeichnungen in deterministic order
@@ -248,13 +229,6 @@ def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker
 
         n_dat = i_array_3D.shape[0] if len(i_array_3D) > 0 else 0
 
-        logger.debug(f"VIOLIN: i_array_3D shape: {i_array_3D.shape}")
-        logger.debug(f"VIOLIN: o_array_3D shape: {o_array_3D.shape}")
-        logger.debug(f"VIOLIN: i_combined_array shape: {i_combined_array.shape}")
-        logger.debug(f"VIOLIN: o_combined_array shape: {o_combined_array.shape}")
-        logger.debug(f"VIOLIN: n_dat (training samples): {n_dat}")
-        logger.debug(f"VIOLIN: Feature lists -> i_list={i_list}, time_list={time_list}, o_list={o_list}")
-
         # Save 3D arrays to Supabase Storage for debugging/comparison downloads
         if uuid_session_id:
             try:
@@ -266,8 +240,6 @@ def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker
         del i_array_3D, o_array_3D
         import gc
         gc.collect()
-        logger.debug("VIOLIN: Freed 3D arrays, keeping combined arrays only")
-        logger.debug("VIOLIN: _prepare_processed_data() DONE")
 
         if progress_tracker:
             progress_tracker.ndat_arrays_complete()
@@ -438,28 +410,6 @@ def generate_violin_plots_for_session(
     del i_combined, o_combined, processed
     import gc
     gc.collect()
-    logger.debug("VIOLIN: Freed combined arrays, column slices retained")
-
-    logger.debug("=" * 60)
-    logger.debug("VIOLIN: Feature tuples built from processed arrays")
-    logger.debug("=" * 60)
-    logger.debug(f"VIOLIN: input_features ({len(input_features)}):")
-    for feat in input_features:
-        name, vals = feat[0], feat[-1]
-        logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
-                     f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}], "
-                     f"NaN count={np.isnan(vals).sum()}")
-    logger.debug(f"VIOLIN: time_features ({len(time_features)}):")
-    for feat in time_features:
-        name, vals = feat[0], feat[-1]
-        logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
-                     f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}]")
-    logger.debug(f"VIOLIN: output_features ({len(output_features)}):")
-    for feat in output_features:
-        name, vals = feat[0], feat[-1]
-        logger.debug(f"VIOLIN:   '{name}': shape={vals.shape}, "
-                     f"range=[{np.nanmin(vals):.4f} -> {np.nanmax(vals):.4f}], "
-                     f"NaN count={np.isnan(vals).sum()}")
 
     if not input_features and not output_features:
         if progress_tracker:

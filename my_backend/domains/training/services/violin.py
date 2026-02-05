@@ -18,7 +18,6 @@ Each variable gets its own single-figure plot: plt.subplots(figsize=(3, 6))
 
 import logging
 import gc
-import time as time_module
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -120,8 +119,6 @@ def _create_violin_plot_group(
     n = len(features)
     if n == 0:
         return None
-
-    t_start = time_module.time()
 
     fig, axes = plt.subplots(1, n, figsize=(2 * n, 6))
 
