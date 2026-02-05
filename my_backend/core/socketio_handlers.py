@@ -87,11 +87,74 @@ def register_socketio_handlers(socketio):
             if session_id:
                 supabase = get_supabase_client()
                 uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
-                
+                room = f"training_{session_id}"
+
                 if uuid_session_id:
+                    # [WORKFLOW_DEBUG] PRIORITY 1: Check training_progress for active training
+                    try:
+                        progress_result = supabase.table('training_progress').select(
+                            'status, overall_progress, current_step, model_progress, updated_at'
+                        ).eq('session_id', str(uuid_session_id)).single().execute()
+
+                        if progress_result.data and progress_result.data.get('status') == 'running':
+                            progress = progress_result.data
+
+                            # Check freshness - only emit if updated within last 2 minutes
+                            from datetime import datetime, timezone
+                            updated_at_str = progress.get('updated_at')
+                            is_fresh = False
+                            if updated_at_str:
+                                try:
+                                    # Parse ISO timestamp
+                                    updated_at = datetime.fromisoformat(updated_at_str.replace('Z', '+00:00'))
+                                    now = datetime.now(timezone.utc)
+                                    age_seconds = (now - updated_at).total_seconds()
+                                    is_fresh = age_seconds < 120  # 2 minutes
+                                    logger.info(f"[WORKFLOW_DEBUG] request_training_status: Training age={age_seconds:.1f}s, is_fresh={is_fresh}")
+                                except Exception as parse_error:
+                                    logger.warning(f"[WORKFLOW_DEBUG] Could not parse updated_at: {parse_error}")
+                                    is_fresh = False
+
+                            if is_fresh:
+                                current_step = (progress.get('current_step') or '').lower()
+
+                                # Check if this is dataset generation (NOT model training)
+                                is_dataset_generation = (
+                                    'dataset' in current_step or
+                                    'violin' in current_step or
+                                    'generating' in current_step
+                                )
+
+                                if is_dataset_generation:
+                                    # This is dataset generation - let request_dataset_status handle it
+                                    logger.info(f"[WORKFLOW_DEBUG] request_training_status: Skipping dataset generation (handled by request_dataset_status)")
+                                else:
+                                    # This is actual model training - emit training_progress
+                                    model_progress = progress.get('model_progress', {}) or {}
+                                    logger.info(f"[WORKFLOW_DEBUG] request_training_status: Active MODEL training found, progress={progress.get('overall_progress')}%")
+
+                                    emit('training_progress', {
+                                        'session_id': session_id,
+                                        'status': 'training_starting',
+                                        'phase': model_progress.get('phase', 'training_execution'),
+                                        'progress_percent': progress.get('overall_progress', 0),
+                                        'message': progress.get('current_step', 'Training in progress...'),
+                                        'epoch': model_progress.get('epoch', 0),
+                                        'total_epochs': model_progress.get('total_epochs', 100),
+                                        'loss': model_progress.get('loss', 0),
+                                        'val_loss': model_progress.get('val_loss', 0),
+                                        'model_name': model_progress.get('model_name', 'Dense')
+                                    }, room=room)
+                                    return
+                            else:
+                                logger.info(f"[WORKFLOW_DEBUG] request_training_status: Training found but stale (updated_at={updated_at_str})")
+                    except Exception as e:
+                        # No active training in progress, continue to check training_results
+                        logger.debug(f"[WORKFLOW_DEBUG] request_training_status: No active training found: {e}")
+
+                    # PRIORITY 2: Fall back to training_results (completed trainings)
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
-                    
-                    room = f"training_{session_id}"
+
                     if results.data:
                         training_status = results.data[0]
                         emit('training_status_update', {
@@ -152,11 +215,16 @@ def register_socketio_handlers(socketio):
             if session_id:
                 supabase = get_supabase_client()
                 uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
-                
+                room = f"training_{session_id}"
+
                 if uuid_session_id:
+                    # NOTE: Removed active progress emission here - it was causing oscillations
+                    # with real-time Socket.IO updates. Let real-time handle active progress,
+                    # this handler only provides status for completed/failed operations.
+
+                    # Check training_results for completed operations
                     results = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
 
-                    room = f"training_{session_id}"
                     if results.data:
                         dataset_status = results.data[0]
                         emit('dataset_status_update', {
