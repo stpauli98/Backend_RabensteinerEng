@@ -235,7 +235,7 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             tracker.total_steps = 1
             tracker.current_step = 1
             tracker.start_step(len(time_list))
-            tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': mode_input})
+            tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': mode_input or 'none'})
 
         # Counter for raw data iteration
         i_raw = 0
@@ -246,8 +246,15 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         # Emit frequency - every ~2% of steps or min 500 rows
         emit_frequency = max(500, len(time_list) // 50)
 
+        # NO METHOD SELECTED: All values become NaN
+        if not mode_input or mode_input.strip() == '':
+            if tracker:
+                tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': 'none'})
+
+            value_list = ["nan"] * len(time_list)
+
         # METHOD: MEAN
-        if mode_input == "mean":
+        elif mode_input == "mean":
             if tracker:
                 tracker.emit('processing', 37, 'fp_processing_start', force=True, message_params={'mode': 'mean'})
 

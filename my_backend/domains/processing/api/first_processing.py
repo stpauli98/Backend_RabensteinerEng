@@ -70,7 +70,7 @@ def upload_chunk():
             logger.error(f"Error parsing parameters: {e}")
             return jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400
 
-        if not all([upload_id, mode, tss > 0]):
+        if not all([upload_id, tss > 0]):
             return jsonify({"error": "Missing required parameters"}), 400
 
         chunk = request.files['fileChunk']
