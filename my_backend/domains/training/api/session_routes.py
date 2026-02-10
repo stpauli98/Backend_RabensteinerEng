@@ -193,6 +193,7 @@ def get_session_from_database_endpoint(session_id):
 
         session_info = {
             'sessionId': string_session_id,
+            'sessionName': session_data.get('session_name', ''),
             'databaseSessionId': database_session_id,
             'n_dat': session_data.get('n_dat', 0),
             'finalized': session_data.get('finalized', False),

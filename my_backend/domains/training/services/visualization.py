@@ -1441,15 +1441,6 @@ class Visualizer:
                 )
 
             # ===================================================================
-            # TITLE - MATCHES ORIGINAL (lines 3299-3303)
-            # ===================================================================
-            plt.suptitle(
-                "Auswertung der Testdatensätze",
-                fontsize=20,
-                fontweight='bold'
-            )
-
-            # ===================================================================
             # SAVE PLOT
             # ===================================================================
             buffer = io.BytesIO()
@@ -1512,21 +1503,26 @@ def delete_old_violin_plots(session_id: str, user_id: str = None) -> int:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, user_id)
 
-        # Get count of existing violin plots
-        existing = supabase.table('training_visualizations').select('id, plot_name').eq(
+        # Get ALL visualizations for this session, then filter by plot_name prefix
+        # (plot_type field is unreliable for legacy records)
+        all_viz = supabase.table('training_visualizations').select('id, plot_name').eq(
             'session_id', uuid_session_id
-        ).eq('plot_type', 'violin_plot').execute()
+        ).execute()
 
-        if existing.data:
-            plot_names = [p['plot_name'] for p in existing.data]
-            logger.info(f"Deleting {len(existing.data)} old violin plots for session {session_id}: {plot_names}")
+        violin_plots = [
+            p for p in (all_viz.data or [])
+            if p['plot_name'].startswith(('input_', 'output_', 'time_'))
+        ]
 
-            # Delete all violin plots for this session
-            supabase.table('training_visualizations').delete().eq(
-                'session_id', uuid_session_id
-            ).eq('plot_type', 'violin_plot').execute()
+        if violin_plots:
+            plot_names = [p['plot_name'] for p in violin_plots]
+            violin_ids = [p['id'] for p in violin_plots]
+            logger.info(f"Deleting {len(violin_plots)} old violin plots for session {session_id}: {plot_names}")
 
-            return len(existing.data)
+            # Delete by IDs
+            supabase.table('training_visualizations').delete().in_('id', violin_ids).execute()
+
+            return len(violin_plots)
 
         return 0
 
@@ -1582,7 +1578,7 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data, use
         if existing.data:
             viz_record = {
                 'image_data': image_data,
-                'plot_type': 'violin_plot' if 'violin' in viz_name else 'other',
+                'plot_type': 'violin_plot' if viz_name.startswith(('input_', 'output_', 'time_')) else 'other',
                 'metadata': {'type': plot_type_category},
                 'created_at': datetime.now().isoformat()
             }
@@ -1595,7 +1591,7 @@ def save_visualization_to_database(session_id: str, viz_name: str, viz_data, use
                 'session_id': uuid_session_id,
                 'plot_name': viz_name,
                 'image_data': image_data,
-                'plot_type': 'violin_plot' if 'violin' in viz_name else 'other',
+                'plot_type': 'violin_plot' if viz_name.startswith(('input_', 'output_', 'time_')) else 'other',
                 'metadata': {'type': plot_type_category},
                 'created_at': datetime.now().isoformat()
             }
