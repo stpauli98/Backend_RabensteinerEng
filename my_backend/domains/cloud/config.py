@@ -7,11 +7,17 @@ import re
 import tempfile
 
 # File size limits
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-MAX_ROWS = 1_000_000
+MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB
+MAX_ROWS = 1_000_000  # Used by /clouddata endpoint only
 MAX_COLUMNS = 100
 MAX_ACTIVE_UPLOADS = 1000
 FILE_BUFFER_SIZE = 1024 * 1024  # 1MB
+
+# Regression streaming settings
+REGRESSION_SAMPLE_SIZE = 200_000            # Max points for regression model fitting
+REGRESSION_STREAMING_CHUNK_SIZE = 5_000     # Points per NDJSON chunk
+REGRESSION_MIN_SAMPLE_SIZE = 100            # Minimum matched points required
+MERGE_CHUNK_SIZE = 50_000                   # Rows per chunk during merge
 
 # Upload validation
 UPLOAD_ID_PATTERN = re.compile(r'^[\w\-]{1,64}$')

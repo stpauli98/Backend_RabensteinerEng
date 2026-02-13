@@ -10,6 +10,8 @@ from domains.cloud.services.validation import (
     sanitize_upload_id,
     validate_csv_size,
     validate_dataframe,
+    validate_csv_columns,
+    count_csv_rows,
     get_chunk_dir
 )
 from domains.cloud.services.regression import (
@@ -19,7 +21,10 @@ from domains.cloud.services.regression import (
     calculate_tolerance_params,
     perform_linear_regression,
     perform_polynomial_regression,
-    process_data_frames
+    process_data_frames,
+    quick_minmax,
+    chunked_merge_and_sample,
+    perform_streaming_regression
 )
 from domains.cloud.services.interpolation import interpolate_data
 
@@ -36,6 +41,8 @@ __all__ = [
     'sanitize_upload_id',
     'validate_csv_size',
     'validate_dataframe',
+    'validate_csv_columns',
+    'count_csv_rows',
     'get_chunk_dir',
 
     # Regression
@@ -46,6 +53,9 @@ __all__ = [
     'perform_linear_regression',
     'perform_polynomial_regression',
     'process_data_frames',
+    'quick_minmax',
+    'chunked_merge_and_sample',
+    'perform_streaming_regression',
 
     # Interpolation
     'interpolate_data'

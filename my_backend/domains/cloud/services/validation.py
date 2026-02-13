@@ -81,6 +81,60 @@ def validate_dataframe(df: pd.DataFrame, name: str = "DataFrame"):
         raise ValueError(f"{name} has too many columns: {len(df.columns)} (max {MAX_COLUMNS})")
 
 
+def validate_csv_columns(file_path: str, name: str = "File"):
+    """
+    Validate CSV has required columns by reading only the header line.
+    Memory-efficient: does not load the file into a DataFrame.
+
+    Returns:
+        Tuple of (column_names, separator)
+
+    Raises:
+        ValueError: If UTC column missing or too many columns
+    """
+    if not os.path.exists(file_path):
+        raise ValueError(f"File not found: {file_path}")
+
+    with open(file_path, 'r', encoding='utf-8') as f:
+        first_line = f.readline().strip()
+
+    if not first_line:
+        raise ValueError(f"{name}: File is empty")
+
+    # Auto-detect separator
+    if ';' in first_line:
+        sep = ';'
+    elif '\t' in first_line:
+        sep = '\t'
+    else:
+        sep = ','
+
+    columns = [col.strip().strip('"') for col in first_line.split(sep)]
+
+    if 'UTC' not in columns:
+        raise ValueError(f'{name}: UTC column not found. Available columns: {columns}')
+    if len(columns) < 2:
+        raise ValueError(f'{name}: At least 2 columns required (UTC + data), found {len(columns)}')
+    if len(columns) > MAX_COLUMNS:
+        raise ValueError(f'{name}: Too many columns: {len(columns)} (max {MAX_COLUMNS})')
+
+    return columns, sep
+
+
+def count_csv_rows(file_path: str) -> int:
+    """
+    Count rows in a CSV file without loading into memory.
+
+    Returns:
+        Number of data rows (excludes header)
+    """
+    count = -1  # Subtract header line
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for _ in f:
+            count += 1
+    return max(count, 0)
+
+
 def get_chunk_dir(upload_id: str) -> str:
     """
     Create and return a directory path for storing chunks of a specific upload.

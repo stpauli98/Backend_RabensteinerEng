@@ -28,9 +28,14 @@ from domains.cloud.services import (
     chunk_uploads,
     sanitize_upload_id,
     validate_csv_size,
+    validate_csv_columns,
     validate_dataframe,
     get_chunk_dir,
-    process_data_frames
+    process_data_frames,
+    calculate_tolerance_params,
+    quick_minmax,
+    chunked_merge_and_sample,
+    perform_streaming_regression
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -105,6 +110,7 @@ def upload_chunk():
 @bp.route('/complete', methods=['POST', 'OPTIONS'])
 @require_auth
 @require_subscription
+@check_processing_limit
 def complete_redirect():
     """Handle chunked upload completion directly instead of redirecting."""
     try:
@@ -213,28 +219,25 @@ def complete_redirect():
         tracker.emit('assembling', 20, 'cloud_assembling_complete')
         logger.info("Files reassembled, processing data")
 
+        # Validate file sizes
         try:
             tracker.emit('validating', 25, 'cloud_validating_size')
             validate_csv_size(temp_file_path)
             validate_csv_size(load_file_path)
-            tracker.emit('validating', 30, 'cloud_size_validated')
+            tracker.emit('validating', 28, 'cloud_size_validated')
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
         try:
-            tracker.emit('parsing', 35, 'cloud_parsing_csv')
-            df1 = pd.read_csv(temp_file_path, sep=';')
-            tracker.emit('parsing', 40, 'cloud_parsing_temp_done')
-            df2 = pd.read_csv(load_file_path, sep=';')
-            tracker.emit('parsing', 50, 'cloud_parsing_complete')
+            # Validate columns without loading files into memory
+            tracker.emit('validating', 29, 'cloud_validating_columns')
+            temp_columns, temp_sep = validate_csv_columns(temp_file_path, "Temperature file")
+            load_columns, load_sep = validate_csv_columns(load_file_path, "Load file")
+            tracker.emit('validating', 30, 'cloud_columns_validated')
 
-            tracker.emit('validating', 55, 'cloud_validating_dataframes')
-            validate_dataframe(df1, "Temperature file")
-            validate_dataframe(df2, "Load file")
-            tracker.emit('validating', 60, 'cloud_dataframes_validated')
-
+            # Extract processing parameters
             processing_params = {
                 'REG': data.get('REG', 'lin'),
                 'TR': data.get('TR', 'cnt'),
@@ -244,26 +247,58 @@ def complete_redirect():
                 'decimalPrecision': data.get('decimalPrecision', 'full')
             }
 
-            logger.info(f"Processing data with parameters: {processing_params}")
-            tracker.emit('processing', 65, 'cloud_processing_start', message_params={'reg_type': processing_params['REG']})
+            # Quick min/max scan for tolerance calculation
+            tracker.emit('processing', 32, 'cloud_scanning_range')
+            y_min, y_max = quick_minmax(load_file_path, load_sep)
+            y_range = y_max - y_min
+            TOL_CNT, TOL_DEP = calculate_tolerance_params(processing_params, y_range)
 
-            result = process_data_frames(df1, df2, processing_params)
-            tracker.emit('processing', 95, 'cloud_processing_complete')
+            # Chunked merge + reservoir sampling
+            tracker.emit('processing', 35, 'cloud_processing_start',
+                         message_params={'reg_type': processing_params['REG']}, force=True)
 
-            try:
-                chunk_dir = get_chunk_dir(upload_id)
-                if os.path.exists(chunk_dir):
-                    shutil.rmtree(chunk_dir)
-                if upload_id in chunk_uploads:
-                    del chunk_uploads[upload_id]
-                logger.info(f"Successfully cleaned up chunks for upload ID: {upload_id}")
-            except Exception as e:
-                logger.warning(f"Error cleaning up chunks: {str(e)}")
+            matched_file_path, sample_df, x_col, y_col, total_matched = chunked_merge_and_sample(
+                temp_file_path, load_file_path, temp_sep, load_sep,
+                tracker=tracker
+            )
 
-            tracker.emit('complete', 100, 'cloud_complete', force=True)
-            return result
+            # Create streaming regression generator
+            generator = perform_streaming_regression(
+                matched_file_path, sample_df, x_col, y_col, total_matched,
+                reg_type=processing_params['REG'],
+                tolerance_type=processing_params['TR'],
+                tol_cnt=TOL_CNT,
+                tol_dep=TOL_DEP,
+                decimal_precision=processing_params['decimalPrecision'],
+                tracker=tracker
+            )
+
+            # Cleanup function
+            def cleanup():
+                try:
+                    cleanup_dir = get_chunk_dir(upload_id)
+                    if os.path.exists(cleanup_dir):
+                        shutil.rmtree(cleanup_dir)
+                    if upload_id in chunk_uploads:
+                        del chunk_uploads[upload_id]
+                except Exception as e:
+                    logger.warning(f"Cleanup error for {upload_id}: {e}")
+
+            increment_processing_count(g.user_id)
+
+            response = Response(generator, mimetype='application/x-ndjson')
+            response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.call_on_close(cleanup)
+            return response
+
+        except ValueError as e:
+            logger.error(f"Validation error: {str(e)}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
+            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
         except Exception as e:
             logger.error(f"Error processing uploaded files: {str(e)}")
+            traceback.print_exc()
             return jsonify({'success': False, 'data': {'error': f'Error processing uploaded files: {str(e)}'}}), 500
     except Exception as e:
         logger.error(f"Error in complete_redirect: {str(e)}")
@@ -436,7 +471,10 @@ def interpolate_chunked():
             tracker.emit('parsing', 35, 'cloud_csv_parsed', message_params={'rows': len(df2)})
 
             tracker.emit('validating', 38, 'cloud_validating_dataframe')
-            validate_dataframe(df2, "Interpolation file")
+            # Only validate column count (row limit removed for streaming support)
+            from domains.cloud.config import MAX_COLUMNS
+            if len(df2.columns) > MAX_COLUMNS:
+                raise ValueError(f"Interpolation file has too many columns: {len(df2.columns)} (max {MAX_COLUMNS})")
             tracker.emit('validating', 40, 'cloud_dataframe_validated')
 
         except ValueError as e:
