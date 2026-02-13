@@ -996,10 +996,9 @@ def calculate_n_dat_from_session(session_id: str, temp_dir: str = None) -> int:
     """
     Calculate n_dat (total number of data samples) from CSV files.
 
-    Each file has its own unique storage path, so samples are counted once per file.
-
-    For Cloud Run (stateless), uses temp_dir where files were downloaded
-    from Supabase Storage by verify_session_files().
+    This is a preliminary estimate used during upload finalization.
+    The authoritative n_dat is set later by the violin/training pipeline
+    from i_array_3D.shape[0] (which filters out invalid interpolation samples).
 
     Args:
         session_id: ID of the session
