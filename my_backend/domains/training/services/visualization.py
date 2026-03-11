@@ -873,6 +873,15 @@ class Visualizer:
                         tst_fcst.append(out[0])
 
                     tst_fcst = np.array(tst_fcst)
+                elif model_type == 'LGBMR':
+                    # LGBMR expects 2D input: flatten 3D → 2D, predict, reshape back to 3D
+                    n_samples, n_timesteps, n_features_in = tst_x.shape
+                    x_flat = tst_x.reshape(n_samples, -1)
+                    feat_names = [f"x_{k}" for k in range(x_flat.shape[1])]
+                    import pandas as pd
+                    x_flat_df = pd.DataFrame(x_flat, columns=feat_names)
+                    tst_fcst = trained_model.predict(x_flat_df)
+                    tst_fcst = tst_fcst.reshape(n_samples, n_timesteps, 1)
                 else:
                     tst_fcst = trained_model.predict(tst_x)
 

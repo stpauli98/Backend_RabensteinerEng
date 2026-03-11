@@ -185,7 +185,12 @@ class MDL:
             self.KERNEL = "poly"
             self.C = 1
             self.EPSILON = 0.1
-            
+
+        elif self.MODE == "LGBMR":
+            self.N_ESTIMATORS = 100
+            self.LEARNING_RATE = 0.1
+            self.MAX_DEPTH = -1
+
         elif self.MODE == "LIN":
             pass
 

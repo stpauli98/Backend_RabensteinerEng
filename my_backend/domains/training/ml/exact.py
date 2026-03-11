@@ -27,7 +27,7 @@ from domains.training.ml.evaluation import (
 )
 from domains.training.ml.trainer import (
     train_dense, train_cnn, train_lstm, train_ar_lstm,
-    train_svr_dir, train_svr_mimo, train_linear_model
+    train_svr_dir, train_svr_mimo, train_linear_model, train_lgbmr
 )
 from domains.training.config import MDL, MTS, T, HOL
 
@@ -433,12 +433,15 @@ def run_exact_training_pipeline(
             # Get UUID for database operations
             uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
 
+            # LGBMR and other non-epoch models don't have EP attribute
+            total_epochs = getattr(mdl_config, 'EP', 1)
+
             # Create progress tracker for database persistence
             progress_tracker = TrainingProgressTracker(
                 socketio=socketio,
                 session_id=session_id,
                 uuid_session_id=uuid_session_id,
-                total_epochs=mdl_config.EP,
+                total_epochs=total_epochs,
                 model_name=mdl_config.MODE
             )
             logger.info(f"   [TRAINING_TRACKER] Created for session {session_id}")
@@ -447,7 +450,7 @@ def run_exact_training_pipeline(
             socketio_callback = SocketIOProgressCallback(
                 socketio=socketio,
                 session_id=session_id,
-                total_epochs=mdl_config.EP,
+                total_epochs=total_epochs,
                 model_name=mdl_config.MODE,
                 progress_tracker=progress_tracker
             )
@@ -477,7 +480,10 @@ def run_exact_training_pipeline(
         
     elif mdl_config.MODE == "LIN":
         mdl = train_linear_model(trn_x, trn_y)
-    
+
+    elif mdl_config.MODE == "LGBMR":
+        mdl = train_lgbmr(trn_x, trn_y, mdl_config)
+
     else:
         raise ValueError(f"Unknown model mode: {mdl_config.MODE}")
 
@@ -517,14 +523,22 @@ def run_exact_training_pipeline(
             elif mdl_config.MODE == "LIN":
                 n_samples, n_timesteps, n_features_in = tst_x.shape
                 tst_x_reshaped = tst_x.reshape(n_samples * n_timesteps, n_features_in)
-                
+
                 test_predictions = []
                 for lin_model in mdl:
                     pred = lin_model.predict(tst_x_reshaped)
                     pred = pred.reshape(n_samples, n_timesteps)
                     test_predictions.append(pred)
-                
+
                 test_predictions = np.stack(test_predictions, axis=-1)
+            elif mdl_config.MODE == "LGBMR":
+                n_samples, n_timesteps, n_features_in = tst_x.shape
+                x_flat = tst_x.reshape(n_samples, -1)
+                feat_names = [f"x_{k}" for k in range(x_flat.shape[1])]
+                x_flat_df = pd.DataFrame(x_flat, columns=feat_names)
+
+                test_predictions = mdl.predict(x_flat_df)
+                test_predictions = test_predictions.reshape(n_samples, n_timesteps, 1)
             else:
                 test_predictions = tst_y
             
@@ -567,14 +581,22 @@ def run_exact_training_pipeline(
             elif mdl_config.MODE == "LIN":
                 n_samples, n_timesteps, n_features_in = val_x.shape
                 val_x_reshaped = val_x.reshape(n_samples * n_timesteps, n_features_in)
-                
+
                 val_predictions = []
                 for lin_model in mdl:
                     pred = lin_model.predict(val_x_reshaped)
                     pred = pred.reshape(n_samples, n_timesteps)
                     val_predictions.append(pred)
-                
+
                 val_predictions = np.stack(val_predictions, axis=-1)
+            elif mdl_config.MODE == "LGBMR":
+                n_samples, n_timesteps, n_features_in = val_x.shape
+                x_flat = val_x.reshape(n_samples, -1)
+                feat_names = [f"x_{k}" for k in range(x_flat.shape[1])]
+                x_flat_df = pd.DataFrame(x_flat, columns=feat_names)
+
+                val_predictions = mdl.predict(x_flat_df)
+                val_predictions = val_predictions.reshape(n_samples, n_timesteps, 1)
             else:
                 val_predictions = val_y
             

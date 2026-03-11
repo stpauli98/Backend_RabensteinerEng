@@ -413,6 +413,43 @@ def train_linear_model(trn_x, trn_y):
     return models
 
 
+def train_lgbmr(train_x, train_y, MDL):
+    """
+    Funktion trainiert ein LightGBM Regressor Modell mittels MultiOutputRegressor.
+
+    train_x...Trainingsdaten (Eingabedaten) [n_samples, n_timesteps, n_features_in]
+    train_y...Trainingsdaten (Ausgabedaten) [n_samples, n_timesteps, n_features_out]
+    MDL.......Informationen zum Modell (N_ESTIMATORS, LEARNING_RATE, MAX_DEPTH)
+    """
+    from sklearn.multioutput import MultiOutputRegressor
+    from lightgbm import LGBMRegressor
+
+    n_samples, n_timesteps, n_features_in = train_x.shape
+
+    # Flatten 3D input to 2D: (n_samples, n_timesteps * n_features_in)
+    x_flat = train_x.reshape(n_samples, -1)
+
+    # Flatten 3D output to 2D: (n_samples, n_timesteps)
+    y_flat = train_y.reshape(n_samples, n_timesteps)
+
+    # Create fixed feature names to avoid LightGBM warning
+    feat_names = [f"x_{k}" for k in range(x_flat.shape[1])]
+    x_flat_df = pd.DataFrame(x_flat, columns=feat_names)
+
+    base_model = LGBMRegressor(
+        n_estimators=MDL.N_ESTIMATORS,
+        learning_rate=MDL.LEARNING_RATE,
+        max_depth=MDL.MAX_DEPTH,
+        min_child_samples=20,
+        force_col_wise=True,
+        verbosity=-1
+    )
+
+    model = MultiOutputRegressor(base_model, n_jobs=1).fit(x_flat_df, y_flat)
+
+    return model
+
+
 class ModelTrainer:
     """
     Main model trainer class wrapper for extracted functions

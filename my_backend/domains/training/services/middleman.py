@@ -309,7 +309,8 @@ class ModernMiddlemanRunner:
                     'LSTM': 'LSTM',
                     'AR LSTM': 'AR LSTM',
                     'SVR_dir': 'SVR_dir',
-                    'SVR_MIMO': 'SVR_MIMO'
+                    'SVR_MIMO': 'SVR_MIMO',
+                    'LGBMR': 'LGBMR'
                 }
                 
                 frontend_mode = model_params.get('MODE', 'Linear')
@@ -335,7 +336,14 @@ class ModernMiddlemanRunner:
                         mdl_config.C = model_params['C']
                     if 'EPSILON' in model_params:
                         mdl_config.EPSILON = model_params['EPSILON']
-            
+                elif backend_mode == 'LGBMR':
+                    if 'N_ESTIMATORS' in model_params:
+                        mdl_config.N_ESTIMATORS = model_params['N_ESTIMATORS']
+                    if 'LEARNING_RATE' in model_params:
+                        mdl_config.LEARNING_RATE = model_params['LEARNING_RATE']
+                    if 'MAX_DEPTH' in model_params:
+                        mdl_config.MAX_DEPTH = model_params['MAX_DEPTH']
+
             try:
                 if DEBUG_MIDDLEMAN:
                     logger.info(f"[DEBUG_MIDDLEMAN] 🚀 Calling run_exact_training_pipeline...")
