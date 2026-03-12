@@ -350,3 +350,32 @@ def atomic_increment_with_check(user_id: str, resource_type: str) -> tuple:
         # Ovo osigurava da korisnici nisu blokirani ako RPC ima problem
         logger.warning(f"Falling back to allow for user {user_id} due to RPC error")
         return True, {'current': 0, 'limit': -1, 'message': f'Fallback allowed: {str(e)}'}
+
+
+def log_compute_duration(user_id: str, duration_seconds: float, resource_type: str, metadata: dict = None) -> bool:
+    """
+    Log compute duration to usage_events for Stundenkontingent tracking.
+
+    Args:
+        user_id: User UUID
+        duration_seconds: Actual backend compute time in seconds
+        resource_type: Pipeline stage identifier (e.g., 'rohdaten', 'erste-bearbeitung')
+        metadata: Optional extra context (upload_id, file_count, etc.)
+
+    Returns:
+        bool: True if logged successfully
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        supabase.table('usage_events').insert({
+            'user_id': user_id,
+            'event_type': 'processing',
+            'resource_type': resource_type,
+            'processing_duration_sec': max(1, round(duration_seconds)),
+            'metadata': metadata or {}
+        }).execute()
+        logger.info(f"Compute duration: {user_id[:8]}... {resource_type} {duration_seconds:.1f}s")
+        return True
+    except Exception as e:
+        logger.error(f"Error logging compute duration: {str(e)}")
+        return False

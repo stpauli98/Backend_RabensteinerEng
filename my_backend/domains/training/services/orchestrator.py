@@ -14,6 +14,7 @@ Created: 2025-10-24
 Phase 6b of training.py refactoring
 """
 
+import time
 import logging
 import threading
 import pickle
@@ -434,7 +435,8 @@ def run_model_training_async(
     session_id: str,
     model_config: Dict,
     training_split: Dict,
-    socketio_instance: Optional[Any] = None
+    socketio_instance: Optional[Any] = None,
+    user_id: Optional[str] = None
 ) -> None:
     """
     Run model training asynchronously in a background thread.
@@ -451,6 +453,7 @@ def run_model_training_async(
         model_config: Model configuration parameters
         training_split: Training/validation split configuration
         socketio_instance: SocketIO instance for real-time updates (optional)
+        user_id: User ID for compute duration tracking (optional)
     """
     from domains.training.services.middleman import ModernMiddlemanRunner
     from domains.training.services.training_tracker import TrainingProgressTracker
@@ -497,6 +500,7 @@ def run_model_training_async(
             if progress_tracker:
                 progress_tracker.emit(0, 'Preparing training data...', 'processing')
 
+        _training_start = time.time()
         runner = ModernMiddlemanRunner()
         if socketio_instance:
             runner.set_socketio(socketio_instance)
@@ -539,6 +543,21 @@ def run_model_training_async(
                     result=result,
                     socketio_instance=socketio_instance
                 )
+
+                # Log compute duration for Stundenkontingent
+                if user_id:
+                    from shared.tracking.usage import log_compute_duration
+                    log_compute_duration(user_id, time.time() - _training_start, 'training', {'session_id': session_id})
+                else:
+                    try:
+                        from shared.database.client import get_supabase_admin_client
+                        from shared.tracking.usage import log_compute_duration
+                        _supabase = get_supabase_admin_client()
+                        _session_resp = _supabase.table('sessions').select('user_id').eq('id', uuid_session_id).single().execute()
+                        if _session_resp.data and _session_resp.data.get('user_id'):
+                            log_compute_duration(_session_resp.data['user_id'], time.time() - _training_start, 'training', {'session_id': session_id})
+                    except Exception:
+                        logger.warning(f"Could not log compute duration for training session {session_id}")
 
                 # Mark training as complete and cleanup database entry
                 if progress_tracker:

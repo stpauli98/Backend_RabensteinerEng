@@ -4,6 +4,7 @@ Handles cloud-based data analysis with regression and interpolation
 """
 import os
 import json
+import time
 import shutil
 import base64
 import logging
@@ -16,7 +17,7 @@ from flask import request, jsonify, Blueprint, Response, g
 # Authentication and authorization
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
-from shared.tracking.usage import increment_processing_count
+from shared.tracking.usage import increment_processing_count, log_compute_duration
 
 from domains.cloud.config import (
     VALID_FILE_TYPES,
@@ -157,6 +158,7 @@ def complete_redirect():
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
         # Initialize progress tracker
+        _compute_start = time.time()
         tracker = CloudProgressTracker(upload_id)
         tracker.emit('initializing', 5, 'cloud_initializing', force=True)
 
@@ -285,6 +287,7 @@ def complete_redirect():
                     logger.warning(f"Cleanup error for {upload_id}: {e}")
 
             increment_processing_count(g.user_id)
+            log_compute_duration(g.user_id, time.time() - _compute_start, 'regression', {'upload_id': upload_id})
 
             response = Response(generator, mimetype='application/x-ndjson')
             response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
@@ -405,6 +408,7 @@ def interpolate_chunked():
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
         # Initialize progress tracker
+        _compute_start_interp = time.time()
         tracker = CloudProgressTracker(upload_id)
         tracker.emit('initializing', 5, 'cloud_interpolate_init', force=True)
 
@@ -676,6 +680,7 @@ def interpolate_chunked():
 
         # Track usage for this processing job
         increment_processing_count(g.user_id)
+        log_compute_duration(g.user_id, time.time() - _compute_start_interp, 'regression', {'upload_id': upload_id})
         logger.info(f"Tracked cloud interpolation for user {g.user_id}")
 
         response = Response(generate_chunks(), mimetype='application/x-ndjson')

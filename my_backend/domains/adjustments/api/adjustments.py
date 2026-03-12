@@ -14,7 +14,7 @@ import pandas as pd
 
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
-from shared.tracking.usage import increment_processing_count, update_storage_usage
+from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 
 from domains.adjustments.config import UPLOAD_FOLDER, VALID_METHODS
 from domains.adjustments.services.state_manager import (
@@ -346,6 +346,8 @@ def complete_adjustment() -> Tuple[Response, int]:
         )
         tracker.set_file_rows(file_rows_dict)
 
+        _compute_start = time.time()
+
         tracker.emit(
             ProgressStages.DATA_PROCESSING_START,
             'processing_start',
@@ -601,6 +603,8 @@ def complete_adjustment() -> Tuple[Response, int]:
             file_size_mb = total_size_bytes / (1024 * 1024)
             update_storage_usage(g.user_id, file_size_mb)
             logger.info(f"Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+
+            log_compute_duration(g.user_id, time.time() - _compute_start, 'dritte-bearbeitung', {'upload_id': upload_id})
         except Exception as e:
             logger.error(f"Failed to track processing usage: {str(e)}")
 

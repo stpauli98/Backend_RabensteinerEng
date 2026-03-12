@@ -10,6 +10,7 @@ Contains 6 endpoints for ML model training:
 - get-training-results/<session_id>
 """
 
+import time
 import threading
 import numpy as np
 from flask import Blueprint, current_app, Response
@@ -24,6 +25,7 @@ from .common import (
     get_logger
 )
 
+from shared.tracking.usage import log_compute_duration
 from domains.training.services.visualization import save_visualization_to_database, delete_old_violin_plots
 from domains.training.data.generator import generate_violin_plots_for_session
 from domains.training.services.orchestrator import run_model_training_async
@@ -75,6 +77,7 @@ def generate_datasets(session_id):
         # [WORKFLOW_DEBUG] Pass uuid_session_id for workflow_phase persistence
         progress_tracker = ViolinProgressTracker(socketio, session_id, uuid_session_id)
 
+        _compute_start = time.time()
         result = generate_violin_plots_for_session(
             session_id=session_id,
             model_parameters=model_parameters,
@@ -111,6 +114,7 @@ def generate_datasets(session_id):
         progress_tracker.complete()
 
         increment_processing_count(g.user_id)
+        log_compute_duration(g.user_id, time.time() - _compute_start, 'dataset-generation', {'session_id': session_id})
         logger.info(f"Tracked dataset generation for user {g.user_id}")
 
         return jsonify({
@@ -182,7 +186,7 @@ def train_models(session_id):
 
         training_thread = threading.Thread(
             target=run_model_training_async,
-            args=(session_id, model_config, training_split, socketio_instance)
+            args=(session_id, model_config, training_split, socketio_instance, g.user_id)
         )
         training_thread.daemon = True
         training_thread.start()

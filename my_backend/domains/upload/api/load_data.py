@@ -18,6 +18,7 @@ Main endpoints:
 
 import json
 import csv
+import time
 import traceback
 from io import StringIO
 from typing import Dict, Tuple, Optional, Any
@@ -27,7 +28,7 @@ import pandas as pd
 
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
-from shared.tracking.usage import increment_processing_count, update_storage_usage
+from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 from shared.storage.service import storage_service
 from shared.exceptions import (
     MissingParameterError,
@@ -502,6 +503,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         # Initialize ProgressTracker
         tracker = ProgressTracker(upload_id, socketio, file_size_bytes=file_size_bytes)
         tracker.total_steps = 5
+        _compute_start = time.time()
 
         # Step 1: Validate and extract parameters (5-15%)
         tracker.current_step = 1
@@ -631,6 +633,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
             increment_processing_count(g.user_id)
             file_size_mb = file_size_bytes / (1024 * 1024)
             update_storage_usage(g.user_id, file_size_mb)
+            log_compute_duration(g.user_id, time.time() - _compute_start, 'rohdaten', {'upload_id': upload_id})
         except Exception:
             pass
 

@@ -7,6 +7,7 @@ Session Affinity ensures all chunks from same user go to same instance.
 Chunks are automatically cleaned up after processing.
 """
 import csv
+import time
 import logging
 import traceback
 from io import StringIO
@@ -15,7 +16,7 @@ from flask import Blueprint, request, jsonify, g, Response
 
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
-from shared.tracking.usage import increment_processing_count, update_storage_usage
+from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 from shared.storage.service import storage_service
 from domains.processing.services.local_chunk_service import local_chunk_service
 
@@ -98,6 +99,7 @@ def upload_chunk():
         total_file_size = len(chunk_data) * total_chunks  # Approximate
 
         # Initialize ProgressTracker with file size
+        _compute_start = time.time()
         tracker = ProgressTracker(
             upload_id=upload_id,
             file_size_bytes=total_file_size,
@@ -146,6 +148,8 @@ def upload_chunk():
                 file_size_mb = file_size_bytes / (1024 * 1024)
                 update_storage_usage(g.user_id, file_size_mb)
                 logger.debug(f"Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+
+                log_compute_duration(g.user_id, time.time() - _compute_start, 'erste-bearbeitung', {'upload_id': upload_id})
             except Exception as e:
                 logger.error(f"Failed to track processing usage: {str(e)}")
 

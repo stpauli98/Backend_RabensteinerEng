@@ -18,7 +18,7 @@ from flask import Blueprint, request, Response, jsonify, g
 
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
-from shared.tracking.usage import increment_processing_count, update_storage_usage
+from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 from domains.processing.services.local_chunk_service import local_chunk_service
 
 from domains.processing.config import STREAMING_CHUNK_SIZE, BACKPRESSURE_DELAY
@@ -141,6 +141,7 @@ def upload_chunk():
         total_file_size = chunk_size * total_chunks  # Approximate
 
         # Initialize ProgressTracker
+        _compute_start = time.time()
         tracker = ProgressTracker(
             upload_id=upload_id,
             file_size_bytes=total_file_size,
@@ -272,6 +273,8 @@ def upload_chunk():
                 file_size_mb = total_size / (1024 * 1024)
                 update_storage_usage(g.user_id, file_size_mb)
                 logger.debug(f"Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
+
+                log_compute_duration(g.user_id, time.time() - _compute_start, 'zweite-bearbeitung', {'upload_id': upload_id})
             except Exception as e:
                 logger.error(f"Failed to track processing usage: {str(e)}")
 
