@@ -275,4 +275,4 @@ class ViolinProgressTracker:
         Args:
             message: Error message to display
         """
-        self.emit(self.current_progress, f"violin.progress.error", "error")
+        self.emit(self.current_progress, f"violin.progress.error", "failed")

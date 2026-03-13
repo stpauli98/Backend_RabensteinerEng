@@ -349,7 +349,7 @@ def create_training_arrays_original(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.Data
                         df_int_i["Y_sin"] = np.sin(sec / sec_y * 2 * np.pi)
                         df_int_i["Y_cos"] = np.cos(sec / sec_y * 2 * np.pi)
                 
-                elif T.Y.SPEC == "Aktuelle Zeit":
+                else:  # "Aktuelle Zeit" or any other value
                     if T.Y.LT == False:
                         sec = utc_ref.timestamp()
                         df_int_i["Y_sin"] = [np.sin(sec / 31557600 * 2 * np.pi)] * mts.I_N
@@ -395,7 +395,7 @@ def create_training_arrays_original(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.Data
                         df_int_i["M_sin"] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
                         df_int_i["M_cos"] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
                 
-                elif T.M.SPEC == "Aktuelle Zeit":
+                else:  # "Aktuelle Zeit" or any other value
                     if T.M.LT == False:
                         # MATCHES ORIGINAL: Use Unix timestamp / constant MONTH_SECONDS
                         sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
@@ -436,7 +436,7 @@ def create_training_arrays_original(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.Data
                         df_int_i["W_sin"] = np.sin(sec / WEEK_SECONDS * 2 * np.pi)
                         df_int_i["W_cos"] = np.cos(sec / WEEK_SECONDS * 2 * np.pi)
                 
-                elif T.W.SPEC == "Aktuelle Zeit":
+                else:  # "Aktuelle Zeit" or any other value
                     if T.W.LT == False:
                         # MATCHES ORIGINAL: Use Unix timestamp / WEEK_SECONDS
                         sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
@@ -475,7 +475,7 @@ def create_training_arrays_original(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.Data
                         df_int_i["D_sin"] = np.sin(sec / DAY_SECONDS * 2 * np.pi)
                         df_int_i["D_cos"] = np.cos(sec / DAY_SECONDS * 2 * np.pi)
                 
-                elif T.D.SPEC == "Aktuelle Zeit":
+                else:  # "Aktuelle Zeit" or any other value
                     if T.D.LT == False:
                         # MATCHES ORIGINAL: Use Unix timestamp / DAY_SECONDS
                         sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
@@ -511,7 +511,7 @@ def create_training_arrays_original(i_dat: Dict, o_dat: Dict, i_dat_inf: pd.Data
                         # Compare local dates against holidays
                         df_int_i["H"] = np.array([1 if dt.date() in hol_d else 0 for dt in lt_th])
 
-                elif T.H.SPEC == "Aktuelle Zeit":
+                else:  # "Aktuelle Zeit" or any other value
                     if T.H.LT == False:
                         df_int_i["H"] = [1 if utc_ref.date() in hol_d else 0] * mts.I_N
                     else:
@@ -886,7 +886,7 @@ def calculate_time_components_vectorized(
                     y_sin[i, :] = np.sin(sec / sec_y * 2 * np.pi)
                     y_cos[i, :] = np.cos(sec / sec_y * 2 * np.pi)
 
-        elif T.Y.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value
             for i, utc_ref in enumerate(utc_refs):
                 if T.Y.LT == False:
                     sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
@@ -923,7 +923,7 @@ def calculate_time_components_vectorized(
                 m_sin[i, :] = np.sin(sec / MONTH_SECONDS * 2 * np.pi)
                 m_cos[i, :] = np.cos(sec / MONTH_SECONDS * 2 * np.pi)
 
-        elif T.M.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value
             for i, utc_ref in enumerate(utc_refs):
                 if T.M.LT == False:
                     sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
@@ -957,7 +957,7 @@ def calculate_time_components_vectorized(
                 w_sin[i, :] = np.sin(sec / WEEK_SECONDS * 2 * np.pi)
                 w_cos[i, :] = np.cos(sec / WEEK_SECONDS * 2 * np.pi)
 
-        elif T.W.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value
             for i, utc_ref in enumerate(utc_refs):
                 if T.W.LT == False:
                     sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
@@ -991,7 +991,7 @@ def calculate_time_components_vectorized(
                 d_sin[i, :] = np.sin(sec / DAY_SECONDS * 2 * np.pi)
                 d_cos[i, :] = np.cos(sec / DAY_SECONDS * 2 * np.pi)
 
-        elif T.D.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value
             for i, utc_ref in enumerate(utc_refs):
                 if T.D.LT == False:
                     sec = utc_ref.timestamp() if hasattr(utc_ref, 'timestamp') else pd.Timestamp(utc_ref).timestamp()
@@ -1022,7 +1022,7 @@ def calculate_time_components_vectorized(
                     lt_th = [dt.astimezone(pytz.timezone(T.TZ)) for dt in utc_th_loc]
                     h_array[i, :] = np.array([1 if dt.date() in hol_d else 0 for dt in lt_th])
 
-        elif T.H.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value
             for i, utc_ref in enumerate(utc_refs):
                 if T.H.LT == False:
                     h_val = 1 if utc_ref.date() in hol_d else 0
@@ -1142,7 +1142,7 @@ def calculate_time_components_fully_vectorized(
                 y_sin = np.sin(sec_in_year / sec_per_year * 2 * np.pi)
                 y_cos = np.cos(sec_in_year / sec_per_year * 2 * np.pi)
 
-        elif T.Y.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value — treat as current time
             if T.Y.LT == False:
                 utc_refs_sec = ns_to_seconds(utc_refs_ns)  # (n_samples,)
                 y_sin_vals = np.sin(utc_refs_sec / YEAR_SECONDS * 2 * np.pi)
@@ -1189,7 +1189,7 @@ def calculate_time_components_fully_vectorized(
             m_sin = np.sin(all_times_sec / MONTH_SECONDS * 2 * np.pi)
             m_cos = np.cos(all_times_sec / MONTH_SECONDS * 2 * np.pi)
 
-        elif T.M.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value — treat as current time
             if T.M.LT == False:
                 utc_refs_sec = ns_to_seconds(utc_refs_ns)
             else:
@@ -1222,7 +1222,7 @@ def calculate_time_components_fully_vectorized(
             w_sin = np.sin(all_times_sec / WEEK_SECONDS * 2 * np.pi)
             w_cos = np.cos(all_times_sec / WEEK_SECONDS * 2 * np.pi)
 
-        elif T.W.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value — treat as current time
             if T.W.LT == False:
                 utc_refs_sec = ns_to_seconds(utc_refs_ns)
             else:
@@ -1255,7 +1255,7 @@ def calculate_time_components_fully_vectorized(
             d_sin = np.sin(all_times_sec / DAY_SECONDS * 2 * np.pi)
             d_cos = np.cos(all_times_sec / DAY_SECONDS * 2 * np.pi)
 
-        elif T.D.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value — treat as current time
             if T.D.LT == False:
                 utc_refs_sec = ns_to_seconds(utc_refs_ns)
             else:
@@ -1290,7 +1290,7 @@ def calculate_time_components_fully_vectorized(
             h_flat = np.array([1 if d in hol_dates else 0 for d in dates], dtype=np.float64)
             h_array = h_flat.reshape(n_samples, n_points)
 
-        elif T.H.SPEC == "Aktuelle Zeit":
+        else:  # "Aktuelle Zeit" or any other value — treat as current time
             if T.H.LT == False:
                 dt_index = pd.DatetimeIndex(utc_refs_ns)
             else:

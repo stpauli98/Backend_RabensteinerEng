@@ -878,7 +878,6 @@ class Visualizer:
                     n_samples, n_timesteps, n_features_in = tst_x.shape
                     x_flat = tst_x.reshape(n_samples, -1)
                     feat_names = [f"x_{k}" for k in range(x_flat.shape[1])]
-                    import pandas as pd
                     x_flat_df = pd.DataFrame(x_flat, columns=feat_names)
                     tst_fcst = trained_model.predict(x_flat_df)
                     tst_fcst = tst_fcst.reshape(n_samples, n_timesteps, 1)
