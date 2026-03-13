@@ -21,6 +21,7 @@ import pickle
 import io
 from typing import Dict, List, Tuple
 from tensorflow import keras
+from shared.database.client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,16 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
     if not uuid_session_id:
         raise ValueError(f'Session {session_id} not found')
 
+    # Fetch session name for filename prefix
+    supabase = get_supabase_admin_client()
+    session_data = supabase.table('sessions').select('session_name').eq('id', str(uuid_session_id)).execute()
+    session_name = None
+    if session_data.data and session_data.data[0].get('session_name'):
+        # Sanitize: replace spaces/special chars with underscores, strip edges
+        import re
+        raw_name = session_data.data[0]['session_name'].strip()
+        session_name = re.sub(r'[^\w\-]', '_', raw_name).strip('_') if raw_name else None
+
     training_results = fetch_training_results_with_storage(session_id)
 
     if not training_results:
@@ -191,7 +202,8 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                         session_id=str(uuid_session_id),
                         model_file_path=temp_file_path,
                         model_type='ScalerDictionary',
-                        dataset_name=dataset_name
+                        dataset_name=dataset_name,
+                        filename_prefix=session_name
                     )
 
                     uploaded_models.append({
@@ -226,7 +238,8 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                         session_id=str(uuid_session_id),
                         model_file_path=temp_file_path,
                         model_type=model_class,
-                        dataset_name=dataset_name
+                        dataset_name=dataset_name,
+                        filename_prefix=session_name
                     )
 
                     uploaded_models.append({
@@ -276,7 +289,8 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                     session_id=str(uuid_session_id),
                     model_file_path=temp_file_path,
                     model_type=model_class,
-                    dataset_name=dataset_name
+                    dataset_name=dataset_name,
+                    filename_prefix=session_name
                 )
 
                 uploaded_models.append({

@@ -24,7 +24,8 @@ def upload_trained_model(
     session_id: str,
     model_file_path: str,
     model_type: str,
-    dataset_name: str
+    dataset_name: str,
+    filename_prefix: str = None
 ) -> Dict[str, any]:
     """
     Upload a trained model (.h5 file) to Supabase Storage
@@ -68,7 +69,8 @@ def upload_trained_model(
 
         file_extension = os.path.splitext(model_file_path)[1]
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-        storage_filename = f"{model_type}_{dataset_name}_{timestamp}{file_extension}"
+        prefix = filename_prefix if filename_prefix else model_type
+        storage_filename = f"{prefix}_{dataset_name}_{timestamp}{file_extension}"
         file_path = f"{session_id}/{storage_filename}"
 
         with open(model_file_path, 'rb') as f:
