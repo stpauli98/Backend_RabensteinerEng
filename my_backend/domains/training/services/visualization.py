@@ -1443,9 +1443,12 @@ class Visualizer:
             if unique_lines:
                 fig.legend(
                     unique_lines, unique_labels,
-                    loc="upper right",
-                    ncol=5,
-                    fontsize=8
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 1.06),
+                    ncol=len(unique_labels),
+                    fontsize=8,
+                    framealpha=0.9,
+                    edgecolor='#cccccc',
                 )
 
             # ===================================================================
