@@ -847,6 +847,19 @@ class Visualizer:
             O_N = tst_y.shape[1]  # Output timesteps
             DELT = metadata.get('delt', 15)  # Default 15 minutes
 
+            # Read per-file time configuration from metadata
+            i_dat_inf_raw = metadata.get('i_dat_inf')
+            o_dat_inf_raw = metadata.get('o_dat_inf')
+
+            if not i_dat_inf_raw or not o_dat_inf_raw:
+                raise ValueError(
+                    'Model needs to be retrained for plot support. '
+                    'Please retrain the model to enable UTC plot generation.'
+                )
+
+            i_dat_inf = pd.DataFrame.from_dict(i_dat_inf_raw)
+            o_dat_inf = pd.DataFrame.from_dict(o_dat_inf_raw)
+
             # ===================================================================
             # GENERATE PREDICTIONS
             # ===================================================================
@@ -972,44 +985,48 @@ class Visualizer:
 
                 tst_inf[random_num] = {"utc_ref": utc_ref}
 
-                # Generate UTC timestamps for input data
-                if utc_ref:
-                    try:
-                        utc_th_in = pd.date_range(
-                            end=utc_ref,
-                            periods=I_N,
-                            freq=f'{DELT}min'
-                        ).to_list()
-                    except Exception:
-                        utc_th_in = [utc_ref] * I_N
-                else:
-                    # Fallback: generate timestamps starting from now
-                    utc_th_in = pd.date_range(
-                        start=pd.Timestamp.now() - pd.Timedelta(minutes=DELT * I_N),
-                        periods=I_N,
-                        freq=f'{DELT}min'
-                    ).to_list()
-
-                # Generate UTC timestamps for output data
-                if utc_ref:
-                    try:
-                        utc_th_out = pd.date_range(
-                            start=utc_ref,
-                            periods=O_N,
-                            freq=f'{DELT}min'
-                        ).to_list()
-                    except Exception:
-                        utc_th_out = [utc_ref] * O_N
-                else:
-                    utc_th_out = pd.date_range(
-                        start=pd.Timestamp.now(),
-                        periods=O_N,
-                        freq=f'{DELT}min'
-                    ).to_list()
-
-                # INPUT DATA - MATCHES ORIGINAL (lines 2488-2530)
+                # =============================================================
+                # INPUT DATA - Per-file UTC generation (matches training.py 2481-2527)
+                # =============================================================
                 for i_feat, feat_name in enumerate(input_file_names):
                     if i_feat < tst_x.shape[-1]:
+                        # Generate per-file UTC timestamps
+                        if utc_ref and feat_name in i_dat_inf.index:
+                            if i_dat_inf.loc[feat_name, "spec"] == "Historische Daten":
+                                utc_th_strt = utc_ref + datetime.timedelta(
+                                    hours=float(i_dat_inf.loc[feat_name, "th_strt"]))
+                                utc_th_end = utc_ref + datetime.timedelta(
+                                    hours=float(i_dat_inf.loc[feat_name, "th_end"]))
+                                try:
+                                    utc_th_in = pd.date_range(
+                                        start=utc_th_strt,
+                                        end=utc_th_end,
+                                        freq=f'{i_dat_inf.loc[feat_name, "delt_transf"]}min'
+                                    ).to_list()
+                                except Exception:
+                                    delt = pd.to_timedelta(
+                                        i_dat_inf.loc[feat_name, "delt_transf"], unit="min")
+                                    utc_th_in = []
+                                    utc = utc_th_strt
+                                    for _ in range(I_N):
+                                        utc_th_in.append(utc)
+                                        utc += delt
+                            else:
+                                # Non-historical data: fallback to global
+                                utc_th_in = pd.date_range(
+                                    end=utc_ref, periods=I_N, freq=f'{DELT}min'
+                                ).to_list()
+                        elif utc_ref:
+                            # Feature not in dat_inf: fallback to global
+                            utc_th_in = pd.date_range(
+                                end=utc_ref, periods=I_N, freq=f'{DELT}min'
+                            ).to_list()
+                        else:
+                            utc_th_in = pd.date_range(
+                                start=pd.Timestamp.now() - pd.Timedelta(minutes=DELT * I_N),
+                                periods=I_N, freq=f'{DELT}min'
+                            ).to_list()
+
                         if y_sbpl_fmt == "original":
                             value = tst_x_orig[random_num, :, i_feat]
                         else:
@@ -1022,29 +1039,129 @@ class Visualizer:
                         })
                         tst_inf[random_num]["IN: " + feat_name] = df
 
-                # TIME COMPONENTS - MATCHES ORIGINAL (lines 2585-2897)
-                # Convert lowercase TIME names to UPPERCASE for display (Y_sin, Y_cos, etc.)
+                # =============================================================
+                # TIME COMPONENTS - per-component UTC generation
+                # MATCHES ORIGINAL training.py (lines 2582-2888):
+                # Each TIME component (Y, M, W, D, H) has its own TH_STRT,
+                # TH_END, DELT, SPEC from category_data in time_info table.
+                # "Zeithorizont" → utc_ref + TH_STRT to TH_END with DELT
+                # "Aktuelle Zeit" → all timestamps = utc_ref (repeated I_N times)
+                # =============================================================
+
+                # Map component names to their category_data key
+                _TIME_COMP_TO_CAT_KEY = {
+                    'Y_sin': 'jahr', 'Y_cos': 'jahr',
+                    'M_sin': 'monat', 'M_cos': 'monat',
+                    'W_sin': 'woche', 'W_cos': 'woche',
+                    'D_sin': 'tag', 'D_cos': 'tag',
+                    'H': 'feiertag',
+                }
+                # Default T class values per category (from config.py)
+                _TIME_DEFAULTS = {
+                    'jahr':     {'spec': 'Zeithorizont',  'th_strt': -24,   'th_end': 0},
+                    'monat':    {'spec': 'Zeithorizont',  'th_strt': -1,    'th_end': 0},
+                    'woche':    {'spec': 'Aktuelle Zeit', 'th_strt': -24,   'th_end': 0},
+                    'tag':      {'spec': 'Zeithorizont',  'th_strt': -24,   'th_end': 0},
+                    'feiertag': {'spec': 'Aktuelle Zeit', 'th_strt': -100,  'th_end': 0},
+                }
+
+                # Get category_data from time_info (already fetched at line 730)
+                category_data = time_info.get('category_data', {}) if time_info_response.data else {}
+
                 time_start_idx = len(input_file_names)
                 for i_time, time_name in enumerate(time_components):
                     time_idx = time_start_idx + i_time
                     if time_idx < tst_x.shape[-1]:
+                        # Determine per-component config from DB or defaults
+                        cat_key = _TIME_COMP_TO_CAT_KEY.get(time_name)
+                        defaults = _TIME_DEFAULTS.get(cat_key, {'spec': 'Zeithorizont', 'th_strt': -24, 'th_end': 0})
+                        cat_cfg = category_data.get(cat_key, {}) if cat_key else {}
+
+                        comp_spec = cat_cfg.get('datenform', defaults['spec'])
+                        # Safe float conversion - handle empty strings from DB
+                        _raw_strt = cat_cfg.get('zeithorizontStart', defaults['th_strt'])
+                        _raw_end = cat_cfg.get('zeithorizontEnd', defaults['th_end'])
+                        comp_th_strt = float(_raw_strt) if _raw_strt != '' and _raw_strt is not None else float(defaults['th_strt'])
+                        comp_th_end = float(_raw_end) if _raw_end != '' and _raw_end is not None else float(defaults['th_end'])
+                        comp_delt = (comp_th_end - comp_th_strt) * 60 / max(I_N - 1, 1)
+
+                        # Generate per-component UTC timestamps (matches original per-component logic)
+                        if utc_ref:
+                            if comp_spec == "Aktuelle Zeit":
+                                # All timestamps = utc_ref (matches original training.py)
+                                utc_th_time = [utc_ref] * I_N
+                            else:  # "Zeithorizont"
+                                comp_utc_strt = utc_ref + datetime.timedelta(hours=comp_th_strt)
+                                try:
+                                    utc_th_time = pd.date_range(
+                                        start=comp_utc_strt, periods=I_N,
+                                        freq=f'{comp_delt}min'
+                                    ).to_list()
+                                except Exception:
+                                    logger.warning(f"date_range failed for TIME '{time_name}', using manual generation")
+                                    delt_td = pd.to_timedelta(comp_delt, unit="min")
+                                    utc_th_time = []
+                                    utc = comp_utc_strt
+                                    for _ in range(I_N):
+                                        utc_th_time.append(utc)
+                                        utc += delt_td
+                        else:
+                            utc_th_time = pd.date_range(
+                                start=pd.Timestamp.now() - pd.Timedelta(minutes=DELT * I_N),
+                                periods=I_N, freq=f'{DELT}min'
+                            ).to_list()
+
                         if y_sbpl_fmt == "original":
                             value = tst_x_orig[random_num, :, time_idx]
                         else:
                             value = tst_x[random_num, :, time_idx]
 
                         df = pd.DataFrame({
-                            "UTC": utc_th_in,
+                            "UTC": utc_th_time,
                             "ts": list(range(-I_N + 1, 1)),
                             "value": value
                         })
-                        # Use UPPERCASE display name (Y_sin, Y_cos) - MATCHES ORIGINAL
                         display_name = TIME_NAME_DISPLAY_MAP.get(time_name, time_name)
                         tst_inf[random_num]["TIME: " + display_name] = df
 
-                # OUTPUT DATA - MATCHES ORIGINAL (lines 2538-2580)
+                # =============================================================
+                # OUTPUT DATA - Per-file UTC generation (matches training.py 2531-2571)
+                # =============================================================
                 for i_feat, feat_name in enumerate(output_features):
                     if i_feat < tst_y.shape[-1]:
+                        if utc_ref and feat_name in o_dat_inf.index:
+                            if o_dat_inf.loc[feat_name, "spec"] == "Historische Daten":
+                                utc_th_strt = utc_ref + datetime.timedelta(
+                                    hours=float(o_dat_inf.loc[feat_name, "th_strt"]))
+                                utc_th_end = utc_ref + datetime.timedelta(
+                                    hours=float(o_dat_inf.loc[feat_name, "th_end"]))
+                                try:
+                                    utc_th_out = pd.date_range(
+                                        start=utc_th_strt,
+                                        end=utc_th_end,
+                                        freq=f'{o_dat_inf.loc[feat_name, "delt_transf"]}min'
+                                    ).to_list()
+                                except Exception:
+                                    delt = pd.to_timedelta(
+                                        o_dat_inf.loc[feat_name, "delt_transf"], unit="min")
+                                    utc_th_out = []
+                                    utc = utc_th_strt
+                                    for _ in range(O_N):
+                                        utc_th_out.append(utc)
+                                        utc += delt
+                            else:
+                                utc_th_out = pd.date_range(
+                                    start=utc_ref, periods=O_N, freq=f'{DELT}min'
+                                ).to_list()
+                        elif utc_ref:
+                            utc_th_out = pd.date_range(
+                                start=utc_ref, periods=O_N, freq=f'{DELT}min'
+                            ).to_list()
+                        else:
+                            utc_th_out = pd.date_range(
+                                start=pd.Timestamp.now(), periods=O_N, freq=f'{DELT}min'
+                            ).to_list()
+
                         if y_sbpl_fmt == "original":
                             value = tst_y_orig[random_num, :, i_feat]
                         else:
@@ -1057,10 +1174,39 @@ class Visualizer:
                         })
                         tst_inf[random_num]["OUT: " + feat_name] = df
 
-                # FORECAST DATA - MATCHES ORIGINAL (lines 2899-2939)
+                # =============================================================
+                # FORECAST DATA - Independent UTC generation from o_dat_inf
+                # MATCHES ORIGINAL training.py (lines 2890-2930):
+                # Generates timestamps independently using o_dat_inf, NOT reusing OUT
+                # =============================================================
                 for i_feat, feat_name in enumerate(output_features):
                     n_fcst_features = tst_fcst.shape[-1] if len(tst_fcst.shape) > 2 else 1
                     if i_feat < n_fcst_features:
+                        if utc_ref and feat_name in o_dat_inf.index:
+                            utc_th_strt = utc_ref + datetime.timedelta(
+                                hours=float(o_dat_inf.loc[feat_name, "th_strt"]))
+                            utc_th_end = utc_ref + datetime.timedelta(
+                                hours=float(o_dat_inf.loc[feat_name, "th_end"]))
+                            try:
+                                utc_th_fcst = pd.date_range(
+                                    start=utc_th_strt,
+                                    end=utc_th_end,
+                                    freq=f'{o_dat_inf.loc[feat_name, "delt_transf"]}min'
+                                ).to_list()
+                            except Exception:
+                                delt = pd.to_timedelta(
+                                    o_dat_inf.loc[feat_name, "delt_transf"], unit="min")
+                                utc_th_fcst = []
+                                utc = utc_th_strt
+                                for _ in range(O_N):
+                                    utc_th_fcst.append(utc)
+                                    utc += delt
+                        else:
+                            utc_th_fcst = pd.date_range(
+                                start=utc_ref if utc_ref else pd.Timestamp.now(),
+                                periods=O_N, freq=f'{DELT}min'
+                            ).to_list()
+
                         if len(tst_fcst.shape) == 3:
                             if y_sbpl_fmt == "original":
                                 value = tst_fcst_orig[random_num, :, i_feat]
@@ -1070,7 +1216,7 @@ class Visualizer:
                             value = tst_fcst[random_num, :]
 
                         df = pd.DataFrame({
-                            "UTC": utc_th_out,
+                            "UTC": utc_th_fcst,
                             "ts": list(range(0, O_N)),
                             "value": value
                         })
