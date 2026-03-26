@@ -2,7 +2,7 @@
 import os
 import logging
 from datetime import datetime as dat
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -55,32 +55,23 @@ def create_app():
                      always_connect=True)
     app.extensions['socketio'] = socketio
 
-    # Initialize CORS with configurable origins
-    _flask_cors_origins = _cors_origins.split(',') if _cors_origins != '*' else ["http://localhost:3000", "http://127.0.0.1:3000", "https://entropia-seven.vercel.app", "*"]
-    cors.init_app(app, resources={
-        r"/*": {
-            "origins": _flask_cors_origins,
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-            "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
-            "expose_headers": ["Content-Disposition", "Content-Length"],
-            "supports_credentials": True,
-            "max_age": 3600
-        }
-    })
+    # Initialize CORS - Flask-Cors 6.0 uses top-level kwargs instead of resources dict
+    # supports_credentials=True requires explicit origins (no wildcard "*")
+    _flask_cors_origins = _cors_origins.split(',') if _cors_origins != '*' else [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://entropia-seven.vercel.app"
+    ]
+    cors.init_app(app,
+        origins=_flask_cors_origins,
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
+        expose_headers=["Content-Disposition", "Content-Length"],
+        supports_credentials=True,
+        max_age=3600
+    )
 
     register_socketio_handlers(socketio)
-    
-    @app.before_request
-    def handle_preflight():
-        if request.method == "OPTIONS":
-            response = app.make_default_options_response()
-            headers = response.headers
-            headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
-            headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-            headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, Origin, X-Requested-With'
-            headers['Access-Control-Allow-Credentials'] = 'true'
-            headers['Access-Control-Max-Age'] = '3600'
-            return response
     
     from core.blueprints import register_blueprints
     register_blueprints(app)

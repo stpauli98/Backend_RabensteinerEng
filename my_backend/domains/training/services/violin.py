@@ -429,7 +429,7 @@ def get_data_for_violin_plots(session_id: str) -> Dict[str, Any]:
 
         response = supabase.table('training_results').select('*').eq(
             'session_id', uuid_session_id
-        ).order('created_at.desc').limit(1).execute()
+        ).order('created_at', desc=True).limit(1).execute()
 
         if not response.data or len(response.data) == 0:
             return {

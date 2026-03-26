@@ -210,8 +210,8 @@ def get_training_status(session_id: str):
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
-        results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
-        logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at.desc').limit(1).execute()
+        results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
+        logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
 
         if results_response.data and len(results_response.data) > 0:
             result_data = results_response.data[0]
@@ -296,7 +296,7 @@ def get_results_summary(session_id):
         results_response = supabase.table('training_results')\
             .select('id, status, created_at, results_metadata')\
             .eq('session_id', uuid_session_id)\
-            .order('created_at.desc')\
+            .order('created_at', desc=True)\
             .limit(1)\
             .execute()
 
@@ -370,7 +370,7 @@ def get_training_results(session_id):
             .select('id, session_id, status, created_at, updated_at, '
                    'results_file_path, file_size_bytes, compressed, results_metadata')\
             .eq('session_id', uuid_session_id)\
-            .order('created_at.desc')\
+            .order('created_at', desc=True)\
             .limit(1)\
             .execute()
 

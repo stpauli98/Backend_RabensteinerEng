@@ -36,7 +36,7 @@ def prepare_data_for_training(
         
         results_response = supabase.table('training_results').select('*').eq(
             'session_id', uuid_session_id
-        ).order('created_at.desc').limit(1).execute()
+        ).order('created_at', desc=True).limit(1).execute()
         
         if results_response.data and len(results_response.data) > 0:
             result = results_response.data[0]

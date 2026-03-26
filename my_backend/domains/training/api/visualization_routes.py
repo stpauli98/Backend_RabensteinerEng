@@ -171,7 +171,7 @@ def get_evaluation_tables(session_id):
         response = supabase.table('training_results') \
             .select('id, results_file_path, compressed, results') \
             .eq('session_id', uuid_session_id) \
-            .order('created_at.desc') \
+            .order('created_at', desc=True) \
             .limit(1) \
             .execute()
 

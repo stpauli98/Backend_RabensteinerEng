@@ -445,7 +445,7 @@ def cleanup_old_training_results(
         response = supabase_client.table('training_results') \
             .select('id, results_file_path, file_size_bytes, created_at') \
             .eq('session_id', session_id) \
-            .order('created_at.desc') \
+            .order('created_at', desc=True) \
             .execute()
 
         if not response.data or len(response.data) <= keep_latest:
@@ -527,7 +527,7 @@ def fetch_training_results_with_storage(
         if model_id:
             query = query.eq('id', model_id)
         else:
-            query = query.order('created_at.desc').limit(1)
+            query = query.order('created_at', desc=True).limit(1)
 
         response = query.execute()
 
