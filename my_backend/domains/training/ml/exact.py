@@ -726,9 +726,13 @@ def run_exact_training_pipeline(
             'n_train': n_train,
             'n_val': n_val,
             'n_test': n_test,
+            'delt': mts_config.DELT if mts_config else 15,
             'utc_ref_log': utc_ref_log,
             'model_config': mdl_config,
             'random_data': random_dat,
+            # Per-file time configuration needed for plot UTC generation
+            'i_dat_inf': i_dat_inf.to_dict() if hasattr(i_dat_inf, 'to_dict') else {},
+            'o_dat_inf': o_dat_inf.to_dict() if hasattr(o_dat_inf, 'to_dict') else {},
             # Build complete input feature names (files + TIME components)
             'input_features': _build_input_feature_names(i_dat_inf, i_dat),
             'output_features': o_dat_inf.index.tolist() if hasattr(o_dat_inf, 'index') else list(o_dat.keys())

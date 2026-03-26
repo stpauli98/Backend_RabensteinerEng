@@ -7,7 +7,6 @@ providing efficient bulk operations with proper error handling.
 
 import logging
 import uuid
-from datetime import datetime
 from typing import Dict, Any, List
 
 from supabase import Client
@@ -106,7 +105,8 @@ def _map_file_info_to_db_record(
     for field_name, value in [("utcMin", file_info.get("utcMin")), ("utcMax", file_info.get("utcMax"))]:
         if value:
             try:
-                dt_obj = datetime.fromisoformat(value)
+                from shared.datetime_utils import parse_iso_datetime
+                dt_obj = parse_iso_datetime(value)
                 db_field_name = "utc_min" if field_name == "utcMin" else "utc_max"
                 data[db_field_name] = dt_obj.isoformat(sep=' ', timespec='seconds')
             except (ValueError, TypeError) as e:

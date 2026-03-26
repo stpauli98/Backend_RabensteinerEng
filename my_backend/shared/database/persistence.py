@@ -7,7 +7,6 @@ This module handles saving time info, zeitschritte, and file info to the databas
 import json
 import logging
 import uuid
-from datetime import datetime
 from typing import Dict, Any, Tuple, Optional
 
 from .config import DomainDefaults, TableNames
@@ -305,14 +304,16 @@ def save_file_info(session_id: str, file_info: dict) -> Tuple[bool, Optional[str
     utc_max = file_info.get("utcMax")
     if utc_min:
         try:
-            dt_obj = datetime.fromisoformat(utc_min)
+            from shared.datetime_utils import parse_iso_datetime
+            dt_obj = parse_iso_datetime(utc_min)
             data["utc_min"] = dt_obj.isoformat(sep=' ', timespec='seconds')
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid utcMin format: {utc_min}, error: {str(e)}")
 
     if utc_max:
         try:
-            dt_obj = datetime.fromisoformat(utc_max)
+            from shared.datetime_utils import parse_iso_datetime
+            dt_obj = parse_iso_datetime(utc_max)
             data["utc_max"] = dt_obj.isoformat(sep=' ', timespec='seconds')
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid utcMax format: {utc_max}, error: {str(e)}")

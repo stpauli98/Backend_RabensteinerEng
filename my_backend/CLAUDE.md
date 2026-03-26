@@ -81,14 +81,29 @@ socketio.emit('training_status_update', data, room=session_id)
 ### Data Flow
 1. **Upload**: Chunked CSV upload → `uploads/file_uploads/session_*`
 2. **Process**: Data cleaning, interpolation, adjustments
-3. **Train**: Generate datasets → Train models (Dense, CNN, LSTM, SVR, Linear)
+3. **Train**: Generate datasets → Train models (Dense, CNN, LSTM, SVR, Linear, LGBMR)
 4. **Results**: Stored in Supabase, scalers saved for inference
+
+### Dataset Transformer
+Two implementations exist in `domains/training/data/transformer.py`:
+- `create_training_arrays_original()` - Slow per-iteration loop (default)
+- `create_training_arrays_optimized()` - 50-100x faster vectorized version
+
+Controlled by env var `USE_OPTIMIZED_TRANSFORMER=true` (strongly recommended).
+
+### Plot Generation
+Plot endpoint `POST /api/training/generate-plot` requires `i_dat_inf` and `o_dat_inf` in training results metadata for UTC timestamp generation. These are saved by `run_exact_training_pipeline()` in `domains/training/ml/exact.py`.
+
+### Datetime Parsing (Python 3.9)
+Use `shared.datetime_utils.parse_iso_datetime()` instead of `datetime.fromisoformat()` for Supabase timestamps. Python 3.9's `fromisoformat()` only supports 0, 3, or 6 fractional second digits; Supabase often returns 5.
 
 ### Environment Variables
 Required in `.env`:
 - `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 - `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`
 - `FRONTEND_URL`
+- `USE_OPTIMIZED_TRANSFORMER=true` - Use fast vectorized dataset transformer
+- `LOG_LEVEL` - DEBUG/INFO (default: INFO)
 
 ### File Storage
 - `chunk_uploads/` - Temporary chunks during upload

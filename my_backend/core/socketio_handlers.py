@@ -105,8 +105,8 @@ def register_socketio_handlers(socketio):
                             is_fresh = False
                             if updated_at_str:
                                 try:
-                                    # Parse ISO timestamp
-                                    updated_at = datetime.fromisoformat(updated_at_str.replace('Z', '+00:00'))
+                                    from shared.datetime_utils import parse_iso_datetime
+                                    updated_at = parse_iso_datetime(updated_at_str)
                                     now = datetime.now(timezone.utc)
                                     age_seconds = (now - updated_at).total_seconds()
                                     is_fresh = age_seconds < 120  # 2 minutes

@@ -263,8 +263,8 @@ class ProgressManager:
                 last_heartbeat = progress_data.get('last_heartbeat')
                 
                 if status == 'running' and process_id and last_heartbeat:
-                    from datetime import datetime
-                    heartbeat_time = datetime.fromisoformat(last_heartbeat.replace('Z', '+00:00'))
+                    from shared.datetime_utils import parse_iso_datetime
+                    heartbeat_time = parse_iso_datetime(last_heartbeat)
                     age_seconds = (datetime.now(timezone.utc) - heartbeat_time).total_seconds()
                     
                     return age_seconds < self.session_timeout
@@ -444,7 +444,8 @@ class ProgressManager:
                     if progress_data.get('status') in ['completed', 'failed', 'cancelled']:
                         if 'completed_at' in progress_data:
                             try:
-                                completed_time = datetime.fromisoformat(progress_data['completed_at'].replace('Z', '+00:00'))
+                                from shared.datetime_utils import parse_iso_datetime
+                                completed_time = parse_iso_datetime(progress_data['completed_at'])
                                 age_seconds = (datetime.now(timezone.utc) - completed_time).total_seconds()
                                 if age_seconds > 300:
                                     sessions_to_remove.append(session_id)
