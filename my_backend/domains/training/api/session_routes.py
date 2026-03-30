@@ -330,8 +330,9 @@ def delete_all_sessions_endpoint():
                 data = {}
 
         confirmation = data.get('confirm_delete_all', False)
+        user_id = g.user_id
 
-        result = delete_all_sessions(confirm=confirmation)
+        result = delete_all_sessions(confirm=confirmation, user_id=user_id)
 
         response_data = {
             'success': True,
