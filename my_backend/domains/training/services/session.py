@@ -515,23 +515,21 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
     }
 
 
-def delete_all_sessions(confirm: bool = False) -> Dict:
+def delete_all_sessions(confirm: bool = False, *, user_id: str) -> Dict:
     """
-    Delete all sessions from database, storage, and local storage.
+    Delete all sessions belonging to a specific user.
+
+    Only deletes sessions owned by user_id. Never deletes other users' data.
 
     Args:
         confirm: Must be True to proceed with deletion
+        user_id: REQUIRED. The authenticated user's ID — only their sessions are deleted.
 
     Returns:
-        dict: {
-            'summary': {'database_records_deleted', 'storage_files_deleted', 'local_directories_deleted', 'local_files_deleted'},
-            'details': {'initial_counts', 'deleted_counts', 'storage_deleted', 'local_deleted'},
-            'warnings': [] (optional),
-            'message': str
-        }
+        dict with summary, details, warnings, message
 
     Raises:
-        ValueError: If confirmation is not provided
+        ValueError: If confirmation is not provided or user_id is missing
     """
     from shared.database.operations import get_supabase_client
     import shutil
@@ -539,48 +537,70 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
     if not confirm:
         raise ValueError('Confirmation required. To delete all sessions, pass confirm=True')
 
-    logger.warning("🚨 DELETE ALL SESSIONS operation initiated!")
+    if not user_id:
+        raise ValueError('user_id is required — cannot delete sessions without user scope')
+
+    logger.warning(f"DELETE ALL SESSIONS for user {user_id}")
 
     supabase = get_supabase_client()
 
-    initial_counts = {}
+    # Step 1: Get all session IDs belonging to this user
+    try:
+        sessions_response = supabase.table('sessions').select('id').eq('user_id', user_id).execute()
+        user_session_ids = [s['id'] for s in (sessions_response.data or [])]
+    except Exception as e:
+        logger.error(f"Failed to fetch user sessions: {e}")
+        raise ValueError(f'Could not fetch sessions for user: {str(e)}')
+
+    if not user_session_ids:
+        return {
+            'summary': {
+                'database_records_deleted': 0,
+                'storage_files_deleted': 0,
+                'local_directories_deleted': 0,
+                'local_files_deleted': 0,
+            },
+            'details': {
+                'initial_counts': {},
+                'deleted_counts': {},
+                'storage_deleted': {'csv-files': 0, 'aus-csv-files': 0},
+                'local_deleted': {'directories': 0, 'files': 0},
+            },
+            'message': 'No sessions found for this user',
+        }
+
+    logger.info(f"Found {len(user_session_ids)} sessions to delete for user {user_id}")
+
     database_errors = []
 
+    # Step 2: Get string session IDs for local dir cleanup BEFORE deleting mappings
+    string_session_ids = []
     try:
-        tables_to_check = [
-            'training_results',
-            'training_visualizations',
-            'files',
-            'zeitschritte',
-            'time_info',
-            'session_mappings',
-            'sessions'
-        ]
+        mappings_response = (
+            supabase.table('session_mappings')
+            .select('string_session_id')
+            .in_('uuid_session_id', user_session_ids)
+            .execute()
+        )
+        string_session_ids = [m['string_session_id'] for m in (mappings_response.data or [])]
+    except Exception:
+        pass
 
-        for table in tables_to_check:
-            try:
-                count_response = supabase.table(table).select('id', count='exact').execute()
-                initial_counts[table] = count_response.count
-                logger.info(f"Found {count_response.count} records in {table}")
-            except Exception as e:
-                logger.warning(f"Could not count records in {table}: {str(e)}")
-                initial_counts[table] = 'unknown'
-
-    except Exception as e:
-        logger.error(f"Error getting initial counts: {str(e)}")
-
+    # Step 3: Delete storage files BEFORE removing DB records
     storage_deleted = {'csv-files': 0, 'aus-csv-files': 0}
 
     try:
-        files_response = supabase.table('files').select('storage_path, type').execute()
+        files_response = (
+            supabase.table('files')
+            .select('storage_path, type')
+            .in_('session_id', user_session_ids)
+            .execute()
+        )
 
-        # Deduplicate storage paths to avoid deleting same file multiple times
-        # (important for shared storage where multiple DB records reference same file)
         unique_storage_paths = {}
-        for file_data in files_response.data:
+        for file_data in (files_response.data or []):
             storage_path = file_data.get('storage_path')
             file_type = file_data.get('type', 'input')
-
             if storage_path and storage_path not in unique_storage_paths:
                 unique_storage_paths[storage_path] = file_type
 
@@ -591,73 +611,118 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
                 bucket_name = 'aus-csv-files' if file_type == 'output' else 'csv-files'
                 supabase.storage.from_(bucket_name).remove([storage_path])
                 storage_deleted[bucket_name] += 1
-                logger.info(f"Deleted from storage: {bucket_name}/{storage_path}")
             except Exception as storage_error:
-                logger.warning(f"Could not delete from storage {storage_path}: {str(storage_error)}")
+                logger.warning(f"Could not delete from storage {storage_path}: {storage_error}")
                 database_errors.append(f"Storage: {storage_path} - {str(storage_error)}")
-
     except Exception as e:
-        logger.error(f"Error deleting from storage: {str(e)}")
+        logger.error(f"Error deleting from storage: {e}")
         database_errors.append(f"Storage deletion error: {str(e)}")
 
-    tables_to_delete = [
+    # Step 4: Delete training results and models from storage buckets
+    for sid in user_session_ids:
+        try:
+            from utils.training_storage import list_session_results, delete_training_results
+            results_files = list_session_results(str(sid))
+            for result_file in results_files:
+                file_path = f"{sid}/{result_file['name']}"
+                try:
+                    delete_training_results(file_path)
+                except Exception as e:
+                    logger.warning(f"Failed to delete training result {file_path}: {e}")
+        except Exception as e:
+            logger.warning(f"Could not cleanup training results for session {sid}: {e}")
+
+        try:
+            from utils.model_storage import delete_session_models
+            delete_session_models(str(sid))
+        except Exception as e:
+            logger.warning(f"Could not cleanup trained models for session {sid}: {e}")
+
+    # Step 5: Delete database records — child tables first, sessions last
+    tables_with_session_id = [
         'training_results',
         'training_visualizations',
         'evaluation_tables',
+        'training_logs',
+        'training_progress',
+        'saved_models',
+        'csv_file_refs',
         'files',
         'zeitschritte',
         'time_info',
-        'session_mappings',
-        'sessions'
     ]
 
     deleted_counts = {}
 
-    for table in tables_to_delete:
+    for table in tables_with_session_id:
         try:
-            response = supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+            response = (
+                supabase.table(table)
+                .delete()
+                .in_('session_id', user_session_ids)
+                .execute()
+            )
             deleted_count = len(response.data) if response.data else 0
             deleted_counts[table] = deleted_count
-
             if deleted_count > 0:
-                logger.info(f"✅ Deleted {deleted_count} records from {table}")
-            else:
-                logger.info(f"ℹ️  No records to delete from {table}")
-
+                logger.info(f"Deleted {deleted_count} records from {table}")
         except Exception as table_error:
-            logger.error(f"Error deleting from {table}: {str(table_error)}")
+            logger.warning(f"Error deleting from {table}: {table_error}")
             database_errors.append(f"Table {table}: {str(table_error)}")
-            deleted_counts[table] = 'error'
+            deleted_counts[table] = 0
 
+    # Delete session_mappings (uses uuid_session_id, not session_id)
+    try:
+        response = (
+            supabase.table('session_mappings')
+            .delete()
+            .in_('uuid_session_id', user_session_ids)
+            .execute()
+        )
+        deleted_counts['session_mappings'] = len(response.data) if response.data else 0
+    except Exception as e:
+        logger.warning(f"Error deleting session_mappings: {e}")
+        database_errors.append(f"Table session_mappings: {str(e)}")
+        deleted_counts['session_mappings'] = 0
+
+    # Delete sessions themselves (uses id, not session_id)
+    try:
+        response = (
+            supabase.table('sessions')
+            .delete()
+            .in_('id', user_session_ids)
+            .execute()
+        )
+        deleted_counts['sessions'] = len(response.data) if response.data else 0
+    except Exception as e:
+        logger.warning(f"Error deleting sessions: {e}")
+        database_errors.append(f"Table sessions: {str(e)}")
+        deleted_counts['sessions'] = 0
+
+    # Step 6: Clean up local directories for this user's sessions only
     local_deleted = {'directories': 0, 'files': 0}
-    local_errors = []
 
     try:
         if os.path.exists(UPLOAD_BASE_DIR):
+            valid_dir_names = set(string_session_ids) | set(user_session_ids)
+
             for item in os.listdir(UPLOAD_BASE_DIR):
                 item_path = os.path.join(UPLOAD_BASE_DIR, item)
-
-                if os.path.isdir(item_path) and item.startswith('session_'):
+                if os.path.isdir(item_path) and item in valid_dir_names:
                     try:
-                        file_count = sum([len(files) for r, d, files in os.walk(item_path)])
+                        file_count = sum(len(files) for _, _, files in os.walk(item_path))
                         local_deleted['files'] += file_count
-
                         shutil.rmtree(item_path)
                         local_deleted['directories'] += 1
-                        logger.info(f"🗂️  Deleted local directory: {item_path} ({file_count} files)")
-
+                        logger.info(f"Deleted local directory: {item_path}")
                     except Exception as dir_error:
-                        logger.error(f"Error deleting directory {item_path}: {str(dir_error)}")
-                        local_errors.append(f"Directory {item}: {str(dir_error)}")
-        else:
-            logger.info("📁 Local upload directory does not exist")
-
+                        logger.error(f"Error deleting directory {item_path}: {dir_error}")
+                        database_errors.append(f"Directory {item}: {str(dir_error)}")
     except Exception as e:
-        logger.error(f"Error during local cleanup: {str(e)}")
-        local_errors.append(f"Local cleanup error: {str(e)}")
+        logger.error(f"Error during local cleanup: {e}")
+        database_errors.append(f"Local cleanup error: {str(e)}")
 
-    all_errors = database_errors + local_errors
-    total_database_records = sum([count for count in deleted_counts.values() if isinstance(count, int)])
+    total_database_records = sum(v for v in deleted_counts.values() if isinstance(v, int))
     total_storage_files = sum(storage_deleted.values())
 
     result = {
@@ -665,23 +730,22 @@ def delete_all_sessions(confirm: bool = False) -> Dict:
             'database_records_deleted': total_database_records,
             'storage_files_deleted': total_storage_files,
             'local_directories_deleted': local_deleted['directories'],
-            'local_files_deleted': local_deleted['files']
+            'local_files_deleted': local_deleted['files'],
         },
         'details': {
-            'initial_counts': initial_counts,
             'deleted_counts': deleted_counts,
             'storage_deleted': storage_deleted,
-            'local_deleted': local_deleted
+            'local_deleted': local_deleted,
         },
-        'message': 'All sessions deletion completed'
+        'message': f'Deleted {len(user_session_ids)} sessions for user',
     }
 
-    if all_errors:
-        result['warnings'] = all_errors
+    if database_errors:
+        result['warnings'] = database_errors
         result['message'] += ' (with some warnings)'
-        logger.warning(f"Completed with {len(all_errors)} warnings")
+        logger.warning(f"Completed with {len(database_errors)} warnings")
     else:
-        logger.info("✅ All sessions deleted successfully without errors")
+        logger.info(f"All {len(user_session_ids)} sessions deleted successfully")
 
     return result
 
