@@ -42,7 +42,7 @@ def _make_mock_supabase():
 class TestDeleteAllSessionsSecurity:
     """Critical: delete_all_sessions must ONLY delete the given user's data."""
 
-    @patch('domains.training.services.session.get_supabase_client')
+    @patch('shared.database.operations.get_supabase_client')
     def test_requires_user_id(self, mock_get_client):
         """delete_all_sessions must raise TypeError if user_id is not provided."""
         from domains.training.services.session import delete_all_sessions
@@ -50,8 +50,8 @@ class TestDeleteAllSessionsSecurity:
         with pytest.raises(TypeError):
             delete_all_sessions(confirm=True)
 
-    @patch('domains.training.services.session.os.path.exists', return_value=False)
-    @patch('domains.training.services.session.get_supabase_client')
+    @patch('os.path.exists', return_value=False)
+    @patch('shared.database.operations.get_supabase_client')
     def test_only_deletes_own_sessions(self, mock_get_client, mock_exists):
         """Must filter session queries by user_id — never delete unfiltered."""
         from domains.training.services.session import delete_all_sessions
@@ -94,9 +94,7 @@ class TestDeleteAllSessionsSecurity:
 
         assert result['message'] is not None
 
-    @patch('domains.training.services.session.os.path.exists', return_value=False)
-    @patch('domains.training.services.session.get_supabase_client')
-    def test_no_unfiltered_delete_neq_trick(self, mock_get_client, mock_exists):
+    def test_no_unfiltered_delete_neq_trick(self):
         """Must NEVER use .delete().neq('id', '000...') — that deletes everything."""
         from domains.training.services.session import delete_all_sessions
         import inspect
