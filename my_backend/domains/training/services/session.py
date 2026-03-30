@@ -374,7 +374,7 @@ def get_session_from_database(session_id: str, user_id: str = None) -> Dict:
     return response.data[0]
 
 
-def delete_session(session_id: str, user_id: str = None) -> Dict:
+def delete_session(session_id: str, user_id: str) -> Dict:
     """
     Delete a session and all associated data.
 
@@ -407,16 +407,15 @@ def delete_session(session_id: str, user_id: str = None) -> Dict:
 
     supabase = get_supabase_client()
 
-    # Note: Ownership already validated by create_or_get_session_uuid above
-    if user_id:
-        session_response = supabase.table('sessions').select('user_id').eq('id', str(uuid_session_id)).execute()
-        if not session_response.data or len(session_response.data) == 0:
-            raise ValueError(f'Session {session_id} not found')
+    # Ownership check - user_id is always required
+    session_response = supabase.table('sessions').select('user_id').eq('id', str(uuid_session_id)).execute()
+    if not session_response.data or len(session_response.data) == 0:
+        raise ValueError(f'Session {session_id} not found')
 
-        session_owner = session_response.data[0].get('user_id')
-        if session_owner != user_id:
-            logger.warning(f"User {user_id} attempted to delete session {session_id} owned by {session_owner}")
-            raise PermissionError(f'Session {session_id} does not belong to user')
+    session_owner = session_response.data[0].get('user_id')
+    if session_owner != user_id:
+        logger.warning(f"User {user_id} attempted to delete session {session_id} owned by {session_owner}")
+        raise PermissionError(f'Session {session_id} does not belong to user')
 
     deleted_files = 0
     deleted_db_records = 0
