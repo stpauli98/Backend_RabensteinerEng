@@ -106,6 +106,10 @@ def require_subscription(f):
             logger.error("require_subscription used without require_auth")
             return jsonify({'error': 'Authentication required'}), 401
 
+        # API key auth already checks subscription in the middleware — skip here
+        if getattr(g, 'auth_method', None) == 'api_key':
+            return f(*args, **kwargs)
+
         subscription = get_user_subscription(g.user_id, g.access_token)
 
         if not subscription:
