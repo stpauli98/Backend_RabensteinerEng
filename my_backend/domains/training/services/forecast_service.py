@@ -161,20 +161,24 @@ def run_forecast(
     for feat in input_features:
         src = feat['data_source']
         name = feat['bezeichnung']
+        logger.info(f"Feature '{name}': data_source={src}, api={feat.get('api_source')}, fcst_var={feat.get('fcst_var')}")
 
         if src == 'User':
             if user_csvs and name in user_csvs:
+                logger.info(f"  → Using user_data from request ({len(user_csvs[name])} rows)")
                 data_in[name] = user_csvs[name]
             else:
                 storage_path = feat.get('storage_path')
                 if not storage_path:
                     raise ValueError(f"No data for User feature: {name}. Provide user_data in request.")
+                logger.info(f"  → Downloading from storage: {storage_path}")
                 data_in[name] = _download_user_csv(storage_path)
         elif src == 'Extern':
             api = feat['api_source']
             var = feat['fcst_var']
             lat = float(feat['latitude'])
             lon = float(feat['longitude'])
+            logger.info(f"  → Calling {api} API: var={var}, lat={lat}, lon={lon}")
 
             if api == 'GeoSphere':
                 data_in[name] = wf_GeoSphere(lat, lon, var)
