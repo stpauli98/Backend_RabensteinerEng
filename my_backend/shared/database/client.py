@@ -21,19 +21,22 @@ except ImportError:
 @lru_cache(maxsize=1)
 def get_supabase_client() -> Client:
     """
-    Get Supabase client singleton with anon key
+    Get Supabase client singleton with service role key.
+
+    Backend always uses service_role to bypass RLS — user filtering
+    is done explicitly in queries (WHERE user_id = ...).
 
     Note: For user-specific operations, use get_supabase_user_client(token) instead
     Note: Timeout is controlled at database level via statement_timeout setting
 
     Returns:
-        Client: Supabase client instance
+        Client: Supabase client instance with service_role privileges
     """
     supabase_url = os.getenv('SUPABASE_URL')
-    supabase_key = os.getenv('SUPABASE_KEY')
+    supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY')
 
     if not supabase_url or not supabase_key:
-        raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
+        raise ValueError("SUPABASE_URL and SUPABASE_KEY/SUPABASE_SERVICE_ROLE_KEY must be set in environment variables")
 
     return create_client(supabase_url, supabase_key)
 
