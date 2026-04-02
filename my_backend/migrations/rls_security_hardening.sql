@@ -62,3 +62,15 @@ USING (EXISTS (SELECT 1 FROM sessions s WHERE s.id = evaluation_tables.session_i
 DROP POLICY IF EXISTS "Users can insert own sessions" ON sessions;
 CREATE POLICY "Users can insert own sessions" ON sessions FOR INSERT TO authenticated
 WITH CHECK (auth.uid() = user_id);
+
+-- ============================================================================
+-- 7. Storage: drop anon policies on csv-files and aus-csv-files
+-- ============================================================================
+DROP POLICY IF EXISTS "aus-csv-files policy u6ybtu_0" ON storage.objects;
+DROP POLICY IF EXISTS "aus-csv-files policy u6ybtu_1" ON storage.objects;
+DROP POLICY IF EXISTS "aus-csv-files policy u6ybtu_2" ON storage.objects;
+DROP POLICY IF EXISTS "aus-csv-files policy u6ybtu_3" ON storage.objects;
+DROP POLICY IF EXISTS "csv-files Policy 1ebbldc_0" ON storage.objects;
+DROP POLICY IF EXISTS "csv-files Policy 1ebbldc_1" ON storage.objects;
+DROP POLICY IF EXISTS "csv-files Policy 1ebbldc_2" ON storage.objects;
+DROP POLICY IF EXISTS "csv-files Policy 1ebbldc_3" ON storage.objects;
