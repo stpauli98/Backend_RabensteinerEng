@@ -16,6 +16,8 @@ from .common import (
 from flask import Blueprint
 import pandas as pd
 
+from shared.auth.api_key import allow_api_key
+
 from domains.training.services.forecast_service import run_forecast
 
 bp = Blueprint('training_forecast', __name__)
@@ -23,7 +25,7 @@ logger = get_logger(__name__)
 
 
 @bp.route('/forecast/<session_id>', methods=['POST'])
-@require_auth
+@allow_api_key
 @require_subscription
 def execute_forecast(session_id):
     """Run forecast using saved config + user-provided DataFrame.

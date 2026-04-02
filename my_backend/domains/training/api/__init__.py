@@ -19,6 +19,7 @@ from .training_routes import bp as training_bp
 from .visualization_routes import bp as visualization_bp
 from .model_routes import bp as model_bp
 from .forecast_routes import bp as forecast_bp
+from .api_key_routes import bp as api_key_bp
 
 # Create parent blueprint
 bp = Blueprint('training', __name__)
@@ -30,6 +31,7 @@ bp.register_blueprint(training_bp)
 bp.register_blueprint(visualization_bp)
 bp.register_blueprint(model_bp)
 bp.register_blueprint(forecast_bp)
+bp.register_blueprint(api_key_bp)
 
 # Keep backward compatibility export name
 training_bp = bp
