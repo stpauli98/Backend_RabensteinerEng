@@ -66,7 +66,14 @@ def create_app():
         origins=_flask_cors_origins,
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
-        expose_headers=["Content-Disposition", "Content-Length"],
+        expose_headers=[
+            "Content-Disposition",
+            "Content-Length",
+            "X-Model-Env-Python",
+            "X-Model-Env-TensorFlow",
+            "X-Model-Env-Keras",
+            "X-Model-Env-Numpy",
+        ],
         supports_credentials=True,
         max_age=3600
     )
