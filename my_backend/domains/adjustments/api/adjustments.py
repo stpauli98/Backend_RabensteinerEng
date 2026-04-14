@@ -280,7 +280,7 @@ def adjust_data() -> Tuple[Response, int]:
         return jsonify({"error": str(e)}), 400
 
 
-@bp.route('/adjustdata/complete', methods=['POST', 'OPTIONS'])
+@bp.route('/adjustdata/complete', methods=['POST'])
 @require_auth
 @require_subscription
 @check_processing_limit
@@ -288,12 +288,6 @@ def complete_adjustment() -> Tuple[Response, int]:
     """
     Complete the adjustment processing.
     """
-    if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'POST,OPTIONS')
-        return response, 200
 
     try:
         data = request.json

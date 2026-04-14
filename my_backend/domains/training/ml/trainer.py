@@ -495,7 +495,7 @@ class ModelTrainer:
                 
                 if self.config.MODE == "Dense":
                     model = train_dense(X_train, y_train, X_test, y_test, self.config)
-                    model_path = os.path.join(models_dir, f'dense_{dataset_name}_{timestamp}.h5')
+                    model_path = os.path.join(models_dir, f'dense_{dataset_name}_{timestamp}.keras')
                     model.save(model_path)
                     
                     predictions = model.predict(X_test)
@@ -510,7 +510,7 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "CNN":
                     model = train_cnn(X_train, y_train, X_test, y_test, self.config)
-                    model_path = os.path.join(models_dir, f'cnn_{dataset_name}_{timestamp}.h5')
+                    model_path = os.path.join(models_dir, f'cnn_{dataset_name}_{timestamp}.keras')
                     model.save(model_path)
                     
                     predictions = model.predict(X_test)
@@ -525,7 +525,7 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "LSTM":
                     model = train_lstm(X_train, y_train, X_test, y_test, self.config)
-                    model_path = os.path.join(models_dir, f'lstm_{dataset_name}_{timestamp}.h5')
+                    model_path = os.path.join(models_dir, f'lstm_{dataset_name}_{timestamp}.keras')
                     model.save(model_path)
                     
                     predictions = model.predict(X_test)
@@ -540,7 +540,7 @@ class ModelTrainer:
                 
                 elif self.config.MODE == "AR LSTM":
                     model = train_ar_lstm(X_train, y_train, X_test, y_test, self.config)
-                    model_path = os.path.join(models_dir, f'ar_lstm_{dataset_name}_{timestamp}.h5')
+                    model_path = os.path.join(models_dir, f'ar_lstm_{dataset_name}_{timestamp}.keras')
                     model.save(model_path)
                     
                     predictions = model.predict(X_test)
