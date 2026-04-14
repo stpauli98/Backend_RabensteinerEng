@@ -227,12 +227,25 @@ def download_model_h5(session_id):
         file_data, file_name = download_model_file(session_id, filename)
         file_obj = io.BytesIO(file_data)
 
-        return send_file(
+        response = send_file(
             file_obj,
             as_attachment=True,
             download_name=file_name,
             mimetype='application/octet-stream'
         )
+
+        import sys
+        import tensorflow as tf
+        import numpy as np
+        import keras
+        response.headers['X-Model-Env-Python'] = (
+            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        )
+        response.headers['X-Model-Env-TensorFlow'] = tf.__version__
+        response.headers['X-Model-Env-Keras'] = keras.__version__
+        response.headers['X-Model-Env-Numpy'] = np.__version__
+
+        return response
 
     except ValueError as e:
         return jsonify({
