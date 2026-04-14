@@ -1,6 +1,6 @@
 """
 Model Storage Module
-Handles upload/download of trained models (.h5 files) to/from Supabase Storage
+Handles upload/download of trained models (.keras files) to/from Supabase Storage
 
 This module provides functions to:
 - Upload trained model files to Storage bucket
@@ -28,17 +28,17 @@ def upload_trained_model(
     filename_prefix: str = None
 ) -> Dict[str, any]:
     """
-    Upload a trained model (.h5 file) to Supabase Storage
+    Upload a trained model (.keras file) to Supabase Storage
 
     Args:
         session_id: UUID session ID
-        model_file_path: Local path to the .h5 model file
+        model_file_path: Local path to the .keras model file
         model_type: Type of model (e.g., 'dense', 'cnn', 'lstm')
         dataset_name: Name of the dataset used for training
 
     Returns:
         dict: {
-            'file_path': str,       # Path in bucket: "session_id/model_type_dataset_timestamp.h5"
+            'file_path': str,       # Path in bucket: "session_id/model_type_dataset_timestamp.keras"
             'file_size': int,       # Size in bytes
             'bucket': str,          # Bucket name
             'model_type': str,      # Model type
@@ -51,12 +51,12 @@ def upload_trained_model(
     Example:
         >>> result = upload_trained_model(
         ...     session_id="abc-123",
-        ...     model_file_path="/app/uploads/trained_models/dense_dataset1_20251023.h5",
+        ...     model_file_path="/app/uploads/trained_models/dense_dataset1_20251023.keras",
         ...     model_type="dense",
         ...     dataset_name="dataset1"
         ... )
         >>> print(result['file_path'])
-        "abc-123/dense_dataset1_20251023_123456.h5"
+        "abc-123/dense_dataset1_20251023_123456.keras"
     """
     try:
         supabase = get_supabase_admin_client()
@@ -260,7 +260,7 @@ def list_session_models(session_id: str) -> List[Dict]:
         models = []
         for file_info in files:
             filename = file_info['name']
-            if filename.endswith('.h5') or filename.endswith('.pkl') or filename.endswith('.save'):
+            if filename.endswith('.h5') or filename.endswith('.keras') or filename.endswith('.pkl') or filename.endswith('.save'):
                 parts = filename.rsplit('.', 1)
                 file_extension = parts[1] if len(parts) > 1 else ''
 
@@ -322,10 +322,10 @@ def delete_session_models(session_id: str) -> Dict:
         deleted_files = []
         errors = []
 
-        # Delete each model file (.h5, .pkl, and .save)
+        # Delete each model file (.h5, .keras, .pkl, and .save)
         for file_info in files:
             filename = file_info['name']
-            if filename.endswith('.h5') or filename.endswith('.pkl') or filename.endswith('.save'):
+            if filename.endswith('.h5') or filename.endswith('.keras') or filename.endswith('.pkl') or filename.endswith('.save'):
                 file_path = f"{session_id}/{filename}"
                 try:
                     supabase.storage.from_(bucket_name).remove([file_path])

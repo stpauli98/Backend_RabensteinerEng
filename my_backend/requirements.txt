@@ -13,7 +13,7 @@ supabase>=2.7.0,<3.0  # 2.7+ fixes proxy parameter issues (gotrue/httpx pins no 
 
 # Basic data handling (lightweight)
 pandas>=2.1.4,<3.0
-numpy>=1.26.3,<2.0  # MUST stay <2.0 - TensorFlow 2.16 crashes with numpy 2.0+
+numpy>=1.26.3,<3.0
 
 # Required by cloud.py blueprint
 scikit-learn>=1.5.1,<2.0
@@ -21,7 +21,8 @@ matplotlib>=3.8.2,<4.0
 
 # Heavy packages
 seaborn>=0.13.1,<1.0
-tensorflow==2.16.1
+tensorflow==2.19.0
+keras==3.12.0  # Pin to match consumer env (TF 2.20/Keras 3.12) for model file compatibility
 lightgbm>=4.3.0,<5.0
 
 # Testing packages

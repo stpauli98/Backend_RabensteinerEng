@@ -408,7 +408,7 @@ class RealModelTrainer:
                     if self.config.MODE == "Dense" or self.config.MODE == "LIN":
                         model = train_dense(X_train, y_train, X_val, y_val, self.config)
                         
-                        model_path = os.path.join(models_dir, f'dense_{dataset_name}_{timestamp}.h5')
+                        model_path = os.path.join(models_dir, f'dense_{dataset_name}_{timestamp}.keras')
                         model.save(model_path)
                         
                         predictions = model.predict(X_val)
@@ -429,7 +429,7 @@ class RealModelTrainer:
                     if self.config.MODE == "CNN" or self.config.MODE == "LIN":
                         model = train_cnn(X_train, y_train, X_val, y_val, self.config)
                         
-                        model_path = os.path.join(models_dir, f'cnn_{dataset_name}_{timestamp}.h5')
+                        model_path = os.path.join(models_dir, f'cnn_{dataset_name}_{timestamp}.keras')
                         model.save(model_path)
                         
                         predictions = model.predict(X_val)
@@ -450,7 +450,7 @@ class RealModelTrainer:
                     if self.config.MODE == "LSTM" or self.config.MODE == "LIN":
                         model = train_lstm(X_train, y_train, X_val, y_val, self.config)
                         
-                        model_path = os.path.join(models_dir, f'lstm_{dataset_name}_{timestamp}.h5')
+                        model_path = os.path.join(models_dir, f'lstm_{dataset_name}_{timestamp}.keras')
                         model.save(model_path)
                         
                         predictions = model.predict(X_val)

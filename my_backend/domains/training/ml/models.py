@@ -228,7 +228,7 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                 model_obj = model_info['raw_model']
                 dataset_name = 'best_model' if path == 'trained_model' else path.replace('.', '_')
 
-                with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_file:
+                with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as temp_file:
                     temp_file_path = temp_file.name
 
                 try:
@@ -249,7 +249,7 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                         'storage_path': storage_result['file_path'],
                         'size_mb': round(storage_result['file_size'] / (1024 * 1024), 2),
                         'path_in_results': path,
-                        'file_format': 'h5'
+                        'file_format': 'keras'
                     })
 
                     logger.info(f"✅ Uploaded raw Keras model: {storage_result['file_path']}")
@@ -270,7 +270,7 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
             model_obj = pickle.loads(model_bytes)
 
             is_keras_model = hasattr(model_obj, 'save') and hasattr(model_obj, 'predict')
-            file_extension = '.h5' if is_keras_model else '.pkl'
+            file_extension = '.keras' if is_keras_model else '.pkl'
 
             with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False, mode='wb') as temp_file:
                 temp_file_path = temp_file.name
@@ -300,7 +300,7 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                     'storage_path': storage_result['file_path'],
                     'size_mb': round(storage_result['file_size'] / (1024 * 1024), 2),
                     'path_in_results': path,
-                    'file_format': 'h5' if is_keras_model else 'pkl'
+                    'file_format': 'keras' if is_keras_model else 'pkl'
                 })
 
             finally:

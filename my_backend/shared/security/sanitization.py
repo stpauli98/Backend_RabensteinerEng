@@ -21,7 +21,7 @@ BLOCKED_EXTENSIONS = {
 # Dozvoljene ekstenzije za upload
 ALLOWED_EXTENSIONS = {
     '.csv', '.txt', '.json', '.xml', '.xlsx', '.xls',
-    '.h5', '.pkl', '.pickle', '.npy', '.npz',
+    '.h5', '.keras', '.pkl', '.pickle', '.npy', '.npz',
     '.png', '.jpg', '.jpeg', '.gif', '.svg', '.pdf'
 }
 

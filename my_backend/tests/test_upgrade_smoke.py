@@ -323,9 +323,8 @@ class TestPackageImports:
     def test_import_numpy(self):
         import numpy as np
         assert hasattr(np, 'array')
-        # Verify numpy version is 1.x (2.0 breaks tensorflow)
         major = int(np.__version__.split('.')[0])
-        assert major == 1, f"numpy 2.0+ will break tensorflow! Got {np.__version__}"
+        assert major in (1, 2), f"unsupported numpy major version: {np.__version__}"
 
     def test_import_pandas(self):
         import pandas as pd

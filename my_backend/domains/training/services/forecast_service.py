@@ -304,10 +304,10 @@ def run_forecast(
     # Auto-detect model file from storage
     from utils.model_storage import list_session_models
     session_models = list_session_models(session_id)
-    h5_models = [m for m in session_models if m.get('format') == 'h5']
-    if not h5_models:
-        raise FileNotFoundError(f"No .h5 model found in storage for session {session_id}")
-    model_filename = h5_models[0]['filename']
+    keras_models = [m for m in session_models if m.get('format') in ('keras', 'h5')]
+    if not keras_models:
+        raise FileNotFoundError(f"No Keras model found in storage for session {session_id}")
+    model_filename = keras_models[0]['filename']
     model = pred_service.load_model(model_filename)
 
     scalers = pred_service.load_scalers()
