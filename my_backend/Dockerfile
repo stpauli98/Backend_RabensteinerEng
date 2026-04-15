@@ -35,4 +35,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # --timeout 900: 15 min za velike fajlove
 # --graceful-timeout 30: graceful shutdown
 # --keep-alive 75: keep connection alive za streaming
-CMD ["gunicorn", "-k", "gthread", "-w", "1", "--threads", "8", "-b", "0.0.0.0:8080", "--timeout", "900", "--graceful-timeout", "30", "--keep-alive", "75", "app:app"]
+# --limit-request-field_size 16384: Supabase JWT + Cookie headeri prelaze default 8190B na
+#   Socket.IO polling requestovima → gunicorn bi ih odbijao → processing progress se ne bi prikazivao
+CMD ["gunicorn", "-k", "gthread", "-w", "1", "--threads", "8", "-b", "0.0.0.0:8080", "--timeout", "900", "--graceful-timeout", "30", "--keep-alive", "75", "--limit-request-line", "16384", "--limit-request-field_size", "16384", "app:app"]
