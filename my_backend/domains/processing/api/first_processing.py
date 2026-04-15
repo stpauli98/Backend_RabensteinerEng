@@ -67,6 +67,7 @@ def upload_chunk():
             mode = request.form.get('mode', '')
             intrpl_max = float(request.form.get('intrplMax', 60))
             decimal_precision = request.form.get('decimalPrecision', 'full')
+            anchor_time = request.form.get('anchorTime') or None
         except (ValueError, TypeError) as e:
             logger.error(f"Error parsing parameters: {e}")
             return jsonify({"error": f"Invalid parameter values: {str(e)}"}), 400
@@ -133,7 +134,7 @@ def upload_chunk():
                 logger.debug(f"Final content third line: '{final_lines[2]}'")
 
             # Pass tracker to process_csv
-            result = process_csv(full_content, tss, offset, mode, intrpl_max, upload_id, tracker, decimal_precision)
+            result = process_csv(full_content, tss, offset, mode, intrpl_max, upload_id, tracker, decimal_precision, anchor_time=anchor_time)
 
             # Cleanup chunks from local filesystem after successful processing
             deleted = local_chunk_service.delete_upload_chunks(upload_id)

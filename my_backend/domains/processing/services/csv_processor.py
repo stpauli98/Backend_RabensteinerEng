@@ -59,7 +59,7 @@ def is_numeric(value):
         return False
 
 
-def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=None, tracker=None, decimal_precision='full'):
+def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=None, tracker=None, decimal_precision='full', anchor_time=None):
     """
     Process CSV content and return result as gzip-compressed JSON response.
 
@@ -72,6 +72,9 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
         upload_id: Optional upload ID for Socket.IO progress tracking
         tracker: Optional existing ProgressTracker instance (from chunk assembly)
         decimal_precision: Decimal precision for rounding ('full' or integer)
+        anchor_time: Optional ISO timestamp "YYYY-MM-DD HH:MM:SS" (UTC). When provided,
+            overrides `offset` and aligns the output time grid so that `anchor_time`
+            falls exactly on a step. Used when int(60/tss) != 60/tss.
     """
     # Use existing tracker or create new one
     if not tracker and upload_id:
@@ -196,23 +199,51 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             tracker.end_phase('preprocessing')
 
         # CONTINUOUS TIMESTAMP
-        # Offset of lower time boundary in raw data
-        offset_strt = datetime.timedelta(
-            minutes=time_min_raw.minute,
-            seconds=time_min_raw.second,
-            microseconds=time_min_raw.microsecond
-        )
+        # --- ofst_set discriminator (Trello card #60) ---
+        ofst_set = "const" if int(60 / tss) == 60 / tss else "var"
+        if anchor_time:
+            # Frontend explicitly sent anchor_time → use var branch regardless of tss parity
+            ofst_set = "var"
 
-        # Real offset in processed data [min]
-        normalized_offset = abs(offset) % tss if offset >= 0 else 0
+        if ofst_set == "const":
+            # Original constant-offset branch
+            offset_strt = datetime.timedelta(
+                minutes=time_min_raw.minute,
+                seconds=time_min_raw.second,
+                microseconds=time_min_raw.microsecond
+            )
+            normalized_offset = abs(offset) % tss if offset >= 0 else 0
+            time_min = time_min_raw - offset_strt
+            if normalized_offset > 0:
+                time_min += datetime.timedelta(minutes=normalized_offset)
+            logger.debug(f"ofst_set=const; applied offset {normalized_offset} min to {time_min_raw} -> {time_min}")
+        else:
+            # Anchor-time branch ported from Trello card spec
+            if anchor_time:
+                time_set = pd.to_datetime(anchor_time, format="%Y-%m-%d %H:%M:%S")
+            else:
+                # Default anchor to first raw timestamp when frontend didn't send one
+                time_set = time_min_raw
 
-        # Lower time boundary in processed data
-        time_min = time_min_raw - offset_strt
-        if normalized_offset > 0:
-            time_min += datetime.timedelta(minutes=normalized_offset)
-
-        logger.debug(f"Applying offset of {normalized_offset} minutes to {time_min_raw}")
-        logger.debug(f"Resulting start time: {time_min}")
+            if time_set >= time_min_raw:
+                i = 0
+                while True:
+                    a = datetime.timedelta(minutes=i * tss)
+                    if time_set - a < time_min_raw:
+                        i = i - 2
+                        break
+                    i += 1
+                time_min = time_set - datetime.timedelta(minutes=i * tss)
+            else:
+                i = 0
+                while True:
+                    a = datetime.timedelta(minutes=i * tss)
+                    if time_set + a >= time_min_raw:
+                        i = i - 1
+                        break
+                    i += 1
+                time_min = time_set + datetime.timedelta(minutes=i * tss)
+            logger.debug(f"ofst_set=var; anchor={time_set} time_min_raw={time_min_raw} -> time_min={time_min}")
 
         # Generate continuous timestamp
         time_list = []
