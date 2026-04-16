@@ -99,8 +99,15 @@ def execute_forecast(session_id):
         user_data = request_data.get('user_data', {})
 
         user_csvs = {}
-        for name, rows in user_data.items():
-            df = pd.DataFrame(rows)
+        for name, data in user_data.items():
+            if isinstance(data, list):
+                # Legacy format: list of dicts [{"UTC": "...", "name": val}, ...]
+                df = pd.DataFrame(data)
+            elif isinstance(data, dict):
+                # New format: dict of arrays {"UTC": [...], "name": [...]}
+                df = pd.DataFrame(data)
+            else:
+                continue
             if 'UTC' in df.columns:
                 df['UTC'] = pd.to_datetime(df['UTC'])
             user_csvs[name] = df
