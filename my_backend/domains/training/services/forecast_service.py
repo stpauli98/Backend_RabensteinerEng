@@ -344,10 +344,11 @@ def run_forecast(
         else:
             values = yhat.flatten()
 
-        forecasts[out_feat['bezeichnung']] = [
-            {"UTC": str(utc_list[j]), "value": round(float(values[j]), 4)}
-            for j in range(len(values))
-        ]
+        feat_name = out_feat['bezeichnung']
+        forecasts[feat_name] = {
+            "UTC": [str(utc_list[j]) for j in range(len(values))],
+            feat_name: [round(float(values[j]), 4) for j in range(len(values))]
+        }
 
     return {
         "forecasts": forecasts,
