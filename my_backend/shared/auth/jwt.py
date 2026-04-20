@@ -21,6 +21,12 @@ def require_auth(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # CORS preflight requests carry no auth header by design. Let them through
+        # so Flask-CORS can attach the response headers; the real request that
+        # follows will still be authenticated.
+        if request.method == 'OPTIONS':
+            return ('', 204)
+
         auth_header = request.headers.get('Authorization')
 
         if not auth_header:
