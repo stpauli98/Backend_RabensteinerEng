@@ -60,7 +60,9 @@ def create_app():
     _flask_cors_origins = _cors_origins.split(',') if _cors_origins != '*' else [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://entropia-seven.vercel.app"
+        "https://entropia-seven.vercel.app",
+        "https://www.forecast-engine.com",
+        "https://forecast-engine.com"
     ]
     cors.init_app(app,
         origins=_flask_cors_origins,
