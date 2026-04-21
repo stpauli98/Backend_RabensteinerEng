@@ -39,7 +39,7 @@ def create_app():
     app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
     # CORS origins from environment (default: "*" for backward compatibility)
-    # Set CORS_ORIGINS=https://entropia-seven.vercel.app,http://localhost:3000 in production
+    # Set CORS_ORIGINS=https://www.forecast-engine.com,http://localhost:3000 in production
     _cors_origins = os.environ.get('CORS_ORIGINS', '*')
     _socketio_cors = _cors_origins.split(',') if _cors_origins != '*' else '*'
 
@@ -60,7 +60,6 @@ def create_app():
     _flask_cors_origins = _cors_origins.split(',') if _cors_origins != '*' else [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://entropia-seven.vercel.app",
         "https://www.forecast-engine.com",
         "https://forecast-engine.com"
     ]

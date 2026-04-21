@@ -130,13 +130,13 @@ class TestCORS:
         origin = resp.headers.get('Access-Control-Allow-Origin', '')
         assert origin in ['http://localhost:3000', '*']
 
-    def test_cors_allows_vercel_origin(self, client):
+    def test_cors_allows_production_origin(self, client):
         """Production frontend origin must be allowed."""
         resp = client.get('/health', headers={
-            'Origin': 'https://entropia-seven.vercel.app'
+            'Origin': 'https://www.forecast-engine.com'
         })
         origin = resp.headers.get('Access-Control-Allow-Origin', '')
-        assert origin in ['https://entropia-seven.vercel.app', '*']
+        assert origin in ['https://www.forecast-engine.com', '*']
 
     def test_cors_expose_headers(self, client):
         """Content-Disposition and Content-Length must be exposed for file downloads."""
