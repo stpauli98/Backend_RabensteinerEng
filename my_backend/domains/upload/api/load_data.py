@@ -32,6 +32,7 @@ from shared.tracking.usage import increment_processing_count, update_storage_usa
 from shared.storage.service import storage_service
 from shared.exceptions import (
     MissingParameterError,
+    InvalidParameterError,
     DelimiterMismatchError,
     CSVParsingError,
     DateTimeParsingError,
@@ -308,33 +309,29 @@ def process_chunks(upload_id: str, metadata: Dict[str, Any]) -> Tuple[Response, 
             raise
 
 
-def _parse_column_index(
-    raw: Any,
-    column_slot: str,
-    allow_none: bool = False
-) -> Optional[int]:
+def _parse_column_index(raw: Any, column_slot: str) -> int:
     """Parse a column index from selected_columns dict.
 
     Args:
         raw: The raw value from selected_columns (string, int, or None).
         column_slot: Slot name ('column1', 'column2', 'column3') for error messages.
-        allow_none: When True, returns None if raw is None/empty.
 
     Returns:
-        Integer index, or None if allow_none and value is missing.
+        Integer index.
 
     Raises:
-        MissingParameterError: If value is missing (and not allowed) or non-numeric.
+        MissingParameterError: If value is None or empty string.
+        InvalidParameterError: If value is present but not a valid integer.
     """
     if raw is None or raw == "":
-        if allow_none:
-            return None
         raise MissingParameterError(f"selected_columns.{column_slot}")
     try:
         return int(str(raw))
     except (ValueError, TypeError):
-        raise MissingParameterError(
-            f"selected_columns.{column_slot} must be an integer index string, got: {raw!r}"
+        raise InvalidParameterError(
+            parameter=f"selected_columns.{column_slot}",
+            value=raw,
+            reason="must be an integer index string"
         )
 
 
@@ -370,19 +367,19 @@ def _validate_and_extract_params(
     upload_id = params.get('uploadId')
 
     date_column_idx = _parse_column_index(
-        selected_columns.get('column1'), 'column1', allow_none=False
+        selected_columns.get('column1'), 'column1'
     )
     if has_separate_date_time:
         time_column_idx = _parse_column_index(
-            selected_columns.get('column2'), 'column2', allow_none=False
+            selected_columns.get('column2'), 'column2'
         )
         value_column_idx = _parse_column_index(
-            selected_columns.get('column3'), 'column3', allow_none=False
+            selected_columns.get('column3'), 'column3'
         )
     else:
         time_column_idx = None
         value_column_idx = _parse_column_index(
-            selected_columns.get('column2'), 'column2', allow_none=False
+            selected_columns.get('column2'), 'column2'
         )
 
     return {

@@ -44,8 +44,9 @@ def test_three_column_mode_parses_all_indices():
 
 
 def test_rejects_non_numeric_index():
+    from shared.exceptions import InvalidParameterError
     params = _base_params(selected_columns={'column1': 'Vrijeme', 'column2': '1'})
-    with pytest.raises(MissingParameterError):
+    with pytest.raises(InvalidParameterError):
         _validate_and_extract_params(params, SAMPLE_CSV)
 
 
