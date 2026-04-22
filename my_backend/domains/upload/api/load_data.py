@@ -39,7 +39,8 @@ from shared.exceptions import (
     EncodingError,
     UploadNotFoundError,
     TimezoneConversionError,
-    LoadDataException
+    LoadDataException,
+    InvalidColumnIndexError
 )
 
 from domains.upload.config import SUPPORTED_ENCODINGS
@@ -399,13 +400,21 @@ def _validate_and_extract_params(
 def _parse_csv_to_dataframe(
     file_content: str,
     validated_params: Dict[str, Any]
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, Dict[str, Optional[str]]]:
     """
-    Parse CSV content to pandas DataFrame.
+    Parse CSV content to pandas DataFrame and resolve column indices to names.
+
+    Returns:
+        Tuple of (dataframe, resolved_column_names) where resolved_column_names
+        is {'date_column': str, 'time_column': Optional[str], 'value_column': str}.
+        Resolved names account for pandas' auto-rename of duplicate headers
+        (e.g. second `Temp` -> `Temp.1`).
     """
     delimiter = validated_params['delimiter']
     has_header = validated_params['has_header']
-    value_column = validated_params['value_column']
+    date_idx = validated_params['date_column_idx']
+    time_idx = validated_params['time_column_idx']
+    value_idx = validated_params['value_column_idx']
 
     cleaned_content = clean_file_content(file_content, delimiter)
 
@@ -434,27 +443,41 @@ def _parse_csv_to_dataframe(
     if df.empty:
         raise CSVParsingError(reason="No data loaded from file")
 
-    # Convert value column to numeric
-    if value_column and value_column in df.columns:
+    max_idx = len(df.columns) - 1
+    for idx in (date_idx, value_idx):
+        if idx > max_idx or idx < 0:
+            raise InvalidColumnIndexError(index=idx, max_index=max_idx)
+    if time_idx is not None and (time_idx > max_idx or time_idx < 0):
+        raise InvalidColumnIndexError(index=time_idx, max_index=max_idx)
+
+    resolved = {
+        'date_column': df.columns[date_idx],
+        'time_column': df.columns[time_idx] if time_idx is not None else None,
+        'value_column': df.columns[value_idx],
+    }
+
+    value_column = resolved['value_column']
+    if value_column in df.columns:
         df[value_column] = pd.to_numeric(df[value_column], errors='coerce')
 
-    return df
+    return df, resolved
 
 
 def _process_datetime_columns(
     df: pd.DataFrame,
-    validated_params: Dict[str, Any]
+    validated_params: Dict[str, Any],
+    resolved_columns: Dict[str, Optional[str]]
 ) -> pd.DataFrame:
     """
     Process and parse datetime columns in DataFrame.
     """
     has_separate_date_time = validated_params['has_separate_date_time']
-    date_column = validated_params['date_column']
-    time_column = validated_params['time_column']
+    date_column = resolved_columns['date_column']
+    time_column = resolved_columns['time_column']
     custom_date_format = validated_params['custom_date_format']
 
     try:
-        datetime_col = date_column or df.columns[0]
+        datetime_col = date_column
 
         if has_separate_date_time and date_column and time_column:
             # Clean time columns
@@ -563,7 +586,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         tracker.emit('parsing', 15, 'parsing_csv', force=True)
 
         try:
-            df = _parse_csv_to_dataframe(file_content, validated_params)
+            df, resolved_columns = _parse_csv_to_dataframe(file_content, validated_params)
             total_rows = len(df)
             tracker.set_total_rows(total_rows)
             tracker.emit('parsing', 40, 'csv_parsed', force=True, message_params={'rowCount': total_rows})
@@ -578,7 +601,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         tracker.emit('datetime', 40, 'processing_datetime', force=True)
 
         try:
-            df = _process_datetime_columns(df, validated_params)
+            df = _process_datetime_columns(df, validated_params, resolved_columns)
             tracker.emit('datetime', 60, 'datetime_processed', force=True)
         except LoadDataException as e:
             return jsonify(e.to_dict()), 400
@@ -605,7 +628,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
         tracker.emit('saving', 75, 'creating_result_dataframe', force=True)
 
         try:
-            value_column = validated_params['value_column']
+            value_column = resolved_columns['value_column']
             value_column_name = validated_params['value_column_name']
 
             if not value_column or value_column not in df.columns:
