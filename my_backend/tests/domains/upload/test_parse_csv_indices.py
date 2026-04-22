@@ -10,14 +10,24 @@ DUP_CSV = "Vrijeme,Temp,Temp\n2024-01-15 10:00:00,21.5,22.1\n2024-01-15 11:00:00
 NO_HEADER_CSV = "2024-01-15 10:00:00,21.5\n2024-01-15 11:00:00,22.3\n"
 
 
-def _params(idx1, idx2, has_header='ja', idx3=None):
+def _params(*, idx1, idx2, has_header='ja', idx3=None):
+    if idx3 is not None:
+        # 3-column mode
+        return {
+            'delimiter': ',',
+            'has_header': has_header,
+            'date_column_idx': idx1,
+            'time_column_idx': idx2,
+            'value_column_idx': idx3,
+            'has_separate_date_time': True,
+        }
     return {
         'delimiter': ',',
         'has_header': has_header,
         'date_column_idx': idx1,
-        'time_column_idx': idx3 if idx3 is not None and has_header == 'ja' else None,
-        'value_column_idx': idx2 if idx3 is None else idx3,
-        'has_separate_date_time': idx3 is not None,
+        'time_column_idx': None,
+        'value_column_idx': idx2,
+        'has_separate_date_time': False,
     }
 
 

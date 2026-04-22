@@ -444,11 +444,11 @@ def _parse_csv_to_dataframe(
         raise CSVParsingError(reason="No data loaded from file")
 
     max_idx = len(df.columns) - 1
-    for idx in (date_idx, value_idx):
-        if idx > max_idx or idx < 0:
+    for idx in (date_idx, value_idx, time_idx):
+        if idx is None:
+            continue
+        if not (0 <= idx <= max_idx):
             raise InvalidColumnIndexError(index=idx, max_index=max_idx)
-    if time_idx is not None and (time_idx > max_idx or time_idx < 0):
-        raise InvalidColumnIndexError(index=time_idx, max_index=max_idx)
 
     resolved = {
         'date_column': df.columns[date_idx],
@@ -457,8 +457,7 @@ def _parse_csv_to_dataframe(
     }
 
     value_column = resolved['value_column']
-    if value_column in df.columns:
-        df[value_column] = pd.to_numeric(df[value_column], errors='coerce')
+    df[value_column] = pd.to_numeric(df[value_column], errors='coerce')
 
     return df, resolved
 
