@@ -159,6 +159,30 @@ class DelimiterMismatchError(ValidationError):
         super().__init__(message, **kwargs)
 
 
+class InvalidColumnIndexError(ValidationError):
+    """Raised when a column index is out of range for the parsed DataFrame.
+
+    Example:
+        raise InvalidColumnIndexError(index=5, max_index=2)
+    """
+
+    def __init__(self, index: int, max_index: int, **kwargs):
+        message = (
+            f"Column index {index} is out of range "
+            f"(file has {max_index + 1} columns, valid range: 0..{max_index})"
+        )
+        kwargs.setdefault('error_code', 'INVALID_COLUMN_INDEX')
+        kwargs.setdefault('details', {}).update({
+            'index': index,
+            'max_index': max_index
+        })
+        kwargs.setdefault('suggestions', [
+            "Re-select the column in the UI dropdown",
+            "Verify the file has the expected number of columns"
+        ])
+        super().__init__(message, **kwargs)
+
+
 # ============================================================================
 # Parsing Errors
 # ============================================================================
