@@ -19,7 +19,8 @@ def validate_processing_params(params):
         'elMin': (-1000000, 1000000, "Lower limit value"),
         'chgMax': (0, 1000000, "Change rate max"),
         'lgMax': (0, 1000000, "Length max"),
-        'gapMax': (0, 1000000, "Gap max duration")
+        'gapMax': (0, 1000000, "Gap max duration"),
+        'lgMin': (0, 1000000, "Minimum valid range duration"),
     }
 
     for param, (min_val, max_val, description) in numeric_params.items():
@@ -81,6 +82,8 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
         active_steps.append(("chgMax", "outlier_removal"))
     if params.get("gapMax"):
         active_steps.append(("gapMax", "gap_filling"))
+    if params.get("lgMin"):
+        active_steps.append(("lgMin", "short_range_removal"))
 
     total_active_steps = len(active_steps) if active_steps else 1
     current_step_index = 0
@@ -264,6 +267,46 @@ def clean_data(df, value_column, params, tracker=None, decimal_precision='full')
                         filled_count += 1
                 frm = 0
         emit_step_complete(step_key, filled_count)
+
+    # === STEP 7: LG_MIN ===
+    # Remove valid (non-NaN) intervals whose duration is below lgMin minutes.
+    # Runs AFTER gap-filling so short islands created by unfilled gaps are
+    # discarded rather than treated as trustworthy signal.
+    if params.get("lgMin"):
+        step_key = "short_range_removal"
+        start_step(step_key)
+        logger.debug("Removing valid intervals shorter than lgMin minutes")
+        lg_min = float(params["lgMin"])
+        frm = 0
+        idx_strt = None
+        removed_count = 0
+        for i in range(len(df)):
+            update_progress(step_key, i)
+            # Opening ATW: first valid value after NaN region
+            if not pd.isna(df.iloc[i][value_column]) and frm == 0:
+                idx_strt = i
+                frm = 1
+            # Closing ATW: first NaN after valid region
+            elif pd.isna(df.iloc[i][value_column]) and frm == 1:
+                idx_end = i
+                gap = (df.iloc[idx_end - 1]["UTC"] -
+                       df.iloc[idx_strt]["UTC"]).total_seconds() / 60
+                if gap < lg_min:
+                    for i_frm in range(idx_strt, idx_end):
+                        df.iloc[i_frm, df.columns.get_loc(value_column)] = np.nan
+                        removed_count += 1
+                frm = 0
+                idx_strt = None
+            # End of DataFrame while ATW still open
+            if i == len(df) - 1 and frm == 1:
+                idx_end = i + 1
+                gap = (df.iloc[idx_end - 1]["UTC"] -
+                       df.iloc[idx_strt]["UTC"]).total_seconds() / 60
+                if gap < lg_min:
+                    for i_frm in range(idx_strt, idx_end):
+                        df.iloc[i_frm, df.columns.get_loc(value_column)] = np.nan
+                        removed_count += 1
+        emit_step_complete(step_key, removed_count)
 
     # === POST-VALIDATION ===
     if params.get("elMin") is not None:

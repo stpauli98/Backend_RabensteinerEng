@@ -236,6 +236,7 @@ def upload_chunk():
                 "elMin": request.form.get("elMin"),
                 "chgMax": request.form.get("chgMax"),
                 "lgMax": request.form.get("lgMax"),
+                "lgMin": request.form.get("lgMin"),
                 "gapMax": request.form.get("gapMax"),
                 "radioValueNull": request.form.get("radioValueNull"),
                 "radioValueNotNull": request.form.get("radioValueNotNull")
