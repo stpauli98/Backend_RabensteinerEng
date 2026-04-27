@@ -547,6 +547,33 @@ def downgrade_to_free_plan(user_id: str) -> None:
         raise
 
 
+def _invoice_subscription_id(invoice) -> str | None:
+    """Resolve the subscription ID from an Invoice across Stripe API versions.
+
+    Older API: invoice.subscription (string).
+    Newer API (2024-09+): invoice.parent.subscription_details.subscription
+    Fallback: invoice.lines.data[0].subscription
+    """
+    sub_id = getattr(invoice, 'subscription', None)
+    if sub_id:
+        return sub_id
+    parent = getattr(invoice, 'parent', None)
+    if parent is not None:
+        details = getattr(parent, 'subscription_details', None)
+        if details is not None:
+            sub_id = getattr(details, 'subscription', None)
+            if sub_id:
+                return sub_id
+    lines = getattr(invoice, 'lines', None)
+    if lines is not None:
+        data = getattr(lines, 'data', None) or []
+        if data:
+            sub_id = getattr(data[0], 'subscription', None)
+            if sub_id:
+                return sub_id
+    return None
+
+
 def handle_payment_failed(invoice: stripe.Invoice) -> None:
     """
     Handle failed payment from Stripe webhook
@@ -559,7 +586,7 @@ def handle_payment_failed(invoice: stripe.Invoice) -> None:
         from datetime import datetime, timezone
 
         # Get subscription ID from invoice
-        subscription_id = invoice.subscription
+        subscription_id = _invoice_subscription_id(invoice)
 
         if not subscription_id:
             logger.warning(f"Invoice {invoice.id} has no subscription")
@@ -597,7 +624,7 @@ def handle_payment_succeeded(invoice: stripe.Invoice) -> None:
         supabase = get_supabase_admin_client()
         from datetime import datetime, timezone
 
-        subscription_id = invoice.subscription
+        subscription_id = _invoice_subscription_id(invoice)
         if not subscription_id:
             return
 
@@ -643,7 +670,7 @@ def handle_charge_refunded(charge: stripe.Charge) -> None:
             return
 
         invoice = stripe.Invoice.retrieve(invoice_id)
-        subscription_id = invoice.subscription
+        subscription_id = _invoice_subscription_id(invoice)
         if not subscription_id:
             logger.info(f"Invoice {invoice_id} has no subscription; nothing to revoke")
             return
