@@ -23,11 +23,29 @@ CREATE OR REPLACE FUNCTION handle_successful_payment_transaction(
 RETURNS JSON
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
 AS $$
 DECLARE
     v_new_subscription_id UUID;
     v_cancelled_count INT;
+    v_existing_id UUID;
 BEGIN
+    -- Idempotency guard: ako red sa ovim stripe_subscription_id već postoji, vrati ga.
+    -- Sprečava duplikate kad Stripe pošalje paralelne webhook retry-e.
+    SELECT id INTO v_existing_id
+    FROM user_subscriptions
+    WHERE stripe_subscription_id = p_stripe_subscription_id
+    LIMIT 1;
+
+    IF v_existing_id IS NOT NULL THEN
+        RETURN json_build_object(
+            'success', TRUE,
+            'duplicate', TRUE,
+            'new_subscription_id', v_existing_id,
+            'cancelled_count', 0
+        );
+    END IF;
+
     -- Cancel all existing active subscriptions for this user
     WITH cancelled AS (
         UPDATE user_subscriptions
@@ -86,6 +104,14 @@ EXCEPTION WHEN OTHERS THEN
     RAISE EXCEPTION 'Transaction failed: %', SQLERRM;
 END;
 $$;
+
+-- ============================================================================
+-- Index: prevent duplicate stripe_subscription_id rows at DB level
+-- Partial UNIQUE INDEX over non-null values (Free plan rows have NULL).
+-- ============================================================================
+CREATE UNIQUE INDEX IF NOT EXISTS user_subscriptions_stripe_sub_id_unique
+  ON user_subscriptions (stripe_subscription_id)
+  WHERE stripe_subscription_id IS NOT NULL;
 
 -- ============================================================================
 -- Function: downgrade_to_free_plan_transaction
