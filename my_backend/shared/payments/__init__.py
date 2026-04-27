@@ -6,6 +6,8 @@ from shared.payments.stripe import (
     handle_subscription_updated,
     handle_subscription_deleted,
     handle_payment_failed,
+    handle_payment_succeeded,
+    handle_charge_refunded,
     downgrade_to_free_plan,
     is_webhook_processed,
     mark_webhook_processed
@@ -18,6 +20,8 @@ __all__ = [
     'handle_subscription_updated',
     'handle_subscription_deleted',
     'handle_payment_failed',
+    'handle_payment_succeeded',
+    'handle_charge_refunded',
     'downgrade_to_free_plan',
     'is_webhook_processed',
     'mark_webhook_processed'

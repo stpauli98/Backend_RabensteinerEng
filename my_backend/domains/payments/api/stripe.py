@@ -14,6 +14,8 @@ from shared.payments.stripe import (
     handle_subscription_updated,
     handle_subscription_deleted,
     handle_payment_failed,
+    handle_payment_succeeded,
+    handle_charge_refunded,
     mark_webhook_processed,
     downgrade_to_free_plan
 )
@@ -102,7 +104,9 @@ def stripe_webhook():
     - checkout.session.completed: Subscription activated
     - customer.subscription.updated: Subscription modified
     - customer.subscription.deleted: Subscription cancelled
+    - invoice.payment_succeeded: Payment recovered (past_due → active)
     - invoice.payment_failed: Payment failure handling
+    - charge.refunded: Full refund revokes paid access
     """
     payload = request.data
     sig_header = request.headers.get('Stripe-Signature')
@@ -140,9 +144,17 @@ def stripe_webhook():
                 subscription = event['data']['object']
                 handle_subscription_deleted(subscription)
 
+            elif event_type == 'invoice.payment_succeeded':
+                invoice = event['data']['object']
+                handle_payment_succeeded(invoice)
+
             elif event_type == 'invoice.payment_failed':
                 invoice = event['data']['object']
                 handle_payment_failed(invoice)
+
+            elif event_type == 'charge.refunded':
+                charge = event['data']['object']
+                handle_charge_refunded(charge)
 
             else:
                 logger.warning(f"Unhandled webhook type: {event_type}")
