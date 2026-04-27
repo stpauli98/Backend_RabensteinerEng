@@ -183,6 +183,37 @@ def get_stripe_price_id(plan_id: str, billing_cycle: str) -> str:
     return price_id
 
 
+def cancel_other_active_stripe_subscriptions(customer_id: str, keep_subscription_id: str) -> int:
+    """
+    Cancel all active Stripe subscriptions for a customer except the one to keep.
+
+    Without this, plan upgrades would leave old subscriptions active on Stripe
+    and the customer would be billed for both old and new plans.
+
+    Args:
+        customer_id: Stripe customer ID
+        keep_subscription_id: Subscription ID NOT to cancel (the new one)
+
+    Returns:
+        int: Number of subscriptions cancelled
+    """
+    cancelled = 0
+    try:
+        existing = stripe.Subscription.list(customer=customer_id, status='active', limit=100)
+        for sub in existing.data:
+            if sub.id == keep_subscription_id:
+                continue
+            try:
+                stripe.Subscription.cancel(sub.id)
+                cancelled += 1
+                logger.info(f"Cancelled stranded Stripe subscription {sub.id} for customer {customer_id}")
+            except stripe.error.StripeError as cancel_err:
+                logger.error(f"Failed to cancel Stripe subscription {sub.id}: {str(cancel_err)}")
+    except stripe.error.StripeError as list_err:
+        logger.error(f"Failed to list active Stripe subscriptions for {customer_id}: {str(list_err)}")
+    return cancelled
+
+
 def handle_successful_payment(session: stripe.checkout.Session) -> None:
     """
     Handle successful Stripe checkout session
@@ -216,6 +247,16 @@ def handle_successful_payment(session: stripe.checkout.Session) -> None:
         started_at = datetime.fromtimestamp(subscription.current_period_start, tz=timezone.utc)
         expires_at = datetime.fromtimestamp(subscription.current_period_end, tz=timezone.utc)
         next_billing_date = expires_at
+
+        # Cancel any other active Stripe subscriptions for this customer.
+        # The DB-side RPC marks old rows cancelled, but without this Stripe
+        # would keep billing the old subscriptions in parallel.
+        stripe_cancelled = cancel_other_active_stripe_subscriptions(
+            customer_id=session.customer,
+            keep_subscription_id=session.subscription
+        )
+        if stripe_cancelled > 0:
+            logger.info(f"Cancelled {stripe_cancelled} stranded Stripe subscription(s) for user {user_id}")
 
         # CRITICAL FIX: Use atomic database transaction via PostgreSQL function
         # This ensures either BOTH operations succeed or BOTH fail (no partial state)
@@ -388,10 +429,28 @@ def handle_subscription_deleted(subscription: stripe.Subscription) -> None:
 
         logger.info(f"Subscription cancelled: {subscription.id}")
 
-        # Downgrade to Free plan
+        # Downgrade to Free plan only if the user has no other active Stripe
+        # subscriptions. Otherwise this webhook (fired when we cancel a stranded
+        # parallel subscription) would clobber the user's still-active paid plan.
         if result.data and len(result.data) > 0:
             user_id = result.data[0].get('user_id')
+            customer_id = subscription.customer
             if user_id:
+                try:
+                    other_active = stripe.Subscription.list(
+                        customer=customer_id, status='active', limit=10
+                    )
+                    if any(s.id != subscription.id for s in other_active.data):
+                        logger.info(
+                            f"Skipping Free-plan downgrade for user {user_id}: "
+                            f"customer {customer_id} still has active Stripe subscription(s)"
+                        )
+                        return
+                except stripe.error.StripeError as list_err:
+                    logger.error(
+                        f"Could not verify other active subscriptions for {customer_id}; "
+                        f"proceeding with downgrade as a safe default: {str(list_err)}"
+                    )
                 downgrade_to_free_plan(user_id)
 
     except Exception as e:
@@ -488,6 +547,33 @@ def downgrade_to_free_plan(user_id: str) -> None:
         raise
 
 
+def _invoice_subscription_id(invoice) -> str | None:
+    """Resolve the subscription ID from an Invoice across Stripe API versions.
+
+    Older API: invoice.subscription (string).
+    Newer API (2024-09+): invoice.parent.subscription_details.subscription
+    Fallback: invoice.lines.data[0].subscription
+    """
+    sub_id = getattr(invoice, 'subscription', None)
+    if sub_id:
+        return sub_id
+    parent = getattr(invoice, 'parent', None)
+    if parent is not None:
+        details = getattr(parent, 'subscription_details', None)
+        if details is not None:
+            sub_id = getattr(details, 'subscription', None)
+            if sub_id:
+                return sub_id
+    lines = getattr(invoice, 'lines', None)
+    if lines is not None:
+        data = getattr(lines, 'data', None) or []
+        if data:
+            sub_id = getattr(data[0], 'subscription', None)
+            if sub_id:
+                return sub_id
+    return None
+
+
 def handle_payment_failed(invoice: stripe.Invoice) -> None:
     """
     Handle failed payment from Stripe webhook
@@ -500,7 +586,7 @@ def handle_payment_failed(invoice: stripe.Invoice) -> None:
         from datetime import datetime, timezone
 
         # Get subscription ID from invoice
-        subscription_id = invoice.subscription
+        subscription_id = _invoice_subscription_id(invoice)
 
         if not subscription_id:
             logger.warning(f"Invoice {invoice.id} has no subscription")
@@ -519,4 +605,101 @@ def handle_payment_failed(invoice: stripe.Invoice) -> None:
 
     except Exception as e:
         logger.error(f"Error handling payment failure: {str(e)}")
+        raise
+
+
+def handle_payment_succeeded(invoice: stripe.Invoice) -> None:
+    """
+    Handle successful invoice payment from Stripe webhook.
+
+    If the subscription was previously past_due (because an earlier payment
+    failed), Stripe's automatic retry has now succeeded and we must restore
+    'active' status. Without this, the require_subscription decorator keeps
+    blocking the user even though they have paid.
+
+    Args:
+        invoice: Stripe invoice object
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        from datetime import datetime, timezone
+
+        subscription_id = _invoice_subscription_id(invoice)
+        if not subscription_id:
+            return
+
+        result = supabase.table('user_subscriptions') \
+            .update({
+                'status': 'active',
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }) \
+            .eq('stripe_subscription_id', subscription_id) \
+            .eq('status', 'past_due') \
+            .execute()
+
+        if result.data:
+            logger.info(f"Payment recovered for subscription {subscription_id}, status restored to active")
+
+    except Exception as e:
+        logger.error(f"Error handling payment success recovery: {str(e)}")
+        raise
+
+
+def handle_charge_refunded(charge: stripe.Charge) -> None:
+    """
+    Handle full refund of a subscription charge.
+
+    When a customer is fully refunded (typically via Stripe Dashboard / support),
+    we should revoke their paid access. Partial refunds are ignored — the
+    customer keeps the plan since they still effectively paid.
+
+    Args:
+        charge: Stripe charge object
+    """
+    try:
+        if charge.amount_refunded < charge.amount:
+            logger.info(
+                f"Partial refund on charge {charge.id} "
+                f"({charge.amount_refunded}/{charge.amount}); not revoking access"
+            )
+            return
+
+        invoice_id = charge.invoice
+        if not invoice_id:
+            logger.info(f"Charge {charge.id} has no invoice; not subscription-related")
+            return
+
+        invoice = stripe.Invoice.retrieve(invoice_id)
+        subscription_id = _invoice_subscription_id(invoice)
+        if not subscription_id:
+            logger.info(f"Invoice {invoice_id} has no subscription; nothing to revoke")
+            return
+
+        supabase = get_supabase_admin_client()
+        result = supabase.table('user_subscriptions') \
+            .select('user_id') \
+            .eq('stripe_subscription_id', subscription_id) \
+            .execute()
+
+        if not result.data:
+            logger.warning(f"No DB row for refunded subscription {subscription_id}")
+            return
+
+        user_id = result.data[0]['user_id']
+
+        # Cancel the Stripe subscription so it stops billing in the future.
+        try:
+            stripe.Subscription.cancel(subscription_id)
+            logger.info(f"Cancelled Stripe subscription {subscription_id} after full refund")
+        except stripe.error.StripeError as cancel_err:
+            logger.error(f"Failed to cancel refunded Stripe subscription {subscription_id}: {str(cancel_err)}")
+
+        # Downgrade the user. handle_subscription_deleted will fire from the
+        # Stripe cancel above; calling downgrade here is a belt-and-suspenders
+        # safeguard in case the webhook is delayed.
+        downgrade_to_free_plan(user_id)
+        logger.warning(f"User {user_id} downgraded after full refund of charge {charge.id}")
+
+    except Exception as e:
+        logger.error(f"Error handling charge refund: {str(e)}")
         raise

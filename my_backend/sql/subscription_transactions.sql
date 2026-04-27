@@ -23,11 +23,29 @@ CREATE OR REPLACE FUNCTION handle_successful_payment_transaction(
 RETURNS JSON
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
 AS $$
 DECLARE
     v_new_subscription_id UUID;
     v_cancelled_count INT;
+    v_existing_id UUID;
 BEGIN
+    -- Idempotency guard: ako red sa ovim stripe_subscription_id već postoji, vrati ga.
+    -- Sprečava duplikate kad Stripe pošalje paralelne webhook retry-e.
+    SELECT id INTO v_existing_id
+    FROM user_subscriptions
+    WHERE stripe_subscription_id = p_stripe_subscription_id
+    LIMIT 1;
+
+    IF v_existing_id IS NOT NULL THEN
+        RETURN json_build_object(
+            'success', TRUE,
+            'duplicate', TRUE,
+            'new_subscription_id', v_existing_id,
+            'cancelled_count', 0
+        );
+    END IF;
+
     -- Cancel all existing active subscriptions for this user
     WITH cancelled AS (
         UPDATE user_subscriptions
@@ -86,6 +104,14 @@ EXCEPTION WHEN OTHERS THEN
     RAISE EXCEPTION 'Transaction failed: %', SQLERRM;
 END;
 $$;
+
+-- ============================================================================
+-- Index: prevent duplicate stripe_subscription_id rows at DB level
+-- Partial UNIQUE INDEX over non-null values (Free plan rows have NULL).
+-- ============================================================================
+CREATE UNIQUE INDEX IF NOT EXISTS user_subscriptions_stripe_sub_id_unique
+  ON user_subscriptions (stripe_subscription_id)
+  WHERE stripe_subscription_id IS NOT NULL;
 
 -- ============================================================================
 -- Function: downgrade_to_free_plan_transaction
@@ -208,3 +234,24 @@ GRANT EXECUTE ON FUNCTION downgrade_to_free_plan_transaction TO service_role;
 -- 5. Click "Run"
 -- 6. Verify functions created successfully
 -- ============================================================================
+
+-- ============================================================================
+-- Security hardening: lock down callable surface
+-- ============================================================================
+-- Revoke EXECUTE on payment-mutating SECURITY DEFINER functions from public roles.
+-- Only the backend (service_role) should invoke these via webhooks.
+REVOKE EXECUTE ON FUNCTION public.handle_successful_payment_transaction(
+  uuid, uuid, varchar, timestamptz, timestamptz, timestamptz, varchar, varchar
+) FROM PUBLIC, anon, authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.downgrade_to_free_plan_transaction(uuid)
+FROM PUBLIC, anon, authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.assign_free_plan()
+FROM PUBLIC, anon, authenticated;
+
+-- Drop the over-permissive RLS policy. The trigger function assign_free_plan()
+-- bypasses RLS via SECURITY DEFINER, so this policy is unnecessary, and its
+-- WITH CHECK (true) on INSERT for {public} let authenticated users insert
+-- subscription rows for arbitrary user_ids.
+DROP POLICY IF EXISTS "Allow triggers to create subscriptions" ON public.user_subscriptions;
