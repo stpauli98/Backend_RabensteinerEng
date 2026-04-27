@@ -429,10 +429,28 @@ def handle_subscription_deleted(subscription: stripe.Subscription) -> None:
 
         logger.info(f"Subscription cancelled: {subscription.id}")
 
-        # Downgrade to Free plan
+        # Downgrade to Free plan only if the user has no other active Stripe
+        # subscriptions. Otherwise this webhook (fired when we cancel a stranded
+        # parallel subscription) would clobber the user's still-active paid plan.
         if result.data and len(result.data) > 0:
             user_id = result.data[0].get('user_id')
+            customer_id = subscription.customer
             if user_id:
+                try:
+                    other_active = stripe.Subscription.list(
+                        customer=customer_id, status='active', limit=10
+                    )
+                    if any(s.id != subscription.id for s in other_active.data):
+                        logger.info(
+                            f"Skipping Free-plan downgrade for user {user_id}: "
+                            f"customer {customer_id} still has active Stripe subscription(s)"
+                        )
+                        return
+                except stripe.error.StripeError as list_err:
+                    logger.error(
+                        f"Could not verify other active subscriptions for {customer_id}; "
+                        f"proceeding with downgrade as a safe default: {str(list_err)}"
+                    )
                 downgrade_to_free_plan(user_id)
 
     except Exception as e:
