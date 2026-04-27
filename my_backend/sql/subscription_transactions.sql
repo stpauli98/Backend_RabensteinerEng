@@ -234,3 +234,24 @@ GRANT EXECUTE ON FUNCTION downgrade_to_free_plan_transaction TO service_role;
 -- 5. Click "Run"
 -- 6. Verify functions created successfully
 -- ============================================================================
+
+-- ============================================================================
+-- Security hardening: lock down callable surface
+-- ============================================================================
+-- Revoke EXECUTE on payment-mutating SECURITY DEFINER functions from public roles.
+-- Only the backend (service_role) should invoke these via webhooks.
+REVOKE EXECUTE ON FUNCTION public.handle_successful_payment_transaction(
+  uuid, uuid, varchar, timestamptz, timestamptz, timestamptz, varchar, varchar
+) FROM PUBLIC, anon, authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.downgrade_to_free_plan_transaction(uuid)
+FROM PUBLIC, anon, authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.assign_free_plan()
+FROM PUBLIC, anon, authenticated;
+
+-- Drop the over-permissive RLS policy. The trigger function assign_free_plan()
+-- bypasses RLS via SECURITY DEFINER, so this policy is unnecessary, and its
+-- WITH CHECK (true) on INSERT for {public} let authenticated users insert
+-- subscription rows for arbitrary user_ids.
+DROP POLICY IF EXISTS "Allow triggers to create subscriptions" ON public.user_subscriptions;
