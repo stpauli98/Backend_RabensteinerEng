@@ -183,6 +183,37 @@ def get_stripe_price_id(plan_id: str, billing_cycle: str) -> str:
     return price_id
 
 
+def cancel_other_active_stripe_subscriptions(customer_id: str, keep_subscription_id: str) -> int:
+    """
+    Cancel all active Stripe subscriptions for a customer except the one to keep.
+
+    Without this, plan upgrades would leave old subscriptions active on Stripe
+    and the customer would be billed for both old and new plans.
+
+    Args:
+        customer_id: Stripe customer ID
+        keep_subscription_id: Subscription ID NOT to cancel (the new one)
+
+    Returns:
+        int: Number of subscriptions cancelled
+    """
+    cancelled = 0
+    try:
+        existing = stripe.Subscription.list(customer=customer_id, status='active', limit=100)
+        for sub in existing.data:
+            if sub.id == keep_subscription_id:
+                continue
+            try:
+                stripe.Subscription.cancel(sub.id)
+                cancelled += 1
+                logger.info(f"Cancelled stranded Stripe subscription {sub.id} for customer {customer_id}")
+            except stripe.error.StripeError as cancel_err:
+                logger.error(f"Failed to cancel Stripe subscription {sub.id}: {str(cancel_err)}")
+    except stripe.error.StripeError as list_err:
+        logger.error(f"Failed to list active Stripe subscriptions for {customer_id}: {str(list_err)}")
+    return cancelled
+
+
 def handle_successful_payment(session: stripe.checkout.Session) -> None:
     """
     Handle successful Stripe checkout session
@@ -216,6 +247,16 @@ def handle_successful_payment(session: stripe.checkout.Session) -> None:
         started_at = datetime.fromtimestamp(subscription.current_period_start, tz=timezone.utc)
         expires_at = datetime.fromtimestamp(subscription.current_period_end, tz=timezone.utc)
         next_billing_date = expires_at
+
+        # Cancel any other active Stripe subscriptions for this customer.
+        # The DB-side RPC marks old rows cancelled, but without this Stripe
+        # would keep billing the old subscriptions in parallel.
+        stripe_cancelled = cancel_other_active_stripe_subscriptions(
+            customer_id=session.customer,
+            keep_subscription_id=session.subscription
+        )
+        if stripe_cancelled > 0:
+            logger.info(f"Cancelled {stripe_cancelled} stranded Stripe subscription(s) for user {user_id}")
 
         # CRITICAL FIX: Use atomic database transaction via PostgreSQL function
         # This ensures either BOTH operations succeed or BOTH fail (no partial state)
