@@ -163,13 +163,17 @@ def stripe_webhook():
                 logger.warning(f"Unhandled webhook type: {event_type}")
 
         except Exception as handler_error:
-            logger.error(f"Error handling webhook {event_id}: {str(handler_error)}")
-            logger.error(f"Returning 500 so Stripe will retry the event")
+            logger.error(
+                f"Error handling webhook {event_id}: {handler_error}; "
+                f"returning 500 so Stripe will retry"
+            )
             return jsonify({'status': 'error', 'message': 'Processing failed; will retry'}), 500
 
-        # Handler succeeded → record it. If this insert fails (e.g. because
-        # a parallel worker just inserted the same event_id) we still return
-        # 200 because the user-visible work is done.
+        # Handler succeeded → record it. The idempotency short-circuit at
+        # the top of this function blocks duplicate event_ids before they
+        # reach this point, so the realistic remaining failure mode here
+        # is a transient DB error. We still return 200 in that case
+        # because the user-visible work is done.
         try:
             mark_webhook_processed(event_id, event_type)
         except Exception as mark_error:

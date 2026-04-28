@@ -18,9 +18,7 @@ import stripe
 @pytest.fixture
 def app():
     from core.app_factory import create_app
-    result = create_app()
-    # create_app returns (app, socketio); accept either form for safety.
-    flask_app = result[0] if isinstance(result, tuple) else result
+    flask_app, _ = create_app()
     flask_app.config['TESTING'] = True
     return flask_app
 
@@ -108,3 +106,33 @@ def test_invalid_signature_returns_400(client):
         )
 
     assert resp.status_code == 400
+
+
+def test_mark_failure_after_handler_success_still_returns_200(client, caplog):
+    """If the handler succeeded but mark_webhook_processed raises (e.g.
+    transient DB error after the user-visible work landed), the endpoint
+    must still return 200 and emit a WARNING log so the failure is
+    observable in production logs.
+    """
+    import logging
+    event = _construct_event_payload()
+    with patch('domains.payments.api.stripe.stripe.Webhook.construct_event', return_value=event), \
+         patch('domains.payments.api.stripe.is_webhook_processed', return_value=False), \
+         patch('domains.payments.api.stripe.handle_successful_payment') as mock_handler, \
+         patch(
+             'domains.payments.api.stripe.mark_webhook_processed',
+             side_effect=RuntimeError('simulated DB write fail'),
+         ) as mock_mark:
+        with caplog.at_level(logging.WARNING, logger='domains.payments.api.stripe'):
+            resp = client.post(
+                '/api/stripe/webhook',
+                data=b'{}',
+                headers={'Stripe-Signature': 't=1,v1=fake'}
+            )
+
+    assert resp.status_code == 200
+    mock_handler.assert_called_once()
+    mock_mark.assert_called_once()
+    assert any('failed to mark processed' in rec.message for rec in caplog.records), (
+        f"expected a WARNING about mark failure; saw {[r.message for r in caplog.records]}"
+    )
