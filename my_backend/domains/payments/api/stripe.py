@@ -16,6 +16,7 @@ from shared.payments.stripe import (
     handle_payment_failed,
     handle_payment_succeeded,
     handle_charge_refunded,
+    is_webhook_processed,
     mark_webhook_processed,
     downgrade_to_free_plan
 )
@@ -122,15 +123,17 @@ def stripe_webhook():
         event_type = event['type']
         logger.info(f"Received webhook: {event_type} (ID: {event_id})")
 
-        # Mark event as processed FIRST to prevent race conditions
-        try:
-            mark_webhook_processed(event_id, event_type)
-            logger.info(f"Marked webhook {event_id} as processing")
-        except Exception as mark_error:
-            logger.info(f"Webhook {event_id} already processed or marking failed, skipping: {str(mark_error)}")
+        # Idempotency short-circuit: if we already finished processing this
+        # event, return 200 immediately and do nothing.
+        if is_webhook_processed(event_id):
+            logger.info(f"Webhook {event_id} already processed; skipping")
             return jsonify({'status': 'success', 'message': 'already processed'}), 200
 
-        # Handle the event
+        # Run the handler. We mark the event processed only AFTER the handler
+        # succeeds — if it raises we return 500 so Stripe retries on its
+        # exponential-backoff schedule. Handlers are idempotent (UNIQUE INDEX
+        # on user_subscriptions.stripe_subscription_id + IF EXISTS guard in
+        # handle_successful_payment_transaction RPC) so a retry is safe.
         try:
             if event_type == 'checkout.session.completed':
                 session = event['data']['object']
@@ -159,14 +162,23 @@ def stripe_webhook():
             else:
                 logger.warning(f"Unhandled webhook type: {event_type}")
 
-            logger.info(f"Successfully processed webhook {event_id}")
-            return jsonify({'status': 'success'}), 200
-
         except Exception as handler_error:
             logger.error(f"Error handling webhook {event_id}: {str(handler_error)}")
-            logger.error(f"Event {event_id} marked as processed but handling failed!")
-            logger.error(f"Manual intervention may be required for event {event_id}")
-            return jsonify({'status': 'error', 'message': 'Processing failed but logged'}), 200
+            logger.error(f"Returning 500 so Stripe will retry the event")
+            return jsonify({'status': 'error', 'message': 'Processing failed; will retry'}), 500
+
+        # Handler succeeded → record it. If this insert fails (e.g. because
+        # a parallel worker just inserted the same event_id) we still return
+        # 200 because the user-visible work is done.
+        try:
+            mark_webhook_processed(event_id, event_type)
+        except Exception as mark_error:
+            logger.warning(
+                f"Webhook {event_id} handled but failed to mark processed: {mark_error}"
+            )
+
+        logger.info(f"Successfully processed webhook {event_id}")
+        return jsonify({'status': 'success'}), 200
 
     except ValueError as e:
         logger.error(f"Invalid webhook payload: {str(e)}")
