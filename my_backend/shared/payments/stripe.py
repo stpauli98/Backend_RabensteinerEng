@@ -6,8 +6,13 @@ from shared.database.client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
 
-# Initialize Stripe
+# Initialize Stripe.
+# Pin the API version so SDK upgrades and Stripe-side default changes do
+# not silently alter response shapes (we already paid for this once when
+# invoice.subscription moved under invoice.parent.subscription_details
+# in newer API versions). Bump intentionally after testing.
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+stripe.api_version = '2025-10-29.clover'
 
 
 def is_webhook_processed(event_id: str) -> bool:
