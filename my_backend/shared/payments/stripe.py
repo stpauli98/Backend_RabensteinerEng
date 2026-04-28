@@ -188,6 +188,35 @@ def get_stripe_price_id(plan_id: str, billing_cycle: str) -> str:
     return price_id
 
 
+def _subscription_period_dates(subscription) -> tuple:
+    """Resolve current_period_start/end across Stripe API versions.
+
+    Older API: top-level subscription.current_period_start / current_period_end
+    Newer API (2025-10-29.clover and later): the same fields are NULL on the
+    subscription itself and live on subscription.items.data[0].current_period_start
+    / current_period_end. This is the same shape as we hit with
+    invoice.subscription → invoice.lines.data[0].subscription, handled by the
+    sibling helper _invoice_subscription_id.
+
+    Returns:
+        (start_unix, end_unix) — Unix timestamps from whichever location
+        actually populated them. Either may be None if neither location has
+        a value (caller is responsible for raising).
+    """
+    start = getattr(subscription, 'current_period_start', None)
+    end = getattr(subscription, 'current_period_end', None)
+    items = getattr(subscription, 'items', None)
+    if items is not None:
+        data = getattr(items, 'data', None) or []
+        if data:
+            item = data[0]
+            if start is None:
+                start = getattr(item, 'current_period_start', None)
+            if end is None:
+                end = getattr(item, 'current_period_end', None)
+    return start, end
+
+
 def cancel_other_active_stripe_subscriptions(customer_id: str, keep_subscription_id: str) -> int:
     """
     Cancel all active Stripe subscriptions for a customer except the one to keep.
@@ -247,10 +276,18 @@ def handle_successful_payment(session: stripe.checkout.Session) -> None:
         # Get subscription details from Stripe
         subscription = stripe.Subscription.retrieve(session.subscription)
 
-        # Calculate dates
+        # Calculate dates. The location of current_period_start/end moved
+        # from the subscription itself to subscription.items.data[0] in
+        # Stripe API version 2025-10-29.clover; resolve across versions.
         from datetime import datetime, timezone
-        started_at = datetime.fromtimestamp(subscription.current_period_start, tz=timezone.utc)
-        expires_at = datetime.fromtimestamp(subscription.current_period_end, tz=timezone.utc)
+        period_start, period_end = _subscription_period_dates(subscription)
+        if period_start is None or period_end is None:
+            raise ValueError(
+                f"Subscription {subscription.id} has no current_period_start/end "
+                f"on either the subscription or its items[0]"
+            )
+        started_at = datetime.fromtimestamp(period_start, tz=timezone.utc)
+        expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
         next_billing_date = expires_at
 
         # Cancel any other active Stripe subscriptions for this customer.
