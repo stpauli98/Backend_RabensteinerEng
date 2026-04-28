@@ -188,6 +188,40 @@ def get_stripe_price_id(plan_id: str, billing_cycle: str) -> str:
     return price_id
 
 
+def _subscription_items_data(subscription) -> list:
+    """Return subscription.items.data as a list, working around a Python SDK quirk.
+
+    `stripe.Subscription` inherits from dict, and `dict.items` is a built-in
+    method. Attribute access (`subscription.items`) returns that method
+    instead of the JSON `items` field. Bracket access via `__getitem__`
+    bypasses the method-resolution shadow and returns the ListObject we want.
+
+    Falls back to attribute access for non-dict shapes (e.g. SimpleNamespace
+    in tests) where bracket access is unavailable.
+    """
+    items_obj = None
+    if hasattr(subscription, '__getitem__'):
+        try:
+            items_obj = subscription['items']
+        except (KeyError, TypeError):
+            items_obj = None
+    if items_obj is None:
+        attr = getattr(subscription, 'items', None)
+        # On dict subclasses, .items is a built-in method; reject those.
+        if attr is not None and not callable(attr):
+            items_obj = attr
+    if items_obj is None:
+        return []
+
+    data = getattr(items_obj, 'data', None)
+    if data is None and hasattr(items_obj, '__getitem__'):
+        try:
+            data = items_obj['data']
+        except (KeyError, TypeError):
+            data = None
+    return data or []
+
+
 def _subscription_period_dates(subscription) -> tuple:
     """Resolve current_period_start/end across Stripe API versions.
 
@@ -203,17 +237,16 @@ def _subscription_period_dates(subscription) -> tuple:
         actually populated them. Either may be None if neither location has
         a value (caller is responsible for raising).
     """
-    start = getattr(subscription, 'current_period_start', None)
-    end = getattr(subscription, 'current_period_end', None)
-    items = getattr(subscription, 'items', None)
-    if items is not None:
-        data = getattr(items, 'data', None) or []
+    start = subscription.get('current_period_start') if hasattr(subscription, 'get') else getattr(subscription, 'current_period_start', None)
+    end = subscription.get('current_period_end') if hasattr(subscription, 'get') else getattr(subscription, 'current_period_end', None)
+    if start is None or end is None:
+        data = _subscription_items_data(subscription)
         if data:
             item = data[0]
             if start is None:
-                start = getattr(item, 'current_period_start', None)
+                start = item.get('current_period_start') if hasattr(item, 'get') else getattr(item, 'current_period_start', None)
             if end is None:
-                end = getattr(item, 'current_period_end', None)
+                end = item.get('current_period_end') if hasattr(item, 'get') else getattr(item, 'current_period_end', None)
     return start, end
 
 
@@ -417,16 +450,25 @@ def handle_subscription_updated(subscription: stripe.Subscription) -> None:
             'updated_at': datetime.now(timezone.utc).isoformat()
         }
 
-        # Only update period dates if they exist in the subscription
-        if hasattr(subscription, 'current_period_end') and subscription.current_period_end:
-            expires_at = datetime.fromtimestamp(subscription.current_period_end, tz=timezone.utc)
+        # Only update period dates if we can resolve them (across API versions
+        # the location moved from the subscription to its items[0]).
+        _, period_end = _subscription_period_dates(subscription)
+        if period_end:
+            expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
             update_data['expires_at'] = expires_at.isoformat()
             update_data['next_billing_date'] = expires_at.isoformat()
 
         # CRITICAL FIX: Check if plan changed (upgrade/downgrade)
-        # Extract price ID from subscription items
-        if hasattr(subscription, 'items') and subscription.items and len(subscription.items.data) > 0:
-            stripe_price_id = subscription.items.data[0].price.id
+        # Extract price ID from subscription items via the items helper, which
+        # avoids the dict.items() method-shadowing issue on stripe.Subscription.
+        items_data = _subscription_items_data(subscription)
+        if items_data:
+            first_item = items_data[0]
+            price_obj = first_item.get('price') if hasattr(first_item, 'get') else getattr(first_item, 'price', None)
+            stripe_price_id = price_obj.get('id') if price_obj is not None and hasattr(price_obj, 'get') else getattr(price_obj, 'id', None) if price_obj is not None else None
+        else:
+            stripe_price_id = None
+        if stripe_price_id:
 
             # Map Stripe price ID to our plan_id
             new_plan_id = get_plan_id_from_stripe_price(stripe_price_id)
