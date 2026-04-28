@@ -31,6 +31,10 @@ logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.getLogger('h5py').setLevel(logging.WARNING)
 logging.getLogger('tzlocal').setLevel(logging.WARNING)
 logging.getLogger('PIL').setLevel(logging.WARNING)
+# Stripe SDK logs an INFO line for every API call ("Request to Stripe api ...")
+# and DEBUG includes full response bodies (customer email, sub IDs, etc.).
+# Suppress to WARNING so production logs only surface real problems.
+logging.getLogger('stripe').setLevel(logging.WARNING)
 
 def create_app():
     """Application factory function"""

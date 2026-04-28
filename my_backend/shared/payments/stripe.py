@@ -6,8 +6,13 @@ from shared.database.client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
 
-# Initialize Stripe
+# Initialize Stripe.
+# Pin the API version so SDK upgrades and Stripe-side default changes do
+# not silently alter response shapes (we already paid for this once when
+# invoice.subscription moved under invoice.parent.subscription_details
+# in newer API versions). Bump intentionally after testing.
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+stripe.api_version = '2025-10-29.clover'
 
 
 def is_webhook_processed(event_id: str) -> bool:
@@ -38,27 +43,27 @@ def is_webhook_processed(event_id: str) -> bool:
 
 def mark_webhook_processed(event_id: str, event_type: str) -> None:
     """
-    Mark webhook event as processed
+    Mark webhook event as processed.
+
+    Raises on failure so the caller (the webhook endpoint) can decide
+    whether to warn-and-200 or escalate. The endpoint currently warns
+    and returns 200 because the user-visible work — the handler —
+    already succeeded by the time we get here.
 
     Args:
         event_id: Stripe event ID (evt_...)
         event_type: Type of event (checkout.session.completed, etc)
     """
-    try:
-        supabase = get_supabase_admin_client()
-        from datetime import datetime, timezone
+    supabase = get_supabase_admin_client()
+    from datetime import datetime, timezone
 
-        supabase.table('processed_webhook_events').insert({
-            'event_id': event_id,
-            'event_type': event_type,
-            'processed_at': datetime.now(timezone.utc).isoformat()
-        }).execute()
+    supabase.table('processed_webhook_events').insert({
+        'event_id': event_id,
+        'event_type': event_type,
+        'processed_at': datetime.now(timezone.utc).isoformat()
+    }).execute()
 
-        logger.info(f"Marked webhook {event_id} as processed")
-
-    except Exception as e:
-        # Log error but don't raise - webhook was processed successfully
-        logger.error(f"Error marking webhook as processed: {str(e)}")
+    logger.info(f"Marked webhook {event_id} as processed")
 
 def get_or_create_stripe_customer(user_id: str, email: str) -> str:
     """
