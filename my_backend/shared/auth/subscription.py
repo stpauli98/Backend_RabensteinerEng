@@ -175,16 +175,23 @@ def check_upload_limit(f):
 
 def check_processing_limit(f):
     """
-    Decorator to check processing limit before processing
+    Decorator to check processing limit before processing.
 
-    Must be used AFTER @require_auth and @require_subscription decorators
+    Hybrid gating:
+      - If the user's plan has `total_compute_hours > 0`, gate by aggregated
+        compute seconds (RPC `get_total_compute_seconds`). On exceed, return
+        403 with `error_code='compute_hours_exhausted'` so the frontend can
+        route the user to /pricing.
+      - Otherwise, fall back to the legacy job-count gate against
+        `processing_jobs_count` / `max_processing_jobs_per_month`.
+
+    Must be used AFTER @require_auth and @require_subscription decorators.
 
     Usage:
         @require_auth
         @require_subscription
         @check_processing_limit
         def process_route():
-            # Processing will only proceed if under limit
             return jsonify({'message': 'Processing successful'})
     """
     @wraps(f)
@@ -193,9 +200,56 @@ def check_processing_limit(f):
             logger.error("check_processing_limit used without require_auth and require_subscription")
             return jsonify({'error': 'Authentication and subscription required'}), 401
 
-        usage = get_user_usage(g.user_id, g.access_token)
-        processing_used = usage.get('processing_count', 0)
-        processing_limit = g.plan.get('max_processing_jobs_per_month', 0)
+        plan = g.plan or {}
+        total_compute_hours = plan.get('total_compute_hours') or 0
+
+        if total_compute_hours > 0:
+            # Compute-hours model: aggregate seconds via RPC.
+            try:
+                supabase = get_supabase_user_client(g.access_token)
+                rpc_result = supabase.rpc(
+                    'get_total_compute_seconds',
+                    {'p_user_id': g.user_id},
+                ).execute()
+                used_seconds = int(rpc_result.data or 0)
+            except Exception as e:
+                logger.error(f"Error reading compute seconds for {g.user_id}: {e}")
+                # Fail-open on RPC errors so transient infra issues don't lock
+                # paying users out. Operation proceeds and the user is gated
+                # only on confirmed exceedance.
+                return f(*args, **kwargs)
+
+            limit_seconds = total_compute_hours * 3600
+            used_hours = used_seconds / 3600
+
+            if used_seconds >= limit_seconds:
+                logger.warning(
+                    f"Compute hours exhausted for user {g.user_email}: "
+                    f"{used_hours:.2f}/{total_compute_hours}h"
+                )
+                return jsonify({
+                    'error': (
+                        f"Compute hours exhausted. Your {plan.get('name', 'current')} plan "
+                        f"includes {total_compute_hours}h. You've used {used_hours:.2f}h. "
+                        f"Upgrade your plan or wait for the next billing period."
+                    ),
+                    'error_code': 'compute_hours_exhausted',
+                    'used_hours': round(used_hours, 2),
+                    'limit_hours': total_compute_hours,
+                    'plan': plan.get('name'),
+                    'redirect_to': '/pricing',
+                }), 403
+
+            # Surface the same shape downstream code expected.
+            g.usage = getattr(g, 'usage', {}) or {}
+            g.usage['total_compute_seconds'] = used_seconds
+            g.compute_seconds_remaining = limit_seconds - used_seconds
+            return f(*args, **kwargs)
+
+        # Legacy count-based gate.
+        usage = g.usage or get_user_usage(g.user_id, g.access_token)
+        processing_used = usage.get('processing_count', usage.get('processing_jobs_count', 0))
+        processing_limit = plan.get('max_processing_jobs_per_month', 0)
 
         if processing_used >= processing_limit:
             logger.warning(f"Processing limit reached for user {g.user_email}: {processing_used}/{processing_limit}")
@@ -204,14 +258,11 @@ def check_processing_limit(f):
                 'message': f'You have reached your monthly processing limit of {processing_limit}',
                 'current_usage': processing_used,
                 'limit': processing_limit,
-                'plan': g.plan.get('name')
+                'plan': plan.get('name'),
             }), 403
 
         g.usage = usage
         g.processing_remaining = processing_limit - processing_used
-
-
-
         return f(*args, **kwargs)
 
     return decorated_function
