@@ -239,7 +239,7 @@ def customer_portal():
         user_id = g.user_id
         user_email = g.user_email
 
-        logger.info(f"Creating portal session for user {user_id} ({user_email})")
+        logger.info(f"Creating portal session for user {user_id}")
 
         # Get Stripe customer ID
         customer_id = get_or_create_stripe_customer(user_id, user_email)
