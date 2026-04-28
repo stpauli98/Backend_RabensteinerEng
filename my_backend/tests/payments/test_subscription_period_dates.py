@@ -53,3 +53,23 @@ def test_handles_empty_items_data_list():
         items=SimpleNamespace(data=[]),
     )
     assert _subscription_period_dates(sub) == (None, None)
+
+
+def test_resolves_correctly_when_subscription_is_a_dict_subclass():
+    """The real stripe.Subscription inherits from dict and bracket access
+    is required to get the JSON 'items' field — attribute access returns
+    the dict's built-in items() method instead. Mimic that here so the
+    helper is exercised against the same shape it sees in production.
+    """
+    # A dict subclass: attribute access for dict-method names returns the
+    # method (the bug). Bracket access returns the JSON value (the workaround).
+    sub = {
+        'current_period_start': None,
+        'current_period_end': None,
+        'items': {
+            'data': [
+                {'current_period_start': 1234567890, 'current_period_end': 1237159890}
+            ]
+        },
+    }
+    assert _subscription_period_dates(sub) == (1234567890, 1237159890)
