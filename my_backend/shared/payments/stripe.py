@@ -110,26 +110,14 @@ def get_or_create_stripe_customer(user_id: str, email: str) -> str:
                 .update({'stripe_customer_id': customer.id}) \
                 .eq('user_id', user_id) \
                 .execute()
-        else:
-            # Get Free plan ID
-            free_plan = supabase.table('subscription_plans') \
-                .select('id') \
-                .eq('name', 'Free') \
-                .single() \
-                .execute()
-
-            # Create new record with Free plan
-            from datetime import datetime, timezone
-            supabase.table('user_subscriptions') \
-                .insert({
-                    'user_id': user_id,
-                    'plan_id': free_plan.data['id'],
-                    'stripe_customer_id': customer.id,
-                    'status': 'active',
-                    'billing_cycle': 'monthly',
-                    'started_at': datetime.now(timezone.utc).isoformat()
-                }) \
-                .execute()
+        # Free is no longer a plan; we no longer seed a user_subscriptions row
+        # at customer-creation time. The row will be created by the checkout
+        # flow when the user actually purchases a paid plan. The
+        # stripe_customer_id <-> user_id mapping is only persisted here when
+        # an existing user_subscriptions row is present (e.g. a previously
+        # cancelled subscription). For brand-new users with no row yet, the
+        # mapping is implicit via the Stripe customer's metadata
+        # (`supabase_user_id`) and is reconciled when checkout completes.
 
         return customer.id
 
@@ -513,9 +501,11 @@ def handle_subscription_deleted(subscription: stripe.Subscription) -> None:
 
         logger.info(f"Subscription cancelled: {subscription.id}")
 
-        # Downgrade to Free plan only if the user has no other active Stripe
-        # subscriptions. Otherwise this webhook (fired when we cancel a stranded
-        # parallel subscription) would clobber the user's still-active paid plan.
+        # Cancel the active user_subscriptions row only if the user has no
+        # other active Stripe subscriptions. Otherwise this webhook (fired
+        # when we cancel a stranded parallel subscription) would clobber the
+        # user's still-active paid plan. Free is no longer a plan; cancelled
+        # users land on /pricing on next request.
         if result.data and len(result.data) > 0:
             user_id = result.data[0].get('user_id')
             customer_id = subscription.customer
@@ -526,109 +516,44 @@ def handle_subscription_deleted(subscription: stripe.Subscription) -> None:
                     )
                     if any(s.id != subscription.id for s in other_active.data):
                         logger.info(
-                            f"Skipping Free-plan downgrade for user {user_id}: "
+                            f"Skipping subscription cancel for user {user_id}: "
                             f"customer {customer_id} still has active Stripe subscription(s)"
                         )
                         return
                 except stripe.error.StripeError as list_err:
                     logger.error(
                         f"Could not verify other active subscriptions for {customer_id}; "
-                        f"proceeding with downgrade as a safe default: {str(list_err)}"
+                        f"proceeding with cancel as a safe default: {str(list_err)}"
                     )
-                downgrade_to_free_plan(user_id)
+                cancel_active_subscription(user_id)
 
     except Exception as e:
         logger.error(f"Error handling subscription deletion: {str(e)}")
         raise
 
 
-def downgrade_to_free_plan(user_id: str) -> None:
+def cancel_active_subscription(user_id: str) -> dict:
     """
-    Downgrade user to Free plan after subscription cancellation
+    Cancel the user's active subscription via the SECURITY DEFINER RPC.
 
-    CRITICAL FIX: Uses PostgreSQL transaction to atomically:
-    1. Cancel all active paid subscriptions
-    2. Create Free plan subscription
-    This prevents duplicate active subscriptions where user keeps paid features.
+    Replaces the legacy "downgrade to Free" flow. Free is no longer a plan;
+    cancelled users land on /pricing on next request and must purchase a paid
+    plan to regain access.
 
-    Prerequisites: Run sql/subscription_transactions.sql in Supabase SQL Editor
-
-    Args:
-        user_id: Supabase user ID
+    Returns the json payload from cancel_active_subscription_transaction:
+    {"cancelled_count": int, "user_id": str}.
     """
-    try:
-        supabase = get_supabase_admin_client()
-
-        # CRITICAL FIX: Use atomic database transaction via PostgreSQL function
-        try:
-            result = supabase.rpc('downgrade_to_free_plan_transaction', {
-                'p_user_id': user_id
-            }).execute()
-
-            if result.data:
-                message = result.data.get('message', '')
-                cancelled_count = result.data.get('cancelled_count', 0)
-                logger.info(f"{message} (cancelled {cancelled_count} paid subscription(s))")
-            else:
-                logger.info(f"User {user_id} downgraded to Free plan")
-
-        except Exception as rpc_error:
-            # If RPC function doesn't exist, fall back to non-transactional approach
-            logger.warning(f"RPC function not found, using fallback approach: {str(rpc_error)}")
-            logger.warning("DEPLOY sql/subscription_transactions.sql for atomic transactions!")
-
-            # Fallback: Non-transactional (RISKY but better than nothing)
-            from datetime import datetime, timezone
-
-            free_plan = supabase.table('subscription_plans') \
-                .select('id') \
-                .eq('name', 'Free') \
-                .single() \
-                .execute()
-
-            if not free_plan.data:
-                logger.error(f"Free plan not found in database")
-                return
-
-            existing_free = supabase.table('user_subscriptions') \
-                .select('id') \
-                .eq('user_id', user_id) \
-                .eq('plan_id', free_plan.data['id']) \
-                .eq('status', 'active') \
-                .execute()
-
-            if existing_free.data and len(existing_free.data) > 0:
-                logger.info(f"User {user_id} already has active Free plan")
-                return
-
-            cancelled_subs = supabase.table('user_subscriptions') \
-                .update({
-                    'status': 'cancelled',
-                    'cancelled_at': datetime.now(timezone.utc).isoformat(),
-                    'updated_at': datetime.now(timezone.utc).isoformat()
-                }) \
-                .eq('user_id', user_id) \
-                .eq('status', 'active') \
-                .execute()
-
-            if cancelled_subs.data and len(cancelled_subs.data) > 0:
-                logger.info(f"Cancelled {len(cancelled_subs.data)} active subscription(s) for user {user_id}")
-
-            supabase.table('user_subscriptions').insert({
-                'user_id': user_id,
-                'plan_id': free_plan.data['id'],
-                'status': 'active',
-                'billing_cycle': 'monthly',
-                'started_at': datetime.now(timezone.utc).isoformat(),
-                'payment_method': 'none',
-                'is_trial': False
-            }).execute()
-
-            logger.info(f"User {user_id} downgraded to Free plan (fallback mode)")
-
-    except Exception as e:
-        logger.error(f"Error downgrading to Free plan: {str(e)}")
-        raise
+    supabase = get_supabase_admin_client()
+    res = supabase.rpc(
+        'cancel_active_subscription_transaction',
+        {'p_user_id': user_id},
+    ).execute()
+    if not res.data:
+        logger.warning(
+            "cancel_active_subscription returned no data for user_id=%s", user_id
+        )
+        return {'cancelled_count': 0, 'user_id': user_id}
+    return res.data
 
 
 def _invoice_subscription_id(invoice) -> str | None:
@@ -778,11 +703,11 @@ def handle_charge_refunded(charge: stripe.Charge) -> None:
         except stripe.error.StripeError as cancel_err:
             logger.error(f"Failed to cancel refunded Stripe subscription {subscription_id}: {str(cancel_err)}")
 
-        # Downgrade the user. handle_subscription_deleted will fire from the
-        # Stripe cancel above; calling downgrade here is a belt-and-suspenders
-        # safeguard in case the webhook is delayed.
-        downgrade_to_free_plan(user_id)
-        logger.warning(f"User {user_id} downgraded after full refund of charge {charge.id}")
+        # Cancel the user's active subscription row. handle_subscription_deleted
+        # will fire from the Stripe cancel above; calling cancel here is a
+        # belt-and-suspenders safeguard in case the webhook is delayed.
+        cancel_active_subscription(user_id)
+        logger.warning(f"User {user_id} subscription cancelled after full refund of charge {charge.id}")
 
     except Exception as e:
         logger.error(f"Error handling charge refund: {str(e)}")

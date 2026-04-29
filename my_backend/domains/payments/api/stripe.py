@@ -18,7 +18,6 @@ from shared.payments.stripe import (
     handle_charge_refunded,
     is_webhook_processed,
     mark_webhook_processed,
-    downgrade_to_free_plan
 )
 
 logger = logging.getLogger(__name__)
@@ -201,28 +200,13 @@ def stripe_webhook():
 @require_auth
 def activate_free_plan():
     """
-    Activate Free plan for user (no Stripe checkout needed)
-
-    Returns:
-        200: {"success": true, "message": "Free plan activated"}
-        400: {"error": "message"}
+    Free plan retired. Endpoint kept for legacy clients but returns 410 Gone.
+    Users must purchase a paid plan via the standard checkout flow.
     """
-    try:
-        user_id = g.user_id
-
-        # Directly activate Free plan
-        downgrade_to_free_plan(user_id)
-
-        logger.info(f"Free plan activated for user {user_id}")
-
-        return jsonify({
-            'success': True,
-            'message': 'Free plan activated successfully'
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error activating free plan: {str(e)}")
-        return jsonify({'error': 'Failed to activate Free plan. Please try again or contact support.'}), 500
+    return jsonify({
+        'error': 'Free plan has been retired. Please choose a paid plan.',
+        'redirect_to': '/pricing',
+    }), 410
 
 
 @bp.route('/customer-portal', methods=['POST'])
