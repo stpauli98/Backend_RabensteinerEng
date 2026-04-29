@@ -59,8 +59,8 @@ def require_auth(f):
             return f(*args, **kwargs)
 
         except Exception as e:
-            logger.error(f"Authentication error: {str(e)}")
-            return jsonify({'error': 'Authentication failed', 'details': str(e)}), 401
+            logger.warning("auth verification failed: %s", e, exc_info=True)
+            return jsonify({'error': 'Authentication failed'}), 401
 
     return decorated_function
 
