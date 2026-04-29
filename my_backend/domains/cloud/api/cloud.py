@@ -120,9 +120,6 @@ def complete_redirect():
                 'success': True,
                 'data': {'message': 'CORS preflight request successful'}
             })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
             return response
 
         logger.info("=== HANDLING COMPLETE UPLOAD REQUEST ===")
@@ -290,8 +287,6 @@ def complete_redirect():
             log_compute_duration(g.user_id, time.time() - _compute_start, 'regression', {'upload_id': upload_id})
 
             response = Response(generator, mimetype='application/x-ndjson')
-            response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.call_on_close(cleanup)
             return response
 
@@ -315,9 +310,6 @@ def clouddata():
     """Handle direct cloud data processing (non-chunked)."""
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return response
 
     try:

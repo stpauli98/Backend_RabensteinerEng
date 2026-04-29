@@ -36,20 +36,40 @@ logging.getLogger('PIL').setLevel(logging.WARNING)
 # Suppress to WARNING so production logs only surface real problems.
 logging.getLogger('stripe').setLevel(logging.WARNING)
 
+def _resolve_cors_origins() -> list[str]:
+    """
+    Resolve allowed CORS origins.
+
+    In production (FLASK_ENV=production), CORS_ORIGINS must be explicitly
+    set to a comma-separated list. If absent, raise — better to fail at
+    boot than silently allow all origins with credentials.
+
+    In development, default to local Vite/CRA dev servers.
+    """
+    raw = os.environ.get('CORS_ORIGINS')
+    if not raw:
+        if os.environ.get('FLASK_ENV') == 'production':
+            raise RuntimeError(
+                "CORS_ORIGINS is required in production. "
+                "Set it to a comma-separated list of allowed origins."
+            )
+        return ['http://localhost:3000', 'http://localhost:5173']
+    return [o.strip() for o in raw.split(',') if o.strip()]
+
+
 def create_app():
     """Application factory function"""
     app = Flask(__name__)
-    
+
     app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
-    # CORS origins from environment (default: "*" for backward compatibility)
-    # Set CORS_ORIGINS=https://www.forecast-engine.com,http://localhost:3000 in production
-    _cors_origins = os.environ.get('CORS_ORIGINS', '*')
-    _socketio_cors = _cors_origins.split(',') if _cors_origins != '*' else '*'
+    # CORS origins resolved via fail-closed helper.
+    # Production requires CORS_ORIGINS env var; dev falls back to localhost.
+    allowed_origins = _resolve_cors_origins()
 
     # Initialize SocketIO
     socketio.init_app(app,
-                     cors_allowed_origins=_socketio_cors,
+                     cors_allowed_origins=allowed_origins,
                      async_mode='threading',
                      logger=False,
                      engineio_logger=False,
@@ -61,14 +81,8 @@ def create_app():
 
     # Initialize CORS - Flask-Cors 6.0 uses top-level kwargs instead of resources dict
     # supports_credentials=True requires explicit origins (no wildcard "*")
-    _flask_cors_origins = _cors_origins.split(',') if _cors_origins != '*' else [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://www.forecast-engine.com",
-        "https://forecast-engine.com"
-    ]
     cors.init_app(app,
-        origins=_flask_cors_origins,
+        origins=allowed_origins,
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
         expose_headers=[
