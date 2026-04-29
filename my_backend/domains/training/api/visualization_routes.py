@@ -22,6 +22,7 @@ from .common import (
 from domains.training.services.visualization import Visualizer
 from domains.training.constants import calculate_time_deltas
 from shared.database.lifecycle import update_workflow_phase
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
 bp = Blueprint('training_visualization', __name__)
 logger = get_logger(__name__)
@@ -167,6 +168,11 @@ def get_evaluation_tables(session_id):
         from utils.training_storage import download_training_results
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
 
         response = supabase.table('training_results') \
             .select('id, results_file_path, compressed, results') \
@@ -366,6 +372,11 @@ def save_evaluation_tables(session_id):
 
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
 
         evaluation_data = {
             'session_id': uuid_session_id,

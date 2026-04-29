@@ -17,6 +17,7 @@ from flask import Blueprint
 import pandas as pd
 
 from shared.auth.api_key import allow_api_key
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
 from domains.training.services.forecast_service import run_forecast
 
@@ -41,6 +42,11 @@ def execute_forecast(session_id):
     try:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
+
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
 
         files_res = supabase.table('files').select('*').eq('session_id', uuid_session_id).execute()
         time_res = supabase.table('time_info').select('*').eq('session_id', uuid_session_id).execute()
@@ -164,6 +170,11 @@ def get_forecast_config(session_id):
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
 
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
+
         files_res = supabase.table('files') \
             .select('*') \
             .eq('session_id', uuid_session_id) \
@@ -207,6 +218,11 @@ def save_forecast_config(session_id):
 
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
+
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
 
         features = data['features']
         updated = 0

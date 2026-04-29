@@ -29,6 +29,7 @@ from shared.tracking.usage import log_compute_duration
 from domains.training.services.visualization import save_visualization_to_database, delete_old_violin_plots
 from domains.training.data.generator import generate_violin_plots_for_session
 from domains.training.services.orchestrator import run_model_training_async
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
 bp = Blueprint('training_training', __name__)
 logger = get_logger(__name__)
@@ -210,6 +211,11 @@ def get_training_status(session_id: str):
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
+
         results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
         logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
 
@@ -279,6 +285,11 @@ def get_results_summary(session_id):
     try:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
 
         # [WORKFLOW_DEBUG] 1. Get n_dat and workflow_phase from sessions table
         n_dat = 0
@@ -356,6 +367,11 @@ def get_training_results(session_id):
         from utils.training_storage import download_training_results
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
 
         # Fetch n_dat from sessions table
         n_dat = 0
@@ -445,6 +461,12 @@ def download_training_arrays(session_id):
         from shared.database.client import get_supabase_admin_client
 
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+
+        try:
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return jsonify({'success': False, 'error': 'forbidden'}), 403
+
         file_path = f"{uuid_session_id}/training_arrays.pkl.gz"
 
         supabase = get_supabase_admin_client()

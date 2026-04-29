@@ -30,6 +30,8 @@ from domains.training.services.session import (
     create_database_session, get_session_uuid, get_upload_status
 )
 
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
+
 bp = Blueprint('training_sessions', __name__)
 logger = get_logger(__name__)
 
@@ -177,6 +179,11 @@ def get_session_from_database_endpoint(session_id):
             string_session_id, database_session_id = resolve_session_id(session_id, g.user_id)
         except ValueError as e:
             return create_error_response(str(e), 404)
+
+        try:
+            assert_session_ownership(database_session_id)
+        except SessionOwnershipError:
+            return create_error_response('forbidden', 403)
 
         supabase = get_supabase_client(use_service_role=True)
         if not supabase:
