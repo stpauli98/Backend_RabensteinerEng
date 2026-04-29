@@ -25,7 +25,14 @@ from typing import Dict, Tuple, Optional, Any
 
 from flask import Blueprint, request, jsonify, current_app, g, Response, redirect
 import pandas as pd
+from marshmallow import ValidationError
 
+from domains.upload.api.schemas import (
+    UploadIdSchema,
+    PrepareSaveSchema,
+    MergeAndPrepareSchema,
+    CleanupFilesSchema,
+)
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
@@ -168,10 +175,10 @@ def finalize_upload() -> Tuple[Response, int]:
     then processes the assembled file.
     """
     try:
-        data = request.get_json(force=True, silent=True)
-
-        if not data or 'uploadId' not in data:
-            return jsonify({"error": "uploadId is required"}), 400
+        try:
+            data = UploadIdSchema().load(request.get_json(force=True, silent=True) or {})
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         upload_id = data['uploadId']
 
@@ -206,10 +213,10 @@ def cancel_upload() -> Tuple[Response, int]:
     Deletes all chunks and metadata from local filesystem.
     """
     try:
-        data = request.get_json(force=True, silent=True)
-
-        if not data or 'uploadId' not in data:
-            return jsonify({"error": "uploadId is required"}), 400
+        try:
+            data = UploadIdSchema().load(request.get_json(force=True, silent=True) or {})
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         upload_id = data['uploadId']
 
@@ -738,10 +745,10 @@ def prepare_save() -> Tuple[Response, int]:
     Saves to local filesystem for fast access and no size limits.
     """
     try:
-        data = request.json
-
-        if not data or 'data' not in data:
-            return jsonify({"error": "No data received"}), 400
+        try:
+            data = PrepareSaveSchema().load(request.get_json(force=True, silent=True) or {})
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         data_wrapper = data['data']
         save_data = data_wrapper.get('data', [])
@@ -793,10 +800,10 @@ def merge_and_prepare() -> Tuple[Response, int]:
     Saves merged result to local storage.
     """
     try:
-        data = request.json
-
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+        try:
+            data = MergeAndPrepareSchema().load(request.get_json(force=True, silent=True) or {})
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         file_ids = data.get('fileIds', [])
         file_name = data.get('fileName', 'merged_data.csv')
@@ -951,10 +958,10 @@ def cleanup_files() -> Tuple[Response, int]:
     Falls back to Supabase Storage for legacy files.
     """
     try:
-        data = request.json
-
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+        try:
+            data = CleanupFilesSchema().load(request.get_json(force=True, silent=True) or {})
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         file_ids = data.get('fileIds', [])
 
