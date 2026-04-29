@@ -1,10 +1,57 @@
-"""Authentication middleware for Supabase JWT validation"""
+"""Authentication middleware for Supabase JWT validation.
+
+JWTs are verified locally with HS256 against SUPABASE_JWT_SECRET (Supabase
+Dashboard -> Settings -> API -> JWT Secret). This avoids a per-request
+network round-trip to Supabase's /auth/v1/user endpoint and removes the
+runtime dependency on Supabase availability for every authenticated call.
+"""
 import logging
+import os
 from functools import wraps
+
+import jwt as pyjwt
 from flask import request, jsonify, g
-from shared.database.client import get_supabase_client
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError, PyJWTError
 
 logger = logging.getLogger(__name__)
+
+SUPABASE_JWT_SECRET = os.environ.get('SUPABASE_JWT_SECRET')
+if not SUPABASE_JWT_SECRET:
+    # Deferred error: we surface this on the first auth request rather than
+    # raising at import time, so localhost workflows that hit unauthenticated
+    # routes still work even when the secret is missing from .env.
+    logger.warning(
+        "SUPABASE_JWT_SECRET is not set. Authenticated requests will fail "
+        "until it is configured. Get it from Supabase Dashboard -> Settings "
+        "-> API -> JWT Secret."
+    )
+
+
+def _verify_jwt_local(token: str) -> dict:
+    """Verify a Supabase-issued JWT locally using HS256 + SUPABASE_JWT_SECRET.
+
+    Raises:
+        RuntimeError: if SUPABASE_JWT_SECRET is not configured.
+        ExpiredSignatureError: if the token is expired.
+        InvalidTokenError / PyJWTError: for any other validation failure
+            (bad signature, missing claims, wrong audience, etc.).
+
+    Returns:
+        The decoded claims dict on success.
+    """
+    if not SUPABASE_JWT_SECRET:
+        raise RuntimeError(
+            "SUPABASE_JWT_SECRET is not set. Add it to .env from "
+            "Supabase Dashboard -> Settings -> API -> JWT Secret."
+        )
+    return pyjwt.decode(
+        token,
+        SUPABASE_JWT_SECRET,
+        algorithms=['HS256'],
+        audience='authenticated',
+        options={'require': ['exp', 'sub', 'aud']},
+    )
+
 
 def require_auth(f):
     """
@@ -43,24 +90,24 @@ def require_auth(f):
             return jsonify({'error': 'Malformed authorization header'}), 401
 
         try:
-            supabase = get_supabase_client()
-
-            response = supabase.auth.get_user(token)
-
-            if not response or not response.user:
-                logger.warning("Invalid or expired token")
-                return jsonify({'error': 'Invalid or expired token'}), 401
-
-            g.user_id = response.user.id
-            g.user_email = response.user.email
-            g.user_metadata = response.user.user_metadata
-            g.access_token = token
-
-            return f(*args, **kwargs)
-
-        except Exception as e:
-            logger.warning("auth verification failed: %s", e, exc_info=True)
+            claims = _verify_jwt_local(token)
+        except RuntimeError as e:
+            # Misconfiguration — surface clearly for ops, generic for client
+            logger.error("auth misconfiguration: %s", e)
+            return jsonify({'error': 'Authentication misconfigured'}), 500
+        except ExpiredSignatureError:
+            return jsonify({'error': 'Token expired'}), 401
+        except (InvalidTokenError, PyJWTError) as e:
+            logger.warning("jwt verify failed: %s", e)
             return jsonify({'error': 'Authentication failed'}), 401
+
+        g.user_id = claims['sub']
+        g.user_email = claims.get('email')
+        g.user_metadata = claims.get('user_metadata', {})
+        g.user_role = claims.get('role', 'authenticated')
+        g.access_token = token
+
+        return f(*args, **kwargs)
 
     return decorated_function
 
@@ -94,16 +141,14 @@ def optional_auth(f):
             if token_type.lower() != 'bearer':
                 return f(*args, **kwargs)
 
-            supabase = get_supabase_client()
-            response = supabase.auth.get_user(token)
+            claims = _verify_jwt_local(token)
+            g.user_id = claims['sub']
+            g.user_email = claims.get('email')
+            g.user_metadata = claims.get('user_metadata', {})
+            g.user_role = claims.get('role', 'authenticated')
+            g.access_token = token
 
-            if response and response.user:
-                g.user_id = response.user.id
-                g.user_email = response.user.email
-                g.user_metadata = response.user.user_metadata
-                g.access_token = token
-
-                logger.debug(f"Optional auth: Authenticated user {g.user_email}")
+            logger.debug(f"Optional auth: Authenticated user {g.user_email}")
 
         except Exception as e:
             logger.debug(f"Optional auth failed (continuing anyway): {str(e)}")
