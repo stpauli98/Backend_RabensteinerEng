@@ -891,6 +891,16 @@ def download_file(file_id: str) -> Response:
     Falls back to Supabase Storage for legacy files.
     """
     try:
+        # IDOR guard: file_id is server-constructed and must be owned by the
+        # caller. Local-chunk format is "{user_id}_..." and Storage format is
+        # "{user_id}/...". Reject anything that does not start with the
+        # caller's user_id followed by the appropriate separator before
+        # touching any storage backend.
+        local_prefix = f"{g.user_id}_"
+        storage_prefix = f"{g.user_id}/"
+        if not (file_id.startswith(local_prefix) or file_id.startswith(storage_prefix)):
+            return jsonify({"error": "forbidden"}), 403
+
         # Try local storage first
         csv_content = local_chunk_service.get_processed_result(file_id)
 
@@ -904,7 +914,12 @@ def download_file(file_id: str) -> Response:
             )
             return response
 
-        # Fallback to Supabase Storage for legacy files
+        # Fallback to Supabase Storage for legacy files. The storage path is
+        # derived from file_id, so re-assert ownership for the storage prefix
+        # to defence-in-depth even though the check above already covers it.
+        if not file_id.startswith(storage_prefix):
+            return jsonify({"error": "File not found"}), 404
+
         signed_url = storage_service.get_download_url(file_id, expires_in=3600)
 
         if signed_url:
