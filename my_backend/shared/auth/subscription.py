@@ -339,7 +339,7 @@ def check_training_limit(f):
             logger.warning(f"Training not available for user {g.user_email}'s plan")
             return jsonify({
                 'error': 'Training not available',
-                'message': 'Training is not available in your plan. Upgrade to Pro or Enterprise to unlock model training.',
+                'message': 'Training is not available in your plan. Upgrade to STANDARD or PREMIUM to unlock model training.',
                 'plan': g.plan.get('name')
             }), 403
 
