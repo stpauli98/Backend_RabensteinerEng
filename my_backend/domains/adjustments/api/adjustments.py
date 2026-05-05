@@ -7,7 +7,7 @@ import time
 import math
 import logging
 import traceback
-from typing import Tuple
+from typing import Optional, Tuple
 
 from flask import Blueprint, request, jsonify, g, Response
 import pandas as pd
@@ -613,3 +613,761 @@ def complete_adjustment() -> Tuple[Response, int]:
         logger.error(f"Error in complete_adjustment: {str(e)}\n{traceback.format_exc()}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 400
+
+
+# ===========================================================================
+# Anomaly Detection (Anomalieerkennung) — `/zweite-bearbeitung` flow
+# ===========================================================================
+# Ports the Python reference script `test2/anomaly_detection_1.py` into a
+# REST + SocketIO pipeline. State is held in `adjustment_chunks[upload_id]`
+# under the `anomaly` key (see state_manager.init_anomaly_state).
+# ---------------------------------------------------------------------------
+
+from pathlib import Path as _Path  # local alias to avoid clobbering existing refs
+
+from core.app_factory import socketio as _socketio
+from domains.adjustments.data.loader import load_and_validate_csv as _load_csv
+from domains.adjustments.services.state_manager import (
+    PipelineStatus as _PipelineStatus,
+    init_anomaly_state as _init_anomaly,
+    get_anomaly_state as _get_anomaly,
+    set_pipeline_status as _set_pipeline_status,
+    try_acquire_pipeline as _try_acquire_pipeline,
+)
+from domains.adjustments.services.plot_builder import (
+    build_anomaly_overlay as _build_anomaly_overlay,
+    build_lstm_error as _build_lstm_error,
+    build_original_plot as _build_original_plot,
+    build_processed_plot as _build_processed_plot,
+    build_slope_plot as _build_slope_plot,
+    build_stl_decomposition as _build_stl_decomposition,
+)
+from domains.adjustments.services.anomaly_helpers import (
+    slope_calc as _slope_calc,
+    tr as _tr,
+)
+from domains.adjustments.services.anomaly_pipeline import (
+    apply_lstm_threshold as _apply_lstm_threshold,
+    apply_stl_threshold as _apply_stl_threshold,
+    build_par_dict as _build_par_dict,
+    prepare_lstm as _prepare_lstm,
+    prepare_stl as _prepare_stl,
+    process_constants as _process_constants,
+    process_range as _process_range,
+    process_sbad as _process_sbad,
+    process_short_ranges as _process_short_ranges,
+    process_zeros as _process_zeros,
+)
+from domains.adjustments.services.anomaly_validators import (
+    validate_par_dict as _validate_par_dict,
+    validate_param_single as _validate_param_single,
+)
+
+
+def _normalize_lang(value) -> str:
+    """Coerce arbitrary input to 'en' or 'de' (default 'en')."""
+    if isinstance(value, str) and value.lower() == "de":
+        return "de"
+    return "en"
+
+
+def _make_progress_callback(upload_id: str):
+    """Build a callable that emits SocketIO `anomaly_progress` events.
+
+    Pipeline phases call `cb(label, fraction)` periodically; the callback
+    debounces by fraction delta to avoid SocketIO flooding.
+    """
+    state_holder = {"last_label": None, "last_fraction": -1.0}
+
+    def cb(label: str, fraction: float) -> None:
+        try:
+            f = max(0.0, min(1.0, float(fraction)))
+            # Always emit on label change, otherwise throttle to 5 % steps.
+            if (state_holder["last_label"] != label
+                    or f - state_holder["last_fraction"] >= 0.05
+                    or f >= 0.999):
+                _socketio.emit(
+                    "anomaly_progress",
+                    {
+                        "uploadId": upload_id,
+                        "step": label,
+                        "progress": int(round(f * 100)),
+                    },
+                    room=upload_id,
+                )
+                state_holder["last_label"] = label
+                state_holder["last_fraction"] = f
+        except Exception:
+            # Progress is best-effort — never let SocketIO failures kill the pipeline.
+            logger.debug("progress emit failed", exc_info=True)
+
+    return cb
+
+
+def _run_preprocess_and_sbad(state, par, lang, progress_cb):
+    """
+    Execute the deterministic phases (constants → zeros → range → sbad) on the
+    *current* original_df, and stash the result into state["processed_df"].
+    """
+    df = state["original_df"].copy()
+
+    df = _process_constants(
+        df,
+        par["EQ_MAX"]["value"],
+        par["GAP_MAX"]["value"],
+        par["DEC"]["value"],
+        lang=lang,
+        progress_callback=progress_cb,
+    )
+    df = _process_zeros(
+        df,
+        par["EL0"]["value"],
+        par["GAP_MAX"]["value"],
+        par["DEC"]["value"],
+        lang=lang,
+        progress_callback=progress_cb,
+    )
+    df = _process_range(
+        df,
+        par["V_MAX"]["value"],
+        par["V_MIN"]["value"],
+        par["GAP_MAX"]["value"],
+        par["DEC"]["value"],
+        lang=lang,
+        progress_callback=progress_cb,
+    )
+
+    sbad_chg_max = par["SBAD"]["var"]["CHG_MAX"]["value"]
+    sbad_lg_max = par["SBAD"]["var"]["LG_MAX"]["value"]
+    if sbad_chg_max is not None and sbad_lg_max is not None:
+        df, _count = _process_sbad(
+            df,
+            sbad_chg_max,
+            sbad_lg_max,
+            par["GAP_MAX"]["value"],
+            par["DEC"]["value"],
+            lang=lang,
+            progress_callback=progress_cb,
+        )
+
+    state["processed_df"] = df
+    return df
+
+
+def _finalize_complete(state, par, lang, progress_cb):
+    """Apply LG_MIN trimming and build the final 'complete' response payload."""
+    df = state["processed_df"]
+    df = _process_short_ranges(
+        df, par["LG_MIN"]["value"], lang=lang, progress_callback=progress_cb
+    )
+    state["processed_df"] = df
+    state["pipeline_status"] = _PipelineStatus.COMPLETE
+
+    plots = state.get("plots", {})
+    plots["processed"] = _build_processed_plot(df, lang=lang)
+    state["plots"] = plots
+    return plots
+
+
+@bp.route('/load', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
+def anomaly_load() -> Tuple[Response, int]:
+    """
+    Validate the uploaded CSV and return original + slope plots.
+
+    Body: {"uploadId": str, "filename": str | None, "lang": "en"|"de"}
+    Returns: {plots: {original, slope}, columnName, dtAvgH} OR {error}
+    """
+    cleanup_all_expired_data()
+
+    try:
+        data = request.get_json(silent=True) or {}
+        upload_id = data.get("uploadId") or data.get("upload_id")
+        filename = data.get("filename")
+        lang = _normalize_lang(data.get("lang"))
+
+        if not upload_id:
+            return jsonify({"error": "uploadId is required"}), 400
+
+        # Locate the assembled file. The chunk-upload flow already stored it at
+        # UPLOAD_FOLDER/<upload_id>/<filename>.
+        upload_dir = _Path(UPLOAD_FOLDER) / upload_id
+        if not upload_dir.exists() or not upload_dir.is_dir():
+            return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
+
+        if filename:
+            try:
+                filename = sanitize_filename(filename)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            file_path = upload_dir / filename
+        else:
+            csv_files = sorted(upload_dir.glob("*.csv"))
+            if not csv_files:
+                return jsonify({"error": "No CSV file present in upload directory"}), 404
+            file_path = csv_files[0]
+            filename = file_path.name
+
+        try:
+            df, dt_avg = _load_csv(
+                file_path,
+                lang=lang,
+                allowed_root=_Path(UPLOAD_FOLDER),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        # Persist anomaly state — owner-aware. Reject if upload_id is owned
+        # by someone else (do not leak existence: 404).
+        state = _init_anomaly(upload_id, g.user_id, lang)
+        if state is None:
+            return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
+
+        state["filename"] = filename
+        state["file_path"] = str(file_path)
+        state["original_df"] = df
+        state["processed_df"] = None  # allocated on first pipeline mutation
+        state["dt_avg"] = dt_avg
+        state["pipeline_status"] = _PipelineStatus.LOADED
+        state["plots"] = {}
+        state["intermediate"] = {"stl_result": None, "lstm_results_df": None}
+
+        # Build response plots
+        original_plot = _build_original_plot(df, lang=lang)
+        df_slope = _slope_calc(df)
+        slope_plot = _build_slope_plot(df_slope, lang=lang)
+
+        return jsonify({
+            "plots": {"original": original_plot, "slope": slope_plot},
+            "columnName": str(df.columns[1]),
+            "dtAvgH": dt_avg.total_seconds() / 3600.0,
+            "rowCount": int(len(df)),
+            "status": _PipelineStatus.LOADED,
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in /load: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@bp.route('/validate-param', methods=['POST'])
+@require_auth
+@require_subscription
+def anomaly_validate_param() -> Tuple[Response, int]:
+    """
+    Validate a single parameter on input change.
+
+    Body: {"name": "EQ_MAX"|"GAP_MAX"|...|"SBAD.CHG_MAX"|"STL.PERIOD_H"|...,
+           "value": Any, "currentParams": {...}, "lang": "en"|"de",
+           "uploadId": str | None}
+    Returns: {ok: true} or {error: localized message}
+
+    Always returns HTTP 200 with `{ok: bool, error?: str}` payload, even on
+    invalid input — clients use this on every keystroke and 4xx would noise
+    the network panel.
+    """
+    cleanup_all_expired_data()
+
+    try:
+        data = request.get_json(silent=True) or {}
+        name = data.get("name")
+        value = data.get("value")
+        current = data.get("currentParams") or {}
+        lang = _normalize_lang(data.get("lang"))
+        upload_id = data.get("uploadId") or data.get("upload_id")
+
+        if not name:
+            return jsonify({"error": "Parameter 'name' is required"}), 400
+
+        # dt_avg comes from the loaded session (needed for STL period check)
+        dt_avg = None
+        if upload_id:
+            state = _get_anomaly(upload_id, g.user_id)
+            if state is not None:
+                dt_avg = state.get("dt_avg")
+
+        par = _build_par_dict(current)
+        try:
+            _validate_param_single(name, value, par, dt_avg, lang)
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 200
+
+        return jsonify({"ok": True}), 200
+
+    except Exception as e:
+        logger.error(f"Error in /validate-param: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@bp.route('/start', methods=['POST'])
+@require_auth
+@require_subscription
+@check_processing_limit
+def anomaly_start() -> Tuple[Response, int]:
+    """
+    Run preprocess → constants → zeros → range → SBAD, then route to next state.
+
+    Body: {"uploadId": str, "params": {...}, "lang": "en"|"de"}
+    Returns one of:
+      - {status: "awaiting_stl_threshold", plots: {stl: [...]}, sessionId}
+      - {status: "awaiting_lstm_threshold", plots: {lstmError}, sessionId}
+      - {status: "complete", plots: {processed}, processedCsvUrl?, sessionId}
+      - {error: localized}
+    """
+    cleanup_all_expired_data()
+
+    try:
+        data = request.get_json(silent=True) or {}
+        upload_id = data.get("uploadId") or data.get("upload_id")
+        raw_params = data.get("params") or {}
+        lang = _normalize_lang(data.get("lang"))
+
+        if not upload_id:
+            return jsonify({"error": "uploadId is required"}), 400
+
+        state = _get_anomaly(upload_id, g.user_id)
+        if state is None or state.get("original_df") is None:
+            return jsonify({"error": "Session not loaded — call /load first"}), 404
+
+        # Build par dict with localized names so error messages match Python script.
+        par = _build_par_dict(raw_params)
+
+        # Preflight validation — same rules as Python L790-921.
+        try:
+            _validate_par_dict(par, dt_avg=state.get("dt_avg"), lang=lang)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        # Atomic claim — refuses concurrent /start for the same upload.
+        if not _try_acquire_pipeline(upload_id, g.user_id):
+            return jsonify({"error": "Pipeline already running for this upload"}), 409
+
+        state["params"] = par
+        state["lang"] = lang
+        progress_cb = _make_progress_callback(upload_id)
+
+        # Run the deterministic phases.
+        try:
+            _run_preprocess_and_sbad(state, par, lang, progress_cb)
+        except ValueError as e:
+            state["pipeline_status"] = _PipelineStatus.ERROR
+            return jsonify({"error": str(e)}), 400
+
+        plots = state.get("plots", {})
+
+        # Branch: STL pause first if enabled. When STL.run AND LSTM.run are
+        # both true, LSTM is run inside /stl-threshold AFTER the user submits
+        # the STL threshold (see T5).
+        if par["STL"]["run"]:
+            try:
+                period = int(par["STL"]["var"]["PERIOD"]["value"])
+                stl_result, time_values = _prepare_stl(
+                    state["processed_df"], period, lang=lang
+                )
+            except ValueError as e:
+                state["pipeline_status"] = _PipelineStatus.ERROR
+                return jsonify({"error": str(e)}), 400
+
+            state["intermediate"]["stl_result"] = stl_result
+            state["pipeline_status"] = _PipelineStatus.AWAITING_STL_THRESHOLD
+
+            stl_plots = _build_stl_decomposition(stl_result, time_values, lang=lang)
+            plots["stlDecomposition"] = stl_plots
+            state["plots"] = plots
+
+            return jsonify({
+                "status": _PipelineStatus.AWAITING_STL_THRESHOLD,
+                "plots": {"stlDecomposition": stl_plots},
+                "sessionId": upload_id,
+            }), 200
+
+        # Else branch: LSTM pause if enabled (without STL).
+        if par["LSTM"]["run"]:
+            from domains.adjustments.services.anomaly_pipeline import prepare_lstm as _prep_lstm
+            try:
+                # validate_par_dict guarantees PERIOD is populated for LSTM.run=true.
+                period = int(par["LSTM"]["var"]["PERIOD"]["value"])
+                results_df, _model = _prep_lstm(
+                    state["processed_df"],
+                    period,
+                    par["LSTM"]["var"]["NEURONS"]["value"],
+                    par["LSTM"]["var"]["EPOCHS"]["value"],
+                    par["LSTM"]["var"]["BATCH_SIZE"]["value"],
+                    lang=lang,
+                    progress_callback=progress_cb,
+                )
+            except ValueError as e:
+                state["pipeline_status"] = _PipelineStatus.ERROR
+                return jsonify({"error": str(e)}), 400
+
+            state["intermediate"]["lstm_results_df"] = results_df
+            state["pipeline_status"] = _PipelineStatus.AWAITING_LSTM_THRESHOLD
+
+            lstm_error_plot = _build_lstm_error(results_df, lang=lang)
+            plots["lstmError"] = lstm_error_plot
+            state["plots"] = plots
+
+            return jsonify({
+                "status": _PipelineStatus.AWAITING_LSTM_THRESHOLD,
+                "plots": {"lstmError": lstm_error_plot},
+                "sessionId": upload_id,
+            }), 200
+
+        # Else: no pauses → finalize directly.
+        plots = _finalize_complete(state, par, lang, progress_cb)
+        return jsonify({
+            "status": _PipelineStatus.COMPLETE,
+            "plots": {"processed": plots["processed"]},
+            "sessionId": upload_id,
+        }), 200
+
+    except Exception as e:
+        # Reset pipeline_status so subsequent /start can retry without 409.
+        try:
+            err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
+            if err_state is not None:
+                err_state["pipeline_status"] = _PipelineStatus.ERROR
+        except Exception:
+            pass
+        logger.error(f"Error in /start: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Pause-resume endpoints
+# ---------------------------------------------------------------------------
+
+def _save_processed_csv(state, lang) -> Optional[str]:
+    """
+    Persist processed_df next to the original upload as `<stem>_1.csv` (port of
+    Python L1568 with the filename bug fixed: 'test2.csv_1.csv' → 'test2_1.csv').
+    Returns the absolute path on disk, or None if no processed data.
+    """
+    df = state.get("processed_df")
+    if df is None:
+        return None
+    file_path = state.get("file_path")
+    if not file_path:
+        return None
+    src = _Path(file_path)
+    out = src.with_name(f"{src.stem}_1{src.suffix}")
+    df.to_csv(out, index=False, sep=";")
+    return str(out)
+
+
+@bp.route('/stl-threshold', methods=['POST'])
+@require_auth
+@require_subscription
+def anomaly_stl_threshold() -> Tuple[Response, int]:
+    """
+    Apply user-supplied STL threshold; chain to LSTM pause or finalize.
+
+    Body: {"uploadId": str, "threshold": float, "lang": "en"|"de"}
+    """
+    cleanup_all_expired_data()
+
+    upload_id = None
+    try:
+        data = request.get_json(silent=True) or {}
+        upload_id = data.get("uploadId") or data.get("upload_id")
+        threshold = data.get("threshold")
+        lang = _normalize_lang(data.get("lang"))
+
+        if not upload_id:
+            return jsonify({"error": "uploadId is required"}), 400
+
+        state = _get_anomaly(upload_id, g.user_id)
+        if state is None:
+            return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
+        if state.get("pipeline_status") != _PipelineStatus.AWAITING_STL_THRESHOLD:
+            return jsonify({"error": "Pipeline is not awaiting an STL threshold"}), 409
+        stl_result = state.get("intermediate", {}).get("stl_result")
+        if stl_result is None:
+            return jsonify({"error": "STL intermediate state missing — re-run /start"}), 409
+
+        # Validate threshold using same rules as Python L1260-1271
+        try:
+            t_descriptor = {"value": threshold, "unit": None,
+                            "name": {"en": "Threshold for anomaly detection",
+                                     "de": "Schwellwert für die Anomalieerkennung"}}
+            from domains.adjustments.services.anomaly_validators import (
+                check_float as _check_float,
+                check_ge_zero as _check_ge_zero,
+            )
+            t_descriptor["value"] = _check_float(t_descriptor, lang)
+            _check_ge_zero(t_descriptor, lang)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        if not _try_acquire_pipeline(upload_id, g.user_id):
+            return jsonify({"error": "Pipeline already running for this upload"}), 409
+        state["pipeline_status"] = _PipelineStatus.APPLYING_STL
+
+        par = state["params"]
+        progress_cb = _make_progress_callback(upload_id)
+
+        # Apply STL — NaN anomalies and interpolate.
+        df, anomaly_mask = _apply_stl_threshold(
+            state["processed_df"],
+            stl_result,
+            t_descriptor["value"],
+            par["GAP_MAX"]["value"],
+            par["DEC"]["value"],
+            lang=lang,
+        )
+        state["processed_df"] = df
+
+        # Build STL anomalies overlay (Python L1277-1305)
+        # Use original_df as the canvas (NaN-ed values are gone from df).
+        stl_overlay = _build_anomaly_overlay(
+            state["original_df"],
+            state["original_df"].columns[0],
+            state["original_df"].columns[1],
+            anomaly_mask,
+            title=_tr("Anomalies detected by STL", "Entfernte Anomalien durch STL", lang),
+            yaxis_label=str(state["original_df"].columns[1]),
+            lang=lang,
+            base_label=_tr("Original data", "Originaldaten", lang),
+        )
+        state["plots"]["stlAnomalies"] = stl_overlay
+        # STL intermediate is consumed — free the memory.
+        state["intermediate"]["stl_result"] = None
+
+        # Chain into LSTM pause if also enabled.
+        if par["LSTM"]["run"]:
+            try:
+                period = int(par["LSTM"]["var"]["PERIOD"]["value"])
+                results_df, _model = _prepare_lstm(
+                    df,
+                    period,
+                    par["LSTM"]["var"]["NEURONS"]["value"],
+                    par["LSTM"]["var"]["EPOCHS"]["value"],
+                    par["LSTM"]["var"]["BATCH_SIZE"]["value"],
+                    lang=lang,
+                    progress_callback=progress_cb,
+                )
+            except ValueError as e:
+                state["pipeline_status"] = _PipelineStatus.ERROR
+                return jsonify({"error": str(e)}), 400
+
+            state["intermediate"]["lstm_results_df"] = results_df
+            state["pipeline_status"] = _PipelineStatus.AWAITING_LSTM_THRESHOLD
+            lstm_error_plot = _build_lstm_error(results_df, lang=lang)
+            state["plots"]["lstmError"] = lstm_error_plot
+            return jsonify({
+                "status": _PipelineStatus.AWAITING_LSTM_THRESHOLD,
+                "plots": {"stlAnomalies": stl_overlay, "lstmError": lstm_error_plot},
+                "sessionId": upload_id,
+            }), 200
+
+        # Else: finalize.
+        plots = _finalize_complete(state, par, lang, progress_cb)
+        csv_path = _save_processed_csv(state, lang)
+        return jsonify({
+            "status": _PipelineStatus.COMPLETE,
+            "plots": {"stlAnomalies": stl_overlay, "processed": plots["processed"]},
+            "processedCsvFilename": _Path(csv_path).name if csv_path else None,
+            "sessionId": upload_id,
+        }), 200
+
+    except Exception as e:
+        try:
+            err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
+            if err_state is not None:
+                err_state["pipeline_status"] = _PipelineStatus.ERROR
+        except Exception:
+            pass
+        logger.error(f"Error in /stl-threshold: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@bp.route('/lstm-threshold', methods=['POST'])
+@require_auth
+@require_subscription
+def anomaly_lstm_threshold() -> Tuple[Response, int]:
+    """Apply user-supplied LSTM threshold and finalize. Body: {uploadId, threshold, lang}."""
+    cleanup_all_expired_data()
+
+    upload_id = None
+    try:
+        data = request.get_json(silent=True) or {}
+        upload_id = data.get("uploadId") or data.get("upload_id")
+        threshold = data.get("threshold")
+        lang = _normalize_lang(data.get("lang"))
+
+        if not upload_id:
+            return jsonify({"error": "uploadId is required"}), 400
+
+        state = _get_anomaly(upload_id, g.user_id)
+        if state is None:
+            return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
+        if state.get("pipeline_status") != _PipelineStatus.AWAITING_LSTM_THRESHOLD:
+            return jsonify({"error": "Pipeline is not awaiting an LSTM threshold"}), 409
+        results_df = state.get("intermediate", {}).get("lstm_results_df")
+        if results_df is None:
+            return jsonify({"error": "LSTM intermediate state missing — re-run /start"}), 409
+
+        try:
+            t_descriptor = {"value": threshold, "unit": None,
+                            "name": {"en": "Threshold for anomaly detection",
+                                     "de": "Schwellwert für die Anomalieerkennung"}}
+            from domains.adjustments.services.anomaly_validators import (
+                check_float as _check_float,
+                check_ge_zero as _check_ge_zero,
+            )
+            t_descriptor["value"] = _check_float(t_descriptor, lang)
+            _check_ge_zero(t_descriptor, lang)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        if not _try_acquire_pipeline(upload_id, g.user_id):
+            return jsonify({"error": "Pipeline already running for this upload"}), 409
+        state["pipeline_status"] = _PipelineStatus.APPLYING_LSTM
+
+        par = state["params"]
+        progress_cb = _make_progress_callback(upload_id)
+
+        df, anomalies_df = _apply_lstm_threshold(
+            state["processed_df"],
+            results_df,
+            t_descriptor["value"],
+            par["GAP_MAX"]["value"],
+            par["DEC"]["value"],
+            lang=lang,
+        )
+        state["processed_df"] = df
+
+        # Build LSTM anomalies overlay (Python L1423-1453) — uses the
+        # results_df rows; NOT every original_df row had a forecast.
+        anomaly_mask_full = (
+            state["original_df"].iloc[:, 0]
+                .isin(anomalies_df["timestamp"])
+                .values
+        )
+        lstm_overlay = _build_anomaly_overlay(
+            state["original_df"],
+            state["original_df"].columns[0],
+            state["original_df"].columns[1],
+            anomaly_mask_full,
+            title=_tr("Detected anomalies by LSTM", "Erkannte Anomalien durch LSTM", lang),
+            yaxis_label=str(state["original_df"].columns[1]),
+            lang=lang,
+            base_label=_tr("Original value", "Originalwert", lang),
+        )
+        state["plots"]["lstmAnomalies"] = lstm_overlay
+        state["intermediate"]["lstm_results_df"] = None
+
+        plots = _finalize_complete(state, par, lang, progress_cb)
+        csv_path = _save_processed_csv(state, lang)
+        return jsonify({
+            "status": _PipelineStatus.COMPLETE,
+            "plots": {"lstmAnomalies": lstm_overlay, "processed": plots["processed"]},
+            "processedCsvFilename": _Path(csv_path).name if csv_path else None,
+            "sessionId": upload_id,
+        }), 200
+
+    except Exception as e:
+        try:
+            err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
+            if err_state is not None:
+                err_state["pipeline_status"] = _PipelineStatus.ERROR
+        except Exception:
+            pass
+        logger.error(f"Error in /lstm-threshold: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@bp.route('/use-processed', methods=['POST'])
+@require_auth
+@require_subscription
+def anomaly_use_processed() -> Tuple[Response, int]:
+    """
+    Promote processed_df to original_df so the user can iterate the pipeline
+    on the cleaned data without re-uploading. Returns refreshed {original, slope} plots.
+
+    Markus's requirement: "Wenn man diesen Button betätigt, dann sollen die
+    verarbeiteten Daten zu den Originaldaten werden."
+    """
+    cleanup_all_expired_data()
+
+    try:
+        data = request.get_json(silent=True) or {}
+        upload_id = data.get("uploadId") or data.get("upload_id")
+        lang = _normalize_lang(data.get("lang"))
+
+        if not upload_id:
+            return jsonify({"error": "uploadId is required"}), 400
+
+        state = _get_anomaly(upload_id, g.user_id)
+        if state is None:
+            return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
+        if state.get("processed_df") is None:
+            return jsonify({"error": "No processed data available — run pipeline first"}), 409
+        # Block while pipeline is mid-run; only promote after a clean COMPLETE
+        # to avoid clobbering /start state mid-flight (race with /start, etc.).
+        if state.get("pipeline_status") != _PipelineStatus.COMPLETE:
+            return jsonify({"error": "Pipeline must complete before promoting processed data"}), 409
+
+        # Promote
+        state["original_df"] = state["processed_df"].copy()
+        state["processed_df"] = None
+        state["pipeline_status"] = _PipelineStatus.LOADED
+        state["plots"] = {}
+        state["intermediate"] = {"stl_result": None, "lstm_results_df": None}
+        state["lang"] = lang
+
+        df = state["original_df"]
+        original_plot = _build_original_plot(df, lang=lang)
+        df_slope = _slope_calc(df)
+        slope_plot = _build_slope_plot(df_slope, lang=lang)
+
+        return jsonify({
+            "status": _PipelineStatus.LOADED,
+            "plots": {"original": original_plot, "slope": slope_plot},
+            "rowCount": int(len(df)),
+            "sessionId": upload_id,
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in /use-processed: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@bp.route('/processed/<upload_id>/<filename>', methods=['GET'])
+@require_auth
+@require_subscription
+def anomaly_processed_download(upload_id: str, filename: str):
+    """
+    Stream a previously written processed CSV. Authenticated; the file must
+    belong to a session owned by the caller (otherwise 404 — enumeration-safe).
+    """
+    cleanup_all_expired_data()
+
+    state = _get_anomaly(upload_id, g.user_id)
+    if state is None:
+        return jsonify({"error": "Not found"}), 404
+
+    try:
+        clean_filename = sanitize_filename(filename)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    upload_dir = _Path(UPLOAD_FOLDER) / upload_id
+    candidate = (upload_dir / clean_filename).resolve()
+    try:
+        candidate.relative_to(_Path(UPLOAD_FOLDER).resolve())
+    except ValueError:
+        return jsonify({"error": "Invalid path"}), 400
+
+    if not candidate.exists() or not candidate.is_file():
+        return jsonify({"error": "Not found"}), 404
+
+    from flask import send_file
+    return send_file(
+        candidate,
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=clean_filename,
+    )
