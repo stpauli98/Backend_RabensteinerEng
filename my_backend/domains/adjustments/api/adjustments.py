@@ -1204,7 +1204,10 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
                     progress_callback=progress_cb,
                 )
             except ValueError as e:
-                state["pipeline_status"] = _PipelineStatus.ERROR
+                # Recoverable validation failure (e.g. NaN-from-LSTM): keep pipeline
+                # retryable so the user can submit a different STL threshold. Only the
+                # outer except-Exception block (catastrophic errors) should set ERROR.
+                state["pipeline_status"] = _PipelineStatus.AWAITING_STL_THRESHOLD
                 return jsonify({"error": str(e)}), 400
 
             state["intermediate"]["lstm_results_df"] = results_df

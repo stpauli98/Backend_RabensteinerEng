@@ -433,6 +433,58 @@ def test_stl_threshold_wrong_state_returns_409(app, staged_test2):
     assert _status(r) == 409
 
 
+def test_stl_threshold_lstm_nan_keeps_pipeline_retryable(app, staged_test2, monkeypatch):
+    """LSTM ValueError (e.g. NaN-from-LSTM) must leave pipeline in AWAITING_STL_THRESHOLD.
+
+    Bug: the inner except-ValueError block used to set pipeline_status=ERROR,
+    which caused a subsequent /stl-threshold submit to return 409
+    'Pipeline is not awaiting an STL threshold', permanently locking the user out.
+    The fix keeps the status retryable; only the outer except-Exception sets ERROR.
+    """
+    upload_id, _ = staged_test2
+
+    # Run /start with STL + LSTM enabled so we reach AWAITING_STL_THRESHOLD.
+    _load_and_start(app, upload_id, _default_params(stl_run=True, lstm_run=True))
+
+    from domains.adjustments.services.state_manager import get_anomaly_state
+    state = get_anomaly_state(upload_id, USER_A)
+    assert state["pipeline_status"] == PipelineStatus.AWAITING_STL_THRESHOLD
+
+    # Patch _prepare_lstm to raise ValueError (simulates NaN in LSTM input).
+    monkeypatch.setattr(
+        adj_module,
+        "_prepare_lstm",
+        lambda *a, **kw: (_ for _ in ()).throw(ValueError("NaN im Datensatz — LSTM kann nicht ausgeführt werden")),
+    )
+
+    # First submit: LSTM raises ValueError → must get 400, NOT 500.
+    r1 = _post_json(app, adj_module.anomaly_stl_threshold,
+                    "/api/adjustmentsOfData/stl-threshold",
+                    {"uploadId": upload_id, "threshold": 1.5, "lang": "de"})
+    assert _status(r1) == 400
+    assert "NaN" in _body(r1)["error"]
+
+    # KEY ASSERTION: pipeline_status must remain AWAITING_STL_THRESHOLD, not ERROR.
+    state = get_anomaly_state(upload_id, USER_A)
+    assert state["pipeline_status"] == PipelineStatus.AWAITING_STL_THRESHOLD, (
+        f"Expected AWAITING_STL_THRESHOLD but got {state['pipeline_status']!r}. "
+        "Retry would have returned 409 'Pipeline is not awaiting an STL threshold'."
+    )
+
+    # Second submit (with different threshold): must NOT return 409.
+    # The STL result was consumed on first submit, so the second will hit the
+    # missing stl_result guard (409 with a different message). That is acceptable —
+    # the important thing is it is not locked out due to ERROR state.
+    r2 = _post_json(app, adj_module.anomaly_stl_threshold,
+                    "/api/adjustmentsOfData/stl-threshold",
+                    {"uploadId": upload_id, "threshold": 2.0, "lang": "de"})
+    # Must NOT be the state-mismatch 409 "Pipeline is not awaiting an STL threshold"
+    body2 = _body(r2)
+    assert "Pipeline is not awaiting an STL threshold" not in body2.get("error", ""), (
+        "Second submit was blocked by ERROR state instead of proceeding to LSTM logic."
+    )
+
+
 # ---------------------------------------------------------------------------
 # /use-processed
 # ---------------------------------------------------------------------------
