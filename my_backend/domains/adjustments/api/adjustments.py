@@ -675,9 +675,24 @@ def _make_progress_callback(upload_id: str):
     """Build a callable that emits SocketIO `anomaly_progress` events.
 
     Pipeline phases call `cb(label, fraction)` periodically; the callback
-    debounces by fraction delta to avoid SocketIO flooding.
+    debounces by fraction delta to avoid SocketIO flooding. After the first
+    meaningful progress (>5%, >1s elapsed) the payload includes etaFormatted
+    so the frontend overlay can render an ETA.
     """
-    state_holder = {"last_label": None, "last_fraction": -1.0}
+    state_holder = {
+        "last_label": None,
+        "last_fraction": -1.0,
+        "started_at": time.time(),
+    }
+
+    def _format_eta(seconds: float) -> str:
+        if seconds < 1:
+            return "<1s"
+        if seconds < 60:
+            return f"{int(round(seconds))}s"
+        m = int(seconds // 60)
+        s = int(round(seconds - m * 60))
+        return f"{m}m {s}s" if s > 0 else f"{m}m"
 
     def cb(label: str, fraction: float) -> None:
         try:
@@ -686,13 +701,18 @@ def _make_progress_callback(upload_id: str):
             if (state_holder["last_label"] != label
                     or f - state_holder["last_fraction"] >= 0.05
                     or f >= 0.999):
+                elapsed = time.time() - state_holder["started_at"]
+                payload = {
+                    "uploadId": upload_id,
+                    "step": label,
+                    "progress": int(round(f * 100)),
+                }
+                if f >= 0.05 and elapsed > 1.0:
+                    remaining = elapsed * (1 - f) / f
+                    payload["etaFormatted"] = _format_eta(remaining)
                 _socketio.emit(
                     "anomaly_progress",
-                    {
-                        "uploadId": upload_id,
-                        "step": label,
-                        "progress": int(round(f * 100)),
-                    },
+                    payload,
                     room=upload_id,
                 )
                 state_holder["last_label"] = label

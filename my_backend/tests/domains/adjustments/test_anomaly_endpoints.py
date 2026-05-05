@@ -647,3 +647,52 @@ def test_500_does_not_leak_internal_message(app, monkeypatch, staged_test2):
     body = _body(r)
     assert "super secret" not in body["error"]
     assert "Internal server error" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# _make_progress_callback: etaFormatted field
+# ---------------------------------------------------------------------------
+
+def test_anomaly_progress_callback_emits_eta_after_threshold(monkeypatch):
+    """etaFormatted appears in payload only after >=5% progress AND >1s elapsed."""
+    import time as _time
+    from domains.adjustments.api.adjustments import _make_progress_callback
+
+    emitted = []
+    monkeypatch.setattr(
+        adj_module._socketio,
+        "emit",
+        lambda evt, payload, room=None: emitted.append((evt, payload, room)),
+    )
+
+    # Control time via monkeypatching time.time in the adjustments module
+    fake_now = [1000.0]
+    monkeypatch.setattr("domains.adjustments.api.adjustments.time.time", lambda: fake_now[0])
+
+    cb = _make_progress_callback("upload-eta-test")
+
+    # First emit: 0% progress, 0 elapsed -> no ETA
+    cb("preprocess", 0.0)
+    assert len(emitted) == 1
+    assert "etaFormatted" not in emitted[0][1]
+
+    # Tick 0.5s, label changes to 'sbad', 4% progress — elapsed < 1s -> no ETA
+    fake_now[0] += 0.5
+    cb("sbad", 0.04)
+    assert len(emitted) == 2
+    assert "etaFormatted" not in emitted[1][1]
+
+    # Tick 1.5s more (total elapsed ~2s), still 'sbad', 50% progress -> ETA present
+    # remaining = 2 * (1 - 0.5) / 0.5 = 2s -> "2s"
+    fake_now[0] += 1.5
+    cb("sbad", 0.50)
+    assert len(emitted) == 3
+    assert "etaFormatted" in emitted[2][1]
+    assert emitted[2][1]["etaFormatted"] == "2s"
+
+    # Final emit at 100%: remaining ~0 -> "<1s"
+    fake_now[0] += 1.0
+    cb("sbad", 1.0)
+    assert len(emitted) == 4
+    assert "etaFormatted" in emitted[3][1]
+    assert emitted[3][1]["etaFormatted"] == "<1s"
