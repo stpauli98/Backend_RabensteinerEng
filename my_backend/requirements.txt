@@ -21,6 +21,9 @@ numpy>=1.26.3,<3.0
 scikit-learn>=1.5.1,<2.0
 matplotlib>=3.8.2,<4.0
 
+# Required by anomaly detection pipeline (STL decomposition)
+statsmodels>=0.14.1,<1.0
+
 # Heavy packages
 seaborn>=0.13.1,<1.0
 tensorflow==2.19.0
