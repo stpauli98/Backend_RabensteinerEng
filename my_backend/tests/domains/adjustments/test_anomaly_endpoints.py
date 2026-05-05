@@ -600,6 +600,38 @@ def test_full_pipeline_iteration_de(app, staged_test2):
     assert "slope" in body["plots"]
 
 
+def test_cancel_pipeline_releases_lock(staged_test2, app):
+    """Cancel during a running pipeline should release the lock to LOADED."""
+    upload_id, _ = staged_test2
+    from domains.adjustments.services.state_manager import (
+        init_anomaly_state, set_pipeline_status, get_anomaly_state, PipelineStatus
+    )
+    init_anomaly_state(upload_id, USER_A, lang='en')
+    set_pipeline_status(upload_id, USER_A, PipelineStatus.RUNNING)
+
+    from domains.adjustments.api.adjustments import cancel_pipeline as view
+    body = {'uploadId': upload_id}
+    result = _post_json(app, view, '/cancel-pipeline', body, user_id=USER_A)
+    assert _status(result) == 200
+    body_resp = _body(result)
+    assert body_resp.get('status') == 'cancelled'
+
+    state = get_anomaly_state(upload_id, USER_A)
+    assert state['pipeline_status'] == PipelineStatus.LOADED
+
+
+def test_cancel_pipeline_other_user_404(staged_test2, app):
+    """Cancel from a different user must not leak — return 404."""
+    upload_id, _ = staged_test2
+    from domains.adjustments.services.state_manager import init_anomaly_state
+    init_anomaly_state(upload_id, USER_A, lang='en')
+
+    from domains.adjustments.api.adjustments import cancel_pipeline as view
+    body = {'uploadId': upload_id}
+    result = _post_json(app, view, '/cancel-pipeline', body, user_id=USER_B)
+    assert _status(result) == 404
+
+
 def test_500_does_not_leak_internal_message(app, monkeypatch, staged_test2):
     """Unexpected exception must not echo str(e) to the client."""
     upload_id, _ = staged_test2

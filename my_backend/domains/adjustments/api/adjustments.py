@@ -1335,6 +1335,33 @@ def anomaly_use_processed() -> Tuple[Response, int]:
         return jsonify({"error": "Internal server error"}), 500
 
 
+@bp.route('/cancel-pipeline', methods=['POST'])
+@require_auth
+@require_subscription
+def cancel_pipeline():
+    """Release the pipeline lock so the user can immediately retry /start.
+
+    Idempotent: if pipeline already idle/loaded, still returns 200.
+    Returns 404 if upload_id is unknown OR owned by a different user.
+    """
+    data = request.get_json(silent=True) or {}
+    upload_id = data.get('uploadId')
+    if not upload_id:
+        return jsonify({'error': 'uploadId required'}), 400
+
+    from domains.adjustments.services.state_manager import (
+        get_anomaly_state as _cancel_get_state,
+        reset_anomaly_intermediate as _cancel_reset,
+    )
+    state = _cancel_get_state(upload_id, g.user_id)
+    if state is None:
+        return jsonify({'error': 'Upload not found'}), 404
+
+    _cancel_reset(upload_id, g.user_id)
+    logger.info(f'Pipeline cancelled for upload_id={upload_id} by user={g.user_id[:8]}...')
+    return jsonify({'status': 'cancelled'}), 200
+
+
 @bp.route('/processed/<upload_id>/<filename>', methods=['GET'])
 @require_auth
 @require_subscription
