@@ -24,6 +24,7 @@ from typing import Optional, Tuple
 import pandas as pd
 
 from domains.adjustments.services.anomaly_helpers import tr
+from domains.adjustments.debug_log import dlog
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ def load_and_validate_csv(
 
     # 2. delimiter
     actual_del = detect_delimiter(path)
+    dlog("DELIMITER_DETECTED", delimiter=actual_del)
     if actual_del != _REQ["DEL"]:
         raise ValueError(
             tr(
@@ -195,11 +197,15 @@ def load_and_validate_csv(
     value_col = df.columns[1]
     df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
 
+    dlog("CSV_PARSED", rows=len(df), cols=list(df.columns))
+
     # 8. time-step deviation ≤ 0.1 %
     dt_series = df[utc_col].diff().dropna()
     dt_avg = dt_series.mean()
     dt_dev = (dt_series - dt_avg).abs() / dt_avg
+    dlog("TIME_GRID_CHECK", dt_avg_s=dt_avg.total_seconds(), n_samples=len(dt_series))
     if (dt_dev > 0.001).any():
+        dlog("TIME_GRID_FAIL", dt_dev_max=float(dt_dev.max()), threshold=0.001)
         raise ValueError(
             tr(
                 "Time step deviates by more than 0.1% from the mean. "
@@ -209,5 +215,6 @@ def load_and_validate_csv(
                 lang,
             )
         )
+    dlog("TIME_GRID_OK")
 
     return df, dt_avg

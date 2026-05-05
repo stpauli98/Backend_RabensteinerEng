@@ -7,6 +7,8 @@ import time
 import logging
 from typing import Dict, Any, Optional, List
 
+from domains.adjustments.debug_log import dlog, _short
+
 from domains.adjustments.config import (
     CHUNK_BUFFER_TIMEOUT,
     ADJUSTMENT_CHUNKS_TIMEOUT,
@@ -218,7 +220,13 @@ def set_pipeline_status(upload_id: str, user_id: str, status: str) -> bool:
         state = get_anomaly_state(upload_id, user_id)
         if state is None:
             return False
+        old = state.get("pipeline_status")
         state["pipeline_status"] = status
+        dlog("PIPELINE_STATUS",
+             upload=_short(upload_id),
+             user=_short(user_id),
+             old=old,
+             new=status)
         return True
 
 
@@ -248,10 +256,13 @@ def try_acquire_pipeline(upload_id: str, user_id: str) -> bool:
     with _anomaly_state_lock:
         state = adjustment_chunks.get(upload_id, {}).get("anomaly")
         if state is None or state.get("user_id") != user_id:
+            dlog("ACQUIRE_DENIED", upload=_short(upload_id), reason="state_missing_or_owner_mismatch")
             return False
         if state.get("pipeline_status") in _PIPELINE_RUNNING_STATES:
             last_run_at = state.get("running_since", 0.0)
             if time.time() - last_run_at < _PIPELINE_STALE_AFTER_S:
+                dlog("ACQUIRE_DENIED", upload=_short(upload_id), reason="pipeline_busy",
+                     status=state.get("pipeline_status"))
                 return False
             # Stale — force-release and re-acquire below.
             logger.warning(
@@ -261,6 +272,9 @@ def try_acquire_pipeline(upload_id: str, user_id: str) -> bool:
                 state.get("pipeline_status"),
                 _PIPELINE_STALE_AFTER_S,
             )
+            dlog("ACQUIRE_STALE_RELEASE", upload=_short(upload_id),
+                 old_status=state.get("pipeline_status"))
+        dlog("ACQUIRE_OK", upload=_short(upload_id), user=_short(user_id))
         state["pipeline_status"] = PipelineStatus.RUNNING
         state["running_since"] = time.time()
         adjustment_chunks_timestamps[upload_id] = time.time()
@@ -276,6 +290,7 @@ def reset_anomaly_intermediate(upload_id: str, user_id: str) -> bool:
         state["intermediate"] = {"stl_result": None, "lstm_results_df": None}
         state["pipeline_status"] = PipelineStatus.LOADED
         state["plots"] = {}
+        dlog("INTERMEDIATE_RESET", upload=_short(upload_id))
         return True
 
 

@@ -28,6 +28,7 @@ from domains.adjustments.services.anomaly_helpers import (
     tr,
     create_sequences,
 )
+from domains.adjustments.debug_log import log_phase, dlog
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,7 @@ def _attach_units(par):
 # Pipeline phases
 # ---------------------------------------------------------------------------
 
+@log_phase("preprocess_constants")
 def process_constants(
     df: pd.DataFrame,
     eq_max: float,
@@ -286,6 +288,7 @@ def process_constants(
     return df
 
 
+@log_phase("preprocess_zeros")
 def process_zeros(
     df: pd.DataFrame,
     el0: bool,
@@ -313,6 +316,7 @@ def process_zeros(
     return df
 
 
+@log_phase("preprocess_range")
 def process_range(
     df: pd.DataFrame,
     v_max: Optional[float],
@@ -348,6 +352,7 @@ def process_range(
     return df
 
 
+@log_phase("sbad")
 def process_sbad(
     df: pd.DataFrame,
     chg_max: float,
@@ -488,6 +493,7 @@ def process_sbad(
     return df, count_an[-1]
 
 
+@log_phase("stl_prep")
 def prepare_stl(
     df: pd.DataFrame,
     period: int,
@@ -519,6 +525,7 @@ def prepare_stl(
     return result, time_values
 
 
+@log_phase("stl_apply")
 def apply_stl_threshold(
     df: pd.DataFrame,
     stl_result,
@@ -549,6 +556,7 @@ def apply_stl_threshold(
     return df, stl_filter.values
 
 
+@log_phase("lstm_prep")
 def prepare_lstm(
     df: pd.DataFrame,
     period: int,
@@ -631,6 +639,7 @@ def prepare_lstm(
     return results, model
 
 
+@log_phase("lstm_apply")
 def apply_lstm_threshold(
     df: pd.DataFrame,
     results_df: pd.DataFrame,
@@ -668,6 +677,7 @@ def apply_lstm_threshold(
     return df, anomalies
 
 
+@log_phase("finalize")
 def process_short_ranges(
     df: pd.DataFrame,
     lg_min: Optional[float],

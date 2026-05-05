@@ -662,6 +662,7 @@ from domains.adjustments.services.anomaly_validators import (
     validate_par_dict as _validate_par_dict,
     validate_param_single as _validate_param_single,
 )
+from domains.adjustments.debug_log import log_request, log_phase, dlog, _short
 
 
 def _normalize_lang(value) -> str:
@@ -698,9 +699,14 @@ def _make_progress_callback(upload_id: str):
         try:
             f = max(0.0, min(1.0, float(fraction)))
             # Always emit on label change, otherwise throttle to 5 % steps.
-            if (state_holder["last_label"] != label
-                    or f - state_holder["last_fraction"] >= 0.05
-                    or f >= 0.999):
+            will_emit = (state_holder["last_label"] != label
+                         or f - state_holder["last_fraction"] >= 0.05
+                         or f >= 0.999)
+            dlog("EMIT_DECISION",
+                 upload=_short(upload_id), step=label, fraction=f"{f:.3f}",
+                 will_emit=will_emit, last_step=state_holder["last_label"],
+                 last_fraction=f"{state_holder['last_fraction']:.3f}")
+            if will_emit:
                 elapsed = time.time() - state_holder["started_at"]
                 payload = {
                     "uploadId": upload_id,
@@ -710,6 +716,12 @@ def _make_progress_callback(upload_id: str):
                 if f >= 0.05 and elapsed > 1.0:
                     remaining = elapsed * (1 - f) / f
                     payload["etaFormatted"] = _format_eta(remaining)
+                    dlog("ETA_COMPUTED",
+                         elapsed_s=f"{elapsed:.2f}",
+                         fraction=f"{f:.3f}",
+                         remaining_s=f"{remaining:.2f}",
+                         formatted=payload["etaFormatted"])
+                dlog("EMIT", room=_short(upload_id), payload=payload)
                 _socketio.emit(
                     "anomaly_progress",
                     payload,
@@ -793,6 +805,7 @@ def _finalize_complete(state, par, lang, progress_cb):
 @require_auth
 @require_subscription
 @check_processing_limit
+@log_request
 def anomaly_load() -> Tuple[Response, int]:
     """
     Validate the uploaded CSV and return original + slope plots.
@@ -830,6 +843,8 @@ def anomaly_load() -> Tuple[Response, int]:
             file_path = csv_files[0]
             filename = file_path.name
 
+        dlog("CSV_RESOLVED", path=str(file_path))
+
         try:
             df, dt_avg = _load_csv(
                 file_path,
@@ -839,11 +854,15 @@ def anomaly_load() -> Tuple[Response, int]:
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
+        dlog("CSV_PARSED", rows=int(len(df)), cols=list(df.columns))
+
         # Persist anomaly state — owner-aware. Reject if upload_id is owned
         # by someone else (do not leak existence: 404).
         state = _init_anomaly(upload_id, g.user_id, lang)
         if state is None:
             return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
+
+        dlog("STATE_INIT", upload=_short(upload_id), state_present=state is not None)
 
         state["filename"] = filename
         state["file_path"] = str(file_path)
@@ -875,6 +894,7 @@ def anomaly_load() -> Tuple[Response, int]:
 @bp.route('/validate-param', methods=['POST'])
 @require_auth
 @require_subscription
+@log_request
 def anomaly_validate_param() -> Tuple[Response, int]:
     """
     Validate a single parameter on input change.
@@ -925,6 +945,7 @@ def anomaly_validate_param() -> Tuple[Response, int]:
 @require_auth
 @require_subscription
 @check_processing_limit
+@log_request
 def anomaly_start() -> Tuple[Response, int]:
     """
     Run preprocess → constants → zeros → range → SBAD, then route to next state.
@@ -997,6 +1018,7 @@ def anomaly_start() -> Tuple[Response, int]:
             plots["stlDecomposition"] = stl_plots
             state["plots"] = plots
 
+            dlog("START_RESPONSE", status=_PipelineStatus.AWAITING_STL_THRESHOLD)
             return jsonify({
                 "status": _PipelineStatus.AWAITING_STL_THRESHOLD,
                 "plots": {"stlDecomposition": stl_plots},
@@ -1029,6 +1051,7 @@ def anomaly_start() -> Tuple[Response, int]:
             plots["lstmError"] = lstm_error_plot
             state["plots"] = plots
 
+            dlog("START_RESPONSE", status=_PipelineStatus.AWAITING_LSTM_THRESHOLD)
             return jsonify({
                 "status": _PipelineStatus.AWAITING_LSTM_THRESHOLD,
                 "plots": {"lstmError": lstm_error_plot},
@@ -1037,6 +1060,7 @@ def anomaly_start() -> Tuple[Response, int]:
 
         # Else: no pauses → finalize directly.
         plots = _finalize_complete(state, par, lang, progress_cb)
+        dlog("START_RESPONSE", status=_PipelineStatus.COMPLETE)
         return jsonify({
             "status": _PipelineStatus.COMPLETE,
             "plots": {"processed": plots["processed"]},
@@ -1080,6 +1104,7 @@ def _save_processed_csv(state, lang) -> Optional[str]:
 @bp.route('/stl-threshold', methods=['POST'])
 @require_auth
 @require_subscription
+@log_request
 def anomaly_stl_threshold() -> Tuple[Response, int]:
     """
     Apply user-supplied STL threshold; chain to LSTM pause or finalize.
@@ -1206,6 +1231,7 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
 @bp.route('/lstm-threshold', methods=['POST'])
 @require_auth
 @require_subscription
+@log_request
 def anomaly_lstm_threshold() -> Tuple[Response, int]:
     """Apply user-supplied LSTM threshold and finalize. Body: {uploadId, threshold, lang}."""
     cleanup_all_expired_data()
@@ -1302,6 +1328,7 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
 @bp.route('/use-processed', methods=['POST'])
 @require_auth
 @require_subscription
+@log_request
 def anomaly_use_processed() -> Tuple[Response, int]:
     """
     Promote processed_df to original_df so the user can iterate the pipeline
@@ -1358,6 +1385,7 @@ def anomaly_use_processed() -> Tuple[Response, int]:
 @bp.route('/cancel-pipeline', methods=['POST'])
 @require_auth
 @require_subscription
+@log_request
 def cancel_pipeline():
     """Release the pipeline lock so the user can immediately retry /start.
 
@@ -1385,6 +1413,7 @@ def cancel_pipeline():
 @bp.route('/processed/<upload_id>/<filename>', methods=['GET'])
 @require_auth
 @require_subscription
+@log_request
 def anomaly_processed_download(upload_id: str, filename: str):
     """
     Stream a previously written processed CSV. Authenticated; the file must

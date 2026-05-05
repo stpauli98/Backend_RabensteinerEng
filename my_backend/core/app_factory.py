@@ -1,6 +1,14 @@
 """Application factory for Flask app"""
 import os
 import logging
+
+# Enable structured debug logging for anomaly detection when DEBUG_ANOMALY=true.
+# Must run at import time so the logger level is set before any request handler runs.
+if os.getenv("DEBUG_ANOMALY", "false").lower() == "true":
+    logging.getLogger("domains.adjustments.debug").setLevel(logging.DEBUG)
+    # Make sure root handlers also pass DEBUG through
+    for _h in logging.getLogger().handlers:
+        _h.setLevel(logging.DEBUG)
 from datetime import datetime as dat
 from flask import Flask, jsonify
 from flask_socketio import SocketIO
