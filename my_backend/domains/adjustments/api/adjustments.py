@@ -672,18 +672,25 @@ def _normalize_lang(value) -> str:
     return "en"
 
 
-def _make_progress_callback(upload_id: str):
+def _make_progress_callback(upload_id: str, started_at: Optional[float] = None):
     """Build a callable that emits SocketIO `anomaly_progress` events.
 
     Pipeline phases call `cb(label, fraction)` periodically; the callback
     debounces by fraction delta to avoid SocketIO flooding. After the first
     meaningful progress (>5%, >1s elapsed) the payload includes etaFormatted
     so the frontend overlay can render an ETA.
+
+    Args:
+        upload_id: The upload identifier used as the SocketIO room.
+        started_at: Optional pipeline-wide start timestamp (time.time()).
+            When provided, ETA accumulates across all phases that share this
+            start time. When omitted, captures time.time() at construction
+            (preserves the prior per-callback behaviour).
     """
     state_holder = {
         "last_label": None,
         "last_fraction": -1.0,
-        "started_at": time.time(),
+        "started_at": started_at if started_at is not None else time.time(),
     }
 
     def _format_eta(seconds: float) -> str:
@@ -987,7 +994,8 @@ def anomaly_start() -> Tuple[Response, int]:
 
         state["params"] = par
         state["lang"] = lang
-        progress_cb = _make_progress_callback(upload_id)
+        pipeline_started_at = time.time()
+        progress_cb = _make_progress_callback(upload_id, started_at=pipeline_started_at)
 
         # Run the deterministic phases.
         try:
@@ -1151,7 +1159,8 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
         state["pipeline_status"] = _PipelineStatus.APPLYING_STL
 
         par = state["params"]
-        progress_cb = _make_progress_callback(upload_id)
+        pipeline_started_at = time.time()
+        progress_cb = _make_progress_callback(upload_id, started_at=pipeline_started_at)
 
         # Apply STL — NaN anomalies and interpolate.
         df, anomaly_mask = _apply_stl_threshold(
@@ -1273,7 +1282,8 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
         state["pipeline_status"] = _PipelineStatus.APPLYING_LSTM
 
         par = state["params"]
-        progress_cb = _make_progress_callback(upload_id)
+        pipeline_started_at = time.time()
+        progress_cb = _make_progress_callback(upload_id, started_at=pipeline_started_at)
 
         df, anomalies_df = _apply_lstm_threshold(
             state["processed_df"],

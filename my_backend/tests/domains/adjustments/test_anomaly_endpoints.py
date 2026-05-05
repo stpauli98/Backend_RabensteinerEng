@@ -696,3 +696,60 @@ def test_anomaly_progress_callback_emits_eta_after_threshold(monkeypatch):
     assert len(emitted) == 4
     assert "etaFormatted" in emitted[3][1]
     assert emitted[3][1]["etaFormatted"] == "<1s"
+
+
+def test_anomaly_progress_callback_uses_external_started_at(monkeypatch):
+    """When started_at is passed externally, ETA accumulates across phases."""
+    from domains.adjustments.api.adjustments import _make_progress_callback
+
+    emitted = []
+    monkeypatch.setattr(
+        adj_module._socketio,
+        "emit",
+        lambda evt, payload, room=None: emitted.append((evt, payload, room)),
+    )
+
+    # Simulate a pipeline that started 10 seconds ago
+    fake_now = [1100.0]
+    monkeypatch.setattr("domains.adjustments.api.adjustments.time.time", lambda: fake_now[0])
+
+    cb = _make_progress_callback("upload-eta-global", started_at=1090.0)  # started 10s ago
+
+    # First emit at 50% — elapsed is 10s, remaining = 10 * (1-0.5) / 0.5 = 10s
+    cb("STL-Zerlegung", 0.5)
+    assert len(emitted) == 1
+    assert emitted[0][1].get("etaFormatted") == "10s"
+
+    # 5 seconds later, emit at 100% — elapsed is 15s, remaining ~0 -> "<1s"
+    fake_now[0] += 5.0
+    cb("STL-Zerlegung", 1.0)
+    assert len(emitted) == 2
+    assert emitted[1][1].get("etaFormatted") == "<1s"
+
+
+def test_anomaly_progress_callback_default_started_at_when_not_passed(monkeypatch):
+    """When started_at omitted, callback captures time.time() at construction (existing behavior preserved)."""
+    from domains.adjustments.api.adjustments import _make_progress_callback
+
+    emitted = []
+    monkeypatch.setattr(
+        adj_module._socketio,
+        "emit",
+        lambda evt, payload, room=None: emitted.append((evt, payload, room)),
+    )
+
+    fake_now = [2000.0]
+    monkeypatch.setattr("domains.adjustments.api.adjustments.time.time", lambda: fake_now[0])
+
+    cb = _make_progress_callback("upload-default")
+
+    # 0% emit at t=2000 — no ETA (elapsed=0)
+    cb("phase", 0.0)
+    assert len(emitted) == 1
+    assert "etaFormatted" not in emitted[0][1]
+
+    # 2 seconds later, 50% emit — elapsed 2s, remaining = 2 * 0.5 / 0.5 = 2s
+    fake_now[0] += 2.0
+    cb("phase", 0.5)
+    assert len(emitted) == 2
+    assert emitted[1][1].get("etaFormatted") == "2s"
