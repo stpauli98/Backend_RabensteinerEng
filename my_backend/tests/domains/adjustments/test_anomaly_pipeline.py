@@ -190,3 +190,37 @@ def test_full_pipeline_through_sbad_on_test2():
     assert int(pd.isna(df.iloc[:, 1]).sum()) >= 0
     # SBAD should have detected at least some anomalies (or exactly 0 if data is clean)
     assert count >= 0
+
+
+# ---------------------------------------------------------------------------
+# R3: phase markers around STL.fit() and LSTM model.fit()
+# ---------------------------------------------------------------------------
+
+def test_prepare_stl_emits_progress_markers():
+    """prepare_stl must emit start (0.0) and end (1.0) progress markers."""
+    from domains.adjustments.services.anomaly_pipeline import prepare_stl
+
+    n = 48  # 2 synthetic days at hourly cadence
+    rng = np.random.RandomState(42)
+    df = pd.DataFrame({
+        "ts": pd.date_range("2024-01-01", periods=n, freq="1h"),
+        "value": np.sin(np.arange(n) * 2 * np.pi / 24) + rng.normal(0, 0.1, n),
+    })
+
+    captured = []
+
+    def cb(label, fraction):
+        captured.append((label, fraction))
+
+    result, time_values = prepare_stl(df, period=24, lang="de", progress_callback=cb)
+
+    labels = [c[0] for c in captured]
+    fractions = [c[1] for c in captured]
+
+    assert any(f == 0.0 for f in fractions), "Expected 0.0 start marker"
+    assert any(f == 1.0 for f in fractions), "Expected 1.0 end marker"
+    assert all("STL" in lbl or "Zerlegung" in lbl for lbl in labels), (
+        f"Unexpected label(s): {labels}"
+    )
+    assert result is not None  # STL ran successfully
+    assert len(time_values) == n

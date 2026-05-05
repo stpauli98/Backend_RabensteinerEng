@@ -1013,7 +1013,8 @@ def anomaly_start() -> Tuple[Response, int]:
             try:
                 period = int(par["STL"]["var"]["PERIOD"]["value"])
                 stl_result, time_values = _prepare_stl(
-                    state["processed_df"], period, lang=lang
+                    state["processed_df"], period, lang=lang,
+                    progress_callback=progress_cb,
                 )
             except ValueError as e:
                 state["pipeline_status"] = _PipelineStatus.ERROR

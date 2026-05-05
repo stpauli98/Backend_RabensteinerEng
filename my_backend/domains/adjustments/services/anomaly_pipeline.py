@@ -498,6 +498,7 @@ def prepare_stl(
     df: pd.DataFrame,
     period: int,
     lang: str = "en",
+    progress_callback: ProgressCallback = None,
 ) -> Tuple[Any, pd.Series]:
     """
     Run STL decomposition (no threshold yet). Port of L1207-1253 (data part only,
@@ -519,8 +520,16 @@ def prepare_stl(
             )
         )
 
+    stl_label = tr("STL decomposition", "STL-Zerlegung", lang)
+    if progress_callback is not None:
+        progress_callback(stl_label, 0.0)
+
     stl = STL(df.iloc[:, 1], period=int(period), robust=True)
     result = stl.fit()
+
+    if progress_callback is not None:
+        progress_callback(stl_label, 1.0)
+
     time_values = pd.to_datetime(df.iloc[:, 0])
     return result, time_values
 
@@ -613,12 +622,18 @@ def prepare_lstm(
     model.compile(optimizer="adam", loss="mse")
 
     if progress_callback is not None:
-        progress_callback(label, 0.1)
+        from keras.callbacks import LambdaCallback
+        total_epochs = int(epochs)
+        epoch_cb = LambdaCallback(
+            on_epoch_end=lambda epoch, logs: progress_callback(
+                label, (epoch + 1) / total_epochs
+            )
+        )
+        fit_callbacks = [epoch_cb]
+    else:
+        fit_callbacks = None
 
-    model.fit(X, y, epochs=int(epochs), batch_size=int(batch_size), verbose=0)
-
-    if progress_callback is not None:
-        progress_callback(label, 0.9)
+    model.fit(X, y, epochs=int(epochs), batch_size=int(batch_size), verbose=0, callbacks=fit_callbacks)
 
     predicted_scaled = model.predict(X, verbose=0)
     predicted = scaler.inverse_transform(predicted_scaled)
