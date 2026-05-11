@@ -124,3 +124,21 @@ def test_resend_failure_returns_502(send_mock, client):
     body = json.dumps(_payload()).encode()
     resp = client.post("/api/auth/send-email", data=body, headers=_signed_headers(body))
     assert resp.status_code == 502
+
+
+@patch("domains.auth_emails.api.hooks.send_email")
+def test_missing_email_returns_400(send_mock, client):
+    payload = {
+        "user": {"id": "u1", "user_metadata": {"lang": "en"}},
+        # `email` deliberately omitted
+        "email_data": {
+            "token_hash": "abc",
+            "email_action_type": "signup",
+            "redirect_to": "https://forecast-engine.com/dashboard",
+            "site_url": "https://luvjebsltuttakatnzaa.supabase.co",
+        },
+    }
+    body = json.dumps(payload).encode()
+    resp = client.post("/api/auth/send-email", data=body, headers=_signed_headers(body))
+    assert resp.status_code == 400
+    send_mock.assert_not_called()

@@ -9,6 +9,7 @@ POST /api/auth/send-email
     502 {"error": "..."}              on Resend failure (Supabase will retry)
 """
 
+import hashlib
 import logging
 import os
 
@@ -25,6 +26,11 @@ from domains.auth_emails.services.webhook_verifier import (
     StaleWebhook,
     verify_webhook,
 )
+
+
+def _hash_email(address: str) -> str:
+    """8-char prefix of SHA256 — enough to correlate logs without storing the email."""
+    return hashlib.sha256(address.encode("utf-8")).hexdigest()[:8]
 
 
 log = logging.getLogger(__name__)
@@ -91,8 +97,8 @@ def send_email_hook():
             html=html,
         )
         log.info(
-            "auth_emails: sent %s to %s lang=%s id=%s",
-            action, to_address, lang, msg_id,
+            "auth_emails: sent %s to user=%s lang=%s id=%s",
+            action, _hash_email(to_address), lang, msg_id,
         )
     except ResendError as exc:
         log.error("auth_emails: Resend failure: %s", exc)

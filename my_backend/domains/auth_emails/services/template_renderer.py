@@ -47,7 +47,12 @@ def render_email(
     try:
         template = _env.get_template(candidate)
     except TemplateNotFound:
-        template = _env.get_template(f"{basename}_de.html.j2")
+        try:
+            template = _env.get_template(f"{basename}_de.html.j2")
+        except TemplateNotFound as inner:
+            raise UnknownTemplate(
+                f"Missing fallback template for action {action!r}"
+            ) from inner
 
     return template.render(
         token_hash=token_hash,

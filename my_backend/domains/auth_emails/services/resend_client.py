@@ -38,6 +38,9 @@ def send_email(
         raise ResendError(f"Network error contacting Resend: {exc}") from exc
 
     if resp.status_code >= 400:
-        raise ResendError(f"Resend HTTP {resp.status_code}: {resp.text}")
+        # Cap body to avoid logging the recipient email or large debug payloads
+        # that Resend sometimes returns in validation errors.
+        snippet = (resp.text or "")[:200]
+        raise ResendError(f"Resend HTTP {resp.status_code}: {snippet}")
 
     return resp.json().get("id", "")
