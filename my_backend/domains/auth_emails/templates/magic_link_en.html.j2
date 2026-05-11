@@ -1,0 +1,129 @@
+<!--
+  Auth Email Template — Magic Link (EN)
+  Subject heading: Your sign-in link – Forecast Engine
+  Variables used: token_hash, redirect_to, site_url
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>Your sign-in link – Forecast Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; display: block; }
+    body { margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #F5F1E8; font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #08122B; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    .email-wrapper { background-color: #F5F1E8; padding: 40px 16px; }
+    .email-container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 24px 60px -28px rgba(8, 18, 43, 0.28); }
+    .email-header { background: linear-gradient(135deg, #05102A 0%, #0A1A3A 55%, #142B5C 100%); padding: 44px 40px 40px; }
+    .brand-row { font-size: 0; line-height: 0; }
+    .brand-mark { display: inline-block; vertical-align: middle; width: 40px; height: 40px; background-color: #0A1A3A; border: 1px solid rgba(20, 216, 196, 0.35); border-radius: 10px; margin-right: 12px; }
+    .brand-mark svg { display: block; border-radius: 10px; }
+    .brand-wordmark { display: inline-block; vertical-align: middle; font-family: 'Fraunces', Georgia, 'Times New Roman', serif; font-size: 22px; line-height: 1; font-weight: 600; letter-spacing: -0.02em; color: #F5F1E8; }
+    .brand-wordmark .accent { color: #14D8C4; }
+    .header-eyebrow { margin: 32px 0 0 0; font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: #14D8C4; }
+    .header-title { margin: 10px 0 0 0; font-family: 'Fraunces', Georgia, serif; font-size: 34px; font-weight: 600; line-height: 1.1; letter-spacing: -0.025em; color: #F5F1E8; }
+    .header-title .ital { font-style: italic; color: #14D8C4; font-weight: 500; }
+    .email-body { padding: 40px 40px 8px; color: #08122B; }
+    .greeting { margin: 0 0 14px 0; font-family: 'Fraunces', Georgia, serif; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: #08122B; }
+    .message { margin: 0 0 28px 0; font-size: 16px; line-height: 1.65; color: #4b5567; }
+    .message strong { color: #0A1A3A; font-weight: 600; }
+    .cta-container { text-align: center; margin: 32px 0 24px; }
+    .cta-button { display: inline-block; padding: 16px 36px; background-color: #14D8C4; color: #0A1A3A !important; text-decoration: none; border-radius: 999px; font-family: 'IBM Plex Sans', sans-serif; font-size: 15px; font-weight: 600; letter-spacing: 0.01em; box-shadow: 0 10px 28px -10px rgba(20, 216, 196, 0.6); }
+    .security-notice { margin: 28px 0 8px; padding: 16px 20px; background-color: #F2FBF9; border: 1px solid #B8EFE7; border-left: 3px solid #14D8C4; border-radius: 8px; }
+    .security-notice p { margin: 0; font-size: 13px; line-height: 1.6; color: #0A1A3A; }
+    .security-notice strong { font-weight: 600; }
+    .divider { margin: 32px 0 18px; border: 0; border-top: 1px solid #E5E7EB; }
+    .divider-label { margin: 0 0 12px 0; font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: #8A99B3; }
+    .alt-link { margin: 0 0 16px 0; font-size: 13px; line-height: 1.65; color: #6b7280; word-break: break-all; }
+    .alt-link a { color: #0A1A3A; text-decoration: underline; text-decoration-color: #14D8C4; text-underline-offset: 3px; }
+    .email-footer { padding: 28px 40px 32px; background-color: #05102A; text-align: center; }
+    .footer-brand { margin: 0 0 6px 0; font-family: 'Fraunces', Georgia, serif; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: #F5F1E8; }
+    .footer-brand .accent { color: #14D8C4; }
+    .footer-tagline { margin: 0 0 18px 0; font-family: 'IBM Plex Sans', sans-serif; font-size: 12px; letter-spacing: 0.04em; color: #8A99B3; }
+    .footer-meta { margin: 0; font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; line-height: 1.65; color: #4f5e7d; }
+    @media only screen and (max-width: 600px) {
+      .email-wrapper { padding: 16px 8px; }
+      .email-container { border-radius: 10px; }
+      .email-header { padding: 32px 24px 28px; }
+      .email-body { padding: 28px 24px 8px; }
+      .email-footer { padding: 24px 24px 28px; }
+      .header-title { font-size: 26px; }
+      .greeting { font-size: 21px; }
+      .message { font-size: 15px; }
+      .cta-button { padding: 14px 28px; font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="email-wrapper">
+    <table role="presentation" class="email-container" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:600px;margin:0 auto;background-color:#ffffff;border-radius:14px;overflow:hidden;">
+      <tr>
+        <td class="email-header">
+          <div class="brand-row">
+            <span class="brand-mark" aria-hidden="true">
+              <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+                <rect width="40" height="40" rx="10" fill="#0A1A3A"/>
+                <circle cx="9" cy="27" r="1.6" fill="#F5F1E8"/>
+                <circle cx="14" cy="23" r="1.6" fill="#F5F1E8"/>
+                <circle cx="19" cy="25" r="1.6" fill="#F5F1E8"/>
+                <line x1="22" y1="9" x2="22" y2="33" stroke="#1F3360" stroke-width="1" stroke-dasharray="2 2"/>
+                <path d="M22 23 C 26 19, 29 16, 34 11" stroke="#14D8C4" stroke-width="2" stroke-linecap="round" fill="none"/>
+                <circle cx="22" cy="23" r="2" fill="#14D8C4"/>
+              </svg>
+            </span><span class="brand-wordmark">Forecast<span class="accent">.</span>Engine</span>
+          </div>
+          <p class="header-eyebrow">Sign In</p>
+          <h1 class="header-title">Secure <span class="ital">sign-in.</span></h1>
+        </td>
+      </tr>
+      <tr>
+        <td class="email-body">
+          <h2 class="greeting">Your personal sign-in link</h2>
+          <p class="message">
+            Click the button below to sign in to <strong>Forecast Engine</strong> securely,
+            without a password. The link is valid for a short time only
+            and can be used once.
+          </p>
+
+          <div class="cta-container">
+            <a href="{{ site_url }}/auth/confirm?token_hash={{ token_hash }}&type=magiclink&redirect_to={{ redirect_to }}" class="cta-button">Sign in now &rarr;</a>
+          </div>
+
+          <div class="security-notice">
+            <p>
+              <strong>Security notice.</strong> If you did not request this sign-in,
+              ignore this email. Nobody can sign in to your account without clicking
+              this link.
+            </p>
+          </div>
+
+          <hr class="divider">
+          <p class="divider-label">Alternative</p>
+          <p class="alt-link">
+            If the button does not work, copy this link into your browser:<br>
+            <a href="{{ site_url }}/auth/confirm?token_hash={{ token_hash }}&type=magiclink&redirect_to={{ redirect_to }}">{{ site_url }}/auth/confirm?token_hash={{ token_hash }}&type=magiclink&redirect_to={{ redirect_to }}</a>
+          </p>
+        </td>
+      </tr>
+      <tr>
+        <td class="email-footer">
+          <p class="footer-brand">Forecast<span class="accent">.</span>Engine</p>
+          <p class="footer-tagline">Time-series forecasting platform &middot; <a href="https://www.forecast-engine.com" style="color:#8A99B3;text-decoration:none;">forecast-engine.com</a></p>
+          <p class="footer-meta">
+            &copy; 2026 Forecast Engine. All rights reserved.<br>
+            This email was generated automatically &ndash; please do not reply.
+          </p>
+        </td>
+      </tr>
+    </table>
+  </div>
+</body>
+</html>
