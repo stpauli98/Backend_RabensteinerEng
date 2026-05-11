@@ -14,7 +14,7 @@ def test_renders_signup_de_with_link():
         redirect_to="https://forecast-engine.com/dashboard",
         site_url="https://api.forecast-engine.com",
     )
-    assert "Bestätigen Sie Ihre E-Mail" in html
+    assert "Bestätigen Sie Ihre Registrierung" in html
     assert "token_hash=abc123" in html
     assert "type=signup" in html
     assert "redirect_to=https://forecast-engine.com/dashboard" in html
@@ -49,7 +49,7 @@ def test_renders_magiclink_both_langs():
 def test_unknown_lang_falls_back_to_de():
     html = render_email(action="signup", lang="fr", token_hash="t",
                         redirect_to="https://a/", site_url="https://b/")
-    assert "Bestätigen Sie Ihre E-Mail" in html
+    assert "Bestätigen Sie Ihre Registrierung" in html
 
 
 def test_unknown_action_raises():
