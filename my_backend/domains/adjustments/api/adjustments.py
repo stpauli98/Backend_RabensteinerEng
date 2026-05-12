@@ -48,6 +48,14 @@ logger = logging.getLogger(__name__)
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 
 
+def _internal_error_message(e: Exception) -> str:
+    """Return the exception message when EXPOSE_INTERNAL_ERRORS=true (dev/staging);
+    otherwise return the sanitized generic string for production safety."""
+    if os.environ.get('EXPOSE_INTERNAL_ERRORS', '').lower() in ('1', 'true', 'yes'):
+        return f'Internal error: {e}'
+    return 'Internal server error'
+
+
 @bp.route('/upload-chunk', methods=['POST'])
 @require_auth
 @require_subscription
@@ -895,7 +903,7 @@ def anomaly_load() -> Tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error in /load: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _internal_error_message(e)}), 500
 
 
 @bp.route('/validate-param', methods=['POST'])
@@ -945,7 +953,7 @@ def anomaly_validate_param() -> Tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error in /validate-param: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _internal_error_message(e)}), 500
 
 
 @bp.route('/start', methods=['POST'])
@@ -1085,7 +1093,7 @@ def anomaly_start() -> Tuple[Response, int]:
         except Exception:
             pass
         logger.error(f"Error in /start: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _internal_error_message(e)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -1238,7 +1246,7 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
         except Exception:
             pass
         logger.error(f"Error in /stl-threshold: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _internal_error_message(e)}), 500
 
 
 @bp.route('/lstm-threshold', methods=['POST'])
@@ -1336,7 +1344,7 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
         except Exception:
             pass
         logger.error(f"Error in /lstm-threshold: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _internal_error_message(e)}), 500
 
 
 @bp.route('/use-processed', methods=['POST'])
@@ -1393,7 +1401,7 @@ def anomaly_use_processed() -> Tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error in /use-processed: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _internal_error_message(e)}), 500
 
 
 @bp.route('/cancel-pipeline', methods=['POST'])
