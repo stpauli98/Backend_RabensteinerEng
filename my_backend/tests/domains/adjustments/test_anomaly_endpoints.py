@@ -422,6 +422,91 @@ def test_stl_threshold_valid_completes(app, staged_test2):
     assert "test2.csv_1" not in body["processedCsvFilename"]  # L1568 bug fixed
 
 
+def test_stl_threshold_recovers_when_intermediate_lost(app, staged_test2):
+    """If state.intermediate.stl_result has been wiped (TTL / process restart),
+    the threshold endpoint must recompute it transparently rather than
+    returning a 409 that the user has no clear path to recover from."""
+    from domains.adjustments.services.state_manager import get_anomaly_state
+
+    upload_id, _ = staged_test2
+    _load_and_start(app, upload_id, _default_params(stl_run=True, lstm_run=False))
+
+    with app.test_request_context():
+        state = get_anomaly_state(upload_id, USER_A)
+        assert state is not None, "fixture must leave the state alive"
+        assert state["intermediate"]["stl_result"] is not None
+        state["intermediate"]["stl_result"] = None
+
+    r = _post_json(app, adj_module.anomaly_stl_threshold,
+                   "/api/adjustmentsOfData/stl-threshold",
+                   {"uploadId": upload_id, "threshold": 50, "lang": "en"})
+    assert _status(r) == 200, _body(r)
+    body = _body(r)
+    assert body["status"] == PipelineStatus.COMPLETE
+    assert "stlAnomalies" in body["plots"]
+
+
+def test_lstm_threshold_recovers_when_intermediate_lost(app, staged_test2):
+    """Symmetric to the STL recovery: if intermediate.lstm_results_df is
+    missing, the /lstm-threshold endpoint must recompute rather than 409."""
+    from domains.adjustments.services.state_manager import get_anomaly_state
+
+    upload_id, _ = staged_test2
+    # stl_run=False so the pipeline pauses at AWAITING_LSTM_THRESHOLD after /start.
+    _load_and_start(app, upload_id, _default_params(stl_run=False, lstm_run=True))
+
+    with app.test_request_context():
+        state = get_anomaly_state(upload_id, USER_A)
+        assert state is not None
+        assert state["intermediate"]["lstm_results_df"] is not None
+        state["intermediate"]["lstm_results_df"] = None
+
+    r = _post_json(app, adj_module.anomaly_lstm_threshold,
+                   "/api/adjustmentsOfData/lstm-threshold",
+                   {"uploadId": upload_id, "threshold": 50, "lang": "en"})
+    assert _status(r) == 200, _body(r)
+    body = _body(r)
+    assert body["status"] == PipelineStatus.COMPLETE
+    assert "lstmAnomalies" in body["plots"]
+
+
+def test_lstm_recovery_yields_identical_results(app, staged_test2):
+    """Determinism guarantee: two calls to `prepare_lstm` with the same
+    inputs must produce byte-identical residuals/forecasts. Without seeding,
+    Keras LSTM training is nondeterministic and the recovery path in
+    `_ensure_lstm_intermediate` silently changes the model — which shifts
+    anomalies for the same user-chosen threshold."""
+    from domains.adjustments.services.state_manager import get_anomaly_state
+    from domains.adjustments.services.anomaly_pipeline import prepare_lstm
+
+    upload_id, _ = staged_test2
+    _load_and_start(app, upload_id, _default_params(stl_run=False, lstm_run=True))
+
+    with app.test_request_context():
+        state = get_anomaly_state(upload_id, USER_A)
+        assert state is not None
+        df = state["processed_df"]
+        params = state["params"]["LSTM"]["var"]
+        period = int(params["PERIOD"]["value"])
+        neurons = params["NEURONS"]["value"]
+        epochs = params["EPOCHS"]["value"]
+        batch_size = params["BATCH_SIZE"]["value"]
+
+    # Two independent calls; second simulates the recovery path.
+    r1, _m1 = prepare_lstm(df, period, neurons, epochs, batch_size, lang="en")
+    r2, _m2 = prepare_lstm(df, period, neurons, epochs, batch_size, lang="en")
+
+    import numpy as np
+    np.testing.assert_array_equal(
+        r1["residual"].to_numpy(), r2["residual"].to_numpy(),
+        err_msg="LSTM residuals diverged between calls — recovery is nondeterministic.",
+    )
+    np.testing.assert_array_equal(
+        r1["forecast"].to_numpy(), r2["forecast"].to_numpy(),
+        err_msg="LSTM forecasts diverged between calls — recovery is nondeterministic.",
+    )
+
+
 def test_stl_threshold_wrong_state_returns_409(app, staged_test2):
     upload_id, _ = staged_test2
     _post_json(app, adj_module.anomaly_load, "/api/adjustmentsOfData/load",

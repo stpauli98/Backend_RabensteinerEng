@@ -33,6 +33,15 @@ from domains.adjustments.debug_log import log_phase, dlog
 logger = logging.getLogger(__name__)
 
 
+# Deterministic seed for `prepare_lstm` RNG sources (Python `random`, NumPy,
+# TensorFlow). Re-seeded per call so that recovery via
+# `_ensure_lstm_intermediate` reproduces the exact model that the user
+# previewed at /start (otherwise Keras weight init + optimizer momentum
+# would silently shift residuals for the same threshold). The integer value
+# itself is arbitrary; stability across calls is what matters.
+_LSTM_SEED = 42
+
+
 # ---------------------------------------------------------------------------
 # Parameter dictionary factory
 # ---------------------------------------------------------------------------
@@ -614,6 +623,21 @@ def prepare_lstm(
 
     X, y = create_sequences(df_local[scaled_col].values, int(period))
     X = X.reshape((X.shape[0], X.shape[1], 1))
+
+    # Seed RNG sources so weight init / optimizer momentum are deterministic.
+    # Required for `_ensure_lstm_intermediate` recovery to reproduce the same
+    # model the user previewed at /start. Keras 3 exposes a one-shot helper
+    # that covers Python `random`, NumPy and TensorFlow; older Keras versions
+    # need the three calls explicitly.
+    try:
+        import keras.utils as _keras_utils  # local import — keeps top-of-file imports lean
+        _keras_utils.set_random_seed(_LSTM_SEED)
+    except (ImportError, AttributeError):
+        import random as _random
+        import tensorflow as _tf
+        _random.seed(_LSTM_SEED)
+        np.random.seed(_LSTM_SEED)
+        _tf.random.set_seed(_LSTM_SEED)
 
     model = Sequential()
     model.add(Input(shape=(int(period), 1)))
