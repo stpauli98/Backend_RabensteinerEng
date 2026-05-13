@@ -1118,7 +1118,7 @@ def _save_processed_csv(state, lang) -> Optional[str]:
     return str(out)
 
 
-def _ensure_stl_intermediate(state, lang):
+def _ensure_stl_intermediate(state, lang) -> None:
     """Recompute state['intermediate']['stl_result'] if it has been wiped.
 
     The threshold endpoint used to return 409 "STL intermediate state
@@ -1137,9 +1137,32 @@ def _ensure_stl_intermediate(state, lang):
     if processed_df is None or period_raw is None:
         # Nothing to recompute from — let the caller emit the original 409.
         return
+    dlog("STL_INTERMEDIATE_RECOMPUTED", filename=state.get("filename"))
     period = int(period_raw)
     stl_result, _time_values = _prepare_stl(processed_df, period, lang=lang)
     state.setdefault("intermediate", {})["stl_result"] = stl_result
+
+
+def _ensure_lstm_intermediate(state, lang) -> None:
+    """Recompute state['intermediate']['lstm_results_df'] if it has been
+    wiped — same idempotency contract as _ensure_stl_intermediate."""
+    if state.get("intermediate", {}).get("lstm_results_df") is not None:
+        return
+    processed_df = state.get("processed_df")
+    par = state.get("params") or {}
+    lstm = par.get("LSTM", {}).get("var", {})
+    period_raw = (lstm.get("PERIOD") or {}).get("value")
+    neurons = (lstm.get("NEURONS") or {}).get("value")
+    epochs = (lstm.get("EPOCHS") or {}).get("value")
+    batch_size = (lstm.get("BATCH_SIZE") or {}).get("value")
+    if processed_df is None or None in (period_raw, neurons, epochs, batch_size):
+        return
+    dlog("LSTM_INTERMEDIATE_RECOMPUTED", filename=state.get("filename"))
+    period = int(period_raw)
+    results_df, _model = _prepare_lstm(
+        processed_df, period, neurons, epochs, batch_size, lang=lang,
+    )
+    state.setdefault("intermediate", {})["lstm_results_df"] = results_df
 
 
 @bp.route('/stl-threshold', methods=['POST'])
@@ -1303,6 +1326,11 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
             return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
         if state.get("pipeline_status") != _PipelineStatus.AWAITING_LSTM_THRESHOLD:
             return jsonify({"error": "Pipeline is not awaiting an LSTM threshold"}), 409
+        try:
+            _ensure_lstm_intermediate(state, lang)
+        except ValueError as e:
+            state["pipeline_status"] = _PipelineStatus.ERROR
+            return jsonify({"error": str(e)}), 400
         results_df = state.get("intermediate", {}).get("lstm_results_df")
         if results_df is None:
             return jsonify({"error": "LSTM intermediate state missing — re-run /start"}), 409
