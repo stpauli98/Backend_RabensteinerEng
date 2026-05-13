@@ -422,6 +422,30 @@ def test_stl_threshold_valid_completes(app, staged_test2):
     assert "test2.csv_1" not in body["processedCsvFilename"]  # L1568 bug fixed
 
 
+def test_stl_threshold_recovers_when_intermediate_lost(app, staged_test2):
+    """If state.intermediate.stl_result has been wiped (TTL / process restart),
+    the threshold endpoint must recompute it transparently rather than
+    returning a 409 that the user has no clear path to recover from."""
+    from domains.adjustments.services.state_manager import get_anomaly_state
+
+    upload_id, _ = staged_test2
+    _load_and_start(app, upload_id, _default_params(stl_run=True, lstm_run=False))
+
+    with app.test_request_context():
+        state = get_anomaly_state(upload_id, USER_A)
+        assert state is not None, "fixture must leave the state alive"
+        assert state["intermediate"]["stl_result"] is not None
+        state["intermediate"]["stl_result"] = None
+
+    r = _post_json(app, adj_module.anomaly_stl_threshold,
+                   "/api/adjustmentsOfData/stl-threshold",
+                   {"uploadId": upload_id, "threshold": 50, "lang": "en"})
+    assert _status(r) == 200, _body(r)
+    body = _body(r)
+    assert body["status"] == PipelineStatus.COMPLETE
+    assert "stlAnomalies" in body["plots"]
+
+
 def test_stl_threshold_wrong_state_returns_409(app, staged_test2):
     upload_id, _ = staged_test2
     _post_json(app, adj_module.anomaly_load, "/api/adjustmentsOfData/load",
