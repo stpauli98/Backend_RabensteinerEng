@@ -1118,6 +1118,30 @@ def _save_processed_csv(state, lang) -> Optional[str]:
     return str(out)
 
 
+def _ensure_stl_intermediate(state, lang):
+    """Recompute state['intermediate']['stl_result'] if it has been wiped.
+
+    The threshold endpoint used to return 409 "STL intermediate state
+    missing — re-run /start" in this case, forcing the user to start over.
+    STL decomposition is deterministic from `state['processed_df']` plus
+    `state['params']['STL']['var']['PERIOD']`, both of which survive the
+    same TTL/restart events that can lose the intermediate. Recovery is
+    therefore local and free of side effects on other endpoints.
+    """
+    if state.get("intermediate", {}).get("stl_result") is not None:
+        return
+    processed_df = state.get("processed_df")
+    par = state.get("params") or {}
+    period_descriptor = (par.get("STL", {}).get("var", {}).get("PERIOD") or {})
+    period_raw = period_descriptor.get("value")
+    if processed_df is None or period_raw is None:
+        # Nothing to recompute from — let the caller emit the original 409.
+        return
+    period = int(period_raw)
+    stl_result, _time_values = _prepare_stl(processed_df, period, lang=lang)
+    state.setdefault("intermediate", {})["stl_result"] = stl_result
+
+
 @bp.route('/stl-threshold', methods=['POST'])
 @require_auth
 @require_subscription
@@ -1145,8 +1169,15 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
             return jsonify({"error": f"No upload found for ID '{upload_id}'"}), 404
         if state.get("pipeline_status") != _PipelineStatus.AWAITING_STL_THRESHOLD:
             return jsonify({"error": "Pipeline is not awaiting an STL threshold"}), 409
+        try:
+            _ensure_stl_intermediate(state, lang)
+        except ValueError as e:
+            state["pipeline_status"] = _PipelineStatus.ERROR
+            return jsonify({"error": str(e)}), 400
         stl_result = state.get("intermediate", {}).get("stl_result")
         if stl_result is None:
+            # Recovery wasn't possible (processed_df or params evicted) —
+            # original 409 path stands.
             return jsonify({"error": "STL intermediate state missing — re-run /start"}), 409
 
         # Validate threshold using same rules as Python L1260-1271
