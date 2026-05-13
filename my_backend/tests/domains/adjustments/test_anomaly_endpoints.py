@@ -446,6 +446,30 @@ def test_stl_threshold_recovers_when_intermediate_lost(app, staged_test2):
     assert "stlAnomalies" in body["plots"]
 
 
+def test_lstm_threshold_recovers_when_intermediate_lost(app, staged_test2):
+    """Symmetric to the STL recovery: if intermediate.lstm_results_df is
+    missing, the /lstm-threshold endpoint must recompute rather than 409."""
+    from domains.adjustments.services.state_manager import get_anomaly_state
+
+    upload_id, _ = staged_test2
+    # stl_run=False so the pipeline pauses at AWAITING_LSTM_THRESHOLD after /start.
+    _load_and_start(app, upload_id, _default_params(stl_run=False, lstm_run=True))
+
+    with app.test_request_context():
+        state = get_anomaly_state(upload_id, USER_A)
+        assert state is not None
+        assert state["intermediate"]["lstm_results_df"] is not None
+        state["intermediate"]["lstm_results_df"] = None
+
+    r = _post_json(app, adj_module.anomaly_lstm_threshold,
+                   "/api/adjustmentsOfData/lstm-threshold",
+                   {"uploadId": upload_id, "threshold": 50, "lang": "en"})
+    assert _status(r) == 200, _body(r)
+    body = _body(r)
+    assert body["status"] == PipelineStatus.COMPLETE
+    assert "lstmAnomalies" in body["plots"]
+
+
 def test_stl_threshold_wrong_state_returns_409(app, staged_test2):
     upload_id, _ = staged_test2
     _post_json(app, adj_module.anomaly_load, "/api/adjustmentsOfData/load",
