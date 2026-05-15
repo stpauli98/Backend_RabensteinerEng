@@ -152,3 +152,42 @@ def test_validate_par_dict_lstm_epochs_over_cap_de():
     with pytest.raises(ValueError) as exc:
         validate_par_dict(par, dt_avg=pd.Timedelta(minutes=3), lang="de")
     assert "überschreitet das Maximum" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "EQ_MAX",
+        "GAP_MAX",
+        "DEC",
+        "LG_MIN",
+        "V_MAX",
+        "V_MIN",
+        "SBAD.CHG_MAX",
+        "SBAD.LG_MAX",
+        "STL.PERIOD_H",
+        "LSTM.PERIOD_H",
+        "LSTM.NEURONS",
+        "LSTM.EPOCHS",
+        "LSTM.BATCH_SIZE",
+    ],
+)
+def test_validate_param_single_none_value_is_noop(name):
+    """None means 'not set' — must mirror validate_par_dict policy.
+
+    Bug repro: clearing a field in the UI sent value=null to /validate-param,
+    which crashed with 'Der Eingabewert None kann nicht in eine
+    Fließkommazahl konvertiert werden'. Empty must be a legal in-progress
+    state for live on-blur validation.
+    """
+    par = build_par_dict({})
+    validate_param_single(name, None, par, dt_avg=None, lang="de")
+    validate_param_single(name, None, par, dt_avg=None, lang="en")
+
+
+def test_validate_param_single_none_does_not_mutate_par():
+    """The short-circuit must not write None back into the par dict."""
+    par = build_par_dict({"eqMax": 15})
+    original = par["EQ_MAX"]["value"]
+    validate_param_single("EQ_MAX", None, par, dt_avg=None, lang="de")
+    assert par["EQ_MAX"]["value"] == original
