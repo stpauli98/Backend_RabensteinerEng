@@ -14,6 +14,7 @@ Bugs corrected vs. original Python:
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -31,6 +32,74 @@ from domains.adjustments.services.anomaly_helpers import (
 from domains.adjustments.debug_log import log_phase, dlog
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Progress callback dispatch (backwards-compatible)
+# ---------------------------------------------------------------------------
+# Pipeline phases now ship a stable i18n `message_key` (and optional
+# `message_params`) alongside the localized label. Older callbacks defined as
+# `cb(label, fraction)` must keep working — so we introspect the signature
+# once per call site and only forward the new kwargs when accepted.
+
+import weakref
+
+# WeakKeyDictionary auto-evicts entries when the callable is garbage-collected,
+# avoiding id() reuse aliasing bugs that a plain int-keyed dict would suffer
+# (a new callable can land on a recycled id with a different signature).
+_MSG_SUPPORT_CACHE: "weakref.WeakKeyDictionary[Callable, bool]" = weakref.WeakKeyDictionary()
+
+
+def _supports_message_kwargs(cb: Callable) -> bool:
+    """Return True if `cb` accepts message_key/message_params kwargs.
+
+    Result is cached in a WeakKeyDictionary so entries auto-evict when the
+    callable is GC'd — this prevents id() reuse aliasing across runs.
+    Non-weakref-able callables (rare: some C built-ins) bypass the cache and
+    re-introspect each call; correctness over micro-optimization.
+
+    Gracefully degrades to False (legacy 2-arg mode) for any callable whose
+    signature can't be introspected.
+    """
+    try:
+        cached = _MSG_SUPPORT_CACHE.get(cb)
+        if cached is not None:
+            return cached
+    except TypeError:
+        cached = None  # cb not weakref-able; fall through, skip caching
+
+    try:
+        sig = inspect.signature(cb)
+    except (TypeError, ValueError):
+        result = False
+    else:
+        params = sig.parameters
+        has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        has_explicit = "message_key" in params and "message_params" in params
+        result = has_var_kw or has_explicit
+
+    try:
+        _MSG_SUPPORT_CACHE[cb] = result
+    except TypeError:
+        pass  # not weakref-able — return uncached
+    return result
+
+
+def _emit_progress(
+    cb: Optional[Callable],
+    label: str,
+    fraction: float,
+    *,
+    message_key: Optional[str] = None,
+    message_params: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Invoke `cb`, forwarding message_key/message_params if supported."""
+    if cb is None:
+        return
+    if _supports_message_kwargs(cb):
+        cb(label, fraction, message_key=message_key, message_params=message_params)
+    else:
+        cb(label, fraction)
 
 
 # Deterministic seed for `prepare_lstm` RNG sources (Python `random`, NumPy,
@@ -283,11 +352,15 @@ def process_constants(
 
             frm = 0
 
-        if progress_callback is not None:
-            progress = i / max(n - 1, 1)
-            if progress - last_progress >= 0.05 or i == n - 1:
-                progress_callback(label, progress)
-                last_progress = progress
+        progress = i / max(n - 1, 1)
+        if progress - last_progress >= 0.05 or i == n - 1:
+            _emit_progress(
+                progress_callback,
+                label,
+                progress,
+                message_key="anomaly_phase_constants",
+            )
+            last_progress = progress
 
     df.iloc[:, 1] = values
 
@@ -311,13 +384,11 @@ def process_zeros(
         return df
 
     label = tr("Removing zeros", "Nullwerte entfernen", lang)
-    if progress_callback is not None:
-        progress_callback(label, 0.0)
+    _emit_progress(progress_callback, label, 0.0, message_key="anomaly_phase_zeros")
 
     df.iloc[:, 1] = df.iloc[:, 1].mask(df.iloc[:, 1] == 0, np.nan)
 
-    if progress_callback is not None:
-        progress_callback(label, 1.0)
+    _emit_progress(progress_callback, label, 1.0, message_key="anomaly_phase_zeros")
 
     if gap_max is not None:
         df = intrpl(df, gap_max, dec, lang, progress_callback=progress_callback)
@@ -340,8 +411,7 @@ def process_range(
         return df
 
     label = tr("Range filtering", "Range-Begrenzung", lang)
-    if progress_callback is not None:
-        progress_callback(label, 0.0)
+    _emit_progress(progress_callback, label, 0.0, message_key="anomaly_phase_range")
 
     col = df.columns[1]
     mask = pd.Series(False, index=df.index)
@@ -352,8 +422,7 @@ def process_range(
 
     df.loc[mask, col] = np.nan
 
-    if progress_callback is not None:
-        progress_callback(label, 1.0)
+    _emit_progress(progress_callback, label, 1.0, message_key="anomaly_phase_range")
 
     if gap_max is not None:
         df = intrpl(df, gap_max, dec, lang, progress_callback=progress_callback)
@@ -395,8 +464,13 @@ def process_sbad(
 
     while iteration < max_iterations:
         iteration += 1
-        if progress_callback is not None:
-            progress_callback(f"{label} (iter {iteration})", 0.0)
+        _emit_progress(
+            progress_callback,
+            f"{label} (iter {iteration})",
+            0.0,
+            message_key="anomaly_phase_sbad",
+            message_params={"iter": iteration},
+        )
 
         # ---- Pass 1: detect anomalies immediately after NaN ----
         n = len(df)
@@ -493,8 +567,7 @@ def process_sbad(
             count_an[-3:] if len(count_an) >= 3 else count_an,
         )
 
-    if progress_callback is not None:
-        progress_callback(label, 1.0)
+    _emit_progress(progress_callback, label, 1.0, message_key="anomaly_phase_sbad")
 
     if gap_max is not None:
         df = intrpl(df, gap_max, dec, lang, progress_callback=progress_callback)
@@ -530,14 +603,12 @@ def prepare_stl(
         )
 
     stl_label = tr("STL decomposition", "STL-Zerlegung", lang)
-    if progress_callback is not None:
-        progress_callback(stl_label, 0.0)
+    _emit_progress(progress_callback, stl_label, 0.0, message_key="anomaly_phase_stl_prep")
 
     stl = STL(df.iloc[:, 1], period=int(period), robust=True)
     result = stl.fit()
 
-    if progress_callback is not None:
-        progress_callback(stl_label, 1.0)
+    _emit_progress(progress_callback, stl_label, 1.0, message_key="anomaly_phase_stl_prep")
 
     time_values = pd.to_datetime(df.iloc[:, 0])
     return result, time_values
@@ -613,7 +684,7 @@ def prepare_lstm(
         lang,
     )
     if progress_callback is not None:
-        progress_callback(label, 0.0)
+        _emit_progress(progress_callback, label, 0.0, message_key="anomaly_phase_lstm_prep")
 
     scaler = MinMaxScaler()
     col_name = df.columns[1]
@@ -649,8 +720,12 @@ def prepare_lstm(
         from keras.callbacks import LambdaCallback
         total_epochs = int(epochs)
         epoch_cb = LambdaCallback(
-            on_epoch_end=lambda epoch, logs: progress_callback(
-                label, (epoch + 1) / total_epochs
+            on_epoch_end=lambda epoch, logs: _emit_progress(
+                progress_callback,
+                label,
+                (epoch + 1) / total_epochs,
+                message_key="anomaly_phase_lstm_prep",
+                message_params={"epoch": epoch + 1, "epochs": total_epochs},
             )
         )
         fit_callbacks = [epoch_cb]
@@ -673,7 +748,7 @@ def prepare_lstm(
     results["absolute_error"] = np.abs(results["residual"])
 
     if progress_callback is not None:
-        progress_callback(label, 1.0)
+        _emit_progress(progress_callback, label, 1.0, message_key="anomaly_phase_lstm_prep")
 
     return results, model
 
@@ -760,11 +835,15 @@ def process_short_ranges(
             frm = 0
             idx_strt = None
 
-        if progress_callback is not None:
-            progress = i / max(n - 1, 1)
-            if progress - last_progress >= 0.05 or i == n - 1:
-                progress_callback(label, progress)
-                last_progress = progress
+        progress = i / max(n - 1, 1)
+        if progress - last_progress >= 0.05 or i == n - 1:
+            _emit_progress(
+                progress_callback,
+                label,
+                progress,
+                message_key="anomaly_phase_short_ranges",
+            )
+            last_progress = progress
 
     # Trailing open window: keep values (matches Python's drop-through behaviour
     # at L1494 where end of loop without NaN does not close the ATW).

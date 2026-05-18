@@ -791,7 +791,9 @@ def test_500_does_not_leak_internal_message(app, monkeypatch, staged_test2):
 # ---------------------------------------------------------------------------
 
 def test_anomaly_progress_callback_emits_eta_after_threshold(monkeypatch):
-    """etaFormatted appears in payload only after >=5% progress AND >1s elapsed."""
+    """etaFormatted is always present: None placeholder before threshold (so
+    FE i18n fallback renders the localized 'Calculating...'), formatted
+    duration once >=5% progress AND >1s elapsed."""
     import time as _time
     from domains.adjustments.api.adjustments import _make_progress_callback
 
@@ -808,30 +810,28 @@ def test_anomaly_progress_callback_emits_eta_after_threshold(monkeypatch):
 
     cb = _make_progress_callback("upload-eta-test")
 
-    # First emit: 0% progress, 0 elapsed -> no ETA
+    # First emit: 0% progress, 0 elapsed -> None placeholder
     cb("preprocess", 0.0)
     assert len(emitted) == 1
-    assert "etaFormatted" not in emitted[0][1]
+    assert emitted[0][1]["etaFormatted"] is None
 
-    # Tick 0.5s, label changes to 'sbad', 4% progress — elapsed < 1s -> no ETA
+    # Tick 0.5s, label changes to 'sbad', 4% progress — elapsed < 1s -> None placeholder
     fake_now[0] += 0.5
     cb("sbad", 0.04)
     assert len(emitted) == 2
-    assert "etaFormatted" not in emitted[1][1]
+    assert emitted[1][1]["etaFormatted"] is None
 
     # Tick 1.5s more (total elapsed ~2s), still 'sbad', 50% progress -> ETA present
     # remaining = 2 * (1 - 0.5) / 0.5 = 2s -> "2s"
     fake_now[0] += 1.5
     cb("sbad", 0.50)
     assert len(emitted) == 3
-    assert "etaFormatted" in emitted[2][1]
     assert emitted[2][1]["etaFormatted"] == "2s"
 
     # Final emit at 100%: remaining ~0 -> "<1s"
     fake_now[0] += 1.0
     cb("sbad", 1.0)
     assert len(emitted) == 4
-    assert "etaFormatted" in emitted[3][1]
     assert emitted[3][1]["etaFormatted"] == "<1s"
 
 
@@ -880,13 +880,70 @@ def test_anomaly_progress_callback_default_started_at_when_not_passed(monkeypatc
 
     cb = _make_progress_callback("upload-default")
 
-    # 0% emit at t=2000 — no ETA (elapsed=0)
+    # 0% emit at t=2000 — None placeholder ETA (elapsed=0)
     cb("phase", 0.0)
     assert len(emitted) == 1
-    assert "etaFormatted" not in emitted[0][1]
+    assert emitted[0][1]["etaFormatted"] is None
 
     # 2 seconds later, 50% emit — elapsed 2s, remaining = 2 * 0.5 / 0.5 = 2s
     fake_now[0] += 2.0
     cb("phase", 0.5)
     assert len(emitted) == 2
     assert emitted[1][1].get("etaFormatted") == "2s"
+
+
+def test_anomaly_progress_payload_includes_message_key_and_step_counter(monkeypatch, app):
+    """anomaly_progress events must include messageKey, currentStep, totalSteps, status."""
+    import domains.adjustments.api.adjustments as adj_module
+    captured: list = []
+
+    class FakeSio:
+        def emit(self, event, payload, room=None):
+            if event == "anomaly_progress":
+                captured.append(payload)
+
+    monkeypatch.setattr(adj_module, "_socketio", FakeSio())
+
+    cb = adj_module._make_progress_callback(
+        "u1",
+        started_at=None,
+        phase_keys=["anomaly_phase_constants", "anomaly_phase_zeros"],
+    )
+    cb("Removing constant values", 0.0, message_key="anomaly_phase_constants")
+    cb("Removing constant values", 1.0, message_key="anomaly_phase_constants")
+    cb("Removing zeros", 0.0, message_key="anomaly_phase_zeros")
+    cb("Removing zeros", 1.0, message_key="anomaly_phase_zeros")
+
+    assert len(captured) == 4
+    # First payload — first phase
+    assert captured[0]["messageKey"] == "anomaly_phase_constants"
+    assert captured[0]["currentStep"] == 1
+    assert captured[0]["totalSteps"] == 2
+    assert captured[0]["status"] == "processing"
+    assert captured[0]["progress"] == 0
+    # Last payload — second phase, 100%
+    assert captured[3]["messageKey"] == "anomaly_phase_zeros"
+    assert captured[3]["currentStep"] == 2
+    assert captured[3]["totalSteps"] == 2
+    assert captured[3]["progress"] == 100
+
+
+def test_anomaly_progress_payload_carries_message_params(monkeypatch, app):
+    import domains.adjustments.api.adjustments as adj_module
+    captured: list = []
+
+    class FakeSio:
+        def emit(self, event, payload, room=None):
+            if event == "anomaly_progress":
+                captured.append(payload)
+
+    monkeypatch.setattr(adj_module, "_socketio", FakeSio())
+
+    cb = adj_module._make_progress_callback(
+        "u1", started_at=None, phase_keys=["anomaly_phase_sbad"],
+    )
+    cb("SBAD (iter 3)", 0.0,
+       message_key="anomaly_phase_sbad",
+       message_params={"iter": 3})
+
+    assert captured[0]["messageParams"] == {"iter": 3}

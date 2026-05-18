@@ -224,3 +224,81 @@ def test_prepare_stl_emits_progress_markers():
     )
     assert result is not None  # STL ran successfully
     assert len(time_values) == n
+
+
+# ---------------------------------------------------------------------------
+# Plan T1: callbacks must additionally carry a stable i18n key (message_key)
+# and optional message_params (e.g. SBAD iteration counter).
+# ---------------------------------------------------------------------------
+
+def test_process_constants_passes_message_key_to_callback():
+    """Pipeline phases must emit a stable i18n key, not just localized labels."""
+    import pandas as pd
+    from domains.adjustments.services.anomaly_pipeline import process_constants
+
+    times = pd.date_range("2025-01-01", periods=10, freq="3min")
+    df = pd.DataFrame({"t": times, "v": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 3.0, 4.0, 5.0]})
+    captured: list = []
+
+    def cb(label, fraction, message_key=None, message_params=None):
+        captured.append({"label": label, "fraction": fraction,
+                         "message_key": message_key, "message_params": message_params})
+
+    process_constants(df, eq_max=1.0, gap_max=None, dec=1, lang="de", progress_callback=cb)
+
+    assert captured, "callback should have been invoked"
+    keys = {c["message_key"] for c in captured if c["message_key"] is not None}
+    assert "anomaly_phase_constants" in keys
+
+
+def test_process_zeros_passes_message_key():
+    import pandas as pd
+    from domains.adjustments.services.anomaly_pipeline import process_zeros
+
+    df = pd.DataFrame({"t": pd.date_range("2025-01-01", periods=5, freq="3min"),
+                       "v": [0.0, 1.0, 0.0, 2.0, 3.0]})
+    captured: list = []
+
+    def cb(label, fraction, message_key=None, message_params=None):
+        captured.append(message_key)
+
+    process_zeros(df, el0=True, gap_max=None, dec=1, lang="en", progress_callback=cb)
+    assert "anomaly_phase_zeros" in {k for k in captured if k}
+
+
+def test_sbad_callback_includes_iteration_param():
+    """SBAD iterates; the iteration count must travel as message_params."""
+    import pandas as pd
+    from domains.adjustments.services.anomaly_pipeline import process_sbad
+
+    df = pd.DataFrame({"t": pd.date_range("2025-01-01", periods=20, freq="3min"),
+                       "v": [10.0] * 10 + [10.0, 100.0, 10.0] + [10.0] * 7})
+    captured: list = []
+
+    def cb(label, fraction, message_key=None, message_params=None):
+        captured.append({"key": message_key, "params": message_params})
+
+    process_sbad(df, chg_max=5, lg_max=3, gap_max=None, dec=1, lang="en", progress_callback=cb)
+
+    sbad_calls = [c for c in captured if c["key"] == "anomaly_phase_sbad"]
+    assert sbad_calls, "SBAD must emit anomaly_phase_sbad messageKey"
+    iter_params = [c["params"] for c in sbad_calls if c["params"] and "iter" in c["params"]]
+    assert iter_params, "SBAD callback must carry {iter: N} as message_params"
+
+
+def test_legacy_two_arg_callback_still_works():
+    """The whole point of the introspection wrapper: legacy cb(label, fraction)
+    callbacks (no message_key/message_params kwargs) must keep working."""
+    import pandas as pd
+    from domains.adjustments.services.anomaly_pipeline import process_zeros
+
+    df = pd.DataFrame({"t": pd.date_range("2025-01-01", periods=5, freq="3min"),
+                       "v": [0.0, 1.0, 0.0, 2.0, 3.0]})
+    captured: list = []
+
+    def cb(label, fraction):  # legacy signature, no kwargs at all
+        captured.append((label, fraction))
+
+    # Must not raise TypeError
+    process_zeros(df, el0=True, gap_max=None, dec=1, lang="en", progress_callback=cb)
+    assert captured, "legacy callback should have been invoked"

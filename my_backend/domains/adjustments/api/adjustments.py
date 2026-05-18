@@ -7,7 +7,7 @@ import time
 import math
 import logging
 import traceback
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from flask import Blueprint, request, jsonify, g, Response
 import pandas as pd
@@ -680,26 +680,73 @@ def _normalize_lang(value) -> str:
     return "en"
 
 
-def _make_progress_callback(upload_id: str, started_at: Optional[float] = None):
+def _compute_phase_keys(par: Dict[str, Any], current_endpoint: str) -> list:
+    """Return ordered list of messageKeys the pipeline will emit for this run.
+
+    `current_endpoint` is one of "start", "stl_threshold", "lstm_threshold".
+    Used to size `totalSteps` so the FE counter matches reality.
+
+    NOTE the finalize step uses `anomaly_phase_short_ranges` (matches Task 1's
+    actual emission key from `process_short_ranges`).
+    """
+    keys = []
+    if current_endpoint == "start":
+        if par["EQ_MAX"]["value"] is not None:
+            keys.append("anomaly_phase_constants")
+        if par["EL0"]["value"]:
+            keys.append("anomaly_phase_zeros")
+        if par["V_MAX"]["value"] is not None or par["V_MIN"]["value"] is not None:
+            keys.append("anomaly_phase_range")
+        sbad = par["SBAD"]["var"]
+        if sbad["CHG_MAX"]["value"] is not None and sbad["LG_MAX"]["value"] is not None:
+            keys.append("anomaly_phase_sbad")
+        if par["STL"]["run"]:
+            keys.append("anomaly_phase_stl_prep")
+        elif par["LSTM"]["run"]:
+            keys.append("anomaly_phase_lstm_prep")
+        else:
+            keys.append("anomaly_phase_short_ranges")
+    elif current_endpoint == "stl_threshold":
+        keys.append("anomaly_phase_stl_apply")
+        if par["LSTM"]["run"]:
+            keys.append("anomaly_phase_lstm_prep")
+        else:
+            keys.append("anomaly_phase_short_ranges")
+    elif current_endpoint == "lstm_threshold":
+        keys.append("anomaly_phase_lstm_apply")
+        keys.append("anomaly_phase_short_ranges")
+    return keys
+
+
+def _make_progress_callback(
+    upload_id: str,
+    started_at: Optional[float] = None,
+    phase_keys: Optional[list] = None,
+):
     """Build a callable that emits SocketIO `anomaly_progress` events.
 
-    Pipeline phases call `cb(label, fraction)` periodically; the callback
-    debounces by fraction delta to avoid SocketIO flooding. After the first
-    meaningful progress (>5%, >1s elapsed) the payload includes etaFormatted
-    so the frontend overlay can render an ETA.
+    Pipeline phases call `cb(label, fraction, message_key=..., message_params=...)`.
+    The callback emits a payload that matches the contract used by other pages
+    (upload, processing) — `messageKey` for i18n, `currentStep/totalSteps`
+    derived from the ordered `phase_keys` list, `etaFormatted` always (or
+    `None` until enough samples accrue, so FE i18n fallback renders the
+    localized "Calculating..."), and `status`.
 
     Args:
-        upload_id: The upload identifier used as the SocketIO room.
-        started_at: Optional pipeline-wide start timestamp (time.time()).
-            When provided, ETA accumulates across all phases that share this
-            start time. When omitted, captures time.time() at construction
-            (preserves the prior per-callback behaviour).
+        upload_id: SocketIO room key.
+        started_at: Pipeline-wide start timestamp; if None, uses time.time() now.
+        phase_keys: Ordered list of message_keys this pipeline run will emit.
+            Used to compute currentStep/totalSteps. If None or empty,
+            currentStep/totalSteps are omitted from the payload.
     """
     state_holder = {
         "last_label": None,
+        "last_message_key": None,
         "last_fraction": -1.0,
         "started_at": started_at if started_at is not None else time.time(),
     }
+    phase_keys = phase_keys or []
+    total_steps = len(phase_keys)
 
     def _format_eta(seconds: float) -> str:
         if seconds < 1:
@@ -710,42 +757,54 @@ def _make_progress_callback(upload_id: str, started_at: Optional[float] = None):
         s = int(round(seconds - m * 60))
         return f"{m}m {s}s" if s > 0 else f"{m}m"
 
-    def cb(label: str, fraction: float) -> None:
+    def cb(label: str, fraction: float, message_key: Optional[str] = None,
+           message_params: Optional[dict] = None) -> None:
         try:
             f = max(0.0, min(1.0, float(fraction)))
-            # Always emit on label change, otherwise throttle to 5 % steps.
-            will_emit = (state_holder["last_label"] != label
+            label_changed = state_holder["last_label"] != label
+            key_changed = state_holder["last_message_key"] != message_key
+            will_emit = (label_changed or key_changed
                          or f - state_holder["last_fraction"] >= 0.05
                          or f >= 0.999)
             dlog("EMIT_DECISION",
-                 upload=_short(upload_id), step=label, fraction=f"{f:.3f}",
-                 will_emit=will_emit, last_step=state_holder["last_label"],
+                 upload=_short(upload_id), step=label, key=message_key,
+                 fraction=f"{f:.3f}", will_emit=will_emit,
+                 last_step=state_holder["last_label"],
                  last_fraction=f"{state_holder['last_fraction']:.3f}")
-            if will_emit:
-                elapsed = time.time() - state_holder["started_at"]
-                payload = {
-                    "uploadId": upload_id,
-                    "step": label,
-                    "progress": int(round(f * 100)),
-                }
-                if f >= 0.05 and elapsed > 1.0:
-                    remaining = elapsed * (1 - f) / f
-                    payload["etaFormatted"] = _format_eta(remaining)
-                    dlog("ETA_COMPUTED",
-                         elapsed_s=f"{elapsed:.2f}",
-                         fraction=f"{f:.3f}",
-                         remaining_s=f"{remaining:.2f}",
-                         formatted=payload["etaFormatted"])
-                dlog("EMIT", room=_short(upload_id), payload=payload)
-                _socketio.emit(
-                    "anomaly_progress",
-                    payload,
-                    room=upload_id,
-                )
-                state_holder["last_label"] = label
-                state_holder["last_fraction"] = f
+            if not will_emit:
+                return
+
+            elapsed = time.time() - state_holder["started_at"]
+            payload = {
+                "uploadId": upload_id,
+                "step": label,
+                "progress": int(round(f * 100)),
+                "status": "processing",
+            }
+            if message_key:
+                payload["messageKey"] = message_key
+            if message_params:
+                payload["messageParams"] = message_params
+            if total_steps > 0 and message_key in phase_keys:
+                payload["currentStep"] = phase_keys.index(message_key) + 1
+                payload["totalSteps"] = total_steps
+
+            # Always include etaFormatted; None means "not yet computable" —
+            # frontend renders the localized "Calculating..." via i18n fallback
+            # (loading.calculating). Sending the literal English string here
+            # would bypass per-language translation.
+            if f >= 0.05 and elapsed > 1.0:
+                remaining = elapsed * (1 - f) / f
+                payload["etaFormatted"] = _format_eta(remaining)
+            else:
+                payload["etaFormatted"] = None
+
+            dlog("EMIT", room=_short(upload_id), payload=payload)
+            _socketio.emit("anomaly_progress", payload, room=upload_id)
+            state_holder["last_label"] = label
+            state_holder["last_message_key"] = message_key
+            state_holder["last_fraction"] = f
         except Exception:
-            # Progress is best-effort — never let SocketIO failures kill the pipeline.
             logger.debug("progress emit failed", exc_info=True)
 
     return cb
@@ -1003,7 +1062,10 @@ def anomaly_start() -> Tuple[Response, int]:
         state["params"] = par
         state["lang"] = lang
         pipeline_started_at = time.time()
-        progress_cb = _make_progress_callback(upload_id, started_at=pipeline_started_at)
+        progress_cb = _make_progress_callback(
+            upload_id, started_at=pipeline_started_at,
+            phase_keys=_compute_phase_keys(par, "start"),
+        )
 
         # Run the deterministic phases.
         try:
@@ -1223,7 +1285,10 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
 
         par = state["params"]
         pipeline_started_at = time.time()
-        progress_cb = _make_progress_callback(upload_id, started_at=pipeline_started_at)
+        progress_cb = _make_progress_callback(
+            upload_id, started_at=pipeline_started_at,
+            phase_keys=_compute_phase_keys(par, "stl_threshold"),
+        )
 
         # Apply STL — NaN anomalies and interpolate.
         df, anomaly_mask = _apply_stl_threshold(
@@ -1354,7 +1419,10 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
 
         par = state["params"]
         pipeline_started_at = time.time()
-        progress_cb = _make_progress_callback(upload_id, started_at=pipeline_started_at)
+        progress_cb = _make_progress_callback(
+            upload_id, started_at=pipeline_started_at,
+            phase_keys=_compute_phase_keys(par, "lstm_threshold"),
+        )
 
         df, anomalies_df = _apply_lstm_threshold(
             state["processed_df"],
