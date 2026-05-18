@@ -244,6 +244,13 @@ def validate_param_single(name: str, value, par: Dict[str, Any], dt_avg: Optiona
 
     `name` is the param key path (e.g. "EQ_MAX", "SBAD.CHG_MAX", "STL.PERIOD_H").
     Raises ValueError with localized message on failure.
+
+    `None` is treated as "not set" — a legal in-progress state for on-blur
+    validation, matching `validate_par_dict` and the original
+    `anomaly_detection_1.py` script (L794: `if par[X]["value"] is not None`).
+    Cross-field constraints and required-when-enabled checks (SBAD pair,
+    STL/LSTM run-without-period) are enforced at submit time by
+    `validate_par_dict`.
     """
     descriptor = _resolve_descriptor(par, name)
     if descriptor is None:
@@ -254,6 +261,12 @@ def validate_param_single(name: str, value, par: Dict[str, Any], dt_avg: Optiona
                 lang,
             )
         )
+
+    # None = "not set" — skip per-field validation. Booleans (EL0, STL.run,
+    # LSTM.run) never come through as None from the frontend; they fall
+    # through to the boolean isinstance check below.
+    if value is None and name not in ("EL0", "STL.run", "LSTM.run"):
+        return
 
     # Build a temp descriptor with the candidate value to validate
     candidate = dict(descriptor)
