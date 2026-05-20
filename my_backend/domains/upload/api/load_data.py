@@ -82,6 +82,7 @@ def _error_response(error_code: str, message: str, status_code: int = 400) -> Tu
 
 @bp.route('/upload-chunk', methods=['POST'])
 @require_auth
+@require_subscription
 def upload_chunk() -> Tuple[Response, int]:
     """
     Handle chunked file upload.
