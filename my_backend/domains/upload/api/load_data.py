@@ -82,6 +82,7 @@ def _error_response(error_code: str, message: str, status_code: int = 400) -> Tu
 
 @bp.route('/upload-chunk', methods=['POST'])
 @require_auth
+@require_subscription
 def upload_chunk() -> Tuple[Response, int]:
     """
     Handle chunked file upload.
@@ -142,10 +143,21 @@ def upload_chunk() -> Tuple[Response, int]:
         else:
             # Non-zero chunks: wait for metadata (chunk 0 must arrive first or concurrently)
             import time
-            for _ in range(10):  # Wait up to 1 second
+            metadata_found = False
+            for _ in range(50):  # Wait up to 5 seconds
                 if local_chunk_service.get_upload_metadata(upload_id) is not None:
+                    metadata_found = True
                     break
                 time.sleep(0.1)
+
+            if not metadata_found:
+                # Chunk 0 metadata never arrived — return 409 so the client can retry this chunk later
+                return jsonify({
+                    "error": "chunk_zero_pending",
+                    "message": "Chunk 0 metadata not yet available. Retry this chunk in a moment.",
+                    "uploadId": upload_id,
+                    "chunkIndex": chunk_index,
+                }), 409
 
         # Upload chunk to local filesystem
         if not local_chunk_service.upload_chunk(upload_id, chunk_index, chunk_content):

@@ -201,16 +201,35 @@ class LocalChunkService:
             encodings_to_try.append('utf-8')
         encodings_to_try.extend(['latin-1', 'cp1252', 'iso-8859-1'])
 
-        for enc in encodings_to_try:
+        preferred = encodings_to_try[0]
+        for idx, enc in enumerate(encodings_to_try):
             try:
                 result = data.decode(enc)
-                logger.debug(f"Successfully decoded with {enc}")
+                if idx == 0:
+                    logger.info(
+                        "[upload] file '%s' decoded with preferred encoding=%s (%d bytes)",
+                        upload_id, enc, len(data),
+                    )
+                else:
+                    logger.warning(
+                        "[upload] file '%s' decoded with fallback encoding=%s "
+                        "(preferred '%s' failed; tried %d encoding(s) before success)",
+                        upload_id, enc, preferred, idx,
+                    )
                 return result
-            except (UnicodeDecodeError, LookupError):
+            except (UnicodeDecodeError, LookupError) as exc:
+                logger.debug(
+                    "[upload] file '%s' decode failed with %s: %s",
+                    upload_id, enc, exc,
+                )
                 continue
 
         # Last resort: ignore errors
-        logger.warning(f"Could not decode with any encoding, using utf-8 with errors='ignore'")
+        logger.error(
+            "[upload] file '%s' could not be decoded with any of %s — "
+            "falling back to utf-8 errors='ignore' (data may be corrupted)",
+            upload_id, encodings_to_try,
+        )
         return data.decode('utf-8', errors='ignore')
 
     def delete_upload_chunks(self, upload_id: str) -> int:
