@@ -256,6 +256,7 @@ def prepare_save():
 
 @bp.route('/download/<path:file_id>', methods=['GET'])
 @require_auth
+@require_subscription
 def download_file(file_id: str):
     """
     Download prepared CSV file.
@@ -264,6 +265,12 @@ def download_file(file_id: str):
     """
     try:
         logger.debug(f"Download request for file: {file_id}")
+
+        # IDOR + path traversal guard: file_id must start with '{user_id}_'
+        # and contain no '..', '/', or '\\' (server-constructed file_ids never do).
+        if not _file_id_is_owned_by_user(file_id, g.user_id):
+            logger.warning(f"Forbidden download attempt: user={g.user_id} file_id={file_id[:40]}")
+            return jsonify({"error": "forbidden"}), 403
 
         # First, try to get from local storage (new files)
         csv_content = local_chunk_service.get_processed_result(file_id)
