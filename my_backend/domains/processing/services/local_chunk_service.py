@@ -23,6 +23,7 @@ Usage:
 """
 
 import os
+import re
 import json
 import shutil
 import tempfile
@@ -37,6 +38,26 @@ logger = logging.getLogger(__name__)
 # Chunk directory in system temp folder
 CHUNK_DIR = os.path.join(tempfile.gettempdir(), 'processing_chunks')
 os.makedirs(CHUNK_DIR, exist_ok=True)
+
+# Allow only safe characters in upload_id: letters, digits, hyphen, underscore.
+# This is sufficient for the natural upload_id format (user_id_timestamp_random)
+# and rejects all path separators and traversal sequences.
+_SAFE_UPLOAD_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_upload_id(upload_id: str) -> None:
+    """
+    Raise ValueError if upload_id contains characters that could lead to path traversal
+    or other unexpected filesystem behavior. Only the safe character set [A-Za-z0-9_-]
+    is accepted.
+    """
+    if not isinstance(upload_id, str) or not upload_id:
+        raise ValueError(f"invalid upload_id: must be a non-empty string")
+    if not _SAFE_UPLOAD_ID_RE.match(upload_id):
+        raise ValueError(
+            f"unsafe upload_id: {upload_id!r} contains disallowed characters "
+            f"(only [A-Za-z0-9_-] allowed)"
+        )
 
 
 class LocalChunkService:
@@ -58,11 +79,15 @@ class LocalChunkService:
         Get chunk directory path for an upload.
 
         Args:
-            upload_id: Unique upload identifier
+            upload_id: Unique upload identifier (must match [A-Za-z0-9_-]+)
 
         Returns:
-            Path to chunk directory
+            Absolute path to the chunk directory
+
+        Raises:
+            ValueError: if upload_id contains path-traversal characters
         """
+        _validate_upload_id(upload_id)
         chunk_dir = os.path.join(CHUNK_DIR, upload_id)
         os.makedirs(chunk_dir, exist_ok=True)
         return chunk_dir
@@ -72,13 +97,17 @@ class LocalChunkService:
         Save a chunk to local filesystem.
 
         Args:
-            upload_id: Unique upload identifier
+            upload_id: Unique upload identifier (must match [A-Za-z0-9_-]+)
             chunk_index: Zero-based chunk index
             data: Chunk data as bytes
 
         Returns:
             True if successful, False otherwise
+
+        Raises:
+            ValueError: if upload_id contains path-traversal characters
         """
+        _validate_upload_id(upload_id)
         try:
             # Cleanup expired uploads periodically
             self._cleanup_expired()
@@ -110,11 +139,15 @@ class LocalChunkService:
         List all chunks for an upload.
 
         Args:
-            upload_id: Unique upload identifier
+            upload_id: Unique upload identifier (must match [A-Za-z0-9_-]+)
 
         Returns:
             List of chunk filenames
+
+        Raises:
+            ValueError: if upload_id contains path-traversal characters
         """
+        _validate_upload_id(upload_id)
         chunk_dir = os.path.join(CHUNK_DIR, upload_id)
         if not os.path.exists(chunk_dir):
             return []
@@ -137,12 +170,16 @@ class LocalChunkService:
         Combine all chunks into a single bytes object.
 
         Args:
-            upload_id: Unique upload identifier
+            upload_id: Unique upload identifier (must match [A-Za-z0-9_-]+)
             total_chunks: Expected total number of chunks
 
         Returns:
             Combined chunk data as bytes, or None on error
+
+        Raises:
+            ValueError: if upload_id contains path-traversal characters
         """
+        _validate_upload_id(upload_id)
         try:
             chunk_dir = os.path.join(CHUNK_DIR, upload_id)
             combined = bytearray()
@@ -199,14 +236,14 @@ class LocalChunkService:
         encodings_to_try = [detected_encoding]
         if detected_encoding != 'utf-8':
             encodings_to_try.append('utf-8')
-        encodings_to_try.extend(['latin-1', 'cp1252', 'iso-8859-1'])
+        encodings_to_try.extend(['latin-1', 'cp1252'])
 
         preferred = encodings_to_try[0]
         for idx, enc in enumerate(encodings_to_try):
             try:
                 result = data.decode(enc)
                 if idx == 0:
-                    logger.info(
+                    logger.debug(
                         "[upload] file '%s' decoded with preferred encoding=%s (%d bytes)",
                         upload_id, enc, len(data),
                     )
@@ -237,11 +274,15 @@ class LocalChunkService:
         Delete all chunks for an upload.
 
         Args:
-            upload_id: Unique upload identifier
+            upload_id: Unique upload identifier (must match [A-Za-z0-9_-]+)
 
         Returns:
             Number of files deleted
+
+        Raises:
+            ValueError: if upload_id contains path-traversal characters
         """
+        _validate_upload_id(upload_id)
         try:
             chunk_dir = os.path.join(CHUNK_DIR, upload_id)
             if os.path.exists(chunk_dir):
@@ -288,7 +329,8 @@ class LocalChunkService:
         self,
         upload_id: str,
         total_chunks: int,
-        parameters: Dict[str, Any]
+        parameters: Dict[str, Any],
+        user_id: str,
     ) -> bool:
         """
         Save upload metadata to JSON file.
@@ -297,10 +339,15 @@ class LocalChunkService:
             upload_id: Unique upload identifier
             total_chunks: Total number of chunks expected
             parameters: Upload parameters dict
+            user_id: Authenticated user UUID (for ownership/IDOR checks)
 
         Returns:
             True if saved successfully, False otherwise
+
+        Raises:
+            ValueError: if upload_id contains path-traversal characters
         """
+        _validate_upload_id(upload_id)
         try:
             chunk_dir = self.get_chunk_dir(upload_id)
             metadata_path = os.path.join(chunk_dir, '_metadata.json')
@@ -308,6 +355,7 @@ class LocalChunkService:
             metadata = {
                 'total_chunks': total_chunks,
                 'parameters': parameters,
+                'user_id': user_id,
                 'created_at': datetime.now().isoformat()
             }
 
@@ -326,11 +374,15 @@ class LocalChunkService:
         Get upload metadata from JSON file.
 
         Args:
-            upload_id: Unique upload identifier
+            upload_id: Unique upload identifier (must match [A-Za-z0-9_-]+)
 
         Returns:
             Metadata dict or None if not found
+
+        Raises:
+            ValueError: if upload_id contains path-traversal characters
         """
+        _validate_upload_id(upload_id)
         try:
             metadata_path = os.path.join(CHUNK_DIR, upload_id, '_metadata.json')
             if not os.path.exists(metadata_path):

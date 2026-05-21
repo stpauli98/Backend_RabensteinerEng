@@ -80,6 +80,23 @@ def _error_response(error_code: str, message: str, status_code: int = 400) -> Tu
     return jsonify({"error": error_code, "message": message}), status_code
 
 
+def _check_upload_ownership(upload_id: str, user_id: str) -> bool:
+    """
+    Verify that an existing upload (identified by upload_id) was created
+    by the given user_id. Returns True if owner matches OR if no metadata
+    exists yet (no upload to protect). Returns False if metadata exists
+    and the owner does not match.
+    """
+    metadata = local_chunk_service.get_upload_metadata(upload_id)
+    if metadata is None:
+        return True  # No upload to protect yet; chunk 0 path
+    owner = metadata.get('user_id')
+    if owner is None:
+        # Legacy upload without owner field — fail closed to be safe
+        return False
+    return owner == user_id
+
+
 @bp.route('/upload-chunk', methods=['POST'])
 @require_auth
 @require_subscription
@@ -135,14 +152,13 @@ def upload_chunk() -> Tuple[Response, int]:
                     'dropdown_count': int(request.form.get('dropdown_count', '2'))
                 }
 
-                if not local_chunk_service.save_upload_metadata(upload_id, total_chunks, parameters):
+                if not local_chunk_service.save_upload_metadata(upload_id, total_chunks, parameters, user_id=g.user_id):
                     return jsonify({"error": "Failed to save upload metadata"}), 500
 
             except json.JSONDecodeError:
                 return jsonify({"error": "Invalid JSON format for selected_columns"}), 400
         else:
             # Non-zero chunks: wait for metadata (chunk 0 must arrive first or concurrently)
-            import time
             metadata_found = False
             for _ in range(50):  # Wait up to 5 seconds
                 if local_chunk_service.get_upload_metadata(upload_id) is not None:
@@ -158,6 +174,10 @@ def upload_chunk() -> Tuple[Response, int]:
                     "uploadId": upload_id,
                     "chunkIndex": chunk_index,
                 }), 409
+
+            # IDOR check: verify the upload belongs to the calling user
+            if not _check_upload_ownership(upload_id, g.user_id):
+                return jsonify({"error": "Forbidden", "message": "Upload not owned by this user"}), 403
 
         # Upload chunk to local filesystem
         if not local_chunk_service.upload_chunk(upload_id, chunk_index, chunk_content):
@@ -199,6 +219,10 @@ def finalize_upload() -> Tuple[Response, int]:
         if metadata is None:
             return jsonify({"error": "Upload not found or already processed"}), 404
 
+        # IDOR check: verify the upload belongs to the calling user
+        if metadata.get('user_id') != g.user_id:
+            return jsonify({"error": "Forbidden", "message": "Upload not owned by this user"}), 403
+
         # Verify all chunks received
         received_chunks = local_chunk_service.get_upload_chunk_count(upload_id)
         total_chunks = metadata['total_chunks']
@@ -218,6 +242,7 @@ def finalize_upload() -> Tuple[Response, int]:
 
 @bp.route('/cancel-upload', methods=['POST'])
 @require_auth
+@require_subscription
 def cancel_upload() -> Tuple[Response, int]:
     """
     Cancel an in-progress upload.
@@ -231,6 +256,11 @@ def cancel_upload() -> Tuple[Response, int]:
             return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         upload_id = data['uploadId']
+
+        # IDOR check: verify the upload belongs to the calling user (if it exists)
+        metadata = local_chunk_service.get_upload_metadata(upload_id)
+        if metadata is not None and metadata.get('user_id') != g.user_id:
+            return jsonify({"error": "Forbidden", "message": "Upload not owned by this user"}), 403
 
         # Delete all chunks and metadata from local filesystem
         deleted_count = local_chunk_service.delete_upload_chunks(upload_id)
@@ -751,6 +781,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
 
 @bp.route('/prepare-save', methods=['POST'])
 @require_auth
+@require_subscription
 def prepare_save() -> Tuple[Response, int]:
     """
     Prepare merged/processed data for download.
@@ -805,6 +836,7 @@ def prepare_save() -> Tuple[Response, int]:
 
 @bp.route('/merge-and-prepare', methods=['POST'])
 @require_auth
+@require_subscription
 def merge_and_prepare() -> Tuple[Response, int]:
     """
     Merge multiple processed files into one file.
