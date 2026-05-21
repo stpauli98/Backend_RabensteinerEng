@@ -22,6 +22,7 @@ from domains.processing.services.local_chunk_service import local_chunk_service
 
 from marshmallow import ValidationError
 from domains.processing.api.schemas import FirstProcessingCleanupSchema, FirstProcessingPrepareSaveSchema
+from domains.processing.utils.csv_sanitizer import csv_safe_cell
 
 from domains.processing.services.progress import ProgressTracker
 from domains.processing.services.csv_processor import process_csv
@@ -225,7 +226,7 @@ def prepare_save():
         output = StringIO()
         writer = csv.writer(output, delimiter=';')
         for row in save_data:
-            writer.writerow(row)
+            writer.writerow(csv_safe_cell(cell) for cell in row)
         csv_content = output.getvalue()
 
         # Save to local filesystem

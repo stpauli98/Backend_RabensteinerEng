@@ -266,3 +266,53 @@ def test_prepare_save_schema_accepts_minimal_valid_payload():
     )
     assert out["data"]["data"] == [["UTC", "value"]]
     assert out["data"]["fileName"] == "x.csv"
+
+
+# === CSV injection roundtrip (Task 5) ===
+
+
+def test_prepare_save_neutralizes_csv_injection(monkeypatch):
+    """Cells starting with =, +, -, @ are written with a leading single quote."""
+    import flask
+    from domains.processing.services import local_chunk_service as lcs
+    from domains.processing.api import first_processing as fp
+
+    captured = {}
+
+    def fake_save(file_id, csv_content, metadata=None):
+        captured['csv_content'] = csv_content
+        return True
+
+    monkeypatch.setattr(lcs.local_chunk_service, 'save_processed_result', fake_save)
+
+    app = flask.Flask(__name__)
+    app.register_blueprint(fp.bp, url_prefix='/api/firstProcessing')
+
+    with app.test_request_context(
+        '/api/firstProcessing/prepare-save',
+        method='POST',
+        json={
+            "data": {
+                "data": [
+                    ["UTC", "value"],
+                    ["=1+1", "@SUM(A1:A2)"],
+                    ["normal", "-CMD"],
+                ],
+                "fileName": "x.csv",
+            }
+        },
+    ):
+        flask.g.user_id = "alice-uuid"
+        underlying = fp.prepare_save
+        while hasattr(underlying, '__wrapped__'):
+            underlying = underlying.__wrapped__
+        response = underlying()
+
+    csv_out = captured.get('csv_content', '')
+    # Every dangerous cell prefixed with '
+    assert "'=1+1" in csv_out, f"=1+1 not neutralized in output:\n{csv_out}"
+    assert "'@SUM" in csv_out, f"@SUM not neutralized in output:\n{csv_out}"
+    assert "'-CMD" in csv_out, f"-CMD not neutralized in output:\n{csv_out}"
+    # Safe cells unchanged
+    assert "normal" in csv_out
+    assert "UTC" in csv_out
