@@ -288,7 +288,8 @@ class LocalChunkService:
         self,
         upload_id: str,
         total_chunks: int,
-        parameters: Dict[str, Any]
+        parameters: Dict[str, Any],
+        user_id: str,
     ) -> bool:
         """
         Save upload metadata to JSON file.
@@ -297,6 +298,7 @@ class LocalChunkService:
             upload_id: Unique upload identifier
             total_chunks: Total number of chunks expected
             parameters: Upload parameters dict
+            user_id: Authenticated user UUID (for ownership/IDOR checks)
 
         Returns:
             True if saved successfully, False otherwise
@@ -308,6 +310,7 @@ class LocalChunkService:
             metadata = {
                 'total_chunks': total_chunks,
                 'parameters': parameters,
+                'user_id': user_id,
                 'created_at': datetime.now().isoformat()
             }
 

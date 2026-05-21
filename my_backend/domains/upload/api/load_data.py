@@ -135,7 +135,7 @@ def upload_chunk() -> Tuple[Response, int]:
                     'dropdown_count': int(request.form.get('dropdown_count', '2'))
                 }
 
-                if not local_chunk_service.save_upload_metadata(upload_id, total_chunks, parameters):
+                if not local_chunk_service.save_upload_metadata(upload_id, total_chunks, parameters, user_id=g.user_id):
                     return jsonify({"error": "Failed to save upload metadata"}), 500
 
             except json.JSONDecodeError:
