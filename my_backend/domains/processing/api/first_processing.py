@@ -20,6 +20,9 @@ from shared.tracking.usage import increment_processing_count, update_storage_usa
 from shared.storage.service import storage_service
 from domains.processing.services.local_chunk_service import local_chunk_service
 
+from marshmallow import ValidationError
+from domains.processing.api.schemas import FirstProcessingCleanupSchema
+
 from domains.processing.services.progress import ProgressTracker
 from domains.processing.services.csv_processor import process_csv
 
@@ -316,16 +319,20 @@ def download_file(file_id: str):
 
 @bp.route('/cleanup-files', methods=['POST'])
 @require_auth
+@require_subscription
 def cleanup_files():
     """
     Delete files after successful download.
     Tries local storage first, then falls back to Supabase Storage for legacy files.
+    Per-file IDOR guard rejects any file_id not owned by g.user_id.
     """
     try:
-        data = request.json
-
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+        try:
+            data = FirstProcessingCleanupSchema().load(
+                request.get_json(force=True, silent=True) or {}
+            )
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         file_ids = data.get('fileIds', [])
 
@@ -337,6 +344,14 @@ def cleanup_files():
 
         for file_id in file_ids:
             try:
+                # IDOR guard: refuse to delete files that don't belong to caller
+                if not _file_id_is_owned_by_user(file_id, g.user_id):
+                    logger.warning(
+                        f"Forbidden cleanup attempt: user={g.user_id} file_id={file_id[:40]}"
+                    )
+                    failed_ids.append(file_id)
+                    continue
+
                 # First try local storage (new files)
                 if local_chunk_service.delete_processed_result(file_id):
                     deleted_count += 1
@@ -346,7 +361,7 @@ def cleanup_files():
                     deleted_count += 1
                     logger.debug(f"Cleaned up file from Supabase: {file_id}")
                 else:
-                    # File not found in either location - consider it already deleted
+                    # File not found in either location — idempotent: count as deleted
                     logger.debug(f"File not found (already deleted?): {file_id}")
                     deleted_count += 1
             except Exception as del_error:

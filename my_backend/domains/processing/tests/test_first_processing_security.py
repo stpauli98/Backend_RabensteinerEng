@@ -117,3 +117,68 @@ def test_download_handler_rejects_path_traversal_via_helper():
     # in this integration suite for visibility.
     assert _file_id_is_owned_by_user("../etc/passwd", "alice") is False
     assert _file_id_is_owned_by_user("alice_../etc/passwd", "alice") is False
+
+
+# === /cleanup-files hardening (Task 3) ===
+
+
+def test_cleanup_files_route_has_require_subscription_decorator():
+    """Static check: @require_subscription present on cleanup_files."""
+    import inspect, re
+    from domains.processing.api import first_processing
+    src = inspect.getsource(first_processing)
+    pattern = re.compile(
+        r"@require_auth\s*\n\s*@require_subscription\s*\n\s*def cleanup_files",
+        re.MULTILINE,
+    )
+    assert pattern.search(src), "@require_subscription missing on cleanup_files"
+
+
+def test_cleanup_files_handler_uses_idor_helper():
+    """Source inspection: cleanup_files calls _file_id_is_owned_by_user for each file_id."""
+    import inspect
+    from domains.processing.api import first_processing
+    src = inspect.getsource(first_processing.cleanup_files)
+    assert "_file_id_is_owned_by_user" in src, \
+        "cleanup_files must invoke _file_id_is_owned_by_user inside its file_id loop"
+
+
+def test_cleanup_files_handler_uses_marshmallow_schema():
+    """Source inspection: cleanup_files uses FirstProcessingCleanupSchema for payload validation."""
+    import inspect
+    from domains.processing.api import first_processing
+    src = inspect.getsource(first_processing.cleanup_files)
+    assert "FirstProcessingCleanupSchema" in src, \
+        "cleanup_files must validate request body via FirstProcessingCleanupSchema"
+    assert "ValidationError" in src or "load(" in src, \
+        "cleanup_files must wrap schema.load() in ValidationError handling"
+
+
+def test_first_processing_cleanup_schema_caps_file_ids_at_1000():
+    """FirstProcessingCleanupSchema rejects fileIds lists longer than MAX_FILE_IDS=1000."""
+    from marshmallow import ValidationError
+    from domains.processing.api.schemas import FirstProcessingCleanupSchema
+    payload = {"fileIds": [f"user_{i:08x}" for i in range(1001)]}
+    schema = FirstProcessingCleanupSchema()
+    try:
+        schema.load(payload)
+        assert False, "schema should have rejected 1001-element list"
+    except ValidationError as e:
+        assert "fileIds" in str(e.messages)
+
+
+def test_first_processing_cleanup_schema_accepts_valid_payload():
+    """FirstProcessingCleanupSchema accepts a small valid fileIds list."""
+    from domains.processing.api.schemas import FirstProcessingCleanupSchema
+    payload = {"fileIds": ["alice_deadbeef", "alice_cafebabe"]}
+    out = FirstProcessingCleanupSchema().load(payload)
+    assert out["fileIds"] == ["alice_deadbeef", "alice_cafebabe"]
+
+
+def test_first_processing_cleanup_schema_accepts_empty_list():
+    """FirstProcessingCleanupSchema permits empty/missing fileIds (no-op success)."""
+    from domains.processing.api.schemas import FirstProcessingCleanupSchema
+    out = FirstProcessingCleanupSchema().load({"fileIds": []})
+    assert out["fileIds"] == []
+    out2 = FirstProcessingCleanupSchema().load({})
+    assert out2["fileIds"] == []
