@@ -243,6 +243,7 @@ def finalize_upload() -> Tuple[Response, int]:
 
 @bp.route('/cancel-upload', methods=['POST'])
 @require_auth
+@require_subscription
 def cancel_upload() -> Tuple[Response, int]:
     """
     Cancel an in-progress upload.
@@ -781,6 +782,7 @@ def upload_files(file_content: str, params: Dict[str, Any]) -> Tuple[Response, i
 
 @bp.route('/prepare-save', methods=['POST'])
 @require_auth
+@require_subscription
 def prepare_save() -> Tuple[Response, int]:
     """
     Prepare merged/processed data for download.
@@ -835,6 +837,7 @@ def prepare_save() -> Tuple[Response, int]:
 
 @bp.route('/merge-and-prepare', methods=['POST'])
 @require_auth
+@require_subscription
 def merge_and_prepare() -> Tuple[Response, int]:
     """
     Merge multiple processed files into one file.
