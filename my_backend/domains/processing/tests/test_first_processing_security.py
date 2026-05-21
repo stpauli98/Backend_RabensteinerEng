@@ -182,3 +182,87 @@ def test_first_processing_cleanup_schema_accepts_empty_list():
     assert out["fileIds"] == []
     out2 = FirstProcessingCleanupSchema().load({})
     assert out2["fileIds"] == []
+
+
+# === /prepare-save hardening (Task 4) ===
+
+
+def test_prepare_save_route_has_require_subscription_and_storage_decorators():
+    """Static check: @require_subscription AND @check_storage_limit present on prepare_save."""
+    import inspect, re
+    from domains.processing.api import first_processing
+    src = inspect.getsource(first_processing)
+    pattern = re.compile(
+        r"@require_auth\s*\n\s*@require_subscription\s*\n\s*@check_storage_limit\s*\n\s*def prepare_save",
+        re.MULTILINE,
+    )
+    assert pattern.search(src), \
+        "@require_subscription and @check_storage_limit must both precede prepare_save"
+
+
+def test_prepare_save_handler_uses_marshmallow_schema():
+    """Source inspection: prepare_save calls FirstProcessingPrepareSaveSchema().load(...)."""
+    import inspect
+    from domains.processing.api import first_processing
+    src = inspect.getsource(first_processing.prepare_save)
+    assert "FirstProcessingPrepareSaveSchema" in src, \
+        "prepare_save must validate payload via FirstProcessingPrepareSaveSchema"
+
+
+def test_prepare_save_stores_user_id_in_metadata(monkeypatch):
+    """After successful prepare-save, the metadata passed to save_processed_result contains user_id."""
+    import flask
+    from domains.processing.services import local_chunk_service as lcs
+    from domains.processing.api import first_processing as fp
+
+    captured = {}
+
+    def fake_save(file_id, csv_content, metadata=None):
+        captured['file_id'] = file_id
+        captured['metadata'] = metadata
+        return True
+
+    monkeypatch.setattr(lcs.local_chunk_service, 'save_processed_result', fake_save)
+
+    # Build a tiny Flask app context and call the underlying function directly,
+    # bypassing decorators (which require real JWT + subscription DB).
+    app = flask.Flask(__name__)
+    app.register_blueprint(fp.bp, url_prefix='/api/firstProcessing')
+
+    with app.test_request_context(
+        '/api/firstProcessing/prepare-save',
+        method='POST',
+        json={"data": {"data": [["UTC", "value"], ["2026-01-01", "100"]], "fileName": "x.csv"}},
+    ):
+        flask.g.user_id = "alice-uuid"
+        # Call the inner function bypassing decorators
+        underlying = fp.prepare_save
+        # If decorator chain wraps the function, peel until we get the real one
+        while hasattr(underlying, '__wrapped__'):
+            underlying = underlying.__wrapped__
+        response = underlying()
+
+    assert captured.get('metadata') is not None, "metadata must be passed to save_processed_result"
+    assert captured['metadata'].get('user_id') == "alice-uuid", \
+        f"metadata.user_id must equal g.user_id, got {captured['metadata'].get('user_id')!r}"
+
+
+def test_prepare_save_schema_rejects_empty_data():
+    """FirstProcessingPrepareSaveSchema rejects empty data list (min=1)."""
+    from marshmallow import ValidationError
+    from domains.processing.api.schemas import FirstProcessingPrepareSaveSchema
+    try:
+        FirstProcessingPrepareSaveSchema().load({"data": {"data": [], "fileName": "x.csv"}})
+        assert False, "should reject empty data list"
+    except ValidationError as e:
+        assert "data" in str(e.messages)
+
+
+def test_prepare_save_schema_accepts_minimal_valid_payload():
+    """FirstProcessingPrepareSaveSchema accepts a 1-row payload."""
+    from domains.processing.api.schemas import FirstProcessingPrepareSaveSchema
+    out = FirstProcessingPrepareSaveSchema().load(
+        {"data": {"data": [["UTC", "value"]], "fileName": "x.csv"}}
+    )
+    assert out["data"]["data"] == [["UTC", "value"]]
+    assert out["data"]["fileName"] == "x.csv"

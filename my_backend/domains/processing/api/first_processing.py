@@ -15,13 +15,13 @@ from io import StringIO
 from flask import Blueprint, request, jsonify, g, Response
 
 from shared.auth.jwt import require_auth
-from shared.auth.subscription import require_subscription, check_processing_limit
+from shared.auth.subscription import require_subscription, check_processing_limit, check_storage_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 from shared.storage.service import storage_service
 from domains.processing.services.local_chunk_service import local_chunk_service
 
 from marshmallow import ValidationError
-from domains.processing.api.schemas import FirstProcessingCleanupSchema
+from domains.processing.api.schemas import FirstProcessingCleanupSchema, FirstProcessingPrepareSaveSchema
 
 from domains.processing.services.progress import ProgressTracker
 from domains.processing.services.csv_processor import process_csv
@@ -202,22 +202,24 @@ def upload_chunk():
 
 @bp.route('/prepare-save', methods=['POST'])
 @require_auth
+@require_subscription
+@check_storage_limit
 def prepare_save():
     """
     Prepare processed data for download.
     Saves CSV data to local filesystem for fast access and no size limits.
     """
     try:
-        data = request.json
-        if not data or 'data' not in data:
-            return jsonify({"error": "No data received"}), 400
+        try:
+            payload = FirstProcessingPrepareSaveSchema().load(
+                request.get_json(force=True, silent=True) or {}
+            )
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
-        data_wrapper = data['data']
-        save_data = data_wrapper.get('data', [])
-        file_name = data_wrapper.get('fileName', '')
-
-        if not save_data:
-            return jsonify({"error": "Empty data"}), 400
+        wrapper = payload['data']
+        save_data = wrapper['data']
+        file_name = wrapper.get('fileName', '')
 
         # Convert data array to CSV string
         output = StringIO()
@@ -236,6 +238,7 @@ def prepare_save():
             file_id=file_id,
             csv_content=csv_content,
             metadata={
+                'user_id': user_id,
                 'totalRows': len(save_data) - 1,
                 'source': 'first-processing-prepare-save',
                 'originalFilename': file_name or "processed_data.csv"
