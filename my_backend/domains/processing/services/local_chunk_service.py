@@ -199,14 +199,14 @@ class LocalChunkService:
         encodings_to_try = [detected_encoding]
         if detected_encoding != 'utf-8':
             encodings_to_try.append('utf-8')
-        encodings_to_try.extend(['latin-1', 'cp1252', 'iso-8859-1'])
+        encodings_to_try.extend(['latin-1', 'cp1252'])
 
         preferred = encodings_to_try[0]
         for idx, enc in enumerate(encodings_to_try):
             try:
                 result = data.decode(enc)
                 if idx == 0:
-                    logger.info(
+                    logger.debug(
                         "[upload] file '%s' decoded with preferred encoding=%s (%d bytes)",
                         upload_id, enc, len(data),
                     )

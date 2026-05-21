@@ -159,7 +159,6 @@ def upload_chunk() -> Tuple[Response, int]:
                 return jsonify({"error": "Invalid JSON format for selected_columns"}), 400
         else:
             # Non-zero chunks: wait for metadata (chunk 0 must arrive first or concurrently)
-            import time
             metadata_found = False
             for _ in range(50):  # Wait up to 5 seconds
                 if local_chunk_service.get_upload_metadata(upload_id) is not None:
