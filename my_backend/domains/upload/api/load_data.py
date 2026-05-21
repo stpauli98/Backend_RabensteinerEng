@@ -80,6 +80,23 @@ def _error_response(error_code: str, message: str, status_code: int = 400) -> Tu
     return jsonify({"error": error_code, "message": message}), status_code
 
 
+def _check_upload_ownership(upload_id: str, user_id: str) -> bool:
+    """
+    Verify that an existing upload (identified by upload_id) was created
+    by the given user_id. Returns True if owner matches OR if no metadata
+    exists yet (no upload to protect). Returns False if metadata exists
+    and the owner does not match.
+    """
+    metadata = local_chunk_service.get_upload_metadata(upload_id)
+    if metadata is None:
+        return True  # No upload to protect yet; chunk 0 path
+    owner = metadata.get('user_id')
+    if owner is None:
+        # Legacy upload without owner field — fail closed to be safe
+        return False
+    return owner == user_id
+
+
 @bp.route('/upload-chunk', methods=['POST'])
 @require_auth
 @require_subscription
@@ -159,6 +176,10 @@ def upload_chunk() -> Tuple[Response, int]:
                     "chunkIndex": chunk_index,
                 }), 409
 
+            # IDOR check: verify the upload belongs to the calling user
+            if not _check_upload_ownership(upload_id, g.user_id):
+                return jsonify({"error": "Forbidden", "message": "Upload not owned by this user"}), 403
+
         # Upload chunk to local filesystem
         if not local_chunk_service.upload_chunk(upload_id, chunk_index, chunk_content):
             return jsonify({"error": "Failed to save chunk to storage"}), 500
@@ -199,6 +220,10 @@ def finalize_upload() -> Tuple[Response, int]:
         if metadata is None:
             return jsonify({"error": "Upload not found or already processed"}), 404
 
+        # IDOR check: verify the upload belongs to the calling user
+        if metadata.get('user_id') != g.user_id:
+            return jsonify({"error": "Forbidden", "message": "Upload not owned by this user"}), 403
+
         # Verify all chunks received
         received_chunks = local_chunk_service.get_upload_chunk_count(upload_id)
         total_chunks = metadata['total_chunks']
@@ -231,6 +256,11 @@ def cancel_upload() -> Tuple[Response, int]:
             return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         upload_id = data['uploadId']
+
+        # IDOR check: verify the upload belongs to the calling user (if it exists)
+        metadata = local_chunk_service.get_upload_metadata(upload_id)
+        if metadata is not None and metadata.get('user_id') != g.user_id:
+            return jsonify({"error": "Forbidden", "message": "Upload not owned by this user"}), 403
 
         # Delete all chunks and metadata from local filesystem
         deleted_count = local_chunk_service.delete_upload_chunks(upload_id)
