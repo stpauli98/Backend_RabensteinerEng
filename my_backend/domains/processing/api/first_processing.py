@@ -32,6 +32,30 @@ logger = logging.getLogger(__name__)
 bp = Blueprint('first_processing', __name__)
 
 
+def _file_id_is_owned_by_user(file_id, user_id):
+    """
+    Verify file_id is server-constructed and owned by the calling user.
+
+    Local-storage format is '{user_id}_{uuid8}'. We reject anything that does
+    not start with EXACTLY '{user_id}_' AND contains no path separators or
+    parent-directory markers — this single check blocks IDOR (different owner)
+    AND path traversal ('..', '/', '\\') because server-constructed file_ids
+    contain neither.
+
+    Returns False for None, empty string, prefix mismatch, or any payload
+    containing '/', '\\', or '..' anywhere.
+    """
+    if not file_id or not user_id:
+        return False
+    if not file_id.startswith(f"{user_id}_"):
+        return False
+    # Defense in depth: reject any path-traversal indicators that should
+    # never appear in a server-constructed file_id.
+    if '/' in file_id or '\\' in file_id or '..' in file_id:
+        return False
+    return True
+
+
 @bp.route('/upload_chunk', methods=['POST'])
 @require_auth
 @require_subscription
