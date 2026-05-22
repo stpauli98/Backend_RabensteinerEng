@@ -34,9 +34,10 @@ info_df = pd.DataFrame(columns=[
 
 def detect_delimiter(file_content: str) -> str:
     """
-    Detect the delimiter used in a CSV file content
+    Detect the delimiter used in a CSV file content.
+    Supports semicolon (German default), comma, tab, and pipe.
     """
-    delimiters = [';', ',', '\t']
+    delimiters = [';', ',', '\t', '|']
     first_line = file_content.split('\n')[0]
 
     counts = {d: first_line.count(d) for d in delimiters}
