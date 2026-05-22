@@ -15,10 +15,14 @@ from io import StringIO
 from flask import Blueprint, request, jsonify, g, Response
 
 from shared.auth.jwt import require_auth
-from shared.auth.subscription import require_subscription, check_processing_limit
+from shared.auth.subscription import require_subscription, check_processing_limit, check_storage_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 from shared.storage.service import storage_service
 from domains.processing.services.local_chunk_service import local_chunk_service
+
+from marshmallow import ValidationError
+from domains.processing.api.schemas import FirstProcessingCleanupSchema, FirstProcessingPrepareSaveSchema
+from domains.processing.utils.csv_sanitizer import csv_safe_cell
 
 from domains.processing.services.progress import ProgressTracker
 from domains.processing.services.csv_processor import process_csv
@@ -30,6 +34,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('first_processing', __name__)
+
+
+def _file_id_is_owned_by_user(file_id, user_id):
+    """
+    Verify file_id is server-constructed and owned by the calling user.
+
+    Local-storage format is '{user_id}_{uuid8}'. We reject anything that does
+    not start with EXACTLY '{user_id}_' AND contains no path separators or
+    parent-directory markers — this single check blocks IDOR (different owner)
+    AND path traversal ('..', '/', '\\') because server-constructed file_ids
+    contain neither.
+
+    Returns False for None, empty string, prefix mismatch, or any payload
+    containing '/', '\\', or '..' anywhere.
+    """
+    if not file_id or not user_id:
+        return False
+    if not file_id.startswith(f"{user_id}_"):
+        return False
+    # Defense in depth: reject any path-traversal indicators that should
+    # never appear in a server-constructed file_id.
+    if '/' in file_id or '\\' in file_id or '..' in file_id:
+        return False
+    return True
 
 
 @bp.route('/upload_chunk', methods=['POST'])
@@ -175,28 +203,30 @@ def upload_chunk():
 
 @bp.route('/prepare-save', methods=['POST'])
 @require_auth
+@require_subscription
+@check_storage_limit
 def prepare_save():
     """
     Prepare processed data for download.
     Saves CSV data to local filesystem for fast access and no size limits.
     """
     try:
-        data = request.json
-        if not data or 'data' not in data:
-            return jsonify({"error": "No data received"}), 400
+        try:
+            payload = FirstProcessingPrepareSaveSchema().load(
+                request.get_json(force=True, silent=True) or {}
+            )
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
-        data_wrapper = data['data']
-        save_data = data_wrapper.get('data', [])
-        file_name = data_wrapper.get('fileName', '')
-
-        if not save_data:
-            return jsonify({"error": "Empty data"}), 400
+        wrapper = payload['data']
+        save_data = wrapper['data']
+        file_name = wrapper.get('fileName', '')
 
         # Convert data array to CSV string
         output = StringIO()
         writer = csv.writer(output, delimiter=';')
         for row in save_data:
-            writer.writerow(row)
+            writer.writerow(csv_safe_cell(cell) for cell in row)
         csv_content = output.getvalue()
 
         # Save to local filesystem
@@ -209,6 +239,7 @@ def prepare_save():
             file_id=file_id,
             csv_content=csv_content,
             metadata={
+                'user_id': user_id,
                 'totalRows': len(save_data) - 1,
                 'source': 'first-processing-prepare-save',
                 'originalFilename': file_name or "processed_data.csv"
@@ -232,6 +263,7 @@ def prepare_save():
 
 @bp.route('/download/<path:file_id>', methods=['GET'])
 @require_auth
+@require_subscription
 def download_file(file_id: str):
     """
     Download prepared CSV file.
@@ -240,6 +272,12 @@ def download_file(file_id: str):
     """
     try:
         logger.debug(f"Download request for file: {file_id}")
+
+        # IDOR + path traversal guard: file_id must start with '{user_id}_'
+        # and contain no '..', '/', or '\\' (server-constructed file_ids never do).
+        if not _file_id_is_owned_by_user(file_id, g.user_id):
+            logger.warning(f"Forbidden download attempt: user={g.user_id} file_id={file_id[:40]}")
+            return jsonify({"error": "forbidden"}), 403
 
         # First, try to get from local storage (new files)
         csv_content = local_chunk_service.get_processed_result(file_id)
@@ -285,16 +323,20 @@ def download_file(file_id: str):
 
 @bp.route('/cleanup-files', methods=['POST'])
 @require_auth
+@require_subscription
 def cleanup_files():
     """
     Delete files after successful download.
     Tries local storage first, then falls back to Supabase Storage for legacy files.
+    Per-file IDOR guard rejects any file_id not owned by g.user_id.
     """
     try:
-        data = request.json
-
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+        try:
+            data = FirstProcessingCleanupSchema().load(
+                request.get_json(force=True, silent=True) or {}
+            )
+        except ValidationError as e:
+            return jsonify({"error": "invalid request", "fields": e.messages}), 400
 
         file_ids = data.get('fileIds', [])
 
@@ -306,6 +348,14 @@ def cleanup_files():
 
         for file_id in file_ids:
             try:
+                # IDOR guard: refuse to delete files that don't belong to caller
+                if not _file_id_is_owned_by_user(file_id, g.user_id):
+                    logger.warning(
+                        f"Forbidden cleanup attempt: user={g.user_id} file_id={file_id[:40]}"
+                    )
+                    failed_ids.append(file_id)
+                    continue
+
                 # First try local storage (new files)
                 if local_chunk_service.delete_processed_result(file_id):
                     deleted_count += 1
@@ -315,7 +365,7 @@ def cleanup_files():
                     deleted_count += 1
                     logger.debug(f"Cleaned up file from Supabase: {file_id}")
                 else:
-                    # File not found in either location - consider it already deleted
+                    # File not found in either location — idempotent: count as deleted
                     logger.debug(f"File not found (already deleted?): {file_id}")
                     deleted_count += 1
             except Exception as del_error:
