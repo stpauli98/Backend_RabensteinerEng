@@ -15,6 +15,7 @@ import pandas as pd
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
+from shared.exceptions.errors import AnomalyException
 
 from domains.adjustments.config import UPLOAD_FOLDER, VALID_METHODS
 from domains.adjustments.services.state_manager import (
@@ -960,6 +961,15 @@ def anomaly_load() -> Tuple[Response, int]:
             "status": _PipelineStatus.LOADED,
         }), 200
 
+    except AnomalyException as exc:
+        logger.warning(f"Anomaly validation rejected in /load: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         logger.error(f"Error in /load: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"error": _internal_error_message(e)}), 500
@@ -1010,6 +1020,13 @@ def anomaly_validate_param() -> Tuple[Response, int]:
 
         return jsonify({"ok": True}), 200
 
+    except AnomalyException as exc:
+        logger.warning(f"validate-param rejected: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+        }), 200
     except Exception as e:
         logger.error(f"Error in /validate-param: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"error": _internal_error_message(e)}), 500
@@ -1146,6 +1163,22 @@ def anomaly_start() -> Tuple[Response, int]:
             "sessionId": upload_id,
         }), 200
 
+    except AnomalyException as exc:
+        # Reset pipeline_status so subsequent /start can retry without 409.
+        try:
+            err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
+            if err_state is not None:
+                err_state["pipeline_status"] = _PipelineStatus.ERROR
+        except Exception:
+            pass
+        logger.warning(f"Anomaly validation rejected in /start: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         # Reset pipeline_status so subsequent /start can retry without 409.
         try:
@@ -1357,6 +1390,18 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
             "sessionId": upload_id,
         }), 200
 
+    except AnomalyException as exc:
+        # Recoverable validation failure — keep pipeline_status retryable so the
+        # user can submit a different threshold. Only catastrophic exceptions
+        # (generic except Exception below) should set ERROR.
+        logger.warning(f"Anomaly validation rejected in /stl-threshold: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         try:
             err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
@@ -1463,6 +1508,18 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
             "sessionId": upload_id,
         }), 200
 
+    except AnomalyException as exc:
+        # Recoverable validation failure — keep pipeline_status retryable so the
+        # user can submit a different threshold. Only catastrophic exceptions
+        # (generic except Exception below) should set ERROR.
+        logger.warning(f"Anomaly validation rejected in /lstm-threshold: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         try:
             err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None

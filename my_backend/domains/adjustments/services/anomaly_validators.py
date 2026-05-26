@@ -17,6 +17,13 @@ from typing import Dict, Any, Optional
 import pandas as pd
 
 from domains.adjustments.services.anomaly_helpers import hms, tr
+from shared.exceptions.errors import (
+    AnomalyException,
+    STLPeriodAlignmentError,
+    LSTMHyperparameterCapError,
+    SBADSlopeRuleError,
+    ParameterOutOfRangeError,
+)
 
 
 def _name(v: Dict[str, Any], lang: str) -> str:
@@ -24,23 +31,25 @@ def _name(v: Dict[str, Any], lang: str) -> str:
 
 
 def check_float(v: Dict[str, Any], lang: str = "en") -> float:
-    """Convert v['value'] to float; raise ValueError with localized message on failure."""
+    """Convert v['value'] to float; raise AnomalyException with localized message on failure."""
     try:
         return float(v["value"])
     except (ValueError, TypeError):
         name = _name(v, lang)
         value = v["value"]
-        raise ValueError(
+        raise AnomalyException(
             tr(
                 f"The input value '{value}' for '{name}' cannot be converted to a float.",
                 f"Der Eingabewert '{value}' für '{name}' kann nicht in eine Fließkommazahl konvertiert werden.",
                 lang,
-            )
+            ),
+            error_code='PARAM_NOT_FLOAT',
+            details={'param': name, 'value': str(value)},
         )
 
 
 def check_integer(v: Dict[str, Any], lang: str = "en") -> int:
-    """Verify v['value'] is an integer (whole number); raise ValueError otherwise."""
+    """Verify v['value'] is an integer (whole number); raise AnomalyException otherwise."""
     value = v["value"]
     try:
         if int(value) == float(value):
@@ -48,45 +57,57 @@ def check_integer(v: Dict[str, Any], lang: str = "en") -> int:
     except (ValueError, TypeError):
         pass
     name = _name(v, lang)
-    raise ValueError(
+    raise AnomalyException(
         tr(
             f"The input value '{value}' for '{name}' is no integer.",
             f"Der Eingabewert '{value}' für '{name}' ist kein Integer.",
             lang,
-        )
+        ),
+        error_code='PARAM_NOT_INTEGER',
+        details={'param': name, 'value': str(value)},
     )
 
 
 def check_gt_zero(v: Dict[str, Any], lang: str = "en") -> None:
-    """Raise ValueError if v['value'] is <= 0."""
+    """Raise AnomalyException (ParameterOutOfRangeError) if v['value'] is <= 0."""
     if v["value"] is None or v["value"] <= 0:
         name = _name(v, lang)
         value = v["value"]
-        raise ValueError(
-            tr(
-                f"The input value '{value}' for '{name}' must be greater than 0.",
-                f"Der Eingabewert '{value}' für '{name}' muss größer als 0 sein.",
-                lang,
-            )
+        raise ParameterOutOfRangeError(
+            param=name,
+            value=value if value is not None else 0,
+            min_value=0,
+            suggestions=[
+                tr(
+                    f"The input value '{value}' for '{name}' must be greater than 0.",
+                    f"Der Eingabewert '{value}' für '{name}' muss größer als 0 sein.",
+                    lang,
+                ),
+            ],
         )
 
 
 def check_ge_zero(v: Dict[str, Any], lang: str = "en") -> None:
-    """Raise ValueError if v['value'] is < 0."""
+    """Raise AnomalyException (ParameterOutOfRangeError) if v['value'] is < 0."""
     if v["value"] is None or v["value"] < 0:
         name = _name(v, lang)
         value = v["value"]
-        raise ValueError(
-            tr(
-                f"The input value '{value}' for '{name}' must be greater than or equal to 0.",
-                f"Der Eingabewert '{value}' für '{name}' muss größer oder gleich 0 sein.",
-                lang,
-            )
+        raise ParameterOutOfRangeError(
+            param=name,
+            value=value if value is not None else -1,
+            min_value=0,
+            suggestions=[
+                tr(
+                    f"The input value '{value}' for '{name}' must be greater than or equal to 0.",
+                    f"Der Eingabewert '{value}' für '{name}' muss größer oder gleich 0 sein.",
+                    lang,
+                ),
+            ],
         )
 
 
 def check_comp(v1: Dict[str, Any], v2: Dict[str, Any], lang: str = "en") -> None:
-    """Ensure v1['value'] >= v2['value']; raise ValueError otherwise."""
+    """Ensure v1['value'] >= v2['value']; raise AnomalyException otherwise."""
     if v1["value"] is None or v2["value"] is None:
         return
     if v1["value"] < v2["value"]:
@@ -94,12 +115,17 @@ def check_comp(v1: Dict[str, Any], v2: Dict[str, Any], lang: str = "en") -> None
         name2 = _name(v2, lang)
         value1 = v1["value"]
         value2 = v2["value"]
-        raise ValueError(
+        raise AnomalyException(
             tr(
                 f"The input value '{value1}' for '{name1}' must be greater than the input value '{value2}' for '{name2}'.",
                 f"Der Eingabewert '{value1}' von '{name1}' muss größer als der Eingabewert '{value2}' von '{name2}' sein.",
                 lang,
-            )
+            ),
+            error_code='PARAM_COMPARISON_FAILED',
+            details={
+                'param1': name1, 'value1': value1,
+                'param2': name2, 'value2': value2,
+            },
         )
 
 
@@ -151,60 +177,75 @@ def validate_par_dict(par: Dict[str, Any], dt_avg: Optional[pd.Timedelta], lang:
             sbad["var"]["LG_MAX"]["value"] = check_float(sbad["var"]["LG_MAX"], lang)
             check_ge_zero(sbad["var"]["LG_MAX"], lang)
         if sbad_values.count(None) == 1:
-            raise ValueError(
-                tr(
-                    f"All parameters for '{sbad['name']['en']}' must be set.",
-                    f"Alle Parameter für '{sbad['name']['de']}' müssen eingegeben werden.",
-                    lang,
-                )
+            # Determine which of CHG_MAX / LG_MAX was provided
+            provided = 'chg_max' if sbad["var"]["CHG_MAX"]["value"] is not None else 'lg_max'
+            raise SBADSlopeRuleError(
+                provided=provided,
+                suggestions=[
+                    tr(
+                        f"All parameters for '{sbad['name']['en']}' must be set.",
+                        f"Alle Parameter für '{sbad['name']['de']}' müssen eingegeben werden.",
+                        lang,
+                    ),
+                ],
             )
 
     # STL — period-step alignment requires dt_avg
     if par["STL"]["run"]:
         period_h = par["STL"]["var"]["PERIOD_H"]
         if period_h["value"] is None:
-            raise ValueError(
+            raise AnomalyException(
                 tr(
                     f"Parameter '{period_h['name']['en']}' must be set when STL is enabled.",
                     f"Parameter '{period_h['name']['de']}' muss eingegeben werden, wenn STL aktiviert ist.",
                     lang,
-                )
+                ),
+                error_code='STL_PERIOD_REQUIRED',
+                details={'param': period_h['name']['en']},
             )
         period_h["value"] = check_float(period_h, lang)
         check_gt_zero(period_h, lang)
         if dt_avg is None:
-            raise ValueError(
+            raise AnomalyException(
                 tr(
                     "STL validation requires a known time step; load CSV first.",
                     "STL-Prüfung benötigt eine bekannte Zeitschrittweite; CSV zuerst laden.",
                     lang,
-                )
+                ),
+                error_code='STL_REQUIRES_DT_AVG',
             )
         period = par["STL"]["var"]["PERIOD"]
         period["value"] = period_h["value"] * 3600 / dt_avg.total_seconds()
         if not math.isclose(period["value"], round(period["value"]), rel_tol=1e-9):
-            raise ValueError(
-                tr(
-                    f"The input value '{period_h['value']}' (→ '{hms(period_h['value'], 'hours')}') for "
-                    f"'{period_h['name']['en']}' must be an integer multiple of the time step "
-                    f"'{hms(dt_avg, 'timedelta')}' of the data set.",
-                    f"Der Eingabewert von '{period_h['value']}' (→ '{hms(period_h['value'], 'hours')}') für "
-                    f"die '{period_h['name']['de']}' muss ein ganzzahliges Vielfaches der Zeitschrittweite "
-                    f"'{hms(dt_avg, 'timedelta')}' des Datensatzes sein.",
-                    lang,
-                )
+            dt_avg_h = dt_avg.total_seconds() / 3600.0
+            raise STLPeriodAlignmentError(
+                period_h=period_h["value"],
+                dt_avg_h=dt_avg_h,
+                suggestions=[
+                    tr(
+                        f"The input value '{period_h['value']}' (→ '{hms(period_h['value'], 'hours')}') for "
+                        f"'{period_h['name']['en']}' must be an integer multiple of the time step "
+                        f"'{hms(dt_avg, 'timedelta')}' of the data set.",
+                        f"Der Eingabewert von '{period_h['value']}' (→ '{hms(period_h['value'], 'hours')}') für "
+                        f"die '{period_h['name']['de']}' muss ein ganzzahliges Vielfaches der Zeitschrittweite "
+                        f"'{hms(dt_avg, 'timedelta')}' des Datensatzes sein.",
+                        lang,
+                    ),
+                ],
             )
 
     # LSTM
     if par["LSTM"]["run"]:
         period_h = par["LSTM"]["var"]["PERIOD_H"]
         if period_h["value"] is None:
-            raise ValueError(
+            raise AnomalyException(
                 tr(
                     f"Parameter '{period_h['name']['en']}' must be set when LSTM is enabled.",
                     f"Parameter '{period_h['name']['de']}' muss eingegeben werden, wenn LSTM aktiviert ist.",
                     lang,
-                )
+                ),
+                error_code='LSTM_PERIOD_REQUIRED',
+                details={'param': period_h['name']['en']},
             )
         period_h["value"] = check_float(period_h, lang)
         check_gt_zero(period_h, lang)
@@ -217,6 +258,7 @@ def validate_par_dict(par: Dict[str, Any], dt_avg: Optional[pd.Timedelta], lang:
         # (a single authenticated request with epochs=10000, neurons=10000
         # would block the Cloud Run worker for hours).
         upper_bounds = {"NEURONS": 1024, "EPOCHS": 500, "BATCH_SIZE": 4096}
+        param_keys = {"NEURONS": "neurons", "EPOCHS": "epochs", "BATCH_SIZE": "batch_size"}
         for key in ("NEURONS", "EPOCHS", "BATCH_SIZE"):
             param = par["LSTM"]["var"][key]
             if param["value"] is not None:
@@ -225,14 +267,19 @@ def validate_par_dict(par: Dict[str, Any], dt_avg: Optional[pd.Timedelta], lang:
                 cap = upper_bounds[key]
                 if param["value"] > cap:
                     name = _name(param, lang)
-                    raise ValueError(
-                        tr(
-                            f"The input value '{param['value']}' for '{name}' "
-                            f"exceeds the maximum of {cap}.",
-                            f"Der Eingabewert '{param['value']}' für '{name}' "
-                            f"überschreitet das Maximum von {cap}.",
-                            lang,
-                        )
+                    raise LSTMHyperparameterCapError(
+                        param=param_keys[key],
+                        value=param["value"],
+                        max_value=cap,
+                        suggestions=[
+                            tr(
+                                f"The input value '{param['value']}' for '{name}' "
+                                f"exceeds the maximum of {cap}.",
+                                f"Der Eingabewert '{param['value']}' für '{name}' "
+                                f"überschreitet das Maximum von {cap}.",
+                                lang,
+                            ),
+                        ],
                     )
 
     return par
@@ -254,12 +301,14 @@ def validate_param_single(name: str, value, par: Dict[str, Any], dt_avg: Optiona
     """
     descriptor = _resolve_descriptor(par, name)
     if descriptor is None:
-        raise ValueError(
+        raise AnomalyException(
             tr(
                 f"Unknown parameter '{name}'.",
                 f"Unbekannter Parameter '{name}'.",
                 lang,
-            )
+            ),
+            error_code='UNKNOWN_PARAMETER',
+            details={'param': name},
         )
 
     # None = "not set" — skip per-field validation. Booleans (EL0, STL.run,
@@ -295,29 +344,35 @@ def validate_param_single(name: str, value, par: Dict[str, Any], dt_avg: Optiona
     elif name == "EL0":
         # Boolean: nothing to validate beyond presence
         if not isinstance(value, bool):
-            raise ValueError(
+            raise AnomalyException(
                 tr(
                     f"The input value '{value}' for '{_name(candidate, lang)}' must be true or false.",
                     f"Der Eingabewert '{value}' für '{_name(candidate, lang)}' muss true oder false sein.",
                     lang,
-                )
+                ),
+                error_code='PARAM_NOT_BOOLEAN',
+                details={'param': name, 'value': str(value)},
             )
     elif name in ("STL.run", "LSTM.run"):
         if not isinstance(value, bool):
-            raise ValueError(
+            raise AnomalyException(
                 tr(
                     f"The input value '{value}' for '{name}' must be true or false.",
                     f"Der Eingabewert '{value}' für '{name}' muss true oder false sein.",
                     lang,
-                )
+                ),
+                error_code='PARAM_NOT_BOOLEAN',
+                details={'param': name, 'value': str(value)},
             )
     else:
-        raise ValueError(
+        raise AnomalyException(
             tr(
                 f"No validation rule for parameter '{name}'.",
                 f"Keine Prüfregel für Parameter '{name}'.",
                 lang,
-            )
+            ),
+            error_code='NO_VALIDATION_RULE',
+            details={'param': name},
         )
 
 
