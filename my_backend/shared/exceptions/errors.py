@@ -421,3 +421,108 @@ class TimezoneConversionError(TimezoneError):
             "Ensure proper datetime format before conversion"
         ])
         super().__init__(message, **kwargs)
+
+
+# ============================================================================
+# Anomaly Detection Exceptions (Anomalieerkennung domain — /api/adjustmentsOfData/*)
+# ============================================================================
+
+class AnomalyException(LoadDataException):
+    """Base class for anomaly-pipeline errors.
+
+    Raised when STL/LSTM/SBAD validation or processing fails. Inherits the
+    full LoadDataException machinery (error_code, details, suggestions,
+    to_dict()) so the route handler can return the same shape as W6 upload
+    errors.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        kwargs.setdefault('error_code', 'ANOMALY_ERROR')
+        super().__init__(message, **kwargs)
+
+
+class STLPeriodAlignmentError(AnomalyException):
+    """Raised when STL_PERIOD_H is not an integer multiple of dt_avg."""
+
+    def __init__(self, period_h: float, dt_avg_h: float, **kwargs):
+        message = (
+            f"STL period ({period_h}h) is not aligned with data timestep "
+            f"(dt_avg={dt_avg_h}h). Period must be an integer multiple of dt_avg."
+        )
+        kwargs.setdefault('error_code', 'STL_PERIOD_NOT_ALIGNED')
+        details = kwargs.get('details', {}) or {}
+        details.update({'period_h': period_h, 'dt_avg_h': dt_avg_h})
+        kwargs['details'] = details
+        kwargs.setdefault('suggestions', [
+            f"Use a STL period that's a multiple of dt_avg ({dt_avg_h}h)",
+            "Check data preprocessing — ensure consistent timestamps",
+        ])
+        super().__init__(message, **kwargs)
+
+
+class LSTMHyperparameterCapError(AnomalyException):
+    """Raised when an LSTM hyperparameter exceeds its cap."""
+
+    def __init__(self, param: str, value: int, max_value: int, **kwargs):
+        message = (
+            f"LSTM {param} ({value}) exceeds the maximum allowed ({max_value})."
+        )
+        kwargs.setdefault('error_code', 'LSTM_HYPERPARAM_OUT_OF_RANGE')
+        details = kwargs.get('details', {}) or {}
+        details.update({'param': param, 'value': value, 'max': max_value})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
+
+
+class SBADSlopeRuleError(AnomalyException):
+    """Raised when only one of SBAD chg_max / lg_max is provided.
+
+    The SBAD slope rule requires BOTH or NEITHER.
+    """
+
+    def __init__(self, provided: str, **kwargs):
+        message = (
+            f"SBAD slope-based anomaly detection requires BOTH chg_max and "
+            f"lg_max. Only '{provided}' was provided."
+        )
+        kwargs.setdefault('error_code', 'SBAD_SLOPE_REQUIRES_BOTH')
+        details = kwargs.get('details', {}) or {}
+        details.update({'provided': provided})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
+
+
+class ThresholdOutOfRangeError(AnomalyException):
+    """Raised when STL/LSTM threshold is below the minimum allowed value."""
+
+    def __init__(self, value: float, min_value: float = 0, **kwargs):
+        message = (
+            f"Threshold ({value}) must be at least {min_value}."
+        )
+        kwargs.setdefault('error_code', 'THRESHOLD_OUT_OF_RANGE')
+        details = kwargs.get('details', {}) or {}
+        details.update({'value': value, 'min': min_value})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
+
+
+class ParameterOutOfRangeError(AnomalyException):
+    """Raised when a numeric parameter falls outside its allowed range."""
+
+    def __init__(self, param: str, value: float, min_value: float = None, max_value: float = None, **kwargs):
+        if min_value is not None and value < min_value:
+            message = f"Parameter '{param}' value {value} is below minimum ({min_value})."
+        elif max_value is not None and value > max_value:
+            message = f"Parameter '{param}' value {value} exceeds maximum ({max_value})."
+        else:
+            message = f"Parameter '{param}' value {value} is out of range."
+        kwargs.setdefault('error_code', 'PARAM_OUT_OF_RANGE')
+        details_base = {'param': param, 'value': value}
+        if min_value is not None:
+            details_base['min'] = min_value
+        if max_value is not None:
+            details_base['max'] = max_value
+        details = kwargs.get('details', {}) or {}
+        details.update(details_base)
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)

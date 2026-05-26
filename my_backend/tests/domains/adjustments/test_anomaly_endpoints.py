@@ -171,7 +171,10 @@ def test_validate_param_negative_eq_max_de(app):
     assert _status(r) == 200
     body = _body(r)
     assert body["ok"] is False
-    assert "muss größer als 0" in body["error"]
+    # New AnomalyException structured response: localized message lives in
+    # suggestions[0]; auto-generated English is in `error`. error_code is the
+    # primary contract for FE mapping.
+    assert body["error_code"] == "PARAM_OUT_OF_RANGE"
 
 
 def test_validate_param_dec_must_be_int(app):
@@ -283,7 +286,10 @@ def test_start_scenario_d_invalid_param_returns_400_de(app, staged_test2):
     r = _load_and_start(app, upload_id, bad, lang="de")
     assert _status(r) == 400
     body = _body(r)
-    assert "muss größer als 0 sein" in body["error"]
+    # New AnomalyException structured response: localized DE message lives in
+    # suggestions[0]; error_code is the primary contract for FE mapping.
+    assert body["error_code"] == "PARAM_OUT_OF_RANGE"
+    assert "muss größer als 0 sein" in body["suggestions"][0]
 
 
 def test_start_without_load_returns_404(app, tmp_path, monkeypatch):
@@ -404,7 +410,11 @@ def test_stl_threshold_invalid_returns_400_de(app, staged_test2):
                    "/api/adjustmentsOfData/stl-threshold",
                    {"uploadId": upload_id, "threshold": -3, "lang": "de"})
     assert _status(r) == 400
-    assert "muss größer oder gleich 0" in _body(r)["error"]
+    body = _body(r)
+    # Threshold-specific error_code (not generic PARAM_OUT_OF_RANGE); localized
+    # DE message lives in suggestions[0] per uniform raise-site contract.
+    assert body["error_code"] == "THRESHOLD_OUT_OF_RANGE"
+    assert "nicht-negative Zahl" in body["suggestions"][0]
 
 
 def test_stl_threshold_valid_completes(app, staged_test2):
@@ -715,7 +725,11 @@ def test_full_pipeline_iteration_de(app, staged_test2):
                    "/api/adjustmentsOfData/stl-threshold",
                    {"uploadId": upload_id, "threshold": -1, "lang": "de"})
     assert _status(r) == 400
-    assert "muss größer oder gleich 0" in _body(r)["error"]
+    body = _body(r)
+    # Threshold-specific error_code (not generic PARAM_OUT_OF_RANGE); localized
+    # DE message lives in suggestions[0] per uniform raise-site contract.
+    assert body["error_code"] == "THRESHOLD_OUT_OF_RANGE"
+    assert "nicht-negative Zahl" in body["suggestions"][0]
 
     # 4. /stl-threshold with valid → complete
     r = _post_json(app, adj_module.anomaly_stl_threshold,

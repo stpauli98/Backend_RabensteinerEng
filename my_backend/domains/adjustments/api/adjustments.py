@@ -15,6 +15,7 @@ import pandas as pd
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
+from shared.exceptions.errors import AnomalyException, ThresholdOutOfRangeError
 
 from domains.adjustments.config import UPLOAD_FOLDER, VALID_METHODS
 from domains.adjustments.services.state_manager import (
@@ -960,6 +961,15 @@ def anomaly_load() -> Tuple[Response, int]:
             "status": _PipelineStatus.LOADED,
         }), 200
 
+    except AnomalyException as exc:
+        logger.warning(f"Anomaly validation rejected in /load: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         logger.error(f"Error in /load: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"error": _internal_error_message(e)}), 500
@@ -1003,13 +1013,18 @@ def anomaly_validate_param() -> Tuple[Response, int]:
                 dt_avg = state.get("dt_avg")
 
         par = _build_par_dict(current)
-        try:
-            _validate_param_single(name, value, par, dt_avg, lang)
-        except ValueError as e:
-            return jsonify({"ok": False, "error": str(e)}), 200
+        # Validation errors propagate to the outer except AnomalyException handler.
+        _validate_param_single(name, value, par, dt_avg, lang)
 
         return jsonify({"ok": True}), 200
 
+    except AnomalyException as exc:
+        logger.warning(f"validate-param rejected: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+        }), 200
     except Exception as e:
         logger.error(f"Error in /validate-param: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"error": _internal_error_message(e)}), 500
@@ -1146,6 +1161,22 @@ def anomaly_start() -> Tuple[Response, int]:
             "sessionId": upload_id,
         }), 200
 
+    except AnomalyException as exc:
+        # Reset pipeline_status so subsequent /start can retry without 409.
+        try:
+            err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
+            if err_state is not None:
+                err_state["pipeline_status"] = _PipelineStatus.ERROR
+        except Exception:
+            pass
+        logger.warning(f"Anomaly validation rejected in /start: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         # Reset pipeline_status so subsequent /start can retry without 409.
         try:
@@ -1265,19 +1296,28 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
             # original 409 path stands.
             return jsonify({"error": "STL intermediate state missing — re-run /start"}), 409
 
-        # Validate threshold using same rules as Python L1260-1271
-        try:
-            t_descriptor = {"value": threshold, "unit": None,
-                            "name": {"en": "Threshold for anomaly detection",
-                                     "de": "Schwellwert für die Anomalieerkennung"}}
-            from domains.adjustments.services.anomaly_validators import (
-                check_float as _check_float,
-                check_ge_zero as _check_ge_zero,
+        # Validate threshold using same rules as Python L1260-1271.
+        # check_float failures (PARAM_NOT_FLOAT) propagate to the outer
+        # except AnomalyException handler. A negative numeric threshold
+        # emits THRESHOLD_OUT_OF_RANGE (route-specific error_code, not the
+        # generic PARAM_OUT_OF_RANGE).
+        t_descriptor = {"value": threshold, "unit": None,
+                        "name": {"en": "Threshold for anomaly detection",
+                                 "de": "Schwellwert für die Anomalieerkennung"}}
+        from domains.adjustments.services.anomaly_validators import (
+            check_float as _check_float,
+        )
+        t_descriptor["value"] = _check_float(t_descriptor, lang)
+        if not math.isfinite(t_descriptor["value"]) or t_descriptor["value"] < 0:
+            raise ThresholdOutOfRangeError(
+                value=t_descriptor["value"],
+                min_value=0,
+                suggestions=[_tr(
+                    "Threshold must be a non-negative number.",
+                    "Der Schwellenwert muss eine nicht-negative Zahl sein.",
+                    lang,
+                )],
             )
-            t_descriptor["value"] = _check_float(t_descriptor, lang)
-            _check_ge_zero(t_descriptor, lang)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
 
         if not _try_acquire_pipeline(upload_id, g.user_id):
             return jsonify({"error": "Pipeline already running for this upload"}), 409
@@ -1357,6 +1397,18 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
             "sessionId": upload_id,
         }), 200
 
+    except AnomalyException as exc:
+        # Recoverable validation failure — keep pipeline_status retryable so the
+        # user can submit a different threshold. Only catastrophic exceptions
+        # (generic except Exception below) should set ERROR.
+        logger.warning(f"Anomaly validation rejected in /stl-threshold: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         try:
             err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
@@ -1400,18 +1452,27 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
         if results_df is None:
             return jsonify({"error": "LSTM intermediate state missing — re-run /start"}), 409
 
-        try:
-            t_descriptor = {"value": threshold, "unit": None,
-                            "name": {"en": "Threshold for anomaly detection",
-                                     "de": "Schwellwert für die Anomalieerkennung"}}
-            from domains.adjustments.services.anomaly_validators import (
-                check_float as _check_float,
-                check_ge_zero as _check_ge_zero,
+        # check_float failures (PARAM_NOT_FLOAT) propagate to the outer
+        # except AnomalyException handler. A negative numeric threshold
+        # emits THRESHOLD_OUT_OF_RANGE (route-specific error_code, not the
+        # generic PARAM_OUT_OF_RANGE).
+        t_descriptor = {"value": threshold, "unit": None,
+                        "name": {"en": "Threshold for anomaly detection",
+                                 "de": "Schwellwert für die Anomalieerkennung"}}
+        from domains.adjustments.services.anomaly_validators import (
+            check_float as _check_float,
+        )
+        t_descriptor["value"] = _check_float(t_descriptor, lang)
+        if not math.isfinite(t_descriptor["value"]) or t_descriptor["value"] < 0:
+            raise ThresholdOutOfRangeError(
+                value=t_descriptor["value"],
+                min_value=0,
+                suggestions=[_tr(
+                    "Threshold must be a non-negative number.",
+                    "Der Schwellenwert muss eine nicht-negative Zahl sein.",
+                    lang,
+                )],
             )
-            t_descriptor["value"] = _check_float(t_descriptor, lang)
-            _check_ge_zero(t_descriptor, lang)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
 
         if not _try_acquire_pipeline(upload_id, g.user_id):
             return jsonify({"error": "Pipeline already running for this upload"}), 409
@@ -1463,6 +1524,18 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
             "sessionId": upload_id,
         }), 200
 
+    except AnomalyException as exc:
+        # Recoverable validation failure — keep pipeline_status retryable so the
+        # user can submit a different threshold. Only catastrophic exceptions
+        # (generic except Exception below) should set ERROR.
+        logger.warning(f"Anomaly validation rejected in /lstm-threshold: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         try:
             err_state = _get_anomaly(upload_id, g.user_id) if upload_id else None
