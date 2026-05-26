@@ -38,13 +38,14 @@ def check_float(v: Dict[str, Any], lang: str = "en") -> float:
         name = _name(v, lang)
         value = v["value"]
         raise AnomalyException(
-            tr(
+            f"Parameter '{name}' value '{value}' is not a valid float.",
+            error_code='PARAM_NOT_FLOAT',
+            details={'param': name, 'value': str(value)},
+            suggestions=[tr(
                 f"The input value '{value}' for '{name}' cannot be converted to a float.",
                 f"Der Eingabewert '{value}' für '{name}' kann nicht in eine Fließkommazahl konvertiert werden.",
                 lang,
-            ),
-            error_code='PARAM_NOT_FLOAT',
-            details={'param': name, 'value': str(value)},
+            )],
         )
 
 
@@ -58,13 +59,14 @@ def check_integer(v: Dict[str, Any], lang: str = "en") -> int:
         pass
     name = _name(v, lang)
     raise AnomalyException(
-        tr(
+        f"Parameter '{name}' value '{value}' is no integer.",
+        error_code='PARAM_NOT_INTEGER',
+        details={'param': name, 'value': str(value)},
+        suggestions=[tr(
             f"The input value '{value}' for '{name}' is no integer.",
             f"Der Eingabewert '{value}' für '{name}' ist kein Integer.",
             lang,
-        ),
-        error_code='PARAM_NOT_INTEGER',
-        details={'param': name, 'value': str(value)},
+        )],
     )
 
 
@@ -116,16 +118,17 @@ def check_comp(v1: Dict[str, Any], v2: Dict[str, Any], lang: str = "en") -> None
         value1 = v1["value"]
         value2 = v2["value"]
         raise AnomalyException(
-            tr(
-                f"The input value '{value1}' for '{name1}' must be greater than the input value '{value2}' for '{name2}'.",
-                f"Der Eingabewert '{value1}' von '{name1}' muss größer als der Eingabewert '{value2}' von '{name2}' sein.",
-                lang,
-            ),
+            f"Parameter '{name1}' value '{value1}' must be greater than the input value '{value2}' for '{name2}'.",
             error_code='PARAM_COMPARISON_FAILED',
             details={
                 'param1': name1, 'value1': value1,
                 'param2': name2, 'value2': value2,
             },
+            suggestions=[tr(
+                f"The input value '{value1}' for '{name1}' must be greater than the input value '{value2}' for '{name2}'.",
+                f"Der Eingabewert '{value1}' von '{name1}' muss größer als der Eingabewert '{value2}' von '{name2}' sein.",
+                lang,
+            )],
         )
 
 
@@ -195,24 +198,26 @@ def validate_par_dict(par: Dict[str, Any], dt_avg: Optional[pd.Timedelta], lang:
         period_h = par["STL"]["var"]["PERIOD_H"]
         if period_h["value"] is None:
             raise AnomalyException(
-                tr(
+                f"Parameter '{period_h['name']['en']}' must be set when STL is enabled.",
+                error_code='STL_PERIOD_REQUIRED',
+                details={'param': period_h['name']['en']},
+                suggestions=[tr(
                     f"Parameter '{period_h['name']['en']}' must be set when STL is enabled.",
                     f"Parameter '{period_h['name']['de']}' muss eingegeben werden, wenn STL aktiviert ist.",
                     lang,
-                ),
-                error_code='STL_PERIOD_REQUIRED',
-                details={'param': period_h['name']['en']},
+                )],
             )
         period_h["value"] = check_float(period_h, lang)
         check_gt_zero(period_h, lang)
         if dt_avg is None:
             raise AnomalyException(
-                tr(
+                "STL validation requires a known time step; load CSV first.",
+                error_code='STL_REQUIRES_DT_AVG',
+                suggestions=[tr(
                     "STL validation requires a known time step; load CSV first.",
                     "STL-Prüfung benötigt eine bekannte Zeitschrittweite; CSV zuerst laden.",
                     lang,
-                ),
-                error_code='STL_REQUIRES_DT_AVG',
+                )],
             )
         period = par["STL"]["var"]["PERIOD"]
         period["value"] = period_h["value"] * 3600 / dt_avg.total_seconds()
@@ -239,13 +244,14 @@ def validate_par_dict(par: Dict[str, Any], dt_avg: Optional[pd.Timedelta], lang:
         period_h = par["LSTM"]["var"]["PERIOD_H"]
         if period_h["value"] is None:
             raise AnomalyException(
-                tr(
+                f"Parameter '{period_h['name']['en']}' must be set when LSTM is enabled.",
+                error_code='LSTM_PERIOD_REQUIRED',
+                details={'param': period_h['name']['en']},
+                suggestions=[tr(
                     f"Parameter '{period_h['name']['en']}' must be set when LSTM is enabled.",
                     f"Parameter '{period_h['name']['de']}' muss eingegeben werden, wenn LSTM aktiviert ist.",
                     lang,
-                ),
-                error_code='LSTM_PERIOD_REQUIRED',
-                details={'param': period_h['name']['en']},
+                )],
             )
         period_h["value"] = check_float(period_h, lang)
         check_gt_zero(period_h, lang)
@@ -302,13 +308,14 @@ def validate_param_single(name: str, value, par: Dict[str, Any], dt_avg: Optiona
     descriptor = _resolve_descriptor(par, name)
     if descriptor is None:
         raise AnomalyException(
-            tr(
+            f"Unknown parameter '{name}'.",
+            error_code='UNKNOWN_PARAMETER',
+            details={'param': name},
+            suggestions=[tr(
                 f"Unknown parameter '{name}'.",
                 f"Unbekannter Parameter '{name}'.",
                 lang,
-            ),
-            error_code='UNKNOWN_PARAMETER',
-            details={'param': name},
+            )],
         )
 
     # None = "not set" — skip per-field validation. Booleans (EL0, STL.run,
@@ -345,34 +352,37 @@ def validate_param_single(name: str, value, par: Dict[str, Any], dt_avg: Optiona
         # Boolean: nothing to validate beyond presence
         if not isinstance(value, bool):
             raise AnomalyException(
-                tr(
+                f"Parameter '{_name(candidate, 'en')}' value '{value}' is not a boolean.",
+                error_code='PARAM_NOT_BOOLEAN',
+                details={'param': name, 'value': str(value)},
+                suggestions=[tr(
                     f"The input value '{value}' for '{_name(candidate, lang)}' must be true or false.",
                     f"Der Eingabewert '{value}' für '{_name(candidate, lang)}' muss true oder false sein.",
                     lang,
-                ),
-                error_code='PARAM_NOT_BOOLEAN',
-                details={'param': name, 'value': str(value)},
+                )],
             )
     elif name in ("STL.run", "LSTM.run"):
         if not isinstance(value, bool):
             raise AnomalyException(
-                tr(
+                f"Parameter '{name}' value '{value}' is not a boolean.",
+                error_code='PARAM_NOT_BOOLEAN',
+                details={'param': name, 'value': str(value)},
+                suggestions=[tr(
                     f"The input value '{value}' for '{name}' must be true or false.",
                     f"Der Eingabewert '{value}' für '{name}' muss true oder false sein.",
                     lang,
-                ),
-                error_code='PARAM_NOT_BOOLEAN',
-                details={'param': name, 'value': str(value)},
+                )],
             )
     else:
         raise AnomalyException(
-            tr(
+            f"No validation rule for parameter '{name}'.",
+            error_code='NO_VALIDATION_RULE',
+            details={'param': name},
+            suggestions=[tr(
                 f"No validation rule for parameter '{name}'.",
                 f"Keine Prüfregel für Parameter '{name}'.",
                 lang,
-            ),
-            error_code='NO_VALIDATION_RULE',
-            details={'param': name},
+            )],
         )
 
 

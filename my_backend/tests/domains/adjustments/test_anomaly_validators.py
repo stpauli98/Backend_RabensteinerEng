@@ -27,7 +27,8 @@ def test_check_float_passes_numeric():
 def test_check_float_raises_de_message():
     with pytest.raises(AnomalyException) as exc:
         check_float(descriptor("abc", "X", "X"), lang="de")
-    assert "kann nicht in eine Fließkommazahl konvertiert werden" in str(exc.value)
+    # Localized message preserved in suggestions[0]
+    assert "kann nicht in eine Fließkommazahl konvertiert werden" in exc.value.suggestions[0]
 
 
 def test_check_integer_raises_for_decimal():
@@ -125,7 +126,8 @@ def test_validate_par_dict_stl_run_without_period_h_raises():
     par["STL"]["var"]["PERIOD_H"]["value"] = None  # explicitly clear
     with pytest.raises(AnomalyException) as exc:
         validate_par_dict(par, dt_avg=pd.Timedelta(minutes=3), lang="de")
-    assert "muss eingegeben werden" in str(exc.value)
+    # Localized message preserved in suggestions[0]
+    assert "muss eingegeben werden" in exc.value.suggestions[0]
 
 
 def test_validate_par_dict_lstm_run_without_period_h_raises():
