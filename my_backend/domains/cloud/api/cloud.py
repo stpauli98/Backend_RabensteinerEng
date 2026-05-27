@@ -18,6 +18,7 @@ from flask import request, jsonify, Blueprint, Response, g
 from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, log_compute_duration
+from shared.exceptions.errors import CloudException
 
 from domains.cloud.config import (
     VALID_FILE_TYPES,
@@ -73,6 +74,15 @@ def upload_chunk():
 
         try:
             upload_id = sanitize_upload_id(upload_id)
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /upload-chunk: {exc.error_code} — {exc.message}")
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
@@ -102,6 +112,15 @@ def upload_chunk():
                 'fileType': file_type
             }
         })
+    except CloudException as exc:
+        logger.warning(f"Cloud validation rejected in /upload-chunk: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         logger.error(f"Error in chunk upload: {str(e)}")
         traceback.print_exc()
@@ -151,6 +170,15 @@ def complete_redirect():
 
         try:
             upload_id = sanitize_upload_id(upload_id)
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /complete: {exc.error_code} — {exc.message}")
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
@@ -224,10 +252,23 @@ def complete_redirect():
             validate_csv_size(temp_file_path)
             validate_csv_size(load_file_path)
             tracker.emit('validating', 28, 'cloud_size_validated')
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /complete (size): {exc.error_code} — {exc.message}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+
+        # Extract language preference for localized regression errors
+        lang = data.get('lang', 'en') if isinstance(data, dict) else 'en'
 
         try:
             # Validate columns without loading files into memory
@@ -248,7 +289,7 @@ def complete_redirect():
 
             # Quick min/max scan for tolerance calculation
             tracker.emit('processing', 32, 'cloud_scanning_range')
-            y_min, y_max = quick_minmax(load_file_path, load_sep)
+            y_min, y_max = quick_minmax(load_file_path, load_sep, lang=lang)
             y_range = y_max - y_min
             TOL_CNT, TOL_DEP = calculate_tolerance_params(processing_params, y_range)
 
@@ -258,7 +299,7 @@ def complete_redirect():
 
             matched_file_path, sample_df, x_col, y_col, total_matched = chunked_merge_and_sample(
                 temp_file_path, load_file_path, temp_sep, load_sep,
-                tracker=tracker
+                tracker=tracker, lang=lang
             )
 
             # Create streaming regression generator
@@ -269,7 +310,7 @@ def complete_redirect():
                 tol_cnt=TOL_CNT,
                 tol_dep=TOL_DEP,
                 decimal_precision=processing_params['decimalPrecision'],
-                tracker=tracker
+                tracker=tracker, lang=lang
             )
 
             # Cleanup function
@@ -290,6 +331,16 @@ def complete_redirect():
             response.call_on_close(cleanup)
             return response
 
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /complete: {exc.error_code} — {exc.message}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             logger.error(f"Validation error: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
@@ -298,6 +349,15 @@ def complete_redirect():
             logger.error(f"Error processing uploaded files: {str(e)}")
             traceback.print_exc()
             return jsonify({'success': False, 'data': {'error': f'Error processing uploaded files: {str(e)}'}}), 500
+    except CloudException as exc:
+        logger.warning(f"Cloud validation rejected in /complete (outer): {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         logger.error(f"Error in complete_redirect: {str(e)}")
         return jsonify({'success': False, 'data': {'error': str(e)}}), 500
@@ -315,6 +375,15 @@ def clouddata():
     try:
         logger.info("Received request to /clouddata")
         return _process_data()
+    except CloudException as exc:
+        logger.warning(f"Cloud validation rejected in /clouddata: {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         logger.error(f"Error in clouddata endpoint: {str(e)}")
         traceback.print_exc()
@@ -331,6 +400,9 @@ def _process_data():
         if data is None:
             logger.error("No data received")
             return jsonify({'success': False, 'data': {'error': 'No data received'}}), 400
+
+        # Extract language preference for localized regression errors
+        lang = data.get('lang', 'en') if isinstance(data, dict) else 'en'
 
         temp_data = data['files'].get('temp_out.csv')
         load_data = data['files'].get('load.csv')
@@ -360,7 +432,16 @@ def _process_data():
             validate_dataframe(df1, "Temperature file")
             validate_dataframe(df2, "Load file")
 
-            return process_data_frames(df1, df2, data)
+            return process_data_frames(df1, df2, data, lang=lang)
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /clouddata (inner): {exc.error_code} — {exc.message}")
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             logger.error(f"Validation error: {str(e)}")
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
@@ -368,6 +449,9 @@ def _process_data():
             logger.error(f"Error reading CSV files: {str(e)}")
             return jsonify({'success': False, 'data': {'error': f'Error reading CSV files: {str(e)}'}}), 400
 
+    except CloudException:
+        # Re-raise so the outer /clouddata route handler returns structured error.
+        raise
     except Exception as e:
         logger.error(f"Error processing data: {str(e)}")
         logger.error(traceback.format_exc())
@@ -394,8 +478,20 @@ def interpolate_chunked():
         upload_id = data['uploadId']
         logger.info(f"Processing upload ID: {upload_id}")
 
+        # Extract language preference for localized regression errors
+        lang = data.get('lang', 'en') if isinstance(data, dict) else 'en'
+
         try:
             upload_id = sanitize_upload_id(upload_id)
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /interpolate-chunked: {exc.error_code} — {exc.message}")
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             return jsonify({'success': False, 'data': {'error': str(e)}}), 400
 
@@ -440,6 +536,16 @@ def interpolate_chunked():
             tracker.emit('validating', 18, 'cloud_validating_size')
             validate_csv_size(combined_file_path)
             tracker.emit('validating', 20, 'cloud_size_validated')
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /interpolate-chunked (size): {exc.error_code} — {exc.message}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
@@ -470,9 +576,23 @@ def interpolate_chunked():
             # Only validate column count (row limit removed for streaming support)
             from domains.cloud.config import MAX_COLUMNS
             if len(df2.columns) > MAX_COLUMNS:
-                raise ValueError(f"Interpolation file has too many columns: {len(df2.columns)} (max {MAX_COLUMNS})")
+                raise CloudException(
+                    f"Interpolation file has too many columns: {len(df2.columns)} (max {MAX_COLUMNS})",
+                    error_code='TOO_MANY_COLUMNS',
+                    details={'columns': len(df2.columns), 'max_columns': MAX_COLUMNS, 'name': 'Interpolation file'},
+                )
             tracker.emit('validating', 40, 'cloud_dataframe_validated')
 
+        except CloudException as exc:
+            logger.warning(f"Cloud validation rejected in /interpolate-chunked (parse): {exc.error_code} — {exc.message}")
+            tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
+            return jsonify({
+                "ok": False,
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "details": exc.details,
+                "suggestions": exc.suggestions,
+            }), 400
         except ValueError as e:
             logger.error(f"Validation error: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
@@ -678,6 +798,15 @@ def interpolate_chunked():
         response = Response(generate_chunks(), mimetype='application/x-ndjson')
         response.call_on_close(cleanup)
         return response
+    except CloudException as exc:
+        logger.warning(f"Cloud validation rejected in /interpolate-chunked (outer): {exc.error_code} — {exc.message}")
+        return jsonify({
+            "ok": False,
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+            "suggestions": exc.suggestions,
+        }), 400
     except Exception as e:
         logger.error(f"Error in interpolation-chunked endpoint: {str(e)}")
         logger.error(traceback.format_exc())

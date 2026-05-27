@@ -14,6 +14,12 @@ from domains.cloud.config import (
     FILE_BUFFER_SIZE,
     CHUNK_DIR
 )
+from shared.exceptions.errors import (
+    CloudException,
+    ColumnDetectionError,
+    CSVParsingError,
+    UploadIdValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,18 +35,20 @@ def sanitize_upload_id(upload_id: str) -> str:
         Sanitized upload ID
 
     Raises:
-        ValueError: If upload_id contains invalid characters or is empty
+        UploadIdValidationError: If upload_id contains invalid characters or is empty
     """
     if not upload_id:
-        raise ValueError("Upload ID cannot be empty")
+        raise UploadIdValidationError(reason="empty")
 
     if not UPLOAD_ID_PATTERN.match(upload_id):
         logger.error(f"Invalid upload ID format: {upload_id}")
-        raise ValueError(f"Invalid upload ID format. Only alphanumeric characters, hyphens, and underscores allowed (max 64 chars)")
+        raise UploadIdValidationError(
+            reason="invalid characters (only alphanumeric, hyphen, underscore allowed; max 64 chars)"
+        )
 
     if os.path.sep in upload_id or '/' in upload_id or '\\' in upload_id:
         logger.error(f"Upload ID contains path separators: {upload_id}")
-        raise ValueError("Upload ID cannot contain path separators")
+        raise UploadIdValidationError(reason="path separator not allowed")
 
     return upload_id
 
@@ -53,14 +61,19 @@ def validate_csv_size(file_path: str):
         file_path: Path to the CSV file
 
     Raises:
-        ValueError: If file exceeds size limits
+        CSVParsingError: If file does not exist
+        CloudException: If file exceeds size limits
     """
     if not os.path.exists(file_path):
-        raise ValueError(f"File not found: {file_path}")
+        raise CSVParsingError(f"File not found: {file_path}")
 
     size = os.path.getsize(file_path)
     if size > MAX_FILE_SIZE:
-        raise ValueError(f"File too large: {size / FILE_BUFFER_SIZE:.2f}MB (max {MAX_FILE_SIZE / FILE_BUFFER_SIZE:.0f}MB)")
+        raise CloudException(
+            f"File too large: {size / FILE_BUFFER_SIZE:.2f}MB (max {MAX_FILE_SIZE / FILE_BUFFER_SIZE:.0f}MB)",
+            error_code='FILE_TOO_LARGE',
+            details={'size_mb': size / FILE_BUFFER_SIZE, 'max_mb': MAX_FILE_SIZE / FILE_BUFFER_SIZE},
+        )
 
 
 def validate_dataframe(df: pd.DataFrame, name: str = "DataFrame"):
@@ -72,13 +85,21 @@ def validate_dataframe(df: pd.DataFrame, name: str = "DataFrame"):
         name: Name of the DataFrame for error messages
 
     Raises:
-        ValueError: If DataFrame exceeds size limits
+        CloudException: If DataFrame exceeds size limits
     """
     if len(df) > MAX_ROWS:
-        raise ValueError(f"{name} has too many rows: {len(df):,} (max {MAX_ROWS:,})")
+        raise CloudException(
+            f"{name} has too many rows: {len(df):,} (max {MAX_ROWS:,})",
+            error_code='TOO_MANY_ROWS',
+            details={'rows': len(df), 'max_rows': MAX_ROWS, 'name': name},
+        )
 
     if len(df.columns) > MAX_COLUMNS:
-        raise ValueError(f"{name} has too many columns: {len(df.columns)} (max {MAX_COLUMNS})")
+        raise CloudException(
+            f"{name} has too many columns: {len(df.columns)} (max {MAX_COLUMNS})",
+            error_code='TOO_MANY_COLUMNS',
+            details={'columns': len(df.columns), 'max_columns': MAX_COLUMNS, 'name': name},
+        )
 
 
 def validate_csv_columns(file_path: str, name: str = "File"):
@@ -90,16 +111,18 @@ def validate_csv_columns(file_path: str, name: str = "File"):
         Tuple of (column_names, separator)
 
     Raises:
-        ValueError: If UTC column missing or too many columns
+        CSVParsingError: If file does not exist or is empty
+        ColumnDetectionError: If UTC column missing
+        CloudException: If column count violates limits
     """
     if not os.path.exists(file_path):
-        raise ValueError(f"File not found: {file_path}")
+        raise CSVParsingError(f"File not found: {file_path}")
 
     with open(file_path, 'r', encoding='utf-8') as f:
         first_line = f.readline().strip()
 
     if not first_line:
-        raise ValueError(f"{name}: File is empty")
+        raise CSVParsingError(f"{name}: File is empty")
 
     # Auto-detect separator
     if ';' in first_line:
@@ -112,11 +135,22 @@ def validate_csv_columns(file_path: str, name: str = "File"):
     columns = [col.strip().strip('"') for col in first_line.split(sep)]
 
     if 'UTC' not in columns:
-        raise ValueError(f'{name}: UTC column not found. Available columns: {columns}')
+        raise ColumnDetectionError(
+            column_type='UTC',
+            available=columns,
+        )
     if len(columns) < 2:
-        raise ValueError(f'{name}: At least 2 columns required (UTC + data), found {len(columns)}')
+        raise CloudException(
+            f"{name}: At least 2 columns required (UTC + data), found {len(columns)}",
+            error_code='TOO_FEW_COLUMNS',
+            details={'columns': columns, 'name': name},
+        )
     if len(columns) > MAX_COLUMNS:
-        raise ValueError(f'{name}: Too many columns: {len(columns)} (max {MAX_COLUMNS})')
+        raise CloudException(
+            f"{name}: Too many columns: {len(columns)} (max {MAX_COLUMNS})",
+            error_code='TOO_MANY_COLUMNS',
+            details={'columns': len(columns), 'max_columns': MAX_COLUMNS, 'name': name},
+        )
 
     return columns, sep
 
