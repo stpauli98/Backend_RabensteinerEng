@@ -22,6 +22,15 @@ from domains.cloud.config import (
     REGRESSION_STREAMING_CHUNK_SIZE,
     REGRESSION_MIN_SAMPLE_SIZE
 )
+from shared.exceptions.errors import (
+    CloudException,
+    TimestampMismatchError,
+    InsufficientMatchingPointsError,
+    ColumnDetectionError,
+    ToleranceBoundsEmptyError,
+    UnknownToleranceTypeError,
+)
+from domains.adjustments.services.anomaly_helpers import tr
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +60,7 @@ def apply_decimal_precision(values, precision):
         return values
 
 
-def validate_and_prepare_data(df1, df2):
+def validate_and_prepare_data(df1, df2, lang: str = 'en', file1_name: str = '', file2_name: str = ''):
     """Validate and prepare CSV data for regression analysis."""
     logger.info(f"Processing dataframes with shapes: {df1.shape}, {df2.shape}")
     logger.info(f"Columns in temperature file: {df1.columns.tolist()}")
@@ -61,9 +70,25 @@ def validate_and_prepare_data(df1, df2):
     load_cols = [col for col in df2.columns if col != 'UTC']
 
     if not temp_cols:
-        raise ValueError(f'No valid temperature column found. Available columns: {df1.columns.tolist()}')
+        raise ColumnDetectionError(
+            column_type='temperature',
+            available=df1.columns.tolist(),
+            suggestions=[tr(
+                f"No valid 'temperature' column found. Available: {df1.columns.tolist()}",
+                f"Keine gültige Temperaturspalte gefunden. Verfügbare Spalten: {df1.columns.tolist()}",
+                lang,
+            )],
+        )
     if not load_cols:
-        raise ValueError(f'No valid load column found. Available columns: {df2.columns.tolist()}')
+        raise ColumnDetectionError(
+            column_type='load',
+            available=df2.columns.tolist(),
+            suggestions=[tr(
+                f"No valid 'load' column found. Available: {df2.columns.tolist()}",
+                f"Keine gültige Lastspalte gefunden. Verfügbare Spalten: {df2.columns.tolist()}",
+                lang,
+            )],
+        )
 
     x = temp_cols[0]
     y = load_cols[0]
@@ -85,7 +110,15 @@ def validate_and_prepare_data(df1, df2):
 
     df_merged = pd.merge(df1[['UTC', x]], df2[['UTC', y]], on='UTC', how='inner')
     if df_merged.empty:
-        raise ValueError('No matching timestamps found between files. Please ensure both files have matching timestamps.')
+        raise TimestampMismatchError(
+            file1=file1_name,
+            file2=file2_name,
+            suggestions=[tr(
+                "No matching timestamps found between files. Please ensure both files cover the same time range.",
+                "Keine übereinstimmenden Zeitstempel zwischen den Dateien gefunden. Bitte stellen Sie sicher, dass beide Dateien denselben Zeitbereich abdecken.",
+                lang,
+            )],
+        )
 
     logger.info(f"First few timestamps in first file: {df1['UTC'].head().tolist()}")
     logger.info(f"First few timestamps in second file: {df2['UTC'].head().tolist()}")
@@ -93,12 +126,28 @@ def validate_and_prepare_data(df1, df2):
     df1_duplicates = df1['UTC'].duplicated().sum()
     df2_duplicates = df2['UTC'].duplicated().sum()
     if df1_duplicates > 0 or df2_duplicates > 0:
-        raise ValueError('Duplicate timestamps found in data')
+        raise CloudException(
+            "Duplicate timestamps found in data",
+            error_code='DUPLICATE_TIMESTAMPS',
+            suggestions=[tr(
+                "Duplicate timestamps found in data. Each timestamp must be unique.",
+                "Doppelte Zeitstempel in den Daten gefunden. Jeder Zeitstempel muss eindeutig sein.",
+                lang,
+            )],
+        )
 
     df1 = df1.dropna()
     df2 = df2.dropna()
     if df1.empty or df2.empty:
-        raise ValueError('No valid numeric data found after cleaning')
+        raise CloudException(
+            "No valid numeric data found after cleaning",
+            error_code='NO_NUMERIC_DATA',
+            suggestions=[tr(
+                "No valid numeric data found after cleaning. Check that data columns contain numbers.",
+                "Keine gültigen numerischen Daten nach Bereinigung gefunden. Überprüfen Sie, ob Datenspalten Zahlen enthalten.",
+                lang,
+            )],
+        )
 
     logger.info(f"Data cleaned. New shapes: {df1.shape}, {df2.shape}")
 
@@ -107,13 +156,29 @@ def validate_and_prepare_data(df1, df2):
     cld[y] = df2[y]
     cld = cld.dropna()
     if cld.empty:
-        raise ValueError('No valid data points after combining datasets')
+        raise CloudException(
+            "No valid data points after combining datasets",
+            error_code='NO_DATA_AFTER_COMBINE',
+            suggestions=[tr(
+                "No valid data points after combining datasets. Check that files have overlapping valid data.",
+                "Keine gültigen Datenpunkte nach Zusammenführung der Datensätze. Überprüfen Sie, ob die Dateien überlappende gültige Daten haben.",
+                lang,
+            )],
+        )
 
     logger.info(f"Combined data shape: {cld.shape}")
 
     cld_srt = cld.sort_values(by=x).copy()
     if cld_srt[x].isna().any() or cld_srt[y].isna().any():
-        raise ValueError('NaN values found in processed data')
+        raise CloudException(
+            "NaN values found in processed data",
+            error_code='NAN_IN_PROCESSED_DATA',
+            suggestions=[tr(
+                "NaN values found in processed data. This indicates data corruption upstream.",
+                "NaN-Werte in den verarbeiteten Daten gefunden. Dies weist auf eine Datenbeschädigung weiter oben hin.",
+                lang,
+            )],
+        )
 
     return cld_srt, x, y, df2
 
@@ -147,7 +212,7 @@ def calculate_tolerance_params(data, y_range):
     return TOL_CNT, TOL_DEP
 
 
-def perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision='full'):
+def perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision='full', lang: str = 'en'):
     """Perform linear regression and apply tolerance filtering."""
     lin_mdl = LinearRegression()
     lin_mdl.fit(cld_srt[[x]], cld_srt[y])
@@ -164,14 +229,28 @@ def perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_preci
         mask = np.abs(cld_srt[y] - lin_prd) <= (np.abs(lin_prd) * TOL_DEP + TOL_CNT)
         logger.info(f"Using dependent tolerance: {TOL_DEP} + {TOL_CNT}")
     else:
-        raise ValueError(f'Unknown tolerance type: {TR}')
+        raise UnknownToleranceTypeError(
+            provided=TR,
+            suggestions=[tr(
+                f"Unknown tolerance type: '{TR}'. Expected 'cnt' or 'dep'.",
+                f"Unbekannter Toleranztyp: '{TR}'. Erwartet 'cnt' oder 'dep'.",
+                lang,
+            )],
+        )
 
     cld_srt_flt = cld_srt[mask]
 
     if len(cld_srt_flt) == 0:
         logger.warning(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
         logger.warning(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
-        raise ValueError('No points within tolerance bounds. Try increasing the tolerance values.')
+        raise ToleranceBoundsEmptyError(
+            tolerance_type=TR,
+            suggestions=[tr(
+                "No points within tolerance bounds. Try increasing the tolerance values.",
+                "Keine Punkte innerhalb der Toleranzgrenzen. Versuchen Sie, die Toleranzwerte zu erhöhen.",
+                lang,
+            )],
+        )
 
     return {
         'x_values': apply_decimal_precision(cld_srt[x].tolist(), decimal_precision),
@@ -186,7 +265,7 @@ def perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_preci
     }
 
 
-def perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision='full'):
+def perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision='full', lang: str = 'en'):
     """Perform polynomial regression and apply tolerance filtering."""
     poly_features = PolynomialFeatures(degree=2)
     X_poly = poly_features.fit_transform(cld_srt[[x]])
@@ -205,14 +284,28 @@ def perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_p
     elif TR == "dep":
         mask = np.abs(cld_srt[y] - poly_prd) <= (np.abs(poly_prd) * TOL_DEP + TOL_CNT)
     else:
-        raise ValueError(f'Unknown tolerance type: {TR}')
+        raise UnknownToleranceTypeError(
+            provided=TR,
+            suggestions=[tr(
+                f"Unknown tolerance type: '{TR}'. Expected 'cnt' or 'dep'.",
+                f"Unbekannter Toleranztyp: '{TR}'. Erwartet 'cnt' oder 'dep'.",
+                lang,
+            )],
+        )
 
     cld_srt_flt = cld_srt[mask]
 
     if len(cld_srt_flt) == 0:
         logger.warning(f"No points within tolerance bounds. Min y: {cld_srt[y].min()}, Max y: {cld_srt[y].max()}")
         logger.warning(f"Bounds: lower={lower_bound.min()}, upper={upper_bound.max()}")
-        raise ValueError('No points within tolerance bounds. Try increasing the tolerance values.')
+        raise ToleranceBoundsEmptyError(
+            tolerance_type=TR,
+            suggestions=[tr(
+                "No points within tolerance bounds. Try increasing the tolerance values.",
+                "Keine Punkte innerhalb der Toleranzgrenzen. Versuchen Sie, die Toleranzwerte zu erhöhen.",
+                lang,
+            )],
+        )
 
     return {
         'x_values': apply_decimal_precision(cld_srt[x].tolist(), decimal_precision),
@@ -227,13 +320,18 @@ def perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_p
     }
 
 
-def process_data_frames(df1, df2, data):
+def process_data_frames(df1, df2, data, lang: str = 'en', file1_name: str = '', file2_name: str = ''):
     """
     Process data from dataframes for both direct and chunked uploads.
     Refactored to use helper functions for better maintainability.
+
+    CloudException subclasses propagate to the route handler (caught in T3);
+    only generic/unexpected exceptions are caught and returned here.
     """
     try:
-        cld_srt, x, y, df2_original = validate_and_prepare_data(df1, df2)
+        cld_srt, x, y, df2_original = validate_and_prepare_data(
+            df1, df2, lang=lang, file1_name=file1_name, file2_name=file2_name
+        )
 
         REG = data.get('REG', 'lin')
         TR = data.get('TR', 'cnt')
@@ -244,13 +342,16 @@ def process_data_frames(df1, df2, data):
         logger.info(f"Final parameters: REG={REG}, TR={TR}, TOL_CNT={TOL_CNT}, TOL_DEP={TOL_DEP}, decimalPrecision={decimal_precision}")
 
         if REG == "lin":
-            result_data = perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision)
+            result_data = perform_linear_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision, lang=lang)
         else:
-            result_data = perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision)
+            result_data = perform_polynomial_regression(cld_srt, x, y, TR, TOL_CNT, TOL_DEP, decimal_precision, lang=lang)
 
         logger.info("Sending response:")
         return jsonify({'success': True, 'data': result_data})
 
+    except CloudException:
+        # Re-raise so route handler can return structured error payload (T3).
+        raise
     except ValueError as ve:
         logger.error(f"Validation error: {str(ve)}")
         return jsonify({'success': False, 'data': {'error': str(ve)}}), 400
@@ -265,7 +366,7 @@ def process_data_frames(df1, df2, data):
 # ═══════════════════════════════════════════════════════════════════
 
 
-def quick_minmax(file_path, sep):
+def quick_minmax(file_path, sep, lang: str = 'en'):
     """
     Read only the value column to determine min/max without loading full file.
     O(N) time, O(1) memory.
@@ -291,13 +392,22 @@ def quick_minmax(file_path, sep):
                 continue
 
     if y_min == float('inf'):
-        raise ValueError("No valid numeric data in load file")
+        raise CloudException(
+            "No valid numeric data in load file",
+            error_code='NO_NUMERIC_DATA_TARGET',
+            suggestions=[tr(
+                "No valid numeric data in target variable file.",
+                "Keine gültigen numerischen Daten in der Zielvariablen-Datei.",
+                lang,
+            )],
+        )
 
     return y_min, y_max
 
 
 def chunked_merge_and_sample(temp_file_path, load_file_path, temp_sep, load_sep,
-                              sample_size=REGRESSION_SAMPLE_SIZE, tracker=None):
+                              sample_size=REGRESSION_SAMPLE_SIZE, tracker=None,
+                              lang: str = 'en', file1_name: str = '', file2_name: str = ''):
     """
     Memory-efficient merge of two CSV files on UTC column with reservoir sampling.
 
@@ -333,7 +443,15 @@ def chunked_merge_and_sample(temp_file_path, load_file_path, temp_sep, load_sep,
                 continue
 
     if len(temp_lookup) == 0:
-        raise ValueError("No valid numeric data in predictor file")
+        raise CloudException(
+            "No valid numeric data in predictor file",
+            error_code='NO_NUMERIC_DATA_PREDICTOR',
+            suggestions=[tr(
+                "No valid numeric data in predictor file.",
+                "Keine gültigen numerischen Daten in der Prädiktor-Datei.",
+                lang,
+            )],
+        )
 
     # Step 2: Stream load file, match UTCs, reservoir sample
     if tracker:
@@ -386,12 +504,26 @@ def chunked_merge_and_sample(temp_file_path, load_file_path, temp_sep, load_sep,
                                  message_params={'matched': matched_count})
 
     if matched_count == 0:
-        raise ValueError('No matching timestamps found between files. '
-                         'Please ensure both files have matching UTC timestamps.')
+        raise TimestampMismatchError(
+            file1=file1_name,
+            file2=file2_name,
+            suggestions=[tr(
+                "No matching timestamps found between files. Please ensure both files cover the same time range.",
+                "Keine übereinstimmenden Zeitstempel zwischen den Dateien gefunden. Bitte stellen Sie sicher, dass beide Dateien denselben Zeitbereich abdecken.",
+                lang,
+            )],
+        )
 
     if matched_count < REGRESSION_MIN_SAMPLE_SIZE:
-        raise ValueError(f'Too few matching points: {matched_count} '
-                         f'(minimum: {REGRESSION_MIN_SAMPLE_SIZE})')
+        raise InsufficientMatchingPointsError(
+            matched=matched_count,
+            minimum=REGRESSION_MIN_SAMPLE_SIZE,
+            suggestions=[tr(
+                f"Too few matching points: {matched_count} (minimum: {REGRESSION_MIN_SAMPLE_SIZE}).",
+                f"Zu wenige übereinstimmende Punkte: {matched_count} (mindestens: {REGRESSION_MIN_SAMPLE_SIZE}).",
+                lang,
+            )],
+        )
 
     # Convert reservoir to DataFrame for regression fitting
     sample_df = pd.DataFrame(reservoir, columns=['x', 'y'])
@@ -449,7 +581,7 @@ def _process_regression_chunk(buffer, predict_fn, tolerance_type, tol_cnt, tol_d
 def perform_streaming_regression(matched_file_path, sample_df, x_col, y_col,
                                   total_matched, reg_type, tolerance_type,
                                   tol_cnt, tol_dep, decimal_precision='full',
-                                  tracker=None):
+                                  tracker=None, lang: str = 'en'):
     """
     Generator that yields NDJSON lines for streaming regression results.
 
@@ -470,8 +602,15 @@ def perform_streaming_regression(matched_file_path, sample_df, x_col, y_col,
     sample_sorted = sample_sorted.replace([np.inf, -np.inf], np.nan).dropna(subset=['x', 'y'])
 
     if len(sample_sorted) < REGRESSION_MIN_SAMPLE_SIZE:
-        raise ValueError(f'Too few valid sample points after cleanup: {len(sample_sorted)} '
-                         f'(minimum: {REGRESSION_MIN_SAMPLE_SIZE})')
+        raise InsufficientMatchingPointsError(
+            matched=len(sample_sorted),
+            minimum=REGRESSION_MIN_SAMPLE_SIZE,
+            suggestions=[tr(
+                f"Too few valid sample points after cleanup: {len(sample_sorted)} (minimum: {REGRESSION_MIN_SAMPLE_SIZE}).",
+                f"Zu wenige gültige Stichprobenpunkte nach Bereinigung: {len(sample_sorted)} (mindestens: {REGRESSION_MIN_SAMPLE_SIZE}).",
+                lang,
+            )],
+        )
 
     # Fit model on sample (use .values to avoid sklearn feature name warnings)
     x_train = sample_sorted['x'].values.reshape(-1, 1)
