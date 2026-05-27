@@ -618,3 +618,15 @@ class UnknownToleranceTypeError(CloudException):
         details.update({'provided': provided})
         kwargs['details'] = details
         super().__init__(message, **kwargs)
+
+
+class UploadIdValidationError(CloudException):
+    """Raised when upload_id contains invalid characters, is empty, or has path separators."""
+
+    def __init__(self, reason: str, **kwargs):
+        message = f"Invalid upload ID: {reason}"
+        kwargs.setdefault('error_code', 'INVALID_UPLOAD_ID')
+        details = kwargs.get('details', {}) or {}
+        details.update({'reason': reason})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
