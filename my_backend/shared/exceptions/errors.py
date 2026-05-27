@@ -526,3 +526,95 @@ class ParameterOutOfRangeError(AnomalyException):
         details.update(details_base)
         kwargs['details'] = details
         super().__init__(message, **kwargs)
+
+
+# ============================================================================
+# Cloud / Datenwolke Exceptions (regression-based anomaly detection — /api/cloud/*)
+# ============================================================================
+
+class CloudException(LoadDataException):
+    """Base class for data-cloud regression errors.
+
+    Raised when validation, regression, or interpolation fails in the
+    /api/cloud/* namespace. Inherits the full LoadDataException machinery
+    (error_code, details, suggestions, to_dict()) so the route handler can
+    return the same {ok, error, error_code, details, suggestions} shape as
+    W6/W9 endpoints.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        kwargs.setdefault('error_code', 'CLOUD_ERROR')
+        super().__init__(message, **kwargs)
+
+
+class TimestampMismatchError(CloudException):
+    """Raised when predictor and target file timestamps do not overlap."""
+
+    def __init__(self, file1: str = '', file2: str = '', **kwargs):
+        message = (
+            f"No matching timestamps found between '{file1}' and '{file2}'. "
+            f"Please ensure both files cover the same time range."
+        )
+        kwargs.setdefault('error_code', 'TIMESTAMP_MISMATCH')
+        details = kwargs.get('details', {}) or {}
+        details.update({'file1': file1, 'file2': file2})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
+
+
+class InsufficientMatchingPointsError(CloudException):
+    """Raised when matched timestamp count is below minimum threshold for regression."""
+
+    def __init__(self, matched: int, minimum: int, **kwargs):
+        message = (
+            f"Too few matching points: {matched} (minimum: {minimum}). "
+            f"Regression requires at least {minimum} overlapping timestamps."
+        )
+        kwargs.setdefault('error_code', 'INSUFFICIENT_MATCHING_POINTS')
+        details = kwargs.get('details', {}) or {}
+        details.update({'matched': matched, 'minimum': minimum})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
+
+
+class ColumnDetectionError(CloudException):
+    """Raised when required column (temperature/load/UTC) is missing from file."""
+
+    def __init__(self, column_type: str, available: list = None, **kwargs):
+        available_str = str(available) if available else '[]'
+        message = (
+            f"No valid '{column_type}' column found in file. "
+            f"Available columns: {available_str}"
+        )
+        kwargs.setdefault('error_code', 'COLUMN_NOT_FOUND')
+        details = kwargs.get('details', {}) or {}
+        details.update({'column_type': column_type, 'available': available or []})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
+
+
+class ToleranceBoundsEmptyError(CloudException):
+    """Raised when tolerance bounds produce no enclosed data points."""
+
+    def __init__(self, tolerance_type: str, **kwargs):
+        message = (
+            f"No points within tolerance bounds (type: '{tolerance_type}'). "
+            f"Try increasing the tolerance values."
+        )
+        kwargs.setdefault('error_code', 'TOLERANCE_BOUNDS_EMPTY')
+        details = kwargs.get('details', {}) or {}
+        details.update({'tolerance_type': tolerance_type})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
+
+
+class UnknownToleranceTypeError(CloudException):
+    """Raised when tolerance type code (TR) is not recognized."""
+
+    def __init__(self, provided: str, **kwargs):
+        message = f"Unknown tolerance type: '{provided}'. Expected 'cnt' or 'dep'."
+        kwargs.setdefault('error_code', 'UNKNOWN_TOLERANCE_TYPE')
+        details = kwargs.get('details', {}) or {}
+        details.update({'provided': provided})
+        kwargs['details'] = details
+        super().__init__(message, **kwargs)
