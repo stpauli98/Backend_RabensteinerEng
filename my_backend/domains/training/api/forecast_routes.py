@@ -21,6 +21,7 @@ import pandas as pd
 from werkzeug.exceptions import BadRequest as WerkzeugBadRequest
 from shared.auth.api_key import allow_api_key
 from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
+from core.rate_limits import limiter, forecast_limit_string
 
 from domains.training.services.forecast_service import run_forecast
 
@@ -46,6 +47,7 @@ def _validate_uuid_format(session_id: str):
 
 
 @bp.route('/forecast/<session_id>', methods=['POST'])
+@limiter.limit(forecast_limit_string)
 @allow_api_key
 @require_subscription
 def execute_forecast(session_id):

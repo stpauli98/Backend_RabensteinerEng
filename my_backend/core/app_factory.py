@@ -16,6 +16,7 @@ from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from core.socketio_handlers import register_socketio_handlers
+from core.rate_limits import limiter
 
 socketio = SocketIO()
 cors = CORS()
@@ -104,6 +105,8 @@ def create_app():
         supports_credentials=True,
         max_age=3600
     )
+
+    limiter.init_app(app)
 
     register_socketio_handlers(socketio)
     

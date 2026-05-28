@@ -307,3 +307,59 @@ def test_invalid_uuid_session_id_returns_400_bad_uuid(client=None):
             assert body.get('code') in ('BAD_UUID', 'MISSING_AUTHORIZATION'), (
                 f"Payload {p!r}: 400 without BAD_UUID code: {body}"
             )
+
+
+def _make_client_with_limiter():
+    """Minimal Flask app with forecast blueprint + limiter initialized.
+
+    Used by rate-limit tests that need the limiter wired into the app so
+    Flask-Limiter can track request counts. The regular _make_client() skips
+    limiter.init_app(), so the @limiter.limit decorator would silently pass
+    every request through (no app context = no storage).
+    """
+    import core.rate_limits as rate_limits_mod
+    from domains.training.api.forecast_routes import bp
+    app = Flask(__name__)
+    app.register_blueprint(bp, url_prefix='/api/training')
+    rate_limits_mod.limiter.init_app(app)
+    return app.test_client()
+
+
+def test_rate_limit_returns_429_after_burst():
+    """SEC-W12-1: Many requests in burst should get 429 after limit.
+
+    NOTE: This test temporarily forces production limits via monkey patch.
+    """
+    import core.rate_limits as rate_limits
+
+    # Save original + override the testing detection to return False
+    original = rate_limits._is_testing
+    rate_limits._is_testing = lambda: False
+
+    client = _make_client_with_limiter()
+
+    # Reset limiter state for test isolation
+    rate_limits.limiter.reset()
+
+    try:
+        # Send 65 requests in quick succession (limit is 60/min for forecast).
+        # We expect at least one 429 once the limit is crossed.
+        statuses = []
+        for i in range(65):
+            resp = client.post(
+                '/api/training/forecast/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+                json={'user_data': {}},
+                headers={'Authorization': f'Bearer sk_fcst_invalid_{i}'}
+            )
+            statuses.append(resp.status_code)
+
+        # At least one 429 should appear once limit is exceeded.
+        count_429 = sum(1 for s in statuses if s == 429)
+        assert count_429 > 0, (
+            f"Expected at least 1 HTTP 429 (rate limited) in 65 requests, got "
+            f"{count_429} 429s. Statuses: {statuses[-15:]}..."
+        )
+    finally:
+        # Restore original detection + clean state
+        rate_limits._is_testing = original
+        rate_limits.limiter.reset()
