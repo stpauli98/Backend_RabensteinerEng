@@ -111,3 +111,18 @@ def test_malformed_json_returns_400_with_code():
     err_lower = body.get('error', '').lower()
     assert 'werkzeug' not in err_lower, f"Leaked werkzeug detail: {body}"
     assert 'expecting property name' not in err_lower, f"Leaked JSON parser detail: {body}"
+
+
+def test_missing_authorization_returns_401_with_code():
+    """W12-F4: Missing Authorization header should return 401 + code MISSING_AUTHORIZATION."""
+    client = _make_client()
+    # No mocks needed — auth decorator fires before any view body or DB lookup.
+    resp = client.post(
+        f'/api/training/forecast/{SESSION_UUID}',
+        json={'user_data': {}},
+        # NOTE: No Authorization header
+    )
+    assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.get_data(as_text=True)}"
+    body = resp.get_json()
+    assert body.get('code') == 'MISSING_AUTHORIZATION', f"Expected MISSING_AUTHORIZATION code, got: {body}"
+    assert 'missing' in body.get('error', '').lower()

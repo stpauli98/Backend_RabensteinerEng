@@ -27,7 +27,7 @@ def allow_api_key(f):
         auth_header = request.headers.get('Authorization', '')
 
         if not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'Missing authorization header'}), 401
+            return jsonify({'code': 'MISSING_AUTHORIZATION', 'error': 'Missing authorization header'}), 401
 
         token = auth_header[7:]
 
