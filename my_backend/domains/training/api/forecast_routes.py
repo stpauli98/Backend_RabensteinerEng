@@ -15,6 +15,7 @@ from .common import (
 )
 from flask import Blueprint
 import json
+import uuid as uuid_module
 import pandas as pd
 
 from werkzeug.exceptions import BadRequest as WerkzeugBadRequest
@@ -25,6 +26,23 @@ from domains.training.services.forecast_service import run_forecast
 
 bp = Blueprint('training_forecast', __name__)
 logger = get_logger(__name__)
+
+
+def _validate_uuid_format(session_id: str):
+    """Return jsonify+status if session_id is malformed UUID, else None.
+
+    Use at top of any forecast route to fail fast with 400 BAD_UUID
+    before reaching DB layer (which would 500).
+    """
+    try:
+        uuid_module.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        return jsonify({
+            'success': False,
+            'code': 'BAD_UUID',
+            'error': 'session_id is not a valid UUID',
+        }), 400
+    return None
 
 
 @bp.route('/forecast/<session_id>', methods=['POST'])
@@ -41,6 +59,11 @@ def execute_forecast(session_id):
         }
     }
     """
+    # SEC-W12-2: validate UUID before any work
+    bad = _validate_uuid_format(session_id)
+    if bad:
+        return bad
+
     # Validate JSON body before any DB work — avoids leaking Flask internals.
     try:
         request_data = request.get_json(force=True, silent=False) or {}
@@ -185,6 +208,11 @@ def execute_forecast(session_id):
 @require_auth
 def get_forecast_config(session_id):
     """Get session configuration needed for forecast UI."""
+    # SEC-W12-2: validate UUID before any work
+    bad = _validate_uuid_format(session_id)
+    if bad:
+        return bad
+
     try:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
@@ -230,6 +258,11 @@ def get_forecast_config(session_id):
 @require_auth
 def save_forecast_config(session_id):
     """Save forecast configuration into files table for a session."""
+    # SEC-W12-2: validate UUID before any work
+    bad = _validate_uuid_format(session_id)
+    if bad:
+        return bad
+
     try:
         data = request.get_json()
         if not data or 'features' not in data:

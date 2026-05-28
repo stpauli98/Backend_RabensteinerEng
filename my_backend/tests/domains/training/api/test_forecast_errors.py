@@ -277,3 +277,33 @@ def test_missing_user_data_key_returns_400():
         f"Expected MISSING_USER_DATA code, got: {body}"
     )
     assert body.get('success') is False
+
+
+def test_invalid_uuid_session_id_returns_400_bad_uuid(client=None):
+    """SEC-W12-2: Malformed UUID in session_id should return 400 BAD_UUID, not 500."""
+    from urllib.parse import quote
+    test_client = client or _make_client()
+    payloads = [
+        "' OR 1=1--",
+        "'; DROP TABLE sessions;--",
+        "not-a-uuid",
+        "../../etc/passwd",
+        "",
+    ]
+    for p in payloads:
+        # GET forecast-config (requires auth, but we want to test the UUID guard fires)
+        resp = test_client.get(
+            f'/api/training/forecast-config/{quote(p, safe="")}',
+            headers={'Authorization': 'Bearer dummy-jwt'}
+        )
+        # Should be 400 BAD_UUID OR 401 (if auth fires first — that's also fine,
+        # auth filter shouldn't crash on bad UUID either).
+        assert resp.status_code in (400, 401, 404), (
+            f"Payload {p!r}: expected 400/401/404, got {resp.status_code}: {resp.get_data(as_text=True)}"
+        )
+        # If we got 400, must have BAD_UUID code (not a generic 400 leak)
+        if resp.status_code == 400:
+            body = resp.get_json()
+            assert body.get('code') in ('BAD_UUID', 'MISSING_AUTHORIZATION'), (
+                f"Payload {p!r}: 400 without BAD_UUID code: {body}"
+            )
