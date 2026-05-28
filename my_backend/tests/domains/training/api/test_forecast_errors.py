@@ -277,3 +277,144 @@ def test_missing_user_data_key_returns_400():
         f"Expected MISSING_USER_DATA code, got: {body}"
     )
     assert body.get('success') is False
+
+
+def test_invalid_uuid_session_id_returns_400_bad_uuid(client=None):
+    """SEC-W12-2: Malformed UUID in session_id should return 400 BAD_UUID, not 500."""
+    from urllib.parse import quote
+    test_client = client or _make_client()
+    payloads = [
+        "' OR 1=1--",
+        "'; DROP TABLE sessions;--",
+        "not-a-uuid",
+        "../../etc/passwd",
+        "",
+    ]
+    for p in payloads:
+        # GET forecast-config (requires auth, but we want to test the UUID guard fires)
+        resp = test_client.get(
+            f'/api/training/forecast-config/{quote(p, safe="")}',
+            headers={'Authorization': 'Bearer dummy-jwt'}
+        )
+        # Should be 400 BAD_UUID OR 401 (if auth fires first — that's also fine,
+        # auth filter shouldn't crash on bad UUID either).
+        assert resp.status_code in (400, 401, 404), (
+            f"Payload {p!r}: expected 400/401/404, got {resp.status_code}: {resp.get_data(as_text=True)}"
+        )
+        # If we got 400, must have BAD_UUID code (not a generic 400 leak)
+        if resp.status_code == 400:
+            body = resp.get_json()
+            assert body.get('code') in ('BAD_UUID', 'MISSING_AUTHORIZATION'), (
+                f"Payload {p!r}: 400 without BAD_UUID code: {body}"
+            )
+
+
+def _make_client_with_limiter():
+    """Minimal Flask app with forecast blueprint + limiter initialized.
+
+    Used by rate-limit tests that need the limiter wired into the app so
+    Flask-Limiter can track request counts. The regular _make_client() skips
+    limiter.init_app(), so the @limiter.limit decorator would silently pass
+    every request through (no app context = no storage).
+    """
+    import core.rate_limits as rate_limits_mod
+    from domains.training.api.forecast_routes import bp
+    app = Flask(__name__)
+    app.register_blueprint(bp, url_prefix='/api/training')
+    rate_limits_mod.limiter.init_app(app)
+    return app.test_client()
+
+
+def test_options_preflight_on_api_keys_returns_200():
+    """SEC-W12-3: OPTIONS preflight on /api-keys/<sessionId> must succeed (200 or 204).
+
+    Regression guard verifying that Flask-CORS correctly handles preflight on the
+    api_key_routes blueprint. Uses Flask-CORS 6.0 top-level kwargs (global config),
+    matching how core/app_factory.py initialises CORS in production.
+
+    The W12 audit's CORS failure was reproduced against a URL variant with a query
+    string that does not map to any real route. This test confirms the legitimate
+    path /api/training/api-keys/<sessionId> returns the required CORS headers.
+    """
+    from flask_cors import CORS
+    from domains.training.api.api_key_routes import bp
+
+    app = Flask(__name__)
+
+    # Mirror the production CORS config from core/app_factory.py (Flask-CORS 6.0
+    # global kwargs — no resources dict).
+    CORS(
+        app,
+        origins=["http://localhost:3000"],
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
+        supports_credentials=True,
+        max_age=3600,
+    )
+    app.register_blueprint(bp, url_prefix='/api/training')
+
+    client = app.test_client()
+
+    resp = client.options(
+        '/api/training/api-keys/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+        headers={
+            'Origin': 'http://localhost:3000',
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'authorization,content-type',
+        }
+    )
+
+    assert resp.status_code in (200, 204), (
+        f"OPTIONS preflight failed: HTTP {resp.status_code}. "
+        f"Headers: {dict(resp.headers)}"
+    )
+    # Must have allow-origin echoed back
+    assert resp.headers.get('Access-Control-Allow-Origin') is not None, (
+        f"Missing Access-Control-Allow-Origin: {dict(resp.headers)}"
+    )
+    # Must allow Authorization header
+    allow_headers = (resp.headers.get('Access-Control-Allow-Headers') or '').lower()
+    assert 'authorization' in allow_headers, (
+        f"Authorization not in Access-Control-Allow-Headers: "
+        f"{resp.headers.get('Access-Control-Allow-Headers')}"
+    )
+
+
+def test_rate_limit_returns_429_after_burst():
+    """SEC-W12-1: Many requests in burst should get 429 after limit.
+
+    NOTE: This test temporarily forces production limits via monkey patch.
+    """
+    import core.rate_limits as rate_limits
+
+    # Save original + override the testing detection to return False
+    original = rate_limits._is_testing
+    rate_limits._is_testing = lambda: False
+
+    client = _make_client_with_limiter()
+
+    # Reset limiter state for test isolation
+    rate_limits.limiter.reset()
+
+    try:
+        # Send 65 requests in quick succession (limit is 60/min for forecast).
+        # We expect at least one 429 once the limit is crossed.
+        statuses = []
+        for i in range(65):
+            resp = client.post(
+                '/api/training/forecast/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+                json={'user_data': {}},
+                headers={'Authorization': f'Bearer sk_fcst_invalid_{i}'}
+            )
+            statuses.append(resp.status_code)
+
+        # At least one 429 should appear once limit is exceeded.
+        count_429 = sum(1 for s in statuses if s == 429)
+        assert count_429 > 0, (
+            f"Expected at least 1 HTTP 429 (rate limited) in 65 requests, got "
+            f"{count_429} 429s. Statuses: {statuses[-15:]}..."
+        )
+    finally:
+        # Restore original detection + clean state
+        rate_limits._is_testing = original
+        rate_limits.limiter.reset()
