@@ -325,6 +325,61 @@ def _make_client_with_limiter():
     return app.test_client()
 
 
+def test_options_preflight_on_api_keys_returns_200():
+    """SEC-W12-3: OPTIONS preflight on /api-keys/<sessionId> must succeed (200 or 204).
+
+    Regression guard verifying that Flask-CORS correctly handles preflight on the
+    api_key_routes blueprint. Uses Flask-CORS 6.0 top-level kwargs (global config),
+    matching how core/app_factory.py initialises CORS in production.
+
+    The W12 audit's CORS failure was reproduced against a URL variant with a query
+    string that does not map to any real route. This test confirms the legitimate
+    path /api/training/api-keys/<sessionId> returns the required CORS headers.
+    """
+    from flask_cors import CORS
+    from domains.training.api.api_key_routes import bp
+
+    app = Flask(__name__)
+
+    # Mirror the production CORS config from core/app_factory.py (Flask-CORS 6.0
+    # global kwargs — no resources dict).
+    CORS(
+        app,
+        origins=["http://localhost:3000"],
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
+        supports_credentials=True,
+        max_age=3600,
+    )
+    app.register_blueprint(bp, url_prefix='/api/training')
+
+    client = app.test_client()
+
+    resp = client.options(
+        '/api/training/api-keys/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+        headers={
+            'Origin': 'http://localhost:3000',
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'authorization,content-type',
+        }
+    )
+
+    assert resp.status_code in (200, 204), (
+        f"OPTIONS preflight failed: HTTP {resp.status_code}. "
+        f"Headers: {dict(resp.headers)}"
+    )
+    # Must have allow-origin echoed back
+    assert resp.headers.get('Access-Control-Allow-Origin') is not None, (
+        f"Missing Access-Control-Allow-Origin: {dict(resp.headers)}"
+    )
+    # Must allow Authorization header
+    allow_headers = (resp.headers.get('Access-Control-Allow-Headers') or '').lower()
+    assert 'authorization' in allow_headers, (
+        f"Authorization not in Access-Control-Allow-Headers: "
+        f"{resp.headers.get('Access-Control-Allow-Headers')}"
+    )
+
+
 def test_rate_limit_returns_429_after_burst():
     """SEC-W12-1: Many requests in burst should get 429 after limit.
 
