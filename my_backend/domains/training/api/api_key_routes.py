@@ -7,6 +7,7 @@ Endpoints:
 - DELETE /api-keys/<key_id> — revoke a key
 """
 
+import re
 import secrets
 import hashlib
 from datetime import datetime, timezone, timedelta
@@ -24,6 +25,7 @@ logger = get_logger(__name__)
 
 API_KEY_PREFIX = "sk_fcst_"
 MAX_KEYS_PER_SESSION = 5
+KEY_NAME_PATTERN = re.compile(r'^[A-Za-z0-9 _\-()\.]{1,100}$')
 
 
 def _generate_key():
@@ -43,9 +45,23 @@ def generate_api_key(session_id):
         expires_in_days = data.get('expires_in_days')
 
         if not name:
-            return jsonify({'success': False, 'error': 'Key name is required'}), 400
+            return jsonify({
+                'success': False, 'code': 'INVALID_KEY_NAME',
+                'error': 'Key name is required'
+            }), 400
         if len(name) > 100:
-            return jsonify({'success': False, 'error': 'Key name too long (max 100 chars)'}), 400
+            return jsonify({
+                'success': False, 'code': 'INVALID_KEY_NAME',
+                'error': 'Key name too long (max 100 chars)'
+            }), 400
+        if not KEY_NAME_PATTERN.match(name):
+            return jsonify({
+                'success': False, 'code': 'INVALID_KEY_NAME',
+                'error': (
+                    'Key name may only contain letters, numbers, spaces, '
+                    'hyphens, underscores, parentheses, and dots.'
+                )
+            }), 400
 
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
