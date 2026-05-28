@@ -199,3 +199,81 @@ def test_unknown_session_returns_404_not_403():
     assert body.get('code') == 'SESSION_NOT_FOUND', (
         f"Expected code SESSION_NOT_FOUND, got: {body}"
     )
+
+
+def test_empty_payload_returns_400_missing_user_data():
+    """W12-F7: Empty {} payload should return 400 + MISSING_USER_DATA, not 422 INTERPOLATION_ERROR."""
+    client = _make_client()
+    mock_sb = _mock_supabase()
+
+    supabase_targets = [
+        'shared.database.operations.get_supabase_client',
+        'domains.training.api.common.get_supabase_client',
+        'shared.auth.ownership.get_supabase_client',
+    ]
+    session_uuid_targets = [
+        'shared.database.operations.create_or_get_session_uuid',
+        'domains.training.api.common.create_or_get_session_uuid',
+    ]
+
+    patches = (
+        [patch(t, return_value=mock_sb) for t in supabase_targets]
+        + [patch(t, return_value=SESSION_UUID) for t in session_uuid_targets]
+    )
+
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        resp = client.post(
+            f'/api/training/forecast/{SESSION_UUID}',
+            json={},
+            headers={'Authorization': 'Bearer sk_fcst_test_key'},
+        )
+
+    assert resp.status_code == 400, (
+        f"Expected 400, got {resp.status_code}: {resp.get_data(as_text=True)}"
+    )
+    body = resp.get_json()
+    assert body is not None, "Response body must be valid JSON"
+    assert body.get('code') == 'MISSING_USER_DATA', (
+        f"Expected MISSING_USER_DATA code, got: {body}"
+    )
+    assert body.get('success') is False
+    assert 'user_data' in body.get('error', '').lower(), (
+        f"Error message should mention user_data: {body}"
+    )
+
+
+def test_missing_user_data_key_returns_400():
+    """W12-F7b: Payload without user_data key should return 400 + MISSING_USER_DATA."""
+    client = _make_client()
+    mock_sb = _mock_supabase()
+
+    supabase_targets = [
+        'shared.database.operations.get_supabase_client',
+        'domains.training.api.common.get_supabase_client',
+        'shared.auth.ownership.get_supabase_client',
+    ]
+    session_uuid_targets = [
+        'shared.database.operations.create_or_get_session_uuid',
+        'domains.training.api.common.create_or_get_session_uuid',
+    ]
+
+    patches = (
+        [patch(t, return_value=mock_sb) for t in supabase_targets]
+        + [patch(t, return_value=SESSION_UUID) for t in session_uuid_targets]
+    )
+
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        resp = client.post(
+            f'/api/training/forecast/{SESSION_UUID}',
+            json={'other_key': 'value'},
+            headers={'Authorization': 'Bearer sk_fcst_test_key'},
+        )
+
+    assert resp.status_code == 400, (
+        f"Expected 400, got {resp.status_code}: {resp.get_data(as_text=True)}"
+    )
+    body = resp.get_json()
+    assert body.get('code') == 'MISSING_USER_DATA', (
+        f"Expected MISSING_USER_DATA code, got: {body}"
+    )
+    assert body.get('success') is False
