@@ -27,7 +27,7 @@ def allow_api_key(f):
         auth_header = request.headers.get('Authorization', '')
 
         if not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'Missing authorization header'}), 401
+            return jsonify({'code': 'MISSING_AUTHORIZATION', 'error': 'Missing authorization header'}), 401
 
         token = auth_header[7:]
 
@@ -72,6 +72,19 @@ def _authenticate_api_key(key, f, *args, **kwargs):
                 uuid_session_id = str(create_or_get_session_uuid(url_session_id, user_id=key_row['user_id']))
             except Exception:
                 uuid_session_id = url_session_id
+
+            # W12-F5: Verify the session in the URL actually exists BEFORE
+            # comparing it to the key's session_id.  Without this check a user
+            # with a valid key hits an unknown/mistyped session UUID and receives
+            # KEY_SESSION_MISMATCH (403), which implies their key is wrong when
+            # the real problem is that the session doesn't exist (404).
+            session_exists = supabase.table('sessions') \
+                .select('id') \
+                .eq('id', uuid_session_id) \
+                .limit(1) \
+                .execute()
+            if not session_exists.data:
+                return jsonify({'error': 'Session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
             if str(key_row['session_id']) != uuid_session_id:
                 return jsonify({'error': 'API key not valid for this session', 'code': 'KEY_SESSION_MISMATCH'}), 403

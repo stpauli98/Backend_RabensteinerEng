@@ -14,8 +14,10 @@ from .common import (
     create_or_get_session_uuid
 )
 from flask import Blueprint
+import json
 import pandas as pd
 
+from werkzeug.exceptions import BadRequest as WerkzeugBadRequest
 from shared.auth.api_key import allow_api_key
 from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
@@ -39,6 +41,25 @@ def execute_forecast(session_id):
         }
     }
     """
+    # Validate JSON body before any DB work — avoids leaking Flask internals.
+    try:
+        request_data = request.get_json(force=True, silent=False) or {}
+    except (WerkzeugBadRequest, json.JSONDecodeError):
+        return jsonify({
+            'success': False,
+            'code': 'MALFORMED_JSON',
+            'error': 'Request body is not valid JSON',
+        }), 400
+
+    # W12-F7: Pre-pipeline validation — surface missing/empty user_data before DB work.
+    user_data = request_data.get('user_data')
+    if not user_data or (isinstance(user_data, dict) and len(user_data) == 0):
+        return jsonify({
+            'success': False,
+            'code': 'MISSING_USER_DATA',
+            'error': 'Request body must contain a non-empty user_data object',
+        }), 400
+
     try:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
@@ -101,9 +122,7 @@ def execute_forecast(session_id):
         time_info = time_res.data[0] if time_res.data else {}
         zeitschritte = zeit_res.data[0]
 
-        request_data = request.get_json() or {}
-        user_data = request_data.get('user_data', {})
-
+        # user_data is validated and set before the try block (W12-F7 pre-pipeline check).
         user_csvs = {}
         for name, data in user_data.items():
             if isinstance(data, list):
