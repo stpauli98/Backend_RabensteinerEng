@@ -126,3 +126,76 @@ def test_missing_authorization_returns_401_with_code():
     body = resp.get_json()
     assert body.get('code') == 'MISSING_AUTHORIZATION', f"Expected MISSING_AUTHORIZATION code, got: {body}"
     assert 'missing' in body.get('error', '').lower()
+
+
+def test_unknown_session_returns_404_not_403():
+    """W12-F5: Unknown session UUID should return 404 SESSION_NOT_FOUND, not 403 KEY_SESSION_MISMATCH.
+
+    Scenario: a user has a valid api key tied to SESSION_UUID, but they POST to
+    an unknown/nonexistent session UUID in the URL. Before this fix the code
+    would compare key.session_id != url_session_id and return KEY_SESSION_MISMATCH
+    (403), misleading the user into thinking their key is wrong when really the
+    session doesn't exist.
+
+    The mock simulates a real key in api_keys, then returns empty data for any
+    sessions table query (session doesn't exist), so the new existence check
+    must fire before the mismatch check and return 404 SESSION_NOT_FOUND.
+    """
+    UNKNOWN_SESSION = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+    client = _make_client()
+
+    mock_supabase = MagicMock()
+
+    # Valid key row — tied to SESSION_UUID (not UNKNOWN_SESSION)
+    api_key_row = {
+        'id': 'key-id-1',
+        'session_id': SESSION_UUID,
+        'user_id': TEST_USER_ID,
+        'expires_at': None,
+        'last_used_at': None,
+    }
+
+    def table_side_effect(table_name):
+        mock_query = MagicMock()
+        # Default: empty result (sessions table returns nothing → session not found)
+        mock_query.execute.return_value = MagicMock(data=[])
+
+        if table_name == 'api_keys':
+            mock_query.execute.return_value = MagicMock(data=[api_key_row])
+        # sessions table intentionally returns empty data (session does not exist)
+
+        for attr in ('select', 'eq', 'is_', 'in_', 'limit', 'update', 'insert', 'delete'):
+            getattr(mock_query, attr).return_value = mock_query
+        return mock_query
+
+    mock_supabase.table.side_effect = table_side_effect
+
+    supabase_targets = [
+        'shared.database.operations.get_supabase_client',
+        'domains.training.api.common.get_supabase_client',
+        'shared.auth.ownership.get_supabase_client',
+    ]
+    session_uuid_targets = [
+        'shared.database.operations.create_or_get_session_uuid',
+        'domains.training.api.common.create_or_get_session_uuid',
+    ]
+
+    patches = (
+        [patch(t, return_value=mock_supabase) for t in supabase_targets]
+        + [patch(t, return_value=UNKNOWN_SESSION) for t in session_uuid_targets]
+    )
+
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        resp = client.post(
+            f'/api/training/forecast/{UNKNOWN_SESSION}',
+            json={'user_data': {}},
+            headers={'Authorization': 'Bearer sk_fcst_test_key'},
+        )
+
+    body = resp.get_json()
+    assert resp.status_code == 404, (
+        f"Expected 404 SESSION_NOT_FOUND, got {resp.status_code}: {body}"
+    )
+    assert body.get('code') == 'SESSION_NOT_FOUND', (
+        f"Expected code SESSION_NOT_FOUND, got: {body}"
+    )

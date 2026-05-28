@@ -73,6 +73,19 @@ def _authenticate_api_key(key, f, *args, **kwargs):
             except Exception:
                 uuid_session_id = url_session_id
 
+            # W12-F5: Verify the session in the URL actually exists BEFORE
+            # comparing it to the key's session_id.  Without this check a user
+            # with a valid key hits an unknown/mistyped session UUID and receives
+            # KEY_SESSION_MISMATCH (403), which implies their key is wrong when
+            # the real problem is that the session doesn't exist (404).
+            session_exists = supabase.table('sessions') \
+                .select('id') \
+                .eq('id', uuid_session_id) \
+                .limit(1) \
+                .execute()
+            if not session_exists.data:
+                return jsonify({'error': 'Session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+
             if str(key_row['session_id']) != uuid_session_id:
                 return jsonify({'error': 'API key not valid for this session', 'code': 'KEY_SESSION_MISMATCH'}), 403
 
