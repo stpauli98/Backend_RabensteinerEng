@@ -59,7 +59,7 @@ def upload_chunk():
     """
     try:
         if 'file' not in request.files:
-            return jsonify({'success': False, 'data': {'error': 'No file part in the request'}}), 400
+            return jsonify({'success': False, 'code': 'MISSING_FILE', 'error': 'No file part in the request'}), 400
 
         file_chunk = request.files['file']
         upload_id = request.form.get('uploadId')
@@ -68,26 +68,26 @@ def upload_chunk():
             chunk_index = int(request.form.get('chunkIndex', 0))
             total_chunks = int(request.form.get('totalChunks', 1))
         except Exception:
-            return jsonify({'success': False, 'data': {'error': 'Invalid chunk index or total chunks'}}), 400
+            return jsonify({'success': False, 'code': 'INVALID_CHUNK_INDEX', 'error': 'Invalid chunk index or total chunks'}), 400
 
         if not upload_id:
-            return jsonify({'success': False, 'data': {'error': 'No upload ID provided'}}), 400
+            return jsonify({'success': False, 'code': 'MISSING_UPLOAD_ID', 'error': 'No upload ID provided'}), 400
         if not file_type or file_type not in VALID_FILE_TYPES:
-            return jsonify({'success': False, 'data': {'error': 'Invalid file type'}}), 400
+            return jsonify({'success': False, 'code': 'INVALID_FILE_TYPE', 'error': 'Invalid file type'}), 400
 
         try:
             upload_id = sanitize_upload_id(upload_id)
         except CloudException as exc:
             logger.warning(f"Cloud validation rejected in /upload-chunk: {exc.error_code} — {exc.message}")
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
 
         chunk_dir = get_chunk_dir(upload_id)
 
@@ -118,16 +118,16 @@ def upload_chunk():
     except CloudException as exc:
         logger.warning(f"Cloud validation rejected in /upload-chunk: {exc.error_code} — {exc.message}")
         return jsonify({
-            "ok": False,
+            "success": False,
+            "code": exc.error_code,
             "error": exc.message,
-            "error_code": exc.error_code,
+            "suggestion": exc.suggestions[0] if exc.suggestions else None,
             "details": exc.details,
-            "suggestions": exc.suggestions,
         }), 400
     except Exception as e:
         logger.error(f"Error in chunk upload: {str(e)}")
         traceback.print_exc()
-        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
+        return jsonify({'success': False, 'code': 'INTERNAL_ERROR', 'error': str(e)}), 500
 
 
 @bp.route('/complete', methods=['POST', 'OPTIONS'])
@@ -162,7 +162,8 @@ def complete_redirect():
                 logger.error(f"Error parsing JSON: {str(e)}")
                 return jsonify({
                     'success': False,
-                    'data': {'error': 'Invalid request format. Expected JSON or FormData.'}
+                    'code': 'BAD_REQUEST',
+                    'error': 'Invalid request format. Expected JSON or FormData.',
                 }), 400
 
         upload_id = data.get('uploadId')
@@ -170,21 +171,21 @@ def complete_redirect():
 
         if not upload_id:
             logger.error("No upload ID provided")
-            return jsonify({'success': False, 'data': {'error': 'No upload ID provided'}}), 400
+            return jsonify({'success': False, 'code': 'MISSING_UPLOAD_ID', 'error': 'No upload ID provided'}), 400
 
         try:
             upload_id = sanitize_upload_id(upload_id)
         except CloudException as exc:
             logger.warning(f"Cloud validation rejected in /complete: {exc.error_code} — {exc.message}")
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
 
         # Initialize progress tracker
         _compute_start = time.time()
@@ -193,7 +194,7 @@ def complete_redirect():
 
         if upload_id not in chunk_uploads:
             logger.error(f"Invalid upload ID: {upload_id}")
-            return jsonify({'success': False, 'data': {'error': 'Invalid upload ID'}}), 400
+            return jsonify({'success': False, 'code': 'INVALID_UPLOAD_ID', 'error': 'Invalid upload ID'}), 400
 
         upload_info = chunk_uploads[upload_id]
         chunk_dir = get_chunk_dir(upload_id)
@@ -208,11 +209,12 @@ def complete_redirect():
             logger.error(f"Missing file uploads. Temp chunks: {temp_info['total_chunks']}, Load chunks: {load_info['total_chunks']}")
             return jsonify({
                 'success': False,
-                'data': {
-                    'error': 'Not all chunks received',
+                'code': 'INCOMPLETE_UPLOAD',
+                'error': 'Not all chunks received',
+                'details': {
                     'temp_progress': len(temp_info['received_chunks']) / max(temp_info['total_chunks'], 1),
-                    'load_progress': len(load_info['received_chunks']) / max(load_info['total_chunks'], 1)
-                }
+                    'load_progress': len(load_info['received_chunks']) / max(load_info['total_chunks'], 1),
+                },
             }), 400
 
         if (len(temp_info['received_chunks']) != temp_info['total_chunks'] or
@@ -220,11 +222,12 @@ def complete_redirect():
             logger.error(f"Not all chunks received. Temp: {len(temp_info['received_chunks'])}/{temp_info['total_chunks']}, Load: {len(load_info['received_chunks'])}/{load_info['total_chunks']}")
             return jsonify({
                 'success': False,
-                'data': {
-                    'error': 'Not all chunks received',
+                'code': 'INCOMPLETE_UPLOAD',
+                'error': 'Not all chunks received',
+                'details': {
                     'temp_progress': len(temp_info['received_chunks']) / max(temp_info['total_chunks'], 1),
-                    'load_progress': len(load_info['received_chunks']) / max(load_info['total_chunks'], 1)
-                }
+                    'load_progress': len(load_info['received_chunks']) / max(load_info['total_chunks'], 1),
+                },
             }), 400
 
         logger.info("All chunks received, reassembling files")
@@ -260,16 +263,16 @@ def complete_redirect():
             logger.warning(f"Cloud validation rejected in /complete (size): {exc.error_code} — {exc.message}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
 
         # Extract language preference for localized regression errors
         lang = data.get('lang', 'en') if isinstance(data, dict) else 'en'
@@ -339,32 +342,32 @@ def complete_redirect():
             logger.warning(f"Cloud validation rejected in /complete: {exc.error_code} — {exc.message}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
             logger.error(f"Validation error: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
         except Exception as e:
             logger.error(f"Error processing uploaded files: {str(e)}")
             traceback.print_exc()
-            return jsonify({'success': False, 'data': {'error': f'Error processing uploaded files: {str(e)}'}}), 500
+            return jsonify({'success': False, 'code': 'PROCESSING_ERROR', 'error': f'Error processing uploaded files: {str(e)}'}), 500
     except CloudException as exc:
         logger.warning(f"Cloud validation rejected in /complete (outer): {exc.error_code} — {exc.message}")
         return jsonify({
-            "ok": False,
+            "success": False,
+            "code": exc.error_code,
             "error": exc.message,
-            "error_code": exc.error_code,
+            "suggestion": exc.suggestions[0] if exc.suggestions else None,
             "details": exc.details,
-            "suggestions": exc.suggestions,
         }), 400
     except Exception as e:
         logger.error(f"Error in complete_redirect: {str(e)}")
-        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
+        return jsonify({'success': False, 'code': 'INTERNAL_ERROR', 'error': str(e)}), 500
 
 
 @bp.route('/clouddata', methods=['POST'])
@@ -393,16 +396,16 @@ def clouddata():
     except CloudException as exc:
         logger.warning(f"Cloud validation rejected in /clouddata: {exc.error_code} — {exc.message}")
         return jsonify({
-            "ok": False,
+            "success": False,
+            "code": exc.error_code,
             "error": exc.message,
-            "error_code": exc.error_code,
+            "suggestion": exc.suggestions[0] if exc.suggestions else None,
             "details": exc.details,
-            "suggestions": exc.suggestions,
         }), 400
     except Exception as e:
         logger.error(f"Error in clouddata endpoint: {str(e)}")
         traceback.print_exc()
-        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
+        return jsonify({'success': False, 'code': 'INTERNAL_ERROR', 'error': str(e)}), 500
 
 
 def _process_data():
@@ -414,7 +417,7 @@ def _process_data():
 
         if data is None:
             logger.error("No data received")
-            return jsonify({'success': False, 'data': {'error': 'No data received'}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': 'No data received'}), 400
 
         # Extract language preference for localized regression errors
         lang = data.get('lang', 'en') if isinstance(data, dict) else 'en'
@@ -424,7 +427,7 @@ def _process_data():
 
         if not temp_data or not load_data:
             logger.error("One or both files are empty")
-            return jsonify({'success': False, 'data': {'error': 'One or both files are empty'}}), 400
+            return jsonify({'success': False, 'code': 'MISSING_FILE', 'error': 'One or both files are empty'}), 400
 
         try:
             logger.info("Attempting to decode and read temperature data...")
@@ -451,18 +454,18 @@ def _process_data():
         except CloudException as exc:
             logger.warning(f"Cloud validation rejected in /clouddata (inner): {exc.error_code} — {exc.message}")
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
             logger.error(f"Validation error: {str(e)}")
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
         except Exception as e:
             logger.error(f"Error reading CSV files: {str(e)}")
-            return jsonify({'success': False, 'data': {'error': f'Error reading CSV files: {str(e)}'}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': f'Error reading CSV files: {str(e)}'}), 400
 
     except CloudException:
         # Re-raise so the outer /clouddata route handler returns structured error.
@@ -470,7 +473,7 @@ def _process_data():
     except Exception as e:
         logger.error(f"Error processing data: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'data': {'error': str(e)}}), 500
+        return jsonify({'success': False, 'code': 'INTERNAL_ERROR', 'error': str(e)}), 500
 
 
 @bp.route('/interpolate-chunked', methods=['POST'])
@@ -481,7 +484,7 @@ def _process_data():
 def interpolate_chunked():
     """
     Process a chunked file upload for interpolation.
-    All responses are in format: {'success': bool, 'data': ...}
+    All responses are in format: {'success': bool, 'code': str, 'error': str, ...}
     """
     try:
         logger.info("Received request to /interpolate-chunked")
@@ -489,7 +492,7 @@ def interpolate_chunked():
         data = request.json
         if not data or 'uploadId' not in data:
             logger.error("Missing uploadId in request")
-            return jsonify({'success': False, 'data': {'error': 'Upload ID is required'}}), 400
+            return jsonify({'success': False, 'code': 'MISSING_UPLOAD_ID', 'error': 'Upload ID is required'}), 400
 
         upload_id = data['uploadId']
         logger.info(f"Processing upload ID: {upload_id}")
@@ -502,14 +505,14 @@ def interpolate_chunked():
         except CloudException as exc:
             logger.warning(f"Cloud validation rejected in /interpolate-chunked: {exc.error_code} — {exc.message}")
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
 
         # Initialize progress tracker
         _compute_start_interp = time.time()
@@ -522,16 +525,16 @@ def interpolate_chunked():
         except ValueError as e:
             logger.error(f"Invalid max_time_span value: {data.get('max_time_span')}")
             tracker.emit('error', 0, 'cloud_invalid_params', force=True)
-            return jsonify({'success': False, 'data': {'error': 'Invalid max_time_span parameter'}}), 400
+            return jsonify({'success': False, 'code': 'INVALID_PARAMS', 'error': 'Invalid max_time_span parameter'}), 400
 
         if upload_id not in chunk_uploads:
             logger.error(f"Upload ID not found: {upload_id}")
-            return jsonify({'success': False, 'data': {'error': 'Upload ID not found'}}), 404
+            return jsonify({'success': False, 'code': 'UPLOAD_NOT_FOUND', 'error': 'Upload ID not found'}), 404
 
         upload_info = chunk_uploads[upload_id]['interpolate_file']
         if len(upload_info['received_chunks']) < upload_info['total_chunks']:
             logger.error(f"Not all chunks received for upload {upload_id}")
-            return jsonify({'success': False, 'data': {'error': f"Incomplete upload: Only {len(upload_info['received_chunks'])}/{upload_info['total_chunks']} chunks received"}}), 400
+            return jsonify({'success': False, 'code': 'INCOMPLETE_UPLOAD', 'error': f"Incomplete upload: Only {len(upload_info['received_chunks'])}/{upload_info['total_chunks']} chunks received"}), 400
 
         chunk_dir = get_chunk_dir(upload_id)
         combined_file_path = os.path.join(chunk_dir, 'combined_interpolate_file.csv')
@@ -556,16 +559,16 @@ def interpolate_chunked():
             logger.warning(f"Cloud validation rejected in /interpolate-chunked (size): {exc.error_code} — {exc.message}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
             logger.error(f"File size validation failed: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
 
         try:
             tracker.emit('parsing', 25, 'cloud_detecting_separator')
@@ -603,25 +606,25 @@ def interpolate_chunked():
             logger.warning(f"Cloud validation rejected in /interpolate-chunked (parse): {exc.error_code} — {exc.message}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': exc.message}, force=True)
             return jsonify({
-                "ok": False,
+                "success": False,
+                "code": exc.error_code,
                 "error": exc.message,
-                "error_code": exc.error_code,
+                "suggestion": exc.suggestions[0] if exc.suggestions else None,
                 "details": exc.details,
-                "suggestions": exc.suggestions,
             }), 400
         except ValueError as e:
             logger.error(f"Validation error: {str(e)}")
             tracker.emit('error', 0, 'cloud_validation_error', message_params={'error': str(e)}, force=True)
-            return jsonify({'success': False, 'data': {'error': str(e)}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
         except Exception as e:
             logger.error(f"Error reading CSV file: {str(e)}")
             tracker.emit('error', 0, 'cloud_parse_error', message_params={'error': str(e)}, force=True)
-            return jsonify({'success': False, 'data': {'error': f'Error reading CSV file: {str(e)}'}}), 400
+            return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': f'Error reading CSV file: {str(e)}'}), 400
 
         if 'UTC' not in df2.columns:
             logger.error("UTC column not found in the file")
             tracker.emit('error', 0, 'cloud_utc_column_missing', force=True)
-            return jsonify({'success': False, 'data': {'error': 'UTC column not found. The file must contain a UTC column with timestamps'}}), 400
+            return jsonify({'success': False, 'code': 'MISSING_UTC_COLUMN', 'error': 'UTC column not found. The file must contain a UTC column with timestamps'}), 400
 
         tracker.emit('processing', 45, 'cloud_detecting_columns')
 
@@ -639,8 +642,8 @@ def interpolate_chunked():
                 tracker.emit('error', 0, 'cloud_load_column_missing', force=True)
                 return jsonify({
                     'success': False,
-                    'error': 'Load column not found',
-                    'message': 'The file must contain a column with load data'
+                    'code': 'MISSING_LOAD_COLUMN',
+                    'error': 'Load column not found. The file must contain a column with load data',
                 }), 400
         else:
             y_col = load_cols[0]
@@ -665,8 +668,9 @@ def interpolate_chunked():
             tracker.emit('error', 0, 'cloud_datetime_error', message_params={'error': str(e)}, force=True)
             return jsonify({
                 'success': False,
+                'code': 'DATETIME_ERROR',
                 'error': f'Error processing timestamps: {str(e)}',
-                'message': 'Please check the timestamp format in the file'
+                'suggestion': 'Please check the timestamp format in the file',
             }), 400
 
         df2.sort_values('UTC', inplace=True)
@@ -679,8 +683,8 @@ def interpolate_chunked():
             tracker.emit('error', 0, 'cloud_insufficient_data', force=True)
             return jsonify({
                 'success': False,
-                'error': 'Not enough valid data points',
-                'message': 'The file must contain at least 2 valid data points for interpolation'
+                'code': 'INSUFFICIENT_DATA',
+                'error': 'Not enough valid data points. The file must contain at least 2 valid data points for interpolation',
             }), 400
 
         tracker.emit('interpolation', 60, 'cloud_analyzing_data', force=True)
@@ -749,10 +753,8 @@ def interpolate_chunked():
             logger.error("No valid data points after processing")
             return jsonify({
                 'success': False,
-                'data': {
-                    'error': 'No valid data points after processing',
-                    'message': 'The file contains no valid data points for interpolation'
-                }
+                'code': 'INSUFFICIENT_DATA',
+                'error': 'No valid data points after processing. The file contains no valid data points for interpolation',
             }), 400
 
         original_points_count = original_points
@@ -817,17 +819,17 @@ def interpolate_chunked():
     except CloudException as exc:
         logger.warning(f"Cloud validation rejected in /interpolate-chunked (outer): {exc.error_code} — {exc.message}")
         return jsonify({
-            "ok": False,
+            "success": False,
+            "code": exc.error_code,
             "error": exc.message,
-            "error_code": exc.error_code,
+            "suggestion": exc.suggestions[0] if exc.suggestions else None,
             "details": exc.details,
-            "suggestions": exc.suggestions,
         }), 400
     except Exception as e:
         logger.error(f"Error in interpolation-chunked endpoint: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
+            'code': 'INTERNAL_ERROR',
             'error': str(e),
-            'message': 'An error occurred during interpolation'
         }), 500

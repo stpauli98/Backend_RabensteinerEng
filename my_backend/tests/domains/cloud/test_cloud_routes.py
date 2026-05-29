@@ -210,3 +210,97 @@ def _has_rate_limit(fn) -> bool:
                 return True
         current = getattr(current, '__wrapped__', None)
     return False
+
+
+def _auth_headers():
+    """Return headers that bypass auth in the stubbed test client."""
+    # Auth is fully bypassed by _stub_require_auth in the 'client' fixture;
+    # these headers are present for completeness / future real-auth variants.
+    return {'Authorization': 'Bearer test-token'}
+
+
+# ---------------------------------------------------------------------------
+# W10-BE3: Static guards — no old error shapes in cloud.py
+# ---------------------------------------------------------------------------
+
+def test_cloud_routes_use_standardized_error_shape_no_data_error_pattern():
+    """Static guard: cloud.py must not emit {success: False, data: {error: ...}}."""
+    import re
+    with open('/app/domains/cloud/api/cloud.py') as f:
+        source = f.read()
+    # Match the old pattern: jsonify({'success': False, 'data': {'error': ...
+    # OR jsonify({"success": False, "data": {"error": ...
+    old_pattern = re.compile(
+        r"jsonify\(\s*\{\s*['\"]success['\"]\s*:\s*False\s*,\s*['\"]data['\"]\s*:\s*\{\s*['\"]error['\"]"
+    )
+    matches = old_pattern.findall(source)
+    assert len(matches) == 0, (
+        f"Old shape {{success: False, data: {{error}}}} still present {len(matches)} time(s) in cloud.py"
+    )
+
+
+def test_cloud_routes_use_standardized_error_shape_no_ok_false_pattern():
+    """Static guard: cloud.py must not emit {ok: False, ...}."""
+    import re
+    with open('/app/domains/cloud/api/cloud.py') as f:
+        source = f.read()
+    # Match: jsonify({'ok': False ...
+    old_pattern = re.compile(
+        r"jsonify\(\s*\{\s*['\"]ok['\"]\s*:\s*False"
+    )
+    matches = old_pattern.findall(source)
+    assert len(matches) == 0, (
+        f"{{ok: False}} shape still present {len(matches)} time(s) in cloud.py"
+    )
+
+
+# ---------------------------------------------------------------------------
+# W10-BE3: Behavioural shape tests for /upload-chunk validation path
+# ---------------------------------------------------------------------------
+
+def test_upload_chunk_missing_file_returns_standardized_shape(client):
+    """W10-BE3: missing file part → 400 with {success, code, error} flat shape."""
+    response = client.post(
+        '/api/cloud/upload-chunk',
+        headers=_auth_headers(),
+        data={'uploadId': 'abc'},  # no file part
+    )
+    if response.status_code == 400:
+        body = response.get_json()
+        assert body['success'] is False, f"Expected success=False, got: {body}"
+        assert 'code' in body and isinstance(body['code'], str), (
+            f"Expected 'code' (str) in response, got: {body}"
+        )
+        assert 'error' in body and isinstance(body['error'], str), (
+            f"Expected 'error' (str) in response, got: {body}"
+        )
+        # Old shape must be gone:
+        if 'data' in body and isinstance(body['data'], dict):
+            assert 'error' not in body['data'], (
+                f"Old shape {{success: False, data: {{error}}}} still emitted. Body: {body}"
+            )
+
+
+def test_upload_chunk_invalid_file_type_returns_standardized_shape(client):
+    """W10-BE3: invalid fileType → 400 with standardized flat shape."""
+    import io
+    response = client.post(
+        '/api/cloud/upload-chunk',
+        headers=_auth_headers(),
+        data={
+            'uploadId': 'abc',
+            'fileType': 'malicious_type',
+            'chunkIndex': '0',
+            'totalChunks': '1',
+            'file': (io.BytesIO(b'col1;col2\n1;2'), 'test.csv'),
+        },
+        content_type='multipart/form-data',
+    )
+    if response.status_code == 400:
+        body = response.get_json()
+        assert body['success'] is False, f"Expected success=False, got: {body}"
+        assert 'code' in body, f"Expected 'code' key in response, got: {body}"
+        assert body['code'] in (
+            'INVALID_FILE_TYPE', 'MISSING_UPLOAD_ID', 'INVALID_CHUNK_INDEX',
+            'BAD_REQUEST', 'MISSING_FILE',
+        ), f"Unexpected code value: {body.get('code')}. Full body: {body}"
