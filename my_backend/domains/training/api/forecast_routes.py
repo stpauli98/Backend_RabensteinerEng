@@ -15,7 +15,6 @@ from .common import (
 )
 from flask import Blueprint
 import json
-import uuid as uuid_module
 import pandas as pd
 
 from werkzeug.exceptions import BadRequest as WerkzeugBadRequest
@@ -29,21 +28,9 @@ bp = Blueprint('training_forecast', __name__)
 logger = get_logger(__name__)
 
 
-def _validate_uuid_format(session_id: str):
-    """Return jsonify+status if session_id is malformed UUID, else None.
-
-    Use at top of any forecast route to fail fast with 400 BAD_UUID
-    before reaching DB layer (which would 500).
-    """
-    try:
-        uuid_module.UUID(session_id)
-    except (ValueError, AttributeError, TypeError):
-        return jsonify({
-            'success': False,
-            'code': 'BAD_UUID',
-            'error': 'session_id is not a valid UUID',
-        }), 400
-    return None
+# BC alias: kept so existing callers in this file keep working unchanged.
+# The implementation is now in shared/validators/uuid.py for cross-domain reuse.
+from shared.validators.uuid import validate_uuid_format as _validate_uuid_format
 
 
 @bp.route('/forecast/<session_id>', methods=['POST'])
