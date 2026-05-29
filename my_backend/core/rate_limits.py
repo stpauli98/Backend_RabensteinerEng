@@ -46,3 +46,10 @@ def auth_strict_limit_string() -> str:
     if _is_testing():
         return "1000 per minute"
     return "10 per minute"
+
+
+def cloud_limit_string() -> str:
+    """Rate limit for /api/cloud/* endpoints."""
+    if _is_testing():
+        return "1000 per minute"
+    return "60 per minute"
