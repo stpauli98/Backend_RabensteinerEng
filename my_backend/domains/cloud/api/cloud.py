@@ -19,6 +19,8 @@ from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, log_compute_duration
 from shared.exceptions.errors import CloudException
+from shared.validators.uuid import validate_uuid_format
+from core.rate_limits import limiter, cloud_limit_string
 
 from domains.cloud.config import (
     VALID_FILE_TYPES,
@@ -47,6 +49,7 @@ bp = Blueprint('cloud', __name__)
 
 
 @bp.route('/upload-chunk', methods=['POST'])
+@limiter.limit(cloud_limit_string)
 @require_auth
 @require_subscription
 def upload_chunk():
@@ -128,6 +131,7 @@ def upload_chunk():
 
 
 @bp.route('/complete', methods=['POST', 'OPTIONS'])
+@limiter.limit(cloud_limit_string)
 @require_auth
 @require_subscription
 @check_processing_limit
@@ -364,13 +368,24 @@ def complete_redirect():
 
 
 @bp.route('/clouddata', methods=['POST'])
+@limiter.limit(cloud_limit_string)
 @require_auth
 @require_subscription
+@check_processing_limit
 def clouddata():
     """Handle direct cloud data processing (non-chunked)."""
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
         return response
+
+    # UUID guard: if caller supplies a session_id, validate it before any DB
+    # hit to avoid 500 leaks from DB drivers on malformed identifiers.
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id')
+    if session_id is not None:
+        bad = validate_uuid_format(session_id)
+        if bad:
+            return bad
 
     try:
         logger.info("Received request to /clouddata")
@@ -459,6 +474,7 @@ def _process_data():
 
 
 @bp.route('/interpolate-chunked', methods=['POST'])
+@limiter.limit(cloud_limit_string)
 @require_auth
 @require_subscription
 @check_processing_limit
