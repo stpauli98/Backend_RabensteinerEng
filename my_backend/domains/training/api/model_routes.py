@@ -22,6 +22,7 @@ from .common import (
 
 from core.rate_limits import limiter, training_limit_string
 from shared.responses.errors import error_response as _err
+from shared.storage.errors import is_storage_not_found
 from shared.validators.uuid import validate_training_session_format
 
 from domains.training.ml.scaler import (
@@ -33,28 +34,6 @@ from domains.training.ml.models import (
 
 bp = Blueprint('training_models', __name__)
 logger = get_logger(__name__)
-
-
-def _is_storage_not_found(exc: Exception) -> bool:
-    """Return True if a generic exception from Supabase storage looks like a 404.
-
-    Supabase storage3 raises ``StorageApiError`` (subclass of ``StorageException``)
-    with status=404 on object-not-found. Importing inline so the module stays
-    importable if storage3 layout shifts.
-    """
-    try:
-        from storage3.utils import StorageException
-    except Exception:  # pragma: no cover - defensive: storage3 always installed
-        StorageException = None  # type: ignore[assignment]
-
-    if StorageException is not None and isinstance(exc, StorageException):
-        status_attr = getattr(exc, 'status', None)
-        if status_attr in (404, '404'):
-            return True
-        msg = str(exc).lower()
-        if 'not found' in msg or 'no such' in msg or 'object not found' in msg:
-            return True
-    return False
 
 
 @bp.route('/scalers/<session_id>', methods=['GET'])
@@ -116,7 +95,7 @@ def download_scalers_as_save_files(session_id):
     except Exception as e:
         # Mirror T4 polish on /download-arrays: distinguish 404 (storage
         # object missing) from real 500 (Supabase outage, network failure).
-        if _is_storage_not_found(e):
+        if is_storage_not_found(e):
             logger.warning("Scaler download: storage reports not found", exc_info=True)
             return _err('SCALER_NOT_FOUND', 'Scalers not found for this session', 404)
         logger.exception("Scaler download unexpected failure")
@@ -311,7 +290,7 @@ def download_model_h5(session_id):
     except Exception as e:
         # Mirror T4 polish on /download-arrays: distinguish 404 (storage
         # object missing) from real 500 (Supabase outage, network failure).
-        if _is_storage_not_found(e):
+        if is_storage_not_found(e):
             logger.warning("Download model: storage reports not found", exc_info=True)
             return _err('MODEL_NOT_FOUND', 'Model file not found for this session', 404)
         logger.exception("Download model unexpected failure")
