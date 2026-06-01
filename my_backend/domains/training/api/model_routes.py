@@ -12,11 +12,13 @@ Contains 7 endpoints for model storage, download and inference:
 """
 
 import io
+import os
 from flask import Blueprint, send_file
 
 from .common import (
     datetime, request, jsonify, g, logging,
     require_auth, require_subscription,
+    create_or_get_session_uuid,
     get_logger
 )
 
@@ -24,6 +26,7 @@ from core.rate_limits import limiter, training_limit_string
 from shared.responses.errors import error_response as _err
 from shared.storage.errors import is_storage_not_found
 from shared.validators.uuid import validate_training_session_format
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
 from domains.training.ml.scaler import (
     get_session_scalers, create_scaler_download_package, scale_new_data
@@ -31,6 +34,50 @@ from domains.training.ml.scaler import (
 from domains.training.ml.models import (
     save_models_to_storage, get_models_list, download_model_file
 )
+
+
+def _resolve_and_assert_ownership(session_id):
+    """Resolve session_id to UUID and verify ownership.
+
+    Returns (uuid_session_id, None) on success or (None, error_response) on
+    failure. Maps any ownership/lookup failure to 404 SESSION_NOT_FOUND per
+    W11-ADV-5 convention (don't leak session existence to attackers).
+    """
+    try:
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        assert_session_ownership(uuid_session_id)
+        return uuid_session_id, None
+    except SessionOwnershipError:
+        return None, _err('SESSION_NOT_FOUND', 'Session not found', 404)
+    except (ValueError, PermissionError):
+        return None, _err('SESSION_NOT_FOUND', 'Session not found', 404)
+
+
+def _validate_model_basename(model_filename):
+    """Validate that ``model_filename`` is a basename only (no path injection).
+
+    Returns None if valid, or an error response if the value is missing or
+    contains traversal characters.
+    """
+    if not model_filename:
+        return _err(
+            'INVALID_MODEL_FILENAME',
+            'Model filename must be a basename only',
+            400,
+        )
+    if os.path.basename(model_filename) != model_filename:
+        return _err(
+            'INVALID_MODEL_FILENAME',
+            'Model filename must be a basename only',
+            400,
+        )
+    if model_filename.startswith('.') or '..' in model_filename or '/' in model_filename or '\\' in model_filename:
+        return _err(
+            'INVALID_MODEL_FILENAME',
+            'Model filename must be a basename only',
+            400,
+        )
+    return None
 
 bp = Blueprint('training_models', __name__)
 logger = get_logger(__name__)
@@ -45,6 +92,11 @@ def get_scalers(session_id):
     err = validate_training_session_format(session_id)
     if err:
         return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
 
     try:
         scalers_data = get_session_scalers(session_id)
@@ -77,6 +129,11 @@ def download_scalers_as_save_files(session_id):
     err = validate_training_session_format(session_id)
     if err:
         return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
 
     try:
         zip_file_path = create_scaler_download_package(session_id)
@@ -117,6 +174,11 @@ def scale_input_data(session_id):
     err = validate_training_session_format(session_id)
     if err:
         return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
 
     try:
         data = request.get_json(silent=True)
@@ -166,6 +228,11 @@ def save_model(session_id):
     err = validate_training_session_format(session_id)
     if err:
         return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
 
     try:
         result = save_models_to_storage(session_id)
@@ -222,6 +289,11 @@ def list_models_database(session_id):
     if err:
         return err
 
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         models = get_models_list(session_id, user_id=g.user_id)
 
@@ -258,8 +330,20 @@ def download_model_h5(session_id):
     if err:
         return err
 
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         filename = request.args.get('filename')
+        # FIX-1: sanitize filename to reject path traversal (only when provided).
+        # download_model_file treats None/empty as "pick default", so we only
+        # validate non-empty caller-supplied values.
+        if filename:
+            invalid = _validate_model_basename(filename)
+            if invalid:
+                return invalid
         file_data, file_name = download_model_file(session_id, filename)
         file_obj = io.BytesIO(file_data)
 
@@ -330,6 +414,11 @@ def predict_with_model(session_id):
     if err:
         return err
 
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         data = request.get_json(silent=True)
         if not data:
@@ -342,6 +431,11 @@ def predict_with_model(session_id):
                 'model_filename is required',
                 400,
             )
+
+        # FIX-1: sanitize model_filename to reject path traversal.
+        invalid = _validate_model_basename(model_filename)
+        if invalid:
+            return invalid
 
         input_data = data.get('input_data')
         if not input_data:

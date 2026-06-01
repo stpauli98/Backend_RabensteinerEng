@@ -97,9 +97,25 @@ def _build_app_with_stubs():
 
 @pytest.fixture
 def client():
+    """Build the test app and bypass the FIX-1 ownership check.
+
+    FIX-1 added assert_session_ownership at the top of every handler. The
+    tests in this file cover error-contract / rate-limit / UUID-validator
+    behaviour — not ownership semantics (those live in
+    test_idor_multi_user.py). The ownership step is bypassed here so the
+    legacy assertions still target the W11-BE error contract.
+    """
     app = _build_app_with_stubs()
-    with app.test_client() as c:
-        yield c
+    # _build_app_with_stubs re-reloads model_routes at the end to restore
+    # production decorators; patch the LIVE module after that reload so the
+    # patched names are the ones the Flask blueprint actually calls.
+    import domains.training.api.model_routes as model_routes
+    with patch.object(model_routes, 'create_or_get_session_uuid',
+                      return_value='a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'), \
+         patch.object(model_routes, 'assert_session_ownership',
+                      return_value='a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'):
+        with app.test_client() as c:
+            yield c
 
 
 def _auth_headers():

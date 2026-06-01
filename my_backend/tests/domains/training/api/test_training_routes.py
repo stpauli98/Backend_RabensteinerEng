@@ -98,9 +98,17 @@ def _build_app_with_stubs():
 
 @pytest.fixture
 def client():
+    """Build the test app and bypass the FIX-1 ownership check on
+    /train-models. Ownership semantics are covered by
+    test_idor_multi_user.py; this file targets the W11-BE error contract."""
     app = _build_app_with_stubs()
-    with app.test_client() as c:
-        yield c
+    import domains.training.api.training_routes as training_routes
+    with patch.object(training_routes, 'create_or_get_session_uuid',
+                      return_value='a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'), \
+         patch.object(training_routes, 'assert_session_ownership',
+                      return_value='a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'):
+        with app.test_client() as c:
+            yield c
 
 
 def _auth_headers():

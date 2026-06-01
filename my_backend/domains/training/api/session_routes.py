@@ -616,6 +616,17 @@ def get_time_info_endpoint(session_id):
     if err:
         return err
 
+    # FIX-1: enforce session ownership before service-layer data access.
+    # get_time_info_data does not filter by user_id — without this guard
+    # raw-UUID input reaches the data layer (RLS bypassed by service-role).
+    try:
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        assert_session_ownership(uuid_session_id)
+    except SessionOwnershipError:
+        return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+    except (ValueError, PermissionError):
+        return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+
     try:
         time_info = get_time_info_data(session_id)
         return jsonify({
@@ -645,6 +656,15 @@ def get_zeitschritte_endpoint(session_id):
     err = validate_training_session_format(session_id)
     if err:
         return err
+
+    # FIX-1: enforce session ownership before service-layer data access.
+    try:
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        assert_session_ownership(uuid_session_id)
+    except SessionOwnershipError:
+        return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+    except (ValueError, PermissionError):
+        return _err('SESSION_NOT_FOUND', 'Session not found', 404)
 
     try:
         zeitschritte = get_zeitschritte_data(session_id)

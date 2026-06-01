@@ -161,6 +161,19 @@ def train_models(session_id):
     if err:
         return err
 
+    # FIX-1: enforce session ownership BEFORE spawning the training thread.
+    # Without this Bob can charge his training quota to launch work against
+    # Alice's session. Resolve to UUID first because the URL accepts both
+    # string-form sessions and raw UUIDs; create_or_get_session_uuid returns
+    # the raw UUID unchanged without any ownership validation.
+    try:
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        assert_session_ownership(uuid_session_id)
+    except SessionOwnershipError:
+        return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+    except (ValueError, PermissionError):
+        return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+
     try:
         data = request.get_json(silent=True)
         if not data:
