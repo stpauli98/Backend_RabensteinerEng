@@ -25,6 +25,10 @@ from .common import (
     get_logger
 )
 
+from core.rate_limits import limiter, training_limit_string
+from shared.responses.errors import error_response as _err
+from shared.validators.uuid import validate_training_session_format
+
 from shared.tracking.usage import log_compute_duration
 from domains.training.services.visualization import save_visualization_to_database, delete_old_violin_plots
 from domains.training.data.generator import generate_violin_plots_for_session
@@ -55,15 +59,21 @@ def convert_numpy_to_native(obj):
 
 
 @bp.route('/generate-datasets/<session_id>', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 @check_processing_limit
 def generate_datasets(session_id):
     """Generate datasets and violin plots WITHOUT training models."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
-        data = request.json
+        data = request.get_json(silent=True)
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return _err('MISSING_BODY', 'Request body is required', 400)
 
         model_parameters = data.get('model_parameters', {})
         training_split = data.get('training_split', {})
@@ -101,16 +111,16 @@ def generate_datasets(session_id):
                 try:
                     if plot_data:
                         save_visualization_to_database(session_id, plot_name, plot_data)
-                except Exception as viz_error:
-                    logger.error(f"Failed to save visualization {plot_name}: {str(viz_error)}")
+                except Exception:
+                    logger.exception("Failed to save visualization")
 
         # Save n_dat to sessions table
         n_dat = result.get('n_dat', 0)
         if n_dat > 0:
             try:
                 db_finalize_session(uuid_session_id, n_dat=n_dat)
-            except Exception as e:
-                logger.error(f"Failed to save n_dat to database: {e}")
+            except Exception:
+                logger.exception("Failed to save n_dat to database")
 
         progress_tracker.complete()
 
@@ -127,26 +137,34 @@ def generate_datasets(session_id):
         })
 
     except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
+        return _err('INVALID_MODEL_PARAMS', str(e), 400)
 
-    except Exception as e:
-        logger.error(f"Error in generate_datasets: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Failed to generate datasets")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to generate datasets',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/train-models/<session_id>', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 @check_training_limit
 def train_models(session_id):
     """Train models with user-specified parameters."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
-        data = request.json
+        data = request.get_json(silent=True)
         if not data:
-            return create_error_response('No data provided', 400)
+            return _err('MISSING_BODY', 'Request body is required', 400)
 
         # Razriješi session ID u string format za lokalni pristup
         try:
@@ -198,15 +216,26 @@ def train_models(session_id):
             'note': 'Training is running in background, listen for SocketIO events for progress'
         })
 
-    except Exception as e:
-        logger.error(f"Error in train_models: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Failed to start model training")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to start model training',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/status/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_training_status(session_id: str):
     """Get training status for a session."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
@@ -214,7 +243,7 @@ def get_training_status(session_id: str):
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return jsonify({'success': False, 'error': 'forbidden'}), 403
+            return _err('FORBIDDEN', 'You do not have access to this session', 403)
 
         results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
         logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
@@ -261,18 +290,16 @@ def get_training_status(session_id: str):
 
         return jsonify(status)
 
-    except Exception as e:
-        logger.error(f"Error getting training status for {session_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': 'Failed to get training status',
-            'message': str(e),
-            'session_id': session_id,
-            'status': 'error'
-        }), 500
+    except Exception:
+        # W11-BE5: do NOT leak exception text via 'message' or echo session_id.
+        # logger.exception captures full stack trace server-side; the client only
+        # sees the standardized {success, code, error} contract.
+        logger.exception("Failed to get training status")
+        return _err('INTERNAL_ERROR', 'Failed to get training status', 500)
 
 
 @bp.route('/results-summary/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_results_summary(session_id):
     """
@@ -282,6 +309,11 @@ def get_results_summary(session_id):
 
     Response size: ~500 bytes (vs 50-100MB for /results endpoint)
     """
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
@@ -289,7 +321,7 @@ def get_results_summary(session_id):
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return jsonify({'success': False, 'error': 'forbidden'}), 403
+            return _err('FORBIDDEN', 'You do not have access to this session', 403)
 
         # [WORKFLOW_DEBUG] 1. Get n_dat and workflow_phase from sessions table
         n_dat = 0
@@ -300,8 +332,8 @@ def get_results_summary(session_id):
                 n_dat = session_response.data.get('n_dat', 0) or 0
                 workflow_phase = session_response.data.get('workflow_phase', 'upload') or 'upload'
                 logger.info(f"[WORKFLOW_DEBUG] get_results_summary for {session_id}: n_dat={n_dat}, workflow_phase={workflow_phase}")
-        except Exception as e:
-            logger.warning(f"[WORKFLOW_DEBUG] Failed to get session data for {session_id}: {str(e)}")
+        except Exception:
+            logger.exception("[WORKFLOW_DEBUG] Failed to get session data for results summary")
 
         # 2. Check if training_results exist (without downloading pickle)
         results_response = supabase.table('training_results')\
@@ -347,14 +379,21 @@ def get_results_summary(session_id):
             'violin_plot_types': violin_plot_types
         })
 
-    except PermissionError as e:
-        return jsonify({'success': False, 'error': str(e)}), 403
-    except Exception as e:
-        logger.error(f"Error getting results summary for {session_id}: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except PermissionError:
+        logger.exception("Permission denied on results summary")
+        return _err('FORBIDDEN', 'You do not have access to this session', 403)
+    except Exception:
+        logger.exception("Failed to get results summary")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to get results summary',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/results/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_training_results(session_id):
     """
@@ -362,6 +401,11 @@ def get_training_results(session_id):
     This endpoint downloads full results and may timeout on large datasets.
     Kept for backward compatibility only.
     """
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     logger.warning(f"DEPRECATED endpoint /results called for session {session_id}")
     try:
         from utils.training_storage import download_training_results
@@ -371,7 +415,7 @@ def get_training_results(session_id):
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return jsonify({'success': False, 'error': 'forbidden'}), 403
+            return _err('FORBIDDEN', 'You do not have access to this session', 403)
 
         # Fetch n_dat from sessions table
         n_dat = 0
@@ -379,8 +423,8 @@ def get_training_results(session_id):
             session_response = supabase.table('sessions').select('n_dat').eq('id', uuid_session_id).single().execute()
             if session_response.data:
                 n_dat = session_response.data.get('n_dat', 0) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch n_dat for session {session_id}: {e}")
+        except Exception:
+            logger.exception("Could not fetch n_dat for results endpoint")
 
         response = supabase.table('training_results')\
             .select('id, session_id, status, created_at, updated_at, '
@@ -402,8 +446,8 @@ def get_training_results(session_id):
                     )
                     record['results'] = convert_numpy_to_native(full_results)
 
-                except Exception as download_error:
-                    logger.error(f"Failed to download results from storage: {download_error}")
+                except Exception:
+                    logger.exception("Failed to download results from storage")
                     record['results'] = convert_numpy_to_native(record.get('results_metadata', {}))
             else:
                 legacy_response = supabase.table('training_results')\
@@ -431,32 +475,41 @@ def get_training_results(session_id):
                 'n_dat': n_dat
             }), 200
 
-    except PermissionError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 403
-    except Exception as e:
-        logger.error(f"Error getting training results for {session_id}: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+    except PermissionError:
+        logger.exception("Permission denied on training results")
+        return _err('FORBIDDEN', 'You do not have access to this session', 403)
+    except Exception:
+        logger.exception("Failed to get training results")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to get training results',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/get-training-results/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_training_results_details(session_id):
     """Get detailed training results for a session (alias)."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
     return get_training_results(session_id)
 
 
 @bp.route('/download-arrays/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def download_training_arrays(session_id):
     """Download i_array_3D and o_array_3D as .pkl.gz from Supabase Storage."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         from shared.database.client import get_supabase_admin_client
 
@@ -465,7 +518,7 @@ def download_training_arrays(session_id):
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return jsonify({'success': False, 'error': 'forbidden'}), 403
+            return _err('FORBIDDEN', 'You do not have access to this session', 403)
 
         file_path = f"{uuid_session_id}/training_arrays.pkl.gz"
 
@@ -481,6 +534,6 @@ def download_training_arrays(session_id):
             }
         )
 
-    except Exception as e:
-        logger.error(f"Error downloading training arrays for {session_id}: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 404
+    except Exception:
+        logger.exception("Failed to download training arrays")
+        return _err('RESULTS_NOT_FOUND', 'Training arrays not found for this session', 404)
