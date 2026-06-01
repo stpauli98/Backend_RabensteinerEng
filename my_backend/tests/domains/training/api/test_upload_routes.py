@@ -228,3 +228,59 @@ def test_update_csv_file_missing_body_returns_structured_error(client):
     assert body is not None
     assert body.get('success') is False
     assert 'code' in body
+
+
+# ---------------------------------------------------------------------------
+# W11-BE5/BE7: 500 path returns INTERNAL_ERROR shape, no exception text leak
+# ---------------------------------------------------------------------------
+
+def test_500_path_returns_internal_error_shape(client):
+    """A downstream exception must NOT leak text; response must match contract.
+
+    Mocks ``process_chunk_upload`` (called from inside upload_chunk's try block)
+    so the route falls into its generic ``except Exception`` branch. The
+    response MUST be the standardized {success:false, code:INTERNAL_ERROR,...}
+    shape with the user-safe message — never the raw exception text.
+    """
+    import io
+    import json as _json
+    import domains.training.api.upload_routes as upload_routes
+
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    metadata = {
+        'sessionId': sid,
+        'fileName': 'data.csv',
+        'chunkIndex': 1,  # skip first-chunk duplicate-check branch
+        'totalChunks': 2,
+    }
+
+    # Patch process_chunk_upload (called from inside the route's try: block)
+    # so the route's `except Exception` branch fires.
+    with patch.object(
+        upload_routes,
+        'process_chunk_upload',
+        side_effect=Exception("internal stacktrace details that must not leak"),
+    ):
+        resp = client.post(
+            "/api/training/upload-chunk",
+            headers=_auth_headers(),
+            data={
+                "metadata": _json.dumps(metadata),
+                "chunk": (io.BytesIO(b"abc123"), "chunk.bin"),
+            },
+            content_type='multipart/form-data',
+        )
+
+    assert resp.status_code == 500, (
+        f"Expected 500, got {resp.status_code}: {resp.get_data(as_text=True)}"
+    )
+    body = resp.get_json()
+    assert body is not None
+    assert body.get('success') is False
+    assert body.get('code') == 'INTERNAL_ERROR', (
+        f"Expected code=INTERNAL_ERROR, got: {body}"
+    )
+    # The raw exception text must NOT appear anywhere in the user-facing payload.
+    assert "internal stacktrace" not in (body.get('error') or "")
+    assert "internal stacktrace" not in (body.get('message') or "")
+    assert "internal stacktrace" not in (body.get('suggestion') or "")

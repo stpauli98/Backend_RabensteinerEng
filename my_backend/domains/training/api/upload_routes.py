@@ -22,6 +22,7 @@ from .common import (
 )
 
 from core.rate_limits import limiter, training_limit_string
+from shared.responses.errors import error_response as _err
 from shared.validators.uuid import validate_training_session_format
 
 from domains.training.services.session import get_csv_files_for_session
@@ -32,14 +33,6 @@ from domains.training.services.upload import (
 
 bp = Blueprint('training_upload', __name__)
 logger = get_logger(__name__)
-
-
-def _err(code: str, message: str, status: int, *, suggestion: str | None = None):
-    """Standard W11-BE4 error response. {success:false, code, error, [suggestion]}."""
-    payload = {'success': False, 'code': code, 'error': message}
-    if suggestion:
-        payload['suggestion'] = suggestion
-    return jsonify(payload), status
 
 
 @bp.route('/upload-chunk', methods=['POST'])
@@ -129,11 +122,11 @@ def upload_chunk():
         })
 
     except ValueError as e:
-        logger.error(f"Validation error in chunk upload: {str(e)}")
+        logger.exception("Validation error in chunk upload")
         return _err('BAD_REQUEST', str(e), 400)
 
-    except Exception as e:
-        logger.error(f"Error processing chunk upload: {str(e)}")
+    except Exception:
+        logger.exception("Upload chunk failed")
         return _err(
             'INTERNAL_ERROR',
             'Upload failed',
@@ -170,8 +163,8 @@ def get_csv_files_endpoint(session_id):
 
     except ValueError as e:
         return _err('BAD_REQUEST', str(e), 400)
-    except Exception as e:
-        logger.error(f"Error getting CSV files for session {session_id}: {str(e)}")
+    except Exception:
+        logger.exception("Failed to list CSV files for session")
         return _err(
             'INTERNAL_ERROR',
             'Failed to list CSV files for session',
@@ -248,8 +241,8 @@ def create_csv_file():
             }
         })
 
-    except Exception as e:
-        logger.error(f"Error creating CSV file: {str(e)}")
+    except Exception:
+        logger.exception("Failed to create CSV file")
         return _err(
             'INTERNAL_ERROR',
             'Failed to create CSV file',
@@ -282,8 +275,8 @@ def update_csv_file(file_id):
     except ValueError as e:
         return _err('BAD_REQUEST', str(e), 400)
 
-    except Exception as e:
-        logger.error(f"Error updating CSV file {file_id}: {str(e)}")
+    except Exception:
+        logger.exception("Failed to update CSV file")
         return _err(
             'INTERNAL_ERROR',
             'Failed to update CSV file',
@@ -310,8 +303,8 @@ def delete_csv_file(file_id):
     except ValueError as e:
         return _err('FILE_NOT_FOUND', str(e), 404)
 
-    except Exception as e:
-        logger.error(f"Error deleting CSV file {file_id}: {str(e)}")
+    except Exception:
+        logger.exception("Failed to delete CSV file")
         return _err(
             'INTERNAL_ERROR',
             'Failed to delete CSV file',
@@ -484,11 +477,11 @@ def instant_upload():
         })
 
     except ValueError as e:
-        logger.error(f"Validation error in instant upload: {str(e)}")
+        logger.exception("Validation error in instant upload")
         return _err('BAD_REQUEST', str(e), 400)
 
-    except Exception as e:
-        logger.error(f"Error in instant upload: {str(e)}")
+    except Exception:
+        logger.exception("Instant upload failed")
         return _err(
             'INTERNAL_ERROR',
             'Upload failed',
