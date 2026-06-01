@@ -20,7 +20,6 @@ from .common import (
     require_auth, require_subscription, check_processing_limit, check_training_limit,
     get_supabase_client, create_or_get_session_uuid,
     increment_processing_count, increment_training_count,
-    create_error_response,
     get_string_session_id, get_uuid_session_id,
     get_logger
 )
@@ -510,6 +509,14 @@ def download_training_arrays(session_id):
     if err:
         return err
 
+    # Supabase storage client raises StorageApiError (subclass of StorageException)
+    # for any storage-API failure, including "object not found" (status=404).
+    # Importing locally so this module stays importable if storage3 layout shifts.
+    try:
+        from storage3.utils import StorageException
+    except Exception:  # pragma: no cover - defensive: storage3 always installed
+        StorageException = None  # type: ignore[assignment]
+
     try:
         from shared.database.client import get_supabase_admin_client
 
@@ -534,6 +541,31 @@ def download_training_arrays(session_id):
             }
         )
 
-    except Exception:
-        logger.exception("Failed to download training arrays")
+    except FileNotFoundError:
+        # Local FS fallback: explicit not-found semantics.
+        logger.warning("Download arrays: file not found for session", exc_info=True)
         return _err('RESULTS_NOT_FOUND', 'Training arrays not found for this session', 404)
+    except Exception as e:
+        # Treat Supabase StorageApiError with 404 status (or "not found"/"no such" in
+        # the message) as file-not-found. Anything else is a real server failure.
+        is_not_found = False
+        if StorageException is not None and isinstance(e, StorageException):
+            status_attr = getattr(e, 'status', None)
+            if status_attr in (404, '404'):
+                is_not_found = True
+            else:
+                msg = str(e).lower()
+                if 'not found' in msg or 'no such' in msg or 'object not found' in msg:
+                    is_not_found = True
+
+        if is_not_found:
+            logger.warning("Download arrays: file not found for session", exc_info=True)
+            return _err('RESULTS_NOT_FOUND', 'Training arrays not found for this session', 404)
+
+        logger.exception("Download arrays unexpected failure")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to download training arrays',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )

@@ -311,3 +311,43 @@ def test_results_summary_500_returns_internal_error_shape(client):
     assert body.get('success') is False
     assert body.get('code') == 'INTERNAL_ERROR'
     assert "internal stacktrace" not in (body.get('error') or "")
+
+
+# ---------------------------------------------------------------------------
+# Code-review follow-up: /download-arrays must distinguish 404 (file not
+# found) from 500 (unexpected server failure). Pre-fix, ALL exceptions
+# collapsed into RESULTS_NOT_FOUND 404, hiding genuine server failures
+# (Supabase outage, network errors, etc.) behind a misleading 404.
+# ---------------------------------------------------------------------------
+
+def test_download_arrays_unexpected_exception_returns_500_internal_error(client):
+    """Unexpected exceptions in /download-arrays must return INTERNAL_ERROR 500, not RESULTS_NOT_FOUND 404."""
+    import domains.training.api.training_routes as training_routes
+
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+
+    # `create_or_get_session_uuid` runs inside the route's try block before any
+    # storage call — patching it with a generic RuntimeError simulates a
+    # non-file-not-found failure (e.g., Supabase outage). The handler MUST
+    # route this to the INTERNAL_ERROR / 500 branch, NOT to RESULTS_NOT_FOUND.
+    with patch.object(
+        training_routes,
+        'create_or_get_session_uuid',
+        side_effect=RuntimeError("simulated DB outage"),
+    ):
+        r = client.get(
+            f"/api/training/download-arrays/{sid}",
+            headers=_auth_headers(),
+        )
+
+    assert r.status_code == 500, (
+        f"Expected 500 INTERNAL_ERROR, got {r.status_code}: {r.get_data(as_text=True)}"
+    )
+    body = r.get_json()
+    assert body is not None
+    assert body.get('success') is False
+    assert body.get('code') == 'INTERNAL_ERROR', (
+        f"Expected code=INTERNAL_ERROR, got: {body}"
+    )
+    # Internal exception text must NOT leak into the user-facing payload.
+    assert 'simulated DB outage' not in (body.get('error') or '')
