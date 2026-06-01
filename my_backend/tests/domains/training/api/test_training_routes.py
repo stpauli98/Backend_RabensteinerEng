@@ -359,3 +359,186 @@ def test_download_arrays_unexpected_exception_returns_500_internal_error(client)
     )
     # Internal exception text must NOT leak into the user-facing payload.
     assert 'simulated DB outage' not in (body.get('error') or '')
+
+
+# ---------------------------------------------------------------------------
+# FIX-4: /status 200 path leak fix + contradictory-fields fix
+#
+# Bug 1: the 200 success path always returned session_id + message
+#        (W11-BE5 only hardened the 500 path).
+# Bug 2: when training_results.status='failed', the response overlaid
+#        progress=100 / current_step='Training completed' /
+#        message='Training completed successfully' — five contradictory
+#        signals in one payload.
+# ---------------------------------------------------------------------------
+
+class _FakeQuery:
+    """Minimal chainable Supabase query stub.
+
+    The real builder returns ``self`` from select/eq/order/limit and only
+    materialises on ``.execute()``. We capture which table was hit so a
+    single fake can serve both the training_progress and training_results
+    branches with different payloads.
+    """
+
+    def __init__(self, table_name, table_responses):
+        self._table = table_name
+        self._responses = table_responses  # {'training_progress': [...], 'training_results': [...]}
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, *_args, **_kwargs):
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        class _R:
+            pass
+        r = _R()
+        r.data = self._responses.get(self._table, [])
+        return r
+
+
+class _FakeSupabase:
+    """Stub for get_supabase_client(...).table('foo').select(...).execute().
+
+    Accepts a dict of {table_name: [row, ...]} keyed payloads.
+    """
+
+    def __init__(self, table_responses):
+        self._table_responses = table_responses
+
+    def table(self, name):
+        return _FakeQuery(name, self._table_responses)
+
+
+def test_status_200_success_response_minimal_shape(client):
+    """FIX-4 (Bug 1): /status 200 must return ONLY status/progress/current_step/completed_at.
+    NO session_id, NO message, NO leak of internal state."""
+    import domains.training.api.training_routes as training_routes
+
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    fake = _FakeSupabase({
+        'training_progress': [{
+            'status': 'completed',
+            'overall_progress': 100,
+            'current_step': 'Model training: done',
+            'started_at': '2026-06-01T12:00:00Z',
+            'completed_at': '2026-06-01T12:05:00Z',
+            'updated_at': '2026-06-01T12:05:00Z',
+        }],
+    })
+
+    with patch.object(training_routes, 'get_supabase_client', return_value=fake):
+        resp = client.get(f"/api/training/status/{sid}", headers=_auth_headers())
+
+    assert resp.status_code == 200, (
+        f"Expected 200, got {resp.status_code}: {resp.get_data(as_text=True)}"
+    )
+    body = resp.get_json()
+    assert 'session_id' not in body, (
+        f"FIX-4 Bug 1: 200 response MUST NOT echo session_id. Got: {body}"
+    )
+    assert 'message' not in body, (
+        f"FIX-4 Bug 1: 200 response MUST NOT carry decorative message. Got: {body}"
+    )
+    # Required minimal shape:
+    assert body.get('status') == 'completed'
+    assert body.get('progress') == 100
+    assert body.get('current_step') == 'Model training: done'
+    assert body.get('completed_at') == '2026-06-01T12:05:00Z'
+
+
+def test_status_failed_run_does_not_show_success_message(client):
+    """FIX-4 (Bug 2): when the latest training_results row is 'failed', the
+    response must NOT overlay 'Training completed successfully' nor progress=100."""
+    import domains.training.api.training_routes as training_routes
+
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    # No live training_progress row → fall back to archived training_results.
+    fake = _FakeSupabase({
+        'training_progress': [],
+        'training_results': [{
+            'status': 'failed',
+            'completed_at': None,
+        }],
+    })
+
+    with patch.object(training_routes, 'get_supabase_client', return_value=fake):
+        resp = client.get(f"/api/training/status/{sid}", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['status'] == 'failed', (
+        f"Archived failed run must surface as status='failed'. Got: {body}"
+    )
+    # MUST NOT contain success-flavoured text/values.
+    assert 'message' not in body
+    assert body.get('current_step') != 'Training completed', (
+        f"Failed run must not claim 'Training completed'. Got: {body}"
+    )
+    assert body.get('progress') != 100, (
+        f"Failed run must not report progress=100. Got: {body}"
+    )
+    assert 'session_id' not in body
+
+
+def test_status_live_progress_takes_precedence_over_archived_results(client):
+    """FIX-4 (Bug 2 corollary): training_progress (live) is the source of
+    truth. When both tables have data, the live row must win — otherwise
+    a stale training_results row from a PREVIOUS run leaks into the
+    current run's status."""
+    import domains.training.api.training_routes as training_routes
+
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    fake = _FakeSupabase({
+        'training_progress': [{
+            'status': 'running',
+            'overall_progress': 45,
+            'current_step': 'Model training: epoch 23/50',
+            'completed_at': None,
+        }],
+        # Even if a previous successful run left behind a row here,
+        # the live progress row must be picked.
+        'training_results': [{
+            'status': 'completed',
+            'completed_at': '2026-05-01T00:00:00Z',
+        }],
+    })
+
+    with patch.object(training_routes, 'get_supabase_client', return_value=fake):
+        resp = client.get(f"/api/training/status/{sid}", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['status'] == 'running'
+    assert body['progress'] == 45
+    assert body['current_step'] == 'Model training: epoch 23/50'
+    assert body['completed_at'] is None
+
+
+def test_status_not_found_response_minimal_shape(client):
+    """FIX-4 (Bug 1): not_found branch also returns minimal shape (no session_id, no message)."""
+    import domains.training.api.training_routes as training_routes
+
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    fake = _FakeSupabase({'training_progress': [], 'training_results': []})
+
+    with patch.object(training_routes, 'get_supabase_client', return_value=fake):
+        resp = client.get(f"/api/training/status/{sid}", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['status'] == 'not_found'
+    assert 'session_id' not in body
+    assert 'message' not in body
+    # current_step + completed_at + progress are always present in the contract.
+    assert 'progress' in body
+    assert 'current_step' in body
+    assert 'completed_at' in body

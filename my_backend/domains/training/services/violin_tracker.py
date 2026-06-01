@@ -104,8 +104,16 @@ class ViolinProgressTracker:
         try:
             supabase = get_supabase_client(use_service_role=True)
 
-            # Map status to database status
-            db_status = 'running' if status == 'processing' else status
+            # Map status to database status.
+            # FIX-4 (Bug 3): training_progress.status CHECK constraint allows only
+            # ('idle', 'running', 'completed', 'failed', 'abandoned'). Defensively
+            # map 'error' → 'failed' for any caller that passes the legacy name.
+            if status == 'processing':
+                db_status = 'running'
+            elif status == 'error':
+                db_status = 'failed'
+            else:
+                db_status = status
 
             data = {
                 'session_id': str(self.uuid_session_id),

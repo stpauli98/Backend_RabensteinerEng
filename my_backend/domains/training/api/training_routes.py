@@ -259,48 +259,75 @@ def get_training_status(session_id: str):
             # W11-ADV-5: use 404 SESSION_NOT_FOUND to avoid leaking session existence.
             return _err('SESSION_NOT_FOUND', 'Session not found', 404)
 
-        results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
-        logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
+        # FIX-4 (Bug 1 + Bug 2): /status response is the minimal shape
+        # { status, progress, current_step, completed_at }. NO session_id
+        # (the caller put it in the URL), NO message (it confused E2E
+        # observers — e.g. status='failed' + message='Training completed
+        # successfully' simultaneously).
+        #
+        # Source-of-truth order:
+        #   1. training_progress   — LIVE state written by TrainingProgressTracker
+        #      (idle/running/completed/failed). Authoritative for in-flight or
+        #      just-finished runs because the tracker writes overall_progress
+        #      and current_step continuously.
+        #   2. training_results    — ARCHIVED state for a run that finished
+        #      (or failed) and whose progress row was cleaned up. We do NOT
+        #      hard-code progress=100/'Training completed' here — when the
+        #      archived row says status='failed', the response must reflect
+        #      that without overlaying success-flavoured fields.
+        progress_response = (
+            supabase.table('training_progress')
+            .select('status, overall_progress, current_step, started_at, completed_at, updated_at')
+            .eq('session_id', uuid_session_id)
+            .order('updated_at', desc=True)
+            .limit(1)
+            .execute()
+        )
 
-        if results_response.data and len(results_response.data) > 0:
-            result_data = results_response.data[0]
+        if progress_response.data and len(progress_response.data) > 0:
+            # LIVE state from training_progress is authoritative.
+            row = progress_response.data[0]
             status = {
-                'session_id': session_id,
-                'status': result_data.get('status', 'completed'),
-                'progress': 100,
-                'current_step': 'Training completed',
-                'total_steps': 7,
-                'completed_steps': 7,
-                'started_at': result_data.get('created_at'),
-                'completed_at': result_data.get('completed_at'),
-                'message': 'Training completed successfully'
-            }
-        elif logs_response.data and len(logs_response.data) > 0:
-            log_data = logs_response.data[0]
-            progress_data = log_data.get('progress', {})
-            status = {
-                'session_id': session_id,
-                'status': 'in_progress',
-                'progress': progress_data.get('overall', 0) if isinstance(progress_data, dict) else 0,
-                'current_step': progress_data.get('current_step', 'Processing') if isinstance(progress_data, dict) else 'Processing',
-                'total_steps': progress_data.get('total_steps', 7) if isinstance(progress_data, dict) else 7,
-                'completed_steps': progress_data.get('completed_steps', 0) if isinstance(progress_data, dict) else 0,
-                'started_at': log_data.get('created_at'),
-                'completed_at': None,
-                'message': 'Training in progress'
+                'status': row.get('status') or 'running',
+                'progress': row.get('overall_progress') or 0,
+                'current_step': row.get('current_step') or '',
+                'completed_at': row.get('completed_at'),
             }
         else:
-            status = {
-                'session_id': session_id,
-                'status': 'not_found',
-                'progress': 0,
-                'current_step': 'Not started',
-                'total_steps': 7,
-                'completed_steps': 0,
-                'started_at': None,
-                'completed_at': None,
-                'message': 'No training found for this session'
-            }
+            # No live progress row — fall back to archived training_results.
+            results_response = (
+                supabase.table('training_results')
+                .select('status, completed_at')
+                .eq('session_id', uuid_session_id)
+                .order('created_at', desc=True)
+                .limit(1)
+                .execute()
+            )
+
+            if results_response.data and len(results_response.data) > 0:
+                result_data = results_response.data[0]
+                archived_status = result_data.get('status') or 'completed'
+                # Derive progress/current_step from the archived terminal status
+                # — never hard-code success values for a failed run.
+                if archived_status == 'failed':
+                    progress = 0
+                    current_step = 'Training failed'
+                else:
+                    progress = 100
+                    current_step = 'Training completed'
+                status = {
+                    'status': archived_status,
+                    'progress': progress,
+                    'current_step': current_step,
+                    'completed_at': result_data.get('completed_at'),
+                }
+            else:
+                status = {
+                    'status': 'not_found',
+                    'progress': 0,
+                    'current_step': '',
+                    'completed_at': None,
+                }
 
         return jsonify(status)
 
