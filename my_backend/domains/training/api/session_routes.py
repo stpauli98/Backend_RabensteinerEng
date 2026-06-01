@@ -36,6 +36,7 @@ from domains.training.services.session import (
     get_time_info_data, get_zeitschritte_data, get_session_status,
     create_database_session, get_session_uuid, get_upload_status
 )
+from domains.training.services.lifecycle import is_training_in_flight
 
 from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
@@ -341,6 +342,30 @@ def delete_session_endpoint(session_id):
     err = validate_training_session_format(session_id)
     if err:
         return err
+
+    # FIX-5 (Bug 2): reject delete while training is in flight. Otherwise the
+    # background thread continues uploading 0.9-12MB orphan storage objects
+    # with no FK reference, cascading FK violations for ~30s after delete
+    # returns 200 OK. Ownership is enforced inside delete_session() (FIX-1),
+    # but we resolve to UUID here for the in-flight lookup — the training
+    # thread persists under the UUID, not the string-form session_id.
+    #
+    # Resolution failure (unknown session) is non-fatal here: we fall through
+    # to delete_session() which has its own ownership/missing-session
+    # handling. This avoids double-leaking session existence (FIX-1 contract).
+    try:
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        if is_training_in_flight(uuid_session_id):
+            return _err(
+                'TRAINING_IN_PROGRESS',
+                'Cannot delete session while training is running',
+                409,
+                suggestion='Wait for training to complete or fail (poll /status), then retry delete.',
+            )
+    except (ValueError, PermissionError):
+        # Let delete_session() produce the canonical 404/403; do not branch
+        # on resolution errors here.
+        pass
 
     try:
         user_id = g.user_id

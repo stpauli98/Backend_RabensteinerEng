@@ -542,3 +542,175 @@ def test_status_not_found_response_minimal_shape(client):
     assert 'progress' in body
     assert 'current_step' in body
     assert 'completed_at' in body
+
+
+# ---------------------------------------------------------------------------
+# FIX-5 (Bug 1): /train-models concurrency guard
+#
+# Pre-fix: two parallel POSTs spawned two threading.Thread workers that
+# raced on the shared Supabase HTTP/2 pool (RST_STREAM kills both threads)
+# AND each ran increment_training_count → user double-billed.
+# Post-fix: a heartbeat-fresh training_progress row with status='running'
+# forces the second call to 409 TRAINING_IN_PROGRESS BEFORE the counter
+# increment and BEFORE the thread spawn.
+# ---------------------------------------------------------------------------
+
+def test_train_models_rejects_when_already_running(client):
+    """FIX-5: concurrent training launches must be rejected with 409 TRAINING_IN_PROGRESS."""
+    import domains.training.api.training_routes as training_routes
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+
+    # is_training_in_flight is imported into training_routes from lifecycle —
+    # patching the route-module binding is the correct seam.
+    with patch.object(training_routes, 'is_training_in_flight', return_value=True), \
+         patch.object(training_routes, 'increment_training_count') as mock_increment, \
+         patch.object(training_routes, 'threading') as mock_threading:
+        r = client.post(
+            f"/api/training/train-models/{sid}",
+            headers=_auth_headers(),
+            json={'model_parameters': {'MODE': 'Linear'}, 'training_split': {}},
+        )
+
+    assert r.status_code == 409, (
+        f"Expected 409 TRAINING_IN_PROGRESS, got {r.status_code}: {r.get_data(as_text=True)}"
+    )
+    body = r.get_json()
+    assert body is not None
+    assert body.get('success') is False
+    assert body.get('code') == 'TRAINING_IN_PROGRESS'
+    # User must NOT be billed when the request is rejected.
+    mock_increment.assert_not_called()
+    # No thread must be spawned on the rejected path.
+    mock_threading.Thread.assert_not_called()
+
+
+def test_train_models_accepts_when_not_in_flight(client):
+    """FIX-5: when no live training, the request proceeds past the 409 guard."""
+    import domains.training.api.training_routes as training_routes
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+
+    with patch.object(training_routes, 'is_training_in_flight', return_value=False), \
+         patch.object(training_routes, 'increment_training_count'), \
+         patch.object(training_routes, 'threading'), \
+         patch.object(training_routes, 'run_model_training_async'):
+        r = client.post(
+            f"/api/training/train-models/{sid}",
+            headers=_auth_headers(),
+            json={'model_parameters': {'MODE': 'Linear'}, 'training_split': {}},
+        )
+
+    # The 409 guard must NOT fire when no run is live. Any other status
+    # (200 success, 500 from a downstream stub gap) is acceptable here —
+    # we're only asserting the FIX-5 guard didn't intercept.
+    assert r.status_code != 409, (
+        f"FIX-5 guard fired when no training is in flight. body={r.get_data(as_text=True)}"
+    )
+    body = r.get_json() or {}
+    assert body.get('code') != 'TRAINING_IN_PROGRESS'
+
+
+def test_train_models_accepts_when_previous_run_stale(client):
+    """FIX-5: a stale heartbeat (worker crashed) must NOT lock the endpoint forever.
+
+    is_training_in_flight enforces the heartbeat window — when it returns
+    False (window expired), the route must accept the new request and
+    NOT 409.
+    """
+    import domains.training.api.training_routes as training_routes
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+
+    # Stale heartbeat → helper returns False → guard does not fire.
+    with patch.object(training_routes, 'is_training_in_flight', return_value=False), \
+         patch.object(training_routes, 'increment_training_count'), \
+         patch.object(training_routes, 'threading'), \
+         patch.object(training_routes, 'run_model_training_async'):
+        r = client.post(
+            f"/api/training/train-models/{sid}",
+            headers=_auth_headers(),
+            json={'model_parameters': {'MODE': 'Linear'}, 'training_split': {}},
+        )
+
+    assert r.status_code != 409
+    body = r.get_json() or {}
+    assert body.get('code') != 'TRAINING_IN_PROGRESS'
+
+
+# ---------------------------------------------------------------------------
+# FIX-5 (Bug 1 unit): is_training_in_flight heartbeat-window logic
+#
+# Unit-level coverage of the helper itself so the route tests above can
+# remain a thin mock-based contract assertion.
+# ---------------------------------------------------------------------------
+
+def test_is_training_in_flight_returns_true_for_fresh_running_row():
+    """status='running' + recent updated_at → True."""
+    from datetime import datetime, timezone, timedelta
+    import domains.training.services.lifecycle as lifecycle
+
+    fake_recent = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    fake = _FakeSupabase({
+        'training_progress': [{'status': 'running', 'updated_at': fake_recent}],
+    })
+    with patch.object(lifecycle, 'get_supabase_client', return_value=fake):
+        assert lifecycle.is_training_in_flight(
+            'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+        ) is True
+
+
+def test_is_training_in_flight_returns_false_for_stale_running_row():
+    """status='running' but updated_at older than window → False (worker crashed)."""
+    from datetime import datetime, timezone, timedelta
+    import domains.training.services.lifecycle as lifecycle
+
+    fake_stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    fake = _FakeSupabase({
+        'training_progress': [{'status': 'running', 'updated_at': fake_stale}],
+    })
+    with patch.object(lifecycle, 'get_supabase_client', return_value=fake):
+        assert lifecycle.is_training_in_flight(
+            'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+        ) is False
+
+
+def test_is_training_in_flight_returns_false_when_no_row():
+    """No training_progress row at all → False (never trained / cleaned up)."""
+    import domains.training.services.lifecycle as lifecycle
+
+    fake = _FakeSupabase({'training_progress': []})
+    with patch.object(lifecycle, 'get_supabase_client', return_value=fake):
+        assert lifecycle.is_training_in_flight(
+            'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+        ) is False
+
+
+def test_is_training_in_flight_returns_false_for_completed_status():
+    """status='completed' → False even with a fresh updated_at."""
+    from datetime import datetime, timezone, timedelta
+    import domains.training.services.lifecycle as lifecycle
+
+    fake_recent = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    fake = _FakeSupabase({
+        'training_progress': [{'status': 'completed', 'updated_at': fake_recent}],
+    })
+    with patch.object(lifecycle, 'get_supabase_client', return_value=fake):
+        assert lifecycle.is_training_in_flight(
+            'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+        ) is False
+
+
+def test_is_training_in_flight_does_not_fail_closed_on_db_error():
+    """DB outage → False (do NOT permanently lock /train-models + /delete).
+
+    See lifecycle.py module docstring: a fail-closed design would lock every
+    session's lifecycle endpoints whenever Supabase blips. The training
+    thread itself will surface DB outages via its own write path.
+    """
+    import domains.training.services.lifecycle as lifecycle
+
+    with patch.object(
+        lifecycle, 'get_supabase_client',
+        side_effect=Exception('simulated supabase outage'),
+    ):
+        assert lifecycle.is_training_in_flight(
+            'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+        ) is False

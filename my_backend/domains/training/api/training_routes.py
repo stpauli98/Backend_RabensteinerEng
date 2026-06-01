@@ -33,6 +33,7 @@ from shared.tracking.usage import log_compute_duration
 from domains.training.services.visualization import save_visualization_to_database, delete_old_violin_plots
 from domains.training.data.generator import generate_violin_plots_for_session
 from domains.training.services.orchestrator import run_model_training_async
+from domains.training.services.lifecycle import is_training_in_flight
 from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
 bp = Blueprint('training_training', __name__)
@@ -173,6 +174,19 @@ def train_models(session_id):
         return _err('SESSION_NOT_FOUND', 'Session not found', 404)
     except (ValueError, PermissionError):
         return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+
+    # FIX-5 (Bug 1): in-flight training guard. Without this check, two
+    # parallel POSTs spawn two threading.Thread workers that race on the
+    # shared Supabase HTTP/2 pool (RST_STREAM kills both threads) AND
+    # double-bill training_count below. Reject with 409 BEFORE
+    # increment_training_count so a rejected call costs the user nothing.
+    if is_training_in_flight(uuid_session_id):
+        return _err(
+            'TRAINING_IN_PROGRESS',
+            'Training is already running for this session',
+            409,
+            suggestion='Wait for the current training to complete, or poll /status to monitor it.',
+        )
 
     try:
         data = request.get_json(silent=True)

@@ -420,3 +420,92 @@ def test_delete_all_sessions_without_confirm_returns_confirmation_required(clien
     assert body.get('code') == 'CONFIRMATION_REQUIRED', (
         f"Expected CONFIRMATION_REQUIRED, got: {body}"
     )
+
+
+# ---------------------------------------------------------------------------
+# FIX-5 (Bug 2): /session/<sid>/delete must reject during active training
+#
+# Pre-fix: returning 200 OK while a training thread was mid-flight caused
+# the thread to keep uploading 0.9-12MB orphan storage objects with no FK,
+# then cascading FK violations for ~30s after delete.
+# Post-fix: if training_progress shows a heartbeat-fresh status='running'
+# row, the delete is rejected with 409 TRAINING_IN_PROGRESS BEFORE the
+# delete_session() service call.
+# ---------------------------------------------------------------------------
+
+def test_delete_session_rejects_during_active_training(client):
+    """FIX-5: delete must 409 if training is in flight; otherwise orphan storage."""
+    import domains.training.api.session_routes as session_routes
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+
+    # Patch the in-flight helper (imported into session_routes from lifecycle)
+    # to True, and stub delete_session so we can confirm it was NOT called.
+    with patch.object(session_routes, 'is_training_in_flight', return_value=True), \
+         patch.object(session_routes, 'delete_session') as mock_delete:
+        r = client.post(
+            f"/api/training/session/{sid}/delete",
+            headers=_auth_headers(),
+            json={},
+        )
+
+    assert r.status_code == 409, (
+        f"Expected 409 TRAINING_IN_PROGRESS, got {r.status_code}: {r.get_data(as_text=True)}"
+    )
+    body = r.get_json()
+    assert body is not None
+    assert body.get('success') is False
+    assert body.get('code') == 'TRAINING_IN_PROGRESS'
+    # delete_session must NOT run when training is mid-flight (otherwise the
+    # bug — orphan storage uploads, cascade FK violations — re-emerges).
+    mock_delete.assert_not_called()
+
+
+def test_delete_session_proceeds_when_no_training_in_flight(client):
+    """FIX-5: with no live training, delete must reach the service layer."""
+    import domains.training.api.session_routes as session_routes
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+
+    with patch.object(session_routes, 'is_training_in_flight', return_value=False), \
+         patch.object(
+             session_routes, 'delete_session',
+             return_value={'message': 'Session deleted', 'warnings': []},
+         ) as mock_delete:
+        r = client.post(
+            f"/api/training/session/{sid}/delete",
+            headers=_auth_headers(),
+            json={},
+        )
+
+    # FIX-5 guard must NOT intercept — call must reach the service layer.
+    body = r.get_json() or {}
+    assert body.get('code') != 'TRAINING_IN_PROGRESS'
+    mock_delete.assert_called_once()
+
+
+def test_delete_session_in_flight_check_failure_does_not_block_delete(client):
+    """FIX-5: if the in-flight resolver raises (unknown session), the route
+    must still hand off to delete_session() so the canonical 404/403 path
+    runs. We must NOT short-circuit to a confusing 409 here.
+    """
+    import domains.training.api.session_routes as session_routes
+    sid = "session_a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+
+    # create_or_get_session_uuid is patched in the `client` fixture to a
+    # static UUID. Override it here to simulate an unknown session.
+    with patch.object(
+        session_routes, 'create_or_get_session_uuid',
+        side_effect=ValueError('session not found'),
+    ), patch.object(
+        session_routes, 'delete_session',
+        side_effect=ValueError('session not found'),
+    ):
+        r = client.post(
+            f"/api/training/session/{sid}/delete",
+            headers=_auth_headers(),
+            json={},
+        )
+
+    # Canonical 404 SESSION_NOT_FOUND from delete_session's ValueError branch.
+    assert r.status_code == 404
+    body = r.get_json()
+    assert body.get('code') == 'SESSION_NOT_FOUND'
