@@ -53,3 +53,17 @@ def cloud_limit_string() -> str:
     if _is_testing():
         return "1000 per minute"
     return "60 per minute"
+
+
+def training_limit_string() -> str:
+    """Rate limit for /api/training/* endpoints.
+
+    Training is more compute-intensive than cloud upload, so we set a
+    stricter per-minute limit. Heavy long-running ops (train-models,
+    generate-datasets) are also gated by @check_training_limit /
+    @check_processing_limit on the user quota side; this IP-keyed limit
+    is the first line of defence against burst abuse.
+    """
+    if _is_testing():
+        return "1000 per minute"
+    return "30 per minute"
