@@ -21,6 +21,9 @@ from .common import (
     get_logger
 )
 
+from core.rate_limits import limiter, training_limit_string
+from shared.validators.uuid import validate_training_session_format
+
 from domains.training.services.session import get_csv_files_for_session
 from domains.training.services.upload import (
     process_chunk_upload, create_csv_file_record,
@@ -31,7 +34,16 @@ bp = Blueprint('training_upload', __name__)
 logger = get_logger(__name__)
 
 
+def _err(code: str, message: str, status: int, *, suggestion: str | None = None):
+    """Standard W11-BE4 error response. {success:false, code, error, [suggestion]}."""
+    payload = {'success': False, 'code': code, 'error': message}
+    if suggestion:
+        payload['suggestion'] = suggestion
+    return jsonify(payload), status
+
+
 @bp.route('/upload-chunk', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 @check_processing_limit
@@ -39,16 +51,24 @@ def upload_chunk():
     """Handle chunk upload from frontend - saving locally."""
     try:
         if 'chunk' not in request.files:
-            return create_error_response('No chunk in request', 400)
+            return _err('MISSING_FILE', 'Chunk file is missing from request', 400)
 
         chunk_file = request.files['chunk']
         if not chunk_file.filename:
-            return create_error_response('No chunk file selected', 400)
+            return _err('MISSING_FILE', 'No chunk file selected', 400)
 
         if 'metadata' not in request.form:
-            return create_error_response('No metadata provided', 400)
+            return _err('MISSING_BODY', 'Chunk metadata is required', 400)
 
         metadata = json.loads(request.form['metadata'])
+
+        # W11-BE2: Validate session_id from metadata body BEFORE downstream work.
+        body_session_id = metadata.get('sessionId') or metadata.get('session_id')
+        if body_session_id:
+            err = validate_training_session_format(body_session_id)
+            if err:
+                return err
+
         chunk_data = chunk_file.read()
         additional_data = {}
 
@@ -89,9 +109,10 @@ def upload_chunk():
                             .execute()
 
                         if existing.data and len(existing.data) > 0:
-                            return create_error_response(
+                            return _err(
+                                'DUPLICATE_FILE',
                                 f'File "{file_name}" with bezeichnung "{bezeichnung}" already exists in this session',
-                                400
+                                400,
                             )
                 except Exception as dup_check_error:
                     logger.warning(f"Duplicate check failed (non-blocking): {dup_check_error}")
@@ -109,17 +130,28 @@ def upload_chunk():
 
     except ValueError as e:
         logger.error(f"Validation error in chunk upload: {str(e)}")
-        return create_error_response(str(e), 400)
+        return _err('BAD_REQUEST', str(e), 400)
 
     except Exception as e:
         logger.error(f"Error processing chunk upload: {str(e)}")
-        return create_error_response(str(e), 500)
+        return _err(
+            'INTERNAL_ERROR',
+            'Upload failed',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/csv-files/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_csv_files_endpoint(session_id):
     """Get all CSV files for a session."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         file_type = request.args.get('type', None)
         files = get_csv_files_for_session(session_id, file_type, user_id=g.user_id)
@@ -137,13 +169,19 @@ def get_csv_files_endpoint(session_id):
             })
 
     except ValueError as e:
-        return create_error_response(str(e), 400)
+        return _err('BAD_REQUEST', str(e), 400)
     except Exception as e:
         logger.error(f"Error getting CSV files for session {session_id}: {str(e)}")
-        return create_error_response(str(e), 500)
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to list CSV files for session',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/csv-files', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 @check_processing_limit
@@ -157,20 +195,25 @@ def create_csv_file():
             session_id = request.form.get('sessionId')
             file_data = request.form.to_dict()
         else:
-            data = request.get_json()
+            data = request.get_json(silent=True)
             if not data:
-                return create_error_response('No data provided', 400)
+                return _err('MISSING_BODY', 'Request body is required', 400)
 
             session_id = data.get('sessionId')
             file_data = data.get('fileData', {})
             file = None
 
         if not session_id:
-            return create_error_response('Session ID is required', 400)
+            return _err('BAD_REQUEST', 'Session ID is required', 400)
+
+        # W11-BE2: validate session_id from body BEFORE DB hit.
+        err = validate_training_session_format(session_id)
+        if err:
+            return err
 
         success, file_uuid = save_file_info(session_id, file_data)
         if not success:
-            return create_error_response('Failed to save file metadata', 500)
+            return _err('INTERNAL_ERROR', 'Failed to save file metadata', 500)
 
         if file and file_uuid:
             with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -207,21 +250,27 @@ def create_csv_file():
 
     except Exception as e:
         logger.error(f"Error creating CSV file: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to create CSV file',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/csv-files/<file_id>', methods=['PUT'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 def update_csv_file(file_id):
     """Update CSV file metadata."""
+    # NOTE: file_id is a row identifier (Supabase UUID for the files table),
+    # not a training session id. The session-id W11-BE2 guard does not apply
+    # here; ownership/existence is enforced inside update_csv_file_record.
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return _err('MISSING_BODY', 'Request body is required', 400)
 
         updated_file = update_csv_file_record(file_id, data)
 
@@ -231,23 +280,25 @@ def update_csv_file(file_id):
         })
 
     except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
+        return _err('BAD_REQUEST', str(e), 400)
 
     except Exception as e:
         logger.error(f"Error updating CSV file {file_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to update CSV file',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/csv-files/<file_id>', methods=['DELETE'])
+@limiter.limit(training_limit_string)
 @require_auth
 def delete_csv_file(file_id):
     """Delete CSV file from database and storage."""
+    # NOTE: file_id is the row identifier for the files table, not a training
+    # session id, so the session-id UUID validator does not apply here.
     try:
         result = delete_csv_file_record(file_id)
 
@@ -257,20 +308,20 @@ def delete_csv_file(file_id):
         })
 
     except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 404
+        return _err('FILE_NOT_FOUND', str(e), 404)
 
     except Exception as e:
         logger.error(f"Error deleting CSV file {file_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to delete CSV file',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/instant-upload', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 @check_processing_limit
@@ -299,15 +350,20 @@ def instant_upload():
 
         # Validate request
         if 'file' not in request.files:
-            return create_error_response('No file provided', 400)
+            return _err('MISSING_FILE', 'File upload missing from request', 400)
 
         file = request.files['file']
         if not file.filename:
-            return create_error_response('No file selected', 400)
+            return _err('MISSING_FILE', 'No file selected', 400)
 
         session_id = request.form.get('sessionId')
         if not session_id:
-            return create_error_response('Session ID is required', 400)
+            return _err('BAD_REQUEST', 'Session ID is required', 400)
+
+        # W11-BE2: validate session_id BEFORE DB hit / storage call.
+        err = validate_training_session_format(session_id)
+        if err:
+            return err
 
         # Parse file metadata
         file_metadata = {}
@@ -315,14 +371,14 @@ def instant_upload():
             try:
                 file_metadata = json.loads(request.form['fileMetadata'])
             except json.JSONDecodeError:
-                return create_error_response('Invalid fileMetadata JSON', 400)
+                return _err('BAD_REQUEST', 'Invalid fileMetadata JSON', 400)
 
         file_hash = request.form.get('fileHash', '')
 
         # Resolve session ID to UUID
         uuid_session_id = resolve_session_id(session_id)
         if not uuid_session_id:
-            return create_error_response(f'Invalid session ID: {session_id}', 400)
+            return _err('BAD_REQUEST', f'Invalid session ID: {session_id}', 400)
 
         # Prepare file data for database
         safe_filename = sanitize_filename(file.filename)
@@ -340,9 +396,10 @@ def instant_upload():
             .execute()
 
         if existing_bezeichnung.data and len(existing_bezeichnung.data) > 0:
-            return create_error_response(
+            return _err(
+                'DUPLICATE_FILE',
                 f'A file with bezeichnung "{bezeichnung}" already exists in this session',
-                400
+                400,
             )
 
         file_data = {
@@ -359,7 +416,7 @@ def instant_upload():
         # Save file metadata to database
         success, file_uuid = save_file_info(session_id, file_data)
         if not success:
-            return create_error_response('Failed to save file metadata', 500)
+            return _err('INTERNAL_ERROR', 'Failed to save file metadata', 500)
 
         # Save file content to Storage
         storage_path = ''
@@ -428,8 +485,13 @@ def instant_upload():
 
     except ValueError as e:
         logger.error(f"Validation error in instant upload: {str(e)}")
-        return create_error_response(str(e), 400)
+        return _err('BAD_REQUEST', str(e), 400)
 
     except Exception as e:
         logger.error(f"Error in instant upload: {str(e)}")
-        return create_error_response(str(e), 500)
+        return _err(
+            'INTERNAL_ERROR',
+            'Upload failed',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
