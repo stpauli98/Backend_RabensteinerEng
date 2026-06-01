@@ -243,7 +243,8 @@ def get_training_status(session_id: str):
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return _err('FORBIDDEN', 'You do not have access to this session', 403)
+            # W11-ADV-5: use 404 SESSION_NOT_FOUND to avoid leaking session existence.
+            return _err('SESSION_NOT_FOUND', 'Session not found', 404)
 
         results_response = supabase.table('training_results').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
         logs_response = supabase.table('training_logs').select('*').eq('session_id', uuid_session_id).order('created_at', desc=True).limit(1).execute()
@@ -518,7 +519,8 @@ def download_training_arrays(session_id):
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return _err('FORBIDDEN', 'You do not have access to this session', 403)
+            # W11-ADV-5: use 404 SESSION_NOT_FOUND to avoid leaking session existence.
+            return _err('SESSION_NOT_FOUND', 'Session not found', 404)
 
         file_path = f"{uuid_session_id}/training_arrays.pkl.gz"
 

@@ -234,6 +234,46 @@ def test_update_csv_file_missing_body_returns_structured_error(client):
 # W11-BE5/BE7: 500 path returns INTERNAL_ERROR shape, no exception text leak
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# W11-ADV-2: /csv-files/<sid> must enforce ownership, not silently return empty
+# ---------------------------------------------------------------------------
+
+def test_csv_files_foreign_session_returns_404(client):
+    """W11-ADV-2: get_csv_files must enforce ownership, not silently return empty array.
+
+    Pre-fix this endpoint returned HTTP 200 with `{data: []}` for any foreign
+    UUID (the ownership check was missing). After the fix, a foreign UUID must
+    return 404 SESSION_NOT_FOUND per the W11-ADV-5 IDOR convention.
+    """
+    from shared.auth.ownership import SessionOwnershipError
+    import domains.training.api.upload_routes as upload_routes
+
+    sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+    with patch.object(
+        upload_routes,
+        'assert_session_ownership',
+        side_effect=SessionOwnershipError('not yours'),
+    ), patch(
+        'shared.database.operations.create_or_get_session_uuid',
+        return_value=sid,
+    ):
+        r = client.get(
+            f"/api/training/csv-files/{sid}",
+            headers=_auth_headers(),
+        )
+
+    assert r.status_code == 404, (
+        f"Expected 404 SESSION_NOT_FOUND, got {r.status_code}: {r.get_data(as_text=True)}"
+    )
+    body = r.get_json()
+    assert body is not None
+    assert body.get('success') is False
+    assert body.get('code') == 'SESSION_NOT_FOUND', (
+        f"Expected code=SESSION_NOT_FOUND, got: {body}"
+    )
+
+
 def test_500_path_returns_internal_error_shape(client):
     """A downstream exception must NOT leak text; response must match contract.
 

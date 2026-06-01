@@ -24,6 +24,7 @@ from .common import (
 from core.rate_limits import limiter, training_limit_string
 from shared.responses.errors import error_response as _err
 from shared.validators.uuid import validate_training_session_format
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
 from domains.training.services.session import get_csv_files_for_session
 from domains.training.services.upload import (
@@ -144,6 +145,32 @@ def get_csv_files_endpoint(session_id):
     err = validate_training_session_format(session_id)
     if err:
         return err
+
+    # W11-ADV-2: enforce ownership BEFORE listing files.
+    # Pre-fix this endpoint returned 200 + empty array for foreign UUIDs,
+    # leaking nothing but breaking the IDOR contract enforced elsewhere.
+    # W11-ADV-5: collapse all "session not yours / not present" branches into
+    # one 404 SESSION_NOT_FOUND response so the endpoint cannot be used to
+    # enumerate session UUIDs.
+    try:
+        from shared.database.operations import create_or_get_session_uuid
+        try:
+            uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        except (PermissionError, ValueError):
+            # PermissionError → cross-tenant access on a known string session.
+            # ValueError → unknown string session id without user_id (caller is
+            # authenticated, so this means the session has no mapping).
+            return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+        except Exception as e:
+            # retry_database_operation wraps the PermissionError in DatabaseError.
+            if 'does not belong to user' in str(e):
+                return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+            raise
+
+        if uuid_session_id:
+            assert_session_ownership(uuid_session_id)
+    except SessionOwnershipError:
+        return _err('SESSION_NOT_FOUND', 'Session not found', 404)
 
     try:
         file_type = request.args.get('type', None)
