@@ -59,11 +59,41 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
         """Check if object is a Keras model."""
         return hasattr(obj, 'save') and hasattr(obj, 'predict') and hasattr(obj, 'layers')
 
+    def is_sklearn_like_estimator(obj) -> bool:
+        """Check if object is an sklearn/lightgbm-style estimator.
+
+        These have .predict() but no .layers (so not Keras). Covers:
+        - sklearn.linear_model.LinearRegression
+        - sklearn.svm.SVR
+        - sklearn.pipeline.Pipeline (e.g. make_pipeline(StandardScaler(), SVR()))
+        - sklearn.multioutput.MultiOutputRegressor
+        - lightgbm.LGBMRegressor
+
+        We do a picklability smoke test inside _wrap_sklearn() because some
+        objects can have .predict but not be picklable (e.g. live DB cursors).
+        """
+        if obj is None:
+            return False
+        if isinstance(obj, (dict, list, tuple, str, bytes, int, float, bool, np_ndarray_type())):
+            return False
+        return hasattr(obj, 'predict') and not hasattr(obj, 'layers')
+
+    def is_sklearn_estimator_list(obj) -> bool:
+        """Check if object is a non-empty list of sklearn-like estimators.
+
+        train_linear_model, train_svr_dir, train_svr_mimo all return a list
+        of fitted estimators (one per output feature). This is the most
+        common shape that the original code silently dropped.
+        """
+        if not isinstance(obj, list) or len(obj) == 0:
+            return False
+        return all(is_sklearn_like_estimator(item) for item in obj)
+
     def extract_models_info(obj, path=""):
         """Recursively extract serialized models"""
         found_models = []
 
-        # Check for raw Keras model first
+        # Check for raw Keras model first (most specific)
         if is_keras_model(obj):
             found_models.append({
                 'model_class': obj.__class__.__name__,
@@ -73,6 +103,38 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
                 'data_size': 0  # Will be determined when saving
             })
             return found_models
+
+        # Check for list of sklearn estimators BEFORE generic list recursion
+        # (train_linear_model, train_svr_dir, train_svr_mimo return these)
+        if is_sklearn_estimator_list(obj):
+            try:
+                # Smoke-test picklability: if it fails, fall through to recursion
+                pickle.dumps(obj)
+                found_models.append({
+                    'model_class': f'{obj[0].__class__.__name__}List',
+                    'path': path,
+                    'is_raw_sklearn_list': True,
+                    'raw_model': obj,  # Save the whole list; predict path expects a list
+                    'data_size': 0
+                })
+                return found_models
+            except (pickle.PicklingError, TypeError, AttributeError) as e:
+                logger.warning(f"sklearn estimator list at '{path}' not picklable: {e}; falling through")
+
+        # Check for single sklearn estimator (LGBMR returns a MultiOutputRegressor instance)
+        if is_sklearn_like_estimator(obj):
+            try:
+                pickle.dumps(obj)
+                found_models.append({
+                    'model_class': obj.__class__.__name__,
+                    'path': path,
+                    'is_raw_sklearn': True,
+                    'raw_model': obj,
+                    'data_size': 0
+                })
+                return found_models
+            except (pickle.PicklingError, TypeError, AttributeError) as e:
+                logger.warning(f"sklearn estimator at '{path}' not picklable: {e}; falling through")
 
         if isinstance(obj, dict):
             # CRITICAL: Stop recursion for scaler dictionaries - treat as single object
@@ -107,6 +169,20 @@ def extract_serialized_models(training_results: Dict) -> List[Dict]:
         return found_models
 
     return extract_models_info(training_results)
+
+
+def np_ndarray_type():
+    """Lazy import numpy.ndarray for isinstance check.
+
+    Returns a tuple to use with isinstance. If numpy isn't importable
+    (extremely unlikely in this codebase), returns a sentinel that will
+    not match anything.
+    """
+    try:
+        import numpy as np
+        return np.ndarray
+    except ImportError:
+        return type(None)
 
 
 def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
@@ -253,6 +329,57 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                     })
 
                     logger.info(f"✅ Uploaded raw Keras model: {storage_result['file_path']}")
+
+                finally:
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
+
+                continue  # Skip to next model
+
+            # Handle raw sklearn estimators or lists of estimators (Linear/SVR/LGBMR).
+            # Pre-fix these silently dropped — only scalers reached storage.
+            if model_info.get('is_raw_sklearn') or model_info.get('is_raw_sklearn_list'):
+                model_obj = model_info['raw_model']
+                dataset_name = 'best_model' if path == 'trained_model' else path.replace('.', '_')
+
+                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False, mode='wb') as temp_file:
+                    temp_file_path = temp_file.name
+
+                try:
+                    # Use joblib for sklearn-style objects — matches the load path
+                    # in prediction_service._load_sklearn_model. Falls back to
+                    # pickle if joblib isn't available (it should be — sklearn dep).
+                    try:
+                        import joblib
+                        joblib.dump(model_obj, temp_file_path)
+                    except ImportError:
+                        with open(temp_file_path, 'wb') as f:
+                            pickle.dump(model_obj, f)
+
+                    storage_result = upload_trained_model(
+                        session_id=str(uuid_session_id),
+                        model_file_path=temp_file_path,
+                        model_type=model_class,
+                        dataset_name=dataset_name,
+                        filename_prefix=session_name
+                    )
+
+                    uploaded_models.append({
+                        'dataset_name': dataset_name,
+                        'model_type': model_class.upper(),
+                        'filename': storage_result['original_filename'],
+                        'storage_path': storage_result['file_path'],
+                        'size_mb': round(storage_result['file_size'] / (1024 * 1024), 2),
+                        'path_in_results': path,
+                        'file_format': 'pkl',
+                        'is_list': bool(model_info.get('is_raw_sklearn_list'))
+                    })
+
+                    logger.info(
+                        f"✅ Uploaded sklearn-style model "
+                        f"({'list' if model_info.get('is_raw_sklearn_list') else 'single'}): "
+                        f"{storage_result['file_path']}"
+                    )
 
                 finally:
                     if os.path.exists(temp_file_path):
