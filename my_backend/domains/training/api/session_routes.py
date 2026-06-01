@@ -20,7 +20,7 @@ from .common import (
     os, json, datetime, request, jsonify, g, logging,
     require_auth, require_subscription,
     get_supabase_client, get_string_id_from_uuid, create_or_get_session_uuid,
-    validate_session_id, create_error_response, create_success_response,
+    validate_session_id, create_success_response,
     resolve_session_id, is_uuid_format, get_string_session_id, get_uuid_session_id,
     UPLOAD_BASE_DIR, get_logger
 )
@@ -51,6 +51,8 @@ def init_session():
     """Initialize a new upload session."""
     data = request.get_json(silent=True) or {}
     session_id = data.get('sessionId') or data.get('session_id')
+    if not session_id:
+        return _err('MISSING_BODY', 'sessionId is required', 400)
     # W11-BE2: validate session_id BEFORE auth-ed work.
     err = validate_training_session_format(session_id)
     if err:
@@ -531,6 +533,8 @@ def save_time_info_endpoint():
         return _err('MISSING_BODY', 'Request body is required', 400)
 
     session_id = data.get('sessionId') or data.get('session_id')
+    if not session_id:
+        return _err('MISSING_BODY', 'sessionId is required', 400)
     # W11-BE2: validate session_id BEFORE auth-ed work.
     err = validate_training_session_format(session_id)
     if err:
@@ -571,6 +575,8 @@ def save_zeitschritte_endpoint():
         return _err('MISSING_BODY', 'Request body is required', 400)
 
     session_id = data.get('sessionId') or data.get('session_id')
+    if not session_id:
+        return _err('MISSING_BODY', 'sessionId is required', 400)
     # W11-BE2: validate session_id BEFORE auth-ed work.
     err = validate_training_session_format(session_id)
     if err:
@@ -668,6 +674,8 @@ def change_session_name_endpoint():
         return _err('MISSING_BODY', 'Request body is required', 400)
 
     session_id = data.get('sessionId') or data.get('session_id')
+    if not session_id:
+        return _err('MISSING_BODY', 'sessionId is required', 400)
     # W11-BE2: validate session_id BEFORE auth-ed work.
     err = validate_training_session_format(session_id)
     if err:

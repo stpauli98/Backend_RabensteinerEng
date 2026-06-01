@@ -357,6 +357,41 @@ def test_get_session_database_ownership_violation_returns_403_forbidden(client):
 # /delete-all-sessions: CONFIRMATION_REQUIRED when confirm flag missing
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# /create-database-session: conditional UUID guard
+# ---------------------------------------------------------------------------
+
+def test_create_database_session_omitted_sessionId_passes_validation(client):
+    """When body omits sessionId, route should NOT reject with BAD_UUID
+    (service auto-generates the id)."""
+    import domains.training.api.session_routes as session_routes
+
+    with patch.object(
+        session_routes,
+        'create_database_session',
+        return_value='auto-generated-uuid',
+    ):
+        r = client.post(
+            "/api/training/create-database-session",
+            headers=_auth_headers(),
+            json={},
+        )
+    body = r.get_json() or {}
+    assert body.get('code') != 'BAD_UUID', "empty body must not trigger BAD_UUID"
+
+
+def test_create_database_session_malformed_sessionId_returns_400_bad_uuid(client):
+    """When body PROVIDES a malformed sessionId, route MUST return BAD_UUID."""
+    r = client.post(
+        "/api/training/create-database-session",
+        headers=_auth_headers(),
+        json={"sessionId": "not-a-uuid-at-all"},
+    )
+    assert r.status_code == 400
+    body = r.get_json()
+    assert body['code'] == 'BAD_UUID'
+
+
 def test_delete_all_sessions_without_confirm_returns_confirmation_required(client):
     """POST /delete-all-sessions without confirm_delete_all=True must return
     400 CONFIRMATION_REQUIRED via the ValueError raised by the service layer.
