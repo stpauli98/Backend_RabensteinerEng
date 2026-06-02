@@ -5,6 +5,10 @@ Endpoints:
 - POST /api-keys/<session_id> — generate new API key
 - GET /api-keys/<session_id> — list keys for session
 - DELETE /api-keys/<key_id> — revoke a key
+
+W11-A T7: hardened with @limiter.limit, UUID guard (only on session_id
+sites — NOT on /api-keys/<key_id> DELETE), and the standardized error
+contract (shared.responses.errors.error_response).
 """
 
 import re
@@ -19,6 +23,10 @@ from .common import (
     create_or_get_session_uuid
 )
 from flask import Blueprint
+
+from core.rate_limits import limiter, training_limit_string
+from shared.responses.errors import error_response as _err
+from shared.validators.uuid import validate_training_session_format
 
 bp = Blueprint('training_api_keys', __name__)
 logger = get_logger(__name__)
@@ -37,32 +45,32 @@ def _generate_key():
 
 
 @bp.route('/api-keys/<session_id>', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 def generate_api_key(session_id):
+    """Generate a new API key for the session."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    expires_in_days = data.get('expires_in_days')
+
+    if not name:
+        return _err('INVALID_API_KEY_NAME', 'Key name is required', 400)
+    if len(name) > 100:
+        return _err('INVALID_API_KEY_NAME', 'Key name too long (max 100 chars)', 400)
+    if not KEY_NAME_PATTERN.match(name):
+        return _err(
+            'INVALID_API_KEY_NAME',
+            'Key name may only contain letters, numbers, spaces, '
+            'hyphens, underscores, parentheses, and dots.',
+            400,
+        )
+
     try:
-        data = request.get_json() or {}
-        name = data.get('name', '').strip()
-        expires_in_days = data.get('expires_in_days')
-
-        if not name:
-            return jsonify({
-                'success': False, 'code': 'INVALID_KEY_NAME',
-                'error': 'Key name is required'
-            }), 400
-        if len(name) > 100:
-            return jsonify({
-                'success': False, 'code': 'INVALID_KEY_NAME',
-                'error': 'Key name too long (max 100 chars)'
-            }), 400
-        if not KEY_NAME_PATTERN.match(name):
-            return jsonify({
-                'success': False, 'code': 'INVALID_KEY_NAME',
-                'error': (
-                    'Key name may only contain letters, numbers, spaces, '
-                    'hyphens, underscores, parentheses, and dots.'
-                )
-            }), 400
-
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
 
@@ -74,10 +82,14 @@ def generate_api_key(session_id):
             .execute()
 
         if not session.data:
-            return jsonify({'success': False, 'error': 'Session not found'}), 404
+            return _err('SESSION_NOT_FOUND', 'Session not found', 404)
 
         if session.data[0]['workflow_phase'] not in ('phase4', 'completed'):
-            return jsonify({'success': False, 'error': 'Session must have a trained model'}), 400
+            return _err(
+                'BAD_REQUEST',
+                'Session must have a trained model',
+                400,
+            )
 
         existing = supabase.table('api_keys') \
             .select('id, name') \
@@ -86,10 +98,18 @@ def generate_api_key(session_id):
             .execute()
 
         if len(existing.data) >= MAX_KEYS_PER_SESSION:
-            return jsonify({'success': False, 'error': f'Maximum {MAX_KEYS_PER_SESSION} active keys per session'}), 400
+            return _err(
+                'API_KEY_LIMIT_EXCEEDED',
+                f'Maximum {MAX_KEYS_PER_SESSION} active keys per session',
+                400,
+            )
 
         if any(k['name'] == name for k in existing.data):
-            return jsonify({'success': False, 'error': f'Key name "{name}" already exists for this session'}), 400
+            return _err(
+                'INVALID_API_KEY_NAME',
+                f'Key name "{name}" already exists for this session',
+                400,
+            )
 
         plaintext, key_hash, prefix = _generate_key()
 
@@ -117,14 +137,26 @@ def generate_api_key(session_id):
             'expires_at': expires_at
         })
 
-    except Exception as e:
-        logger.error(f"Error generating API key: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Failed to generate API key")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to generate API key',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/api-keys/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def list_api_keys(session_id):
+    """List API keys for the given session."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = str(create_or_get_session_uuid(session_id, user_id=g.user_id))
@@ -141,14 +173,26 @@ def list_api_keys(session_id):
             'keys': result.data
         })
 
-    except Exception as e:
-        logger.error(f"Error listing API keys: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Failed to list API keys")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to list API keys',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/api-keys/<key_id>', methods=['DELETE'])
+@limiter.limit(training_limit_string)
 @require_auth
 def revoke_api_key(key_id):
+    """Revoke (soft-delete) the API key by row id.
+
+    NOTE: ``key_id`` is the api_keys row id, NOT a session id, so no UUID
+    guard is applied here. The DB query below acts as the implicit guard
+    (unknown id → no rows → 404).
+    """
     try:
         supabase = get_supabase_client(use_service_role=True)
 
@@ -161,7 +205,7 @@ def revoke_api_key(key_id):
             .execute()
 
         if not key_check.data:
-            return jsonify({'success': False, 'error': 'Key not found or already revoked'}), 404
+            return _err('API_KEY_NOT_FOUND', 'Key not found or already revoked', 404)
 
         supabase.table('api_keys') \
             .update({'revoked_at': datetime.now(timezone.utc).isoformat()}) \
@@ -172,6 +216,11 @@ def revoke_api_key(key_id):
 
         return jsonify({'success': True, 'revoked': True})
 
-    except Exception as e:
-        logger.error(f"Error revoking API key: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Failed to revoke API key")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to revoke API key',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )

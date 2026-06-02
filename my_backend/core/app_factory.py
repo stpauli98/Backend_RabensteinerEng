@@ -10,7 +10,7 @@ if os.getenv("DEBUG_ANOMALY", "false").lower() == "true":
     for _h in logging.getLogger().handlers:
         _h.setLevel(logging.DEBUG)
 from datetime import datetime as dat
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -127,12 +127,43 @@ def create_app():
             return error.response
         return jsonify({'error': 'Payload Too Large', 'message': 'Request entity is too large'}), 413
 
-    @app.errorhandler(500)
-    def internal_error(error):
-        logger.error(f"Internal server error (500): {error}")
+    # W11-ADV-4: global JSON handlers for 404/405/500 to keep the error
+    # contract consistent. Flask's defaults return HTML for these, which
+    # breaks FE error mappers that key off `code`.
+    @app.errorhandler(404)
+    def _not_found(error):
+        # Routes that set their own custom response (e.g., abort(404, response=...))
+        # should still win.
         if hasattr(error, 'response') and error.response:
             return error.response
-        return jsonify({'error': 'Internal Server Error', 'message': str(error)}), 500
+        return jsonify({
+            'success': False,
+            'code': 'NOT_FOUND',
+            'error': 'Resource not found',
+        }), 404
+
+    @app.errorhandler(405)
+    def _method_not_allowed(error):
+        if hasattr(error, 'response') and error.response:
+            return error.response
+        return jsonify({
+            'success': False,
+            'code': 'METHOD_NOT_ALLOWED',
+            'error': f'Method {request.method} not allowed for this endpoint',
+        }), 405
+
+    @app.errorhandler(500)
+    def internal_error(error):
+        # logger.exception captures stack trace server-side. Client only
+        # sees the standardized {success, code, error} contract — no leak.
+        logger.exception("Unhandled server error (500)")
+        if hasattr(error, 'response') and error.response:
+            return error.response
+        return jsonify({
+            'success': False,
+            'code': 'INTERNAL_ERROR',
+            'error': 'An unexpected error occurred',
+        }), 500
     
     @app.route('/health')
     def health():

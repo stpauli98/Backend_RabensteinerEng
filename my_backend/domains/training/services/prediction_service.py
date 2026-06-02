@@ -212,61 +212,100 @@ class PredictionService:
     
     def preprocess_input(
         self,
-        input_data: List[Dict[str, float]],
+        input_data,
         scalers: Optional[Dict] = None
     ) -> np.ndarray:
         """
         Transform input data using scalers.
-        
+
+        Iterates over the FEATURE axis (last axis) and applies the matching
+        per-feature scaler. Supports:
+          - 1-D input shape (n_features,)           — single sample, non-sequence
+          - 2-D input shape (N, n_features)         — batch, non-sequence
+          - 3-D input shape (N, n_timesteps, n_features) — batch, sequence
+
         Args:
-            input_data: List of dicts with feature values
-            scalers: Optional scalers dict (uses loaded if not provided)
-            
+            input_data: List of dicts, raw list/array, or a pre-built ndarray.
+            scalers: Optional scalers dict with 'input'/'output' sub-dicts.
+                     If not provided, loads via self.load_scalers().
+
         Returns:
-            Preprocessed numpy array ready for model
+            Preprocessed numpy array of the SAME shape as the input array.
+
+        Raises:
+            ValueError: For unsupported ndim (>3 or 0).
+            Errors from sklearn scalers (shape mismatches) propagate — we do NOT
+            silently swallow them, because returning unscaled values with
+            success=true is a silent-correctness bug.
         """
         if scalers is None:
             scalers = self.load_scalers()
-        
+
         input_scalers = scalers.get('input', {})
-        
-        # Convert input data to numpy array
-        # Assuming input_data is list of dicts with numeric values
-        if isinstance(input_data, list) and len(input_data) > 0:
+
+        # Convert input data to numpy array (preserve original behaviour)
+        if isinstance(input_data, np.ndarray):
+            input_array = input_data
+        elif isinstance(input_data, list) and len(input_data) > 0:
             if isinstance(input_data[0], dict):
-                # Extract values in consistent order
+                # Extract values in consistent (sorted-key) order
                 keys = sorted(input_data[0].keys())
-                input_array = np.array([[row.get(k, 0) for k in keys] for row in input_data])
+                input_array = np.array([[row.get(k, 0) for k in keys] for row in input_data], dtype=float)
             else:
-                input_array = np.array(input_data)
+                input_array = np.array(input_data, dtype=float)
         else:
-            input_array = np.array(input_data)
-        
+            input_array = np.array(input_data, dtype=float)
+
+        # Ensure float dtype so in-place assignment of scaled values works
+        if input_array.dtype != np.float64 and input_array.dtype != np.float32:
+            input_array = input_array.astype(float)
+
         logger.info(f"Input array shape: {input_array.shape}")
-        
-        # Apply scaling if scalers available
-        scaled_data = input_array.copy()
-        
-        for i in range(input_array.shape[1] if len(input_array.shape) > 1 else 1):
-            if i in input_scalers and input_scalers[i] is not None:
-                try:
-                    if len(input_array.shape) > 1:
-                        column_data = input_array[:, i].reshape(-1, 1)
-                    else:
-                        column_data = input_array.reshape(-1, 1)
-                    
-                    scaled_column = input_scalers[i].transform(column_data)
-                    
-                    if len(scaled_data.shape) > 1:
-                        scaled_data[:, i] = scaled_column.flatten()
-                    else:
-                        scaled_data = scaled_column.flatten()
-                        
-                except Exception as e:
-                    logger.warning(f"Error scaling feature {i}: {e}")
-        
-        logger.info(f"Preprocessed data shape: {scaled_data.shape}")
-        return scaled_data
+
+        ndim = input_array.ndim
+
+        if ndim == 1:
+            # Shape (n_features,) — single sample, non-sequence
+            scaled = input_array.astype(float).copy()
+            for feature_idx in range(input_array.shape[0]):
+                if feature_idx not in input_scalers or input_scalers[feature_idx] is None:
+                    continue
+                scaler = input_scalers[feature_idx]
+                value = np.array([[input_array[feature_idx]]], dtype=float)
+                scaled[feature_idx] = scaler.transform(value).flatten()[0]
+            logger.info(f"Preprocessed data shape: {scaled.shape}")
+            return scaled
+
+        if ndim == 2:
+            # Shape (N, n_features) — batch, non-sequence
+            scaled = input_array.astype(float).copy()
+            for feature_idx in range(input_array.shape[1]):
+                if feature_idx not in input_scalers or input_scalers[feature_idx] is None:
+                    continue
+                scaler = input_scalers[feature_idx]
+                column = input_array[:, feature_idx].reshape(-1, 1)
+                scaled[:, feature_idx] = scaler.transform(column).flatten()
+            logger.info(f"Preprocessed data shape: {scaled.shape}")
+            return scaled
+
+        if ndim == 3:
+            # Shape (N, n_timesteps, n_features) — batch, sequence
+            n_batches, n_timesteps, n_features = input_array.shape
+            scaled = input_array.astype(float).copy()
+            for feature_idx in range(n_features):
+                if feature_idx not in input_scalers or input_scalers[feature_idx] is None:
+                    continue
+                scaler = input_scalers[feature_idx]
+                # Flatten (N, n_timesteps) → (N*n_timesteps, 1) for the scaler, then back
+                flat = input_array[:, :, feature_idx].reshape(-1, 1)
+                scaled_flat = scaler.transform(flat)
+                scaled[:, :, feature_idx] = scaled_flat.reshape(n_batches, n_timesteps)
+            logger.info(f"Preprocessed data shape: {scaled.shape}")
+            return scaled
+
+        raise ValueError(
+            f"Unsupported input_array.ndim={ndim}; expected 1, 2, or 3"
+        )
     
     def predict_raw(self, model: Any, preprocessed_data: np.ndarray) -> np.ndarray:
         """
@@ -295,43 +334,71 @@ class PredictionService:
         self,
         predictions: np.ndarray,
         scalers: Optional[Dict] = None
-    ) -> List[float]:
+    ):
         """
         Inverse transform predictions using output scalers.
-        
+
+        Iterates over the OUTPUT-FEATURE axis (last axis) and applies the
+        matching per-output scaler. Supports:
+          - 1-D shape (N,)             → reshape to (N, 1) and unscale
+          - 2-D shape (N, n_outputs)
+          - 3-D shape (N, n_timesteps, n_outputs)
+
         Args:
-            predictions: Raw model predictions
-            scalers: Optional scalers dict (uses loaded if not provided)
-            
+            predictions: Raw model predictions as ndarray.
+            scalers: Optional scalers dict; loads via self.load_scalers() if None.
+
         Returns:
-            List of unscaled prediction values
+            For 1-D or 2-D-with-single-output: flat python list of unscaled values.
+            For 2-D multi-output or 3-D: nested python list preserving the shape.
+
+        Raises:
+            ValueError: For unsupported ndim (>3).
+            Errors from sklearn scalers (shape mismatches) propagate — we do NOT
+            silently swallow them. Silent-wrong-output (returning raw scaled
+            values with success=true) is the bug this fix targets.
         """
         if scalers is None:
             scalers = self.load_scalers()
-        
+
         output_scalers = scalers.get('output', {})
-        
-        # Ensure predictions is 2D
-        if len(predictions.shape) == 1:
+
+        # Normalize 1-D → 2-D so the single-output flat-list return path works
+        if predictions.ndim == 1:
             predictions = predictions.reshape(-1, 1)
-        
-        # Apply inverse scaling if scalers available
-        unscaled_predictions = predictions.copy()
-        
-        for i in range(predictions.shape[1]):
-            if i in output_scalers and output_scalers[i] is not None:
-                try:
-                    column_data = predictions[:, i].reshape(-1, 1)
-                    unscaled_column = output_scalers[i].inverse_transform(column_data)
-                    unscaled_predictions[:, i] = unscaled_column.flatten()
-                except Exception as e:
-                    logger.warning(f"Error inverse scaling output {i}: {e}")
-        
-        # Convert to list
-        if unscaled_predictions.shape[1] == 1:
-            return unscaled_predictions.flatten().tolist()
-        else:
-            return unscaled_predictions.tolist()
+
+        ndim = predictions.ndim
+
+        if ndim == 2:
+            # Shape (N, n_outputs) — iterate over output features (last axis)
+            unscaled = predictions.astype(float).copy()
+            for output_idx in range(predictions.shape[1]):
+                if output_idx not in output_scalers or output_scalers[output_idx] is None:
+                    continue
+                scaler = output_scalers[output_idx]
+                column = predictions[:, output_idx].reshape(-1, 1)
+                unscaled[:, output_idx] = scaler.inverse_transform(column).flatten()
+
+            if unscaled.shape[1] == 1:
+                return unscaled.flatten().tolist()
+            return unscaled.tolist()
+
+        if ndim == 3:
+            # Shape (N, n_timesteps, n_outputs) — iterate over output features
+            n_batches, n_timesteps, n_outputs = predictions.shape
+            unscaled = predictions.astype(float).copy()
+            for output_idx in range(n_outputs):
+                if output_idx not in output_scalers or output_scalers[output_idx] is None:
+                    continue
+                scaler = output_scalers[output_idx]
+                flat = predictions[:, :, output_idx].reshape(-1, 1)
+                unscaled_flat = scaler.inverse_transform(flat)
+                unscaled[:, :, output_idx] = unscaled_flat.reshape(n_batches, n_timesteps)
+            return unscaled.tolist()
+
+        raise ValueError(
+            f"Unsupported predictions.ndim={ndim}; expected 1, 2, or 3"
+        )
     
     def predict(
         self,
