@@ -107,7 +107,7 @@ def retry_database_operation(
     raise DatabaseError(f"Database operation failed: {last_error}")
 
 
-def create_or_get_session_uuid(session_id: str, user_id: str = None) -> str:
+def create_or_get_session_uuid(session_id: str, user_id: str = None, create_if_missing: bool = True) -> str:
     """Create or get UUID for a session from the session_mappings table.
 
     SECURITY: Validates session ownership when user_id is provided.
@@ -161,6 +161,13 @@ def create_or_get_session_uuid(session_id: str, user_id: str = None) -> str:
     existing_uuid = retry_database_operation(check_existing_mapping)
     if existing_uuid:
         return existing_uuid
+
+    # Read-only callers (e.g. the Socket.IO status handlers) pass
+    # create_if_missing=False: a missing session must NOT be (re)created — return
+    # None so the caller treats it as 'not found' instead of erroring or
+    # resurrecting a just-deleted session.
+    if not create_if_missing:
+        return None
 
     # Validate user_id is provided for new sessions
     if not user_id:

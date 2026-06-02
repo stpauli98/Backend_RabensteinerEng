@@ -86,7 +86,7 @@ def register_socketio_handlers(socketio):
             session_id = data.get('session_id')
             if session_id:
                 supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
+                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None, create_if_missing=False)
                 room = f"training_{session_id}"
 
                 if uuid_session_id:
@@ -214,7 +214,7 @@ def register_socketio_handlers(socketio):
             session_id = data.get('session_id')
             if session_id:
                 supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None)
+                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None, create_if_missing=False)
                 room = f"training_{session_id}"
 
                 if uuid_session_id:
