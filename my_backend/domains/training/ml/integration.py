@@ -22,7 +22,7 @@ from domains.training.services.violin import create_violin_plots_from_viz_data
 from domains.training.config import MTS, T, MDL, HOL
 from domains.training.data.transformer import create_training_arrays
 from domains.training.ml.scaler import process_and_scale_data
-from domains.training.ml.exact import run_exact_training_pipeline, prepare_data_for_training
+from domains.training.ml.exact import run_exact_training_pipeline
 
 logger = logging.getLogger(__name__)
 
