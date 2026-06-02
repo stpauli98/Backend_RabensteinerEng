@@ -149,21 +149,23 @@ def calculate_evaluation_metrics(y_true, y_pred):
             smape_values.append(abs(yp - yt) / denom)
     smape = sum(smape_values) / n * 100
 
-    # MASE - EXACT MATCH: raises exceptions (original lines 597-617)
+    # MASE - degrades to NaN (like WAPE) when undefined, instead of raising and
+    # taking down the entire metrics dict via the pipeline's broad except.
     m = 1  # Saisonalität
     n_mase = len(y_true_flat)
     mae_forecast = sum(abs(yt - yp) for yt, yp in zip(y_true_flat, y_pred_flat)) / n_mase
 
     if n_mase <= m:
-        raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
-
-    naive_errors = [abs(y_true_flat[t] - y_true_flat[t - m]) for t in range(m, n_mase)]
-    mae_naive = sum(naive_errors) / len(naive_errors)
-
-    if mae_naive == 0:
-        raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
-
-    mase = mae_forecast / mae_naive
+        # Too few points for the chosen seasonality -> MASE undefined.
+        mase = np.nan
+    else:
+        naive_errors = [abs(y_true_flat[t] - y_true_flat[t - m]) for t in range(m, n_mase)]
+        mae_naive = sum(naive_errors) / len(naive_errors)
+        if mae_naive == 0:
+            # Constant series -> naive baseline 0 -> MASE undefined.
+            mase = np.nan
+        else:
+            mase = mae_forecast / mae_naive
 
     # =========================================================================
     # _TS VERZIJE - METRIKE PO VREMENSKIM KORACIMA (ZEITSCHRITTE)
@@ -288,21 +290,20 @@ def _calculate_single_timestep_metrics(v_true, v_pred):
             smape_values.append(abs(yp - yt) / denom)
     ts_smape = float(sum(smape_values) / n_smape * 100)
 
-    # MASE - EXACT MATCH: raises exceptions (original lines 597-617)
+    # MASE - degrades to NaN (like WAPE) when undefined, instead of raising.
     m = 1  # Saisonalität
     n_mase = len(v_true)
     mae_forecast = sum(abs(yt - yp) for yt, yp in zip(v_true, v_pred)) / n_mase
 
     if n_mase <= m:
-        raise ValueError("Zu wenig Daten für gewählte Saisonalität m.")
-
-    naive_errors = [abs(v_true[t] - v_true[t - m]) for t in range(m, n_mase)]
-    mae_naive_val = sum(naive_errors) / len(naive_errors)
-
-    if mae_naive_val == 0:
-        raise ZeroDivisionError("Naive MAE ist 0 – MASE nicht definiert.")
-
-    ts_mase = float(mae_forecast / mae_naive_val)
+        ts_mase = float("nan")
+    else:
+        naive_errors = [abs(v_true[t] - v_true[t - m]) for t in range(m, n_mase)]
+        mae_naive_val = sum(naive_errors) / len(naive_errors)
+        if mae_naive_val == 0:
+            ts_mase = float("nan")
+        else:
+            ts_mase = float(mae_forecast / mae_naive_val)
 
     return {
         'mae': ts_mae,
@@ -314,6 +315,34 @@ def _calculate_single_timestep_metrics(v_true, v_pred):
         'smape': ts_smape,
         'mase': ts_mase
     }
+
+
+def inverse_scale_predictions(predictions, o_scalers):
+    """Inverse-transform scaled predictions back to original units.
+
+    predictions: (n_samples, n_timesteps, n_features_out) or (n_samples, n_timesteps).
+    o_scalers: dict {feature_index: fitted scaler}. Returns a new array (input is not
+    mutated); features without a scaler are left as-is.
+    """
+    if o_scalers is None or len(o_scalers) == 0:
+        return predictions
+
+    restored = np.copy(predictions)
+    n_samples = predictions.shape[0]
+    n_features_out = predictions.shape[-1] if predictions.ndim > 2 else 1
+
+    for i in range(n_samples):
+        for i1 in range(n_features_out):
+            if i1 in o_scalers and o_scalers[i1] is not None:
+                if predictions.ndim == 3:
+                    restored[i, :, i1] = o_scalers[i1].inverse_transform(
+                        predictions[i, :, i1].reshape(-1, 1)
+                    ).ravel()
+                elif predictions.ndim == 2:
+                    restored[i, :] = o_scalers[0].inverse_transform(
+                        predictions[i, :].reshape(-1, 1)
+                    ).ravel()
+    return restored
 
 
 def train_non_keras_model(mdl_config, trn_x, trn_y, progress_tracker=None):
@@ -579,17 +608,26 @@ def run_exact_training_pipeline(
                 x_flat_df = pd.DataFrame(x_flat, columns=feat_names)
 
                 test_predictions = mdl.predict(x_flat_df)
-                test_predictions = test_predictions.reshape(n_samples, n_timesteps, 1)
+                n_features_out = tst_y.shape[2]
+                test_predictions = test_predictions.reshape(n_samples, n_timesteps, n_features_out)
             else:
                 test_predictions = tst_y
             
             test_metrics = calculate_evaluation_metrics(tst_y, test_predictions)
-            
-            if tst_y_orig is not None:
-                original_metrics = test_metrics
+
+            # Original-scale metrics: inverse-transform predictions and compare against
+            # the unscaled ground truth so reported MAE/RMSE are in real units (e.g. kW),
+            # not normalized space. Fall back to scaled metrics if originals are missing.
+            if tst_y_orig is not None and o_scalers:
+                try:
+                    test_predictions_orig = inverse_scale_predictions(test_predictions, o_scalers)
+                    original_metrics = calculate_evaluation_metrics(tst_y_orig, test_predictions_orig)
+                except Exception as orig_err:
+                    logger.warning(f"Original-scale metrics failed, using scaled: {orig_err}")
+                    original_metrics = test_metrics
             else:
                 original_metrics = test_metrics
-            
+
             evaluation_metrics = {
                 'test_metrics_scaled': test_metrics,
                 'test_metrics_original': original_metrics,
@@ -637,7 +675,8 @@ def run_exact_training_pipeline(
                 x_flat_df = pd.DataFrame(x_flat, columns=feat_names)
 
                 val_predictions = mdl.predict(x_flat_df)
-                val_predictions = val_predictions.reshape(n_samples, n_timesteps, 1)
+                n_features_out = val_y.shape[2]
+                val_predictions = val_predictions.reshape(n_samples, n_timesteps, n_features_out)
             else:
                 val_predictions = val_y
             
@@ -663,26 +702,8 @@ def run_exact_training_pipeline(
                 # CRITICAL: Inverse scale predictions to match original scale
                 # This matches training_original.py lines 2313-2331 RE-SCALING section
                 if o_scalers is not None and len(o_scalers) > 0:
-                    test_predictions_orig = np.copy(test_predictions)
-                    n_tst_samples = test_predictions.shape[0]
-                    n_ft_o = test_predictions.shape[-1] if len(test_predictions.shape) > 2 else 1
-
-                    logger.info(f"Inverse scaling predictions: {n_tst_samples} samples, {n_ft_o} features")
-
-                    for i in range(n_tst_samples):
-                        for i1 in range(n_ft_o):
-                            if i1 in o_scalers and o_scalers[i1] is not None:
-                                if len(test_predictions.shape) == 3:
-                                    test_predictions_orig[i, :, i1] = o_scalers[i1].inverse_transform(
-                                        test_predictions[i, :, i1].reshape(-1, 1)
-                                    ).ravel()
-                                elif len(test_predictions.shape) == 2:
-                                    test_predictions_orig[i, :] = o_scalers[0].inverse_transform(
-                                        test_predictions[i, :].reshape(-1, 1)
-                                    ).ravel()
-
-                    eval_fcst = test_predictions_orig
-                    logger.info(f"Predictions inverse scaled. Original range: [{np.min(test_predictions):.4f}, {np.max(test_predictions):.4f}] -> [{np.min(eval_fcst):.2f}, {np.max(eval_fcst):.2f}]")
+                    eval_fcst = inverse_scale_predictions(test_predictions, o_scalers)
+                    logger.info(f"Predictions inverse scaled. Range: [{np.min(test_predictions):.4f}, {np.max(test_predictions):.4f}] -> [{np.min(eval_fcst):.2f}, {np.max(eval_fcst):.2f}]")
                 else:
                     eval_fcst = test_predictions
                     logger.warning("No output scalers available - using scaled predictions for evaluation")

@@ -425,12 +425,16 @@ def train_lgbmr(train_x, train_y, MDL):
     from lightgbm import LGBMRegressor
 
     n_samples, n_timesteps, n_features_in = train_x.shape
+    n_features_out = train_y.shape[2]
 
     # Flatten 3D input to 2D: (n_samples, n_timesteps * n_features_in)
     x_flat = train_x.reshape(n_samples, -1)
 
-    # Flatten 3D output to 2D: (n_samples, n_timesteps)
-    y_flat = train_y.reshape(n_samples, n_timesteps)
+    # Flatten 3D output to 2D: (n_samples, n_timesteps * n_features_out).
+    # Reshaping to (n_samples, n_timesteps) only works for a single output feature;
+    # MultiOutputRegressor handles the full flattened width and predict() returns it
+    # in the same C-order, so exact.py reshapes back to (n, n_timesteps, n_features_out).
+    y_flat = train_y.reshape(n_samples, n_timesteps * n_features_out)
 
     # Create fixed feature names to avoid LightGBM warning
     feat_names = [f"x_{k}" for k in range(x_flat.shape[1])]
