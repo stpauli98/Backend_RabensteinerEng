@@ -793,6 +793,69 @@ def extract_windows_fully_vectorized(
     return result
 
 
+def extract_avg_windows_matching_original(
+    interpolated_df: pd.DataFrame,
+    utc_refs: list,
+    th_strt_hours: float,
+    th_end_hours: float,
+    n_points: int,
+) -> np.ndarray:
+    """Replicate create_training_arrays_original's avg=True path EXACTLY.
+
+    The original (lines 149-158 / 240-249) averages the RAW data points whose
+    timestamp falls in the window [utc_ref+th_strt, utc_ref+th_end]:
+        idx1 = utc_idx_post(raw, th_strt)   # first index >= th_strt, else None
+        idx2 = utc_idx_pre(raw, th_end)     # last index <= th_end,  else None
+        val  = raw.iloc[idx1:idx2, 1].mean()   # half-open, idx2 EXCLUDED; skipna
+    then fills the window with ``[val] * N``.
+
+    This matches that statistic point-for-point — NOT the mean of N interpolated
+    points the optimized path used before (which diverged for non-linear data).
+    ``interpolated_df`` holds the raw points (preprocess_and_interpolate_file does
+    no resampling), so its int64-ns index + values are the same data the original
+    reads. ``avg=True`` is not currently reachable through any training caller
+    (all force avg=False), so a per-utc_ref loop is fine — parity, not speed.
+
+    Returns (n_samples, n_points); each row is the window mean tiled n_points
+    times, or all-NaN when the slice is empty/all-NaN (→ the sample is dropped by
+    the downstream NaN mask, matching the original's error/break).
+    """
+    df_index_ns = interpolated_df.index.astype(np.int64).values
+    if len(interpolated_df.columns) > 0:
+        df_values = interpolated_df.iloc[:, 0].values.astype(np.float64)
+    else:
+        df_values = interpolated_df.values.flatten().astype(np.float64)
+    n_data = len(df_index_ns)
+
+    n_samples = len(utc_refs)
+    result = np.full((n_samples, n_points), np.nan)
+
+    th_strt_ns = np.int64(th_strt_hours * 3600 * 1e9)
+    th_end_ns = np.int64(th_end_hours * 3600 * 1e9)
+
+    for i, utc_ref in enumerate(utc_refs):
+        ref_ns = pd.Timestamp(utc_ref).value
+        window_start_ns = ref_ns + th_strt_ns
+        window_end_ns = ref_ns + th_end_ns
+
+        # utc_idx_post(window_start): first index >= start (side='left'), else None
+        post = int(np.searchsorted(df_index_ns, window_start_ns, side='left'))
+        idx1 = post if post < n_data else None
+        # utc_idx_pre(window_end): last index <= end (side='right' minus 1), else None
+        pre = int(np.searchsorted(df_index_ns, window_end_ns, side='right'))
+        idx2 = (pre - 1) if pre > 0 else None
+
+        # Python-slice semantics (None -> open end) replicate iloc[idx1:idx2],
+        # which is half-open and EXCLUDES idx2 exactly as the original does.
+        sliced = df_values[idx1:idx2]
+        valid = sliced[~np.isnan(sliced)]   # pandas .mean() skips NaN
+        if valid.size > 0:
+            result[i, :] = valid.mean()
+        # else: leave NaN row -> sample dropped downstream (original error/break)
+
+    return result
+
+
 def compare_extraction_methods(
     interpolated_df: pd.DataFrame,
     utc_refs: list,
@@ -1473,12 +1536,9 @@ def create_training_arrays_optimized(
         delt = float(i_dat_inf.loc[key, "delt_transf"])
 
         if i_dat_inf.loc[key, "avg"] == True:
-            # Average mode - compute mean over window (simplified)
-            windows = extract_windows_fully_vectorized(interp_df, utc_refs, th_strt, th_end, mts.I_N, delt, debug)
-            # For avg=True, we'd take mean, but original fills with same value
-            # This matches original behavior where avg creates [val] * mts.I_N
-            mean_vals = np.nanmean(windows, axis=1, keepdims=True)
-            windows = np.tile(mean_vals, (1, mts.I_N))
+            # Average mode: mean of RAW points in the window, matching
+            # create_training_arrays_original exactly (not mean-of-interpolated).
+            windows = extract_avg_windows_matching_original(interp_df, utc_refs, th_strt, th_end, mts.I_N)
         else:
             windows = extract_windows_fully_vectorized(interp_df, utc_refs, th_strt, th_end, mts.I_N, delt, debug)
 
@@ -1524,9 +1584,9 @@ def create_training_arrays_optimized(
         delt = float(o_dat_inf.loc[key, "delt_transf"])
 
         if o_dat_inf.loc[key, "avg"] == True:
-            windows = extract_windows_fully_vectorized(interp_df, utc_refs, th_strt, th_end, mts.O_N, delt, debug)
-            mean_vals = np.nanmean(windows, axis=1, keepdims=True)
-            windows = np.tile(mean_vals, (1, mts.O_N))
+            # Average mode: mean of RAW points in the window, matching
+            # create_training_arrays_original exactly (not mean-of-interpolated).
+            windows = extract_avg_windows_matching_original(interp_df, utc_refs, th_strt, th_end, mts.O_N)
         else:
             windows = extract_windows_fully_vectorized(interp_df, utc_refs, th_strt, th_end, mts.O_N, delt, debug)
 
