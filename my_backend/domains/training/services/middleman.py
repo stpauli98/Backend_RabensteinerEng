@@ -35,6 +35,16 @@ def safe_float_to_int(value: Any, default: int) -> int:
     except (ValueError, TypeError):
         return default
 
+
+def avg_from_metadata(metadata: Dict) -> bool:
+    """Read the per-file 'average over horizon' flag from file metadata.
+
+    Mirrors loader.py: the flag is stored as
+    'mittelwertbildung_uber_den_zeithorizont' = 'ja' | 'nein'. Honors the UI
+    toggle instead of forcing False. Defaults to False (no averaging).
+    """
+    return str(metadata.get('mittelwertbildung_uber_den_zeithorizont', 'nein')).strip().lower() == 'ja'
+
 class ModernMiddlemanRunner:
     """
     Modern middleman runner that uses run_exact_training_pipeline
@@ -265,7 +275,7 @@ class ModernMiddlemanRunner:
                 i_dat_inf.loc[key, "th_strt"] = th_start
                 i_dat_inf.loc[key, "th_end"] = th_end
                 i_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
-                i_dat_inf.loc[key, "avg"] = False
+                i_dat_inf.loc[key, "avg"] = avg_from_metadata(metadata)
                 i_dat_inf.loc[key, "scal"] = True
                 i_dat_inf.loc[key, "scal_max"] = 1
                 i_dat_inf.loc[key, "scal_min"] = 0
@@ -280,7 +290,7 @@ class ModernMiddlemanRunner:
                 o_dat_inf.loc[key, "th_strt"] = th_start
                 o_dat_inf.loc[key, "th_end"] = th_end
                 o_dat_inf.loc[key, "meth"] = "Lineare Interpolation"
-                o_dat_inf.loc[key, "avg"] = False
+                o_dat_inf.loc[key, "avg"] = avg_from_metadata(metadata)
                 o_dat_inf.loc[key, "scal"] = True
                 o_dat_inf.loc[key, "scal_max"] = 1
                 o_dat_inf.loc[key, "scal_min"] = 0
