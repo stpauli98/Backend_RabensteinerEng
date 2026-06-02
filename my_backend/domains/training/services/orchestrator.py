@@ -25,6 +25,8 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, Optional, Any
 
+from domains.training.services.training_events import emit_training_error
+
 logger = logging.getLogger(__name__)
 
 # Debug flag - set to True to trace training progress events
@@ -590,20 +592,10 @@ def run_model_training_async(
             logger.error(f"Training failed: {result.get('error')}")
             if progress_tracker:
                 progress_tracker.error(result.get('error', 'Unknown error'))
-            if socketio_instance:
-                socketio_instance.emit('training_error', {
-                    'session_id': session_id,
-                    'status': 'failed',
-                    'error': result.get('error', 'Unknown error')
-                }, room=session_id)
+            emit_training_error(socketio_instance, session_id, result.get('error', 'Unknown error'))
 
     except Exception as e:
         logger.error(f"Async training error: {str(e)}")
         if progress_tracker:
             progress_tracker.error(str(e))
-        if socketio_instance:
-            socketio_instance.emit('training_error', {
-                'session_id': session_id,
-                'status': 'failed',
-                'error': str(e)
-            }, room=session_id)
+        emit_training_error(socketio_instance, session_id, str(e))

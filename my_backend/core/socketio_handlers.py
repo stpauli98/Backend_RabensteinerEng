@@ -2,6 +2,8 @@
 import logging
 from flask_socketio import join_room, leave_room, emit
 from shared.database.operations import get_supabase_client, create_or_get_session_uuid
+from domains.training.services.training_events import build_active_training_progress_event
+from domains.training.services.training_tracker import STALE_THRESHOLD_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +111,7 @@ def register_socketio_handlers(socketio):
                                     updated_at = parse_iso_datetime(updated_at_str)
                                     now = datetime.now(timezone.utc)
                                     age_seconds = (now - updated_at).total_seconds()
-                                    is_fresh = age_seconds < 120  # 2 minutes
+                                    is_fresh = age_seconds < STALE_THRESHOLD_SECONDS  # match tracker cleanup window
                                     logger.info(f"[WORKFLOW_DEBUG] request_training_status: Training age={age_seconds:.1f}s, is_fresh={is_fresh}")
                                 except Exception as parse_error:
                                     logger.warning(f"[WORKFLOW_DEBUG] Could not parse updated_at: {parse_error}")
@@ -133,18 +135,9 @@ def register_socketio_handlers(socketio):
                                     model_progress = progress.get('model_progress', {}) or {}
                                     logger.info(f"[WORKFLOW_DEBUG] request_training_status: Active MODEL training found, progress={progress.get('overall_progress')}%")
 
-                                    emit('training_progress', {
-                                        'session_id': session_id,
-                                        'status': 'training_starting',
-                                        'phase': model_progress.get('phase', 'training_execution'),
-                                        'progress_percent': progress.get('overall_progress', 0),
-                                        'message': progress.get('current_step', 'Training in progress...'),
-                                        'epoch': model_progress.get('epoch', 0),
-                                        'total_epochs': model_progress.get('total_epochs', 100),
-                                        'loss': model_progress.get('loss', 0),
-                                        'val_loss': model_progress.get('val_loss', 0),
-                                        'model_name': model_progress.get('model_name', 'Dense')
-                                    }, room=room)
+                                    emit('training_progress',
+                                         build_active_training_progress_event(progress, session_id),
+                                         room=room)
                                     return
                             else:
                                 logger.info(f"[WORKFLOW_DEBUG] request_training_status: Training found but stale (updated_at={updated_at_str})")
