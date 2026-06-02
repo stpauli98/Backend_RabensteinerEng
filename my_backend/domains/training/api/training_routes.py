@@ -150,6 +150,46 @@ def generate_datasets(session_id):
         )
 
 
+# Adversarial-hardening: bound model-config so a single request cannot trigger a
+# multi-GB allocation. A Dense layer with N=999999999 makes Keras attempt a ~192GB
+# allocation that OOM-kills the (single) gunicorn worker → full outage / DoS.
+ALLOWED_MODEL_MODES = {
+    'Dense', 'CNN', 'LSTM', 'AR LSTM', 'SVR_dir', 'SVR_MIMO', 'LGBMR', 'LIN', 'Linear',
+}
+_MODEL_PARAM_BOUNDS = {
+    'LAY': (1, 16),              # number of layers
+    'N': (1, 4096),             # neurons / filters per layer
+    'EP': (1, 2000),            # epochs
+    'K': (1, 4096),             # CNN kernel count
+    'C': (0, 1_000_000),        # SVR C
+    'EPSILON': (0, 1_000_000),  # SVR epsilon
+}
+
+
+def validate_model_config(model_config):
+    """Return an error string if the model config is out of bounds, else None.
+
+    Rejects unknown model types and out-of-range numeric params BEFORE a training
+    thread is spawned, so e.g. N=999999999 can no longer reach Keras and OOM-kill
+    the worker. Numeric values may arrive as strings from the UI; they are coerced
+    for the range check only (the original values are passed through unchanged).
+    """
+    mode = model_config.get('MODE')
+    if mode not in ALLOWED_MODEL_MODES:
+        return f'Unknown model type: {mode!r}'
+    for key, (lo, hi) in _MODEL_PARAM_BOUNDS.items():
+        value = model_config.get(key)
+        if value is None or value == '':
+            continue
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return f'{key} must be a number'
+        if num < lo or num > hi:
+            return f'{key} must be between {lo} and {hi}'
+    return None
+
+
 @bp.route('/train-models/<session_id>', methods=['POST'])
 @limiter.limit(training_limit_string)
 @require_auth
@@ -202,8 +242,10 @@ def train_models(session_id):
         except ValueError:
             pass  # Zadrži originalni session_id ako nije UUID
 
-        model_parameters = data.get('model_parameters', {})
-        training_split = data.get('training_split', {})
+        model_parameters = data.get('model_parameters') or {}
+        training_split = data.get('training_split') or {}
+        if not isinstance(model_parameters, dict) or not isinstance(training_split, dict):
+            return _err('INVALID_MODEL_PARAMS', 'model_parameters and training_split must be objects', 400)
 
         socketio_instance = current_app.extensions.get('socketio')
 
@@ -223,6 +265,10 @@ def train_models(session_id):
             'EPSILON': model_parameters.get('EPSILON'),
             'random_dat': not training_split.get('shuffle', True)
         }
+
+        config_error = validate_model_config(model_config)
+        if config_error:
+            return _err('INVALID_MODEL_PARAMS', config_error, 400)
 
         increment_training_count(g.user_id)
         logger.info(f"Tracked training run for user {g.user_id}")

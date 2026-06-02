@@ -36,6 +36,24 @@ logger = logging.getLogger(__name__)
 # Debug flag - set to True to trace training pipeline phases
 DEBUG_EXACT_PIPELINE = True
 
+# Non-Keras models flatten (samples x timesteps) into the regression row axis, so
+# they require input_timesteps == output_timesteps. Unequal steps previously caused a
+# cryptic sklearn "inconsistent numbers of samples" error deep in fit(); guard early.
+NON_KERAS_MODES = ("SVR_dir", "SVR_MIMO", "LIN", "LGBMR")
+
+
+def non_keras_timestep_error(mode, input_timesteps, output_timesteps):
+    """Return a clear error string if a non-Keras model is used with unequal
+    input/output time steps, else None. Keras models (Dense/CNN/LSTM/AR LSTM)
+    support differing horizons and are unaffected."""
+    if mode in NON_KERAS_MODES and input_timesteps != output_timesteps:
+        return (
+            f"{mode} models require an equal number of input and output time steps "
+            f"(got input={input_timesteps}, output={output_timesteps}). "
+            f"Use a Keras model (Dense, CNN, or LSTM) for a different forecast horizon."
+        )
+    return None
+
 
 def _build_input_feature_names(i_dat_inf, i_dat) -> list:
     """
@@ -488,6 +506,10 @@ def run_exact_training_pipeline(
     
     mdl = None
     
+    _ts_error = non_keras_timestep_error(mdl_config.MODE, trn_x.shape[1], trn_y.shape[1])
+    if _ts_error:
+        raise ValueError(_ts_error)
+
     if mdl_config.MODE == "Dense":
         mdl = train_dense(trn_x, trn_y, val_x, val_y, mdl_config, socketio_callback=socketio_callback)
         

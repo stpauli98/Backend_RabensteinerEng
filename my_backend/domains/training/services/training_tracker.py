@@ -298,7 +298,9 @@ class TrainingProgressTracker:
                 'session_id': str(self.uuid_session_id),
                 'status': db_status,
                 'overall_progress': progress,
-                'current_step': f'Model training: {step}',
+                # current_step is varchar(100): truncate so a long error message
+                # (e.g. a full FK-violation string) can't fail the write with 22001.
+                'current_step': f'Model training: {step}'[:100],
                 'total_steps': self.total_epochs,
                 'completed_steps': self._current_epoch,
                 'model_progress': model_progress,
