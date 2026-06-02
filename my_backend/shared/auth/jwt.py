@@ -78,28 +78,53 @@ def require_auth(f):
 
         if not auth_header:
             logger.warning("Missing Authorization header")
-            return jsonify({'error': 'Missing authorization header'}), 401
+            # W11-ADV-3: standardize 401 to the {success, code, error} contract.
+            return jsonify({
+                'success': False,
+                'code': 'MISSING_AUTHORIZATION',
+                'error': 'Authentication required',
+            }), 401
 
         try:
             token_type, token = auth_header.split(' ', 1)
             if token_type.lower() != 'bearer':
                 logger.warning(f"Invalid token type: {token_type}")
-                return jsonify({'error': 'Invalid token type. Expected Bearer token'}), 401
+                return jsonify({
+                    'success': False,
+                    'code': 'INVALID_TOKEN',
+                    'error': 'Invalid token type. Expected Bearer token',
+                }), 401
         except ValueError:
             logger.warning("Malformed Authorization header")
-            return jsonify({'error': 'Malformed authorization header'}), 401
+            return jsonify({
+                'success': False,
+                'code': 'INVALID_TOKEN',
+                'error': 'Malformed authorization header',
+            }), 401
 
         try:
             claims = _verify_jwt_local(token)
         except RuntimeError as e:
             # Misconfiguration — surface clearly for ops, generic for client
             logger.error("auth misconfiguration: %s", e)
-            return jsonify({'error': 'Authentication misconfigured'}), 500
+            return jsonify({
+                'success': False,
+                'code': 'AUTH_MISCONFIGURED',
+                'error': 'Authentication misconfigured',
+            }), 500
         except ExpiredSignatureError:
-            return jsonify({'error': 'Token expired'}), 401
+            return jsonify({
+                'success': False,
+                'code': 'EXPIRED_TOKEN',
+                'error': 'Authentication token has expired',
+            }), 401
         except (InvalidTokenError, PyJWTError) as e:
             logger.warning("jwt verify failed: %s", e)
-            return jsonify({'error': 'Authentication failed'}), 401
+            return jsonify({
+                'success': False,
+                'code': 'INVALID_TOKEN',
+                'error': 'Authentication failed',
+            }), 401
 
         g.user_id = claims['sub']
         g.user_email = claims.get('email')

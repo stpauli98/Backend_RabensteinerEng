@@ -1,23 +1,32 @@
 """
 Model routes for training API.
 
-Contains 6 endpoints for model storage and download:
+Contains 7 endpoints for model storage, download and inference:
 - scalers/<session_id> GET
 - scalers/<session_id>/download GET
 - scale-data/<session_id> POST
 - save-model/<session_id> POST
 - list-models-database/<session_id> GET
 - download-model-h5/<session_id> GET
+- predict/<session_id> POST
 """
 
 import io
+import os
 from flask import Blueprint, send_file
 
 from .common import (
     datetime, request, jsonify, g, logging,
     require_auth, require_subscription,
+    create_or_get_session_uuid,
     get_logger
 )
+
+from core.rate_limits import limiter, training_limit_string
+from shared.responses.errors import error_response as _err
+from shared.storage.errors import is_storage_not_found
+from shared.validators.uuid import validate_training_session_format
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
 
 from domains.training.ml.scaler import (
     get_session_scalers, create_scaler_download_package, scale_new_data
@@ -26,14 +35,69 @@ from domains.training.ml.models import (
     save_models_to_storage, get_models_list, download_model_file
 )
 
+
+def _resolve_and_assert_ownership(session_id):
+    """Resolve session_id to UUID and verify ownership.
+
+    Returns (uuid_session_id, None) on success or (None, error_response) on
+    failure. Maps any ownership/lookup failure to 404 SESSION_NOT_FOUND per
+    W11-ADV-5 convention (don't leak session existence to attackers).
+    """
+    try:
+        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        assert_session_ownership(uuid_session_id)
+        return uuid_session_id, None
+    except SessionOwnershipError:
+        return None, _err('SESSION_NOT_FOUND', 'Session not found', 404)
+    except (ValueError, PermissionError):
+        return None, _err('SESSION_NOT_FOUND', 'Session not found', 404)
+
+
+def _validate_model_basename(model_filename):
+    """Validate that ``model_filename`` is a basename only (no path injection).
+
+    Returns None if valid, or an error response if the value is missing or
+    contains traversal characters.
+    """
+    if not model_filename:
+        return _err(
+            'INVALID_MODEL_FILENAME',
+            'Model filename must be a basename only',
+            400,
+        )
+    if os.path.basename(model_filename) != model_filename:
+        return _err(
+            'INVALID_MODEL_FILENAME',
+            'Model filename must be a basename only',
+            400,
+        )
+    if model_filename.startswith('.') or '..' in model_filename or '/' in model_filename or '\\' in model_filename:
+        return _err(
+            'INVALID_MODEL_FILENAME',
+            'Model filename must be a basename only',
+            400,
+        )
+    return None
+
 bp = Blueprint('training_models', __name__)
 logger = get_logger(__name__)
 
 
 @bp.route('/scalers/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_scalers(session_id):
     """Retrieve saved scalers from database for a specific session."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         scalers_data = get_session_scalers(session_id)
 
@@ -43,24 +107,34 @@ def get_scalers(session_id):
             'scalers': scalers_data
         })
 
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 404
-    except Exception as e:
-        logger.error(f"Error retrieving scalers for session {session_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': 'Failed to retrieve scalers from database'
-        }), 500
+    except ValueError:
+        logger.exception("Scalers not found for session")
+        return _err('SCALER_NOT_FOUND', 'Scalers not found for this session', 404)
+    except Exception:
+        logger.exception("Failed to retrieve scalers from database")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to retrieve scalers from database',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/scalers/<session_id>/download', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def download_scalers_as_save_files(session_id):
     """Download scalers as .save files."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         zip_file_path = create_scaler_download_package(session_id)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -72,26 +146,52 @@ def download_scalers_as_save_files(session_id):
             mimetype='application/zip'
         )
 
-    except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 404
+    except (ValueError, FileNotFoundError):
+        logger.warning("Scaler download: artifacts not found for session", exc_info=True)
+        return _err('SCALER_NOT_FOUND', 'Scalers not found for this session', 404)
     except Exception as e:
-        logger.error(f"Error creating scaler download for session {session_id}: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        # Mirror T4 polish on /download-arrays: distinguish 404 (storage
+        # object missing) from real 500 (Supabase outage, network failure).
+        if is_storage_not_found(e):
+            logger.warning("Scaler download: storage reports not found", exc_info=True)
+            return _err('SCALER_NOT_FOUND', 'Scalers not found for this session', 404)
+        logger.exception("Scaler download unexpected failure")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to create scaler download package',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/scale-data/<session_id>', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 def scale_input_data(session_id):
     """Scale input data using saved scalers."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
-        data = request.json
+        data = request.get_json(silent=True)
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return _err('MISSING_BODY', 'Request body is required', 400)
 
         input_data = data.get('input_data')
         if input_data is None:
-            return jsonify({'success': False, 'error': 'input_data field is required'}), 400
+            return _err(
+                'MISSING_PREDICTION_INPUT',
+                'input_data field is required',
+                400,
+            )
 
         save_scaled = data.get('save_scaled', False)
 
@@ -105,25 +205,35 @@ def scale_input_data(session_id):
             'metadata': result['metadata']
         })
 
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 404
-    except Exception as e:
-        logger.error(f"Error scaling data for session {session_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': 'Failed to scale input data'
-        }), 500
+    except ValueError:
+        logger.exception("Scale-data: scalers not found for session")
+        return _err('SCALER_NOT_FOUND', 'Scalers not found for this session', 404)
+    except Exception:
+        logger.exception("Failed to scale input data")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to scale input data',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/save-model/<session_id>', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 def save_model(session_id):
     """Save trained models to Supabase Storage."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         result = save_models_to_storage(session_id)
 
@@ -143,52 +253,47 @@ def save_model(session_id):
 
     except ValueError as e:
         error_msg = str(e)
-        if 'Session' in error_msg and 'not found' in error_msg:
-            return jsonify({
-                'success': False,
-                'error': error_msg
-            }), 404
-        elif 'No training results' in error_msg:
-            return jsonify({
-                'success': False,
-                'error': error_msg,
-                'message': 'Train a model first before attempting to save.'
-            }), 404
-        elif 'No trained models' in error_msg:
-            return jsonify({
-                'success': False,
-                'error': error_msg,
-                'message': 'Training results exist but no models were saved.'
-            }), 404
-        else:
-            return jsonify({
-                'success': False,
-                'error': error_msg
-            }), 400
+        # Classify ValueErrors raised by save_models_to_storage. We do NOT
+        # echo error_msg back to the caller — it may contain DB / storage
+        # internals. We only use it to pick the right error code.
+        if ('Session' in error_msg and 'not found' in error_msg) or \
+           'No training results' in error_msg or \
+           'No trained models' in error_msg:
+            logger.warning("Save model: prerequisite missing", exc_info=True)
+            return _err(
+                'MODEL_NOT_FOUND',
+                'No trained models available to save for this session',
+                404,
+                suggestion='Train a model first before attempting to save.',
+            )
+        logger.warning("Save model: invalid request state", exc_info=True)
+        return _err('BAD_REQUEST', 'Unable to save models for this session', 400)
 
-    except Exception as e:
-        logger.error(f"Error saving models: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-
-        if 'All model uploads failed' in str(e):
-            return jsonify({
-                'success': False,
-                'error': str(e),
-                'failed_models': []
-            }), 500
-
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': 'Failed to save models to storage'
-        }), 500
+    except Exception:
+        logger.exception("Failed to save models to storage")
+        return _err(
+            'MODEL_SAVE_ERROR',
+            'Failed to save models to storage',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/list-models-database/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def list_models_database(session_id):
     """List all trained models stored in Supabase Storage for a session."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         models = get_models_list(session_id, user_id=g.user_id)
 
@@ -201,29 +306,44 @@ def list_models_database(session_id):
             'session_id': session_id
         })
 
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 404
+    except ValueError:
+        logger.warning("List models: no models found for session", exc_info=True)
+        return _err('MODEL_NOT_FOUND', 'No models found for this session', 404)
 
-    except Exception as e:
-        logger.error(f"Error listing models from Storage: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': 'Failed to list models from Storage'
-        }), 500
+    except Exception:
+        logger.exception("Failed to list models from storage")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to list models from storage',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/download-model-h5/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def download_model_h5(session_id):
     """Download a trained model file from Supabase Storage."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
         filename = request.args.get('filename')
+        # FIX-1: sanitize filename to reject path traversal (only when provided).
+        # download_model_file treats None/empty as "pick default", so we only
+        # validate non-empty caller-supplied values.
+        if filename:
+            invalid = _validate_model_basename(filename)
+            if invalid:
+                return invalid
         file_data, file_name = download_model_file(session_id, filename)
         file_obj = io.BytesIO(file_data)
 
@@ -247,24 +367,27 @@ def download_model_h5(session_id):
 
         return response
 
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 404
+    except (ValueError, FileNotFoundError):
+        logger.warning("Download model: artifact not found", exc_info=True)
+        return _err('MODEL_NOT_FOUND', 'Model file not found for this session', 404)
 
     except Exception as e:
-        logger.error(f"Error downloading model: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': 'Failed to download model from Storage'
-        }), 500
+        # Mirror T4 polish on /download-arrays: distinguish 404 (storage
+        # object missing) from real 500 (Supabase outage, network failure).
+        if is_storage_not_found(e):
+            logger.warning("Download model: storage reports not found", exc_info=True)
+            return _err('MODEL_NOT_FOUND', 'Model file not found for this session', 404)
+        logger.exception("Download model unexpected failure")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to download model from storage',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/predict/<session_id>', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 def predict_with_model(session_id):
@@ -286,21 +409,48 @@ def predict_with_model(session_id):
         "input_count": 2
     }
     """
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    # FIX-1: enforce session ownership before any data access.
+    _, ownership_err = _resolve_and_assert_ownership(session_id)
+    if ownership_err:
+        return ownership_err
+
     try:
-        data = request.json
+        data = request.get_json(silent=True)
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return _err('MISSING_BODY', 'Request body is required', 400)
 
         model_filename = data.get('model_filename')
         if not model_filename:
-            return jsonify({'success': False, 'error': 'model_filename is required'}), 400
+            return _err(
+                'MISSING_PREDICTION_INPUT',
+                'model_filename is required',
+                400,
+            )
+
+        # FIX-1: sanitize model_filename to reject path traversal.
+        invalid = _validate_model_basename(model_filename)
+        if invalid:
+            return invalid
 
         input_data = data.get('input_data')
         if not input_data:
-            return jsonify({'success': False, 'error': 'input_data is required'}), 400
+            return _err(
+                'MISSING_PREDICTION_INPUT',
+                'input_data is required',
+                400,
+            )
 
         if not isinstance(input_data, list):
-            return jsonify({'success': False, 'error': 'input_data must be a list'}), 400
+            return _err(
+                'MISSING_PREDICTION_INPUT',
+                'input_data must be a list',
+                400,
+            )
 
         # Get user_id from auth context
         user_id = g.user_id if hasattr(g, 'user_id') else 'anonymous'
@@ -327,33 +477,23 @@ def predict_with_model(session_id):
             'scaling_applied': result['scaling_applied']
         })
 
-    except FileNotFoundError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'code': 'MODEL_NOT_FOUND'
-        }), 404
+    except FileNotFoundError:
+        logger.warning("Predict: model artifact not found", exc_info=True)
+        return _err('MODEL_NOT_FOUND', 'Model file not found for this session', 404)
 
     except ValueError as e:
         error_msg = str(e)
         if 'No training results' in error_msg or 'No scalers' in error_msg:
-            return jsonify({
-                'success': False,
-                'error': error_msg,
-                'code': 'SCALERS_NOT_FOUND'
-            }), 404
-        return jsonify({
-            'success': False,
-            'error': error_msg,
-            'code': 'VALIDATION_ERROR'
-        }), 400
+            logger.warning("Predict: scalers not found", exc_info=True)
+            return _err('SCALER_NOT_FOUND', 'Scalers not found for this session', 404)
+        logger.warning("Predict: validation error", exc_info=True)
+        return _err('BAD_REQUEST', 'Invalid prediction request', 400)
 
-    except Exception as e:
-        logger.error(f"Error making prediction: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': 'Failed to make prediction'
-        }), 500
+    except Exception:
+        logger.exception("Failed to make prediction")
+        return _err(
+            'PREDICTION_ERROR',
+            'Failed to make prediction',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )

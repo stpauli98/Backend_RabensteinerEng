@@ -25,6 +25,8 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, Optional, Any
 
+from domains.training.services.training_events import emit_training_error
+
 logger = logging.getLogger(__name__)
 
 # Debug flag - set to True to trace training progress events
@@ -414,10 +416,34 @@ def save_training_results(
         logger.info(f"🤖 Auto-saving trained models to storage for session {uuid_session_id}...")
         models_result = save_models_to_storage(session_id, user_id=None)
 
-        logger.info(f"✅ Auto-saved {models_result['total_uploaded']} model(s) to trained-models bucket")
+        # Split the count: model artifacts vs scaler artifacts.
+        # Pre-fix this log said "Auto-saved N model(s)" while counting scalers —
+        # masking that Linear/SVR/LGBMR users got no model file at all.
+        uploaded_models_list = models_result.get('uploaded_models', [])
+        scaler_count = sum(
+            1 for m in uploaded_models_list
+            if m.get('model_type', '').upper() in ('SCALER_DICTIONARY', 'SCALERDICTIONARY')
+        )
+        model_count = models_result['total_uploaded'] - scaler_count
+
+        logger.info(
+            f"✅ Auto-saved {model_count} model artifact(s) and {scaler_count} scaler artifact(s) "
+            f"to trained-models bucket for session {uuid_session_id}"
+        )
+
+        # Explicit WARNING if a model was expected but none was serialized.
+        # This catches future regressions where extract_serialized_models fails
+        # to recognize a new estimator type.
+        if model_count == 0:
+            mod_hint = model_config.get('MODE', 'unknown') if isinstance(model_config, dict) else 'unknown'
+            logger.warning(
+                f"⚠️ No model artifacts saved for session {session_id} (MOD={mod_hint}). "
+                f"Scalers OK; trained model object was not recognized for serialization. "
+                f"Users will be unable to download or use the trained model."
+            )
 
         # Progress: Models uploaded
-        emit_post_training_progress(socketio_instance, session_id, 'models_uploaded', 95, f"Uploaded {models_result['total_uploaded']} model(s)")
+        emit_post_training_progress(socketio_instance, session_id, 'models_uploaded', 95, f"Uploaded {model_count} model(s)")
 
         if models_result['failed_models']:
             logger.warning(f"⚠️ {models_result['total_failed']} model(s) failed to save: {models_result['failed_models']}")
@@ -590,20 +616,10 @@ def run_model_training_async(
             logger.error(f"Training failed: {result.get('error')}")
             if progress_tracker:
                 progress_tracker.error(result.get('error', 'Unknown error'))
-            if socketio_instance:
-                socketio_instance.emit('training_error', {
-                    'session_id': session_id,
-                    'status': 'failed',
-                    'error': result.get('error', 'Unknown error')
-                }, room=session_id)
+            emit_training_error(socketio_instance, session_id, result.get('error', 'Unknown error'))
 
     except Exception as e:
         logger.error(f"Async training error: {str(e)}")
         if progress_tracker:
             progress_tracker.error(str(e))
-        if socketio_instance:
-            socketio_instance.emit('training_error', {
-                'session_id': session_id,
-                'status': 'failed',
-                'error': str(e)
-            }, room=session_id)
+        emit_training_error(socketio_instance, session_id, str(e))

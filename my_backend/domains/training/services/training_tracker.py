@@ -268,9 +268,19 @@ class TrainingProgressTracker:
         try:
             supabase = get_supabase_client(use_service_role=True)
 
-            # Map status to database status
-            # NOTE: Database check constraint only allows: 'running', 'completed', 'error'
-            db_status = 'running' if status == 'processing' else status
+            # Map status to database status.
+            # FIX-4 (Bug 3): the training_progress.status CHECK constraint accepts
+            # only ('idle', 'running', 'completed', 'failed', 'abandoned'). The
+            # tracker historically emitted 'error' (e.g. from self.error()), which
+            # triggered 23514 constraint violations on every failure path and
+            # silently lost error state. Map 'processing' → 'running' (live work
+            # in progress) and 'error' → 'failed' (canonical DB name).
+            if status == 'processing':
+                db_status = 'running'
+            elif status == 'error':
+                db_status = 'failed'
+            else:
+                db_status = status
 
             # Build model_progress data for restoration
             model_progress = {

@@ -316,6 +316,34 @@ def _calculate_single_timestep_metrics(v_true, v_pred):
     }
 
 
+def train_non_keras_model(mdl_config, trn_x, trn_y, progress_tracker=None):
+    """Train a non-Keras model (SVR/LIN/LGBMR), emitting coarse progress.
+
+    These models fit in a single synchronous call with no epoch callback, so we
+    emit a 'training' marker before the fit (the bar would otherwise sit at 0%
+    until the 50% post-training phase). The heartbeat thread (started by the
+    tracker's first emit) keeps the training_progress row fresh during the fit.
+    """
+    if progress_tracker is not None:
+        progress_tracker.emit(35, f"Training {mdl_config.MODE} model...", "processing")
+
+    mode = mdl_config.MODE
+    if mode == "SVR_dir":
+        mdl = train_svr_dir(trn_x, trn_y, mdl_config)
+    elif mode == "SVR_MIMO":
+        mdl = train_svr_mimo(trn_x, trn_y, mdl_config)
+    elif mode == "LIN":
+        mdl = train_linear_model(trn_x, trn_y)
+    elif mode == "LGBMR":
+        mdl = train_lgbmr(trn_x, trn_y, mdl_config)
+    else:
+        raise ValueError(f"Unknown non-Keras model mode: {mode}")
+
+    if progress_tracker is not None:
+        progress_tracker.emit(45, f"{mdl_config.MODE} model trained", "processing")
+    return mdl
+
+
 def run_exact_training_pipeline(
     i_dat: Dict[str, pd.DataFrame],
     o_dat: Dict[str, pd.DataFrame],
@@ -494,17 +522,8 @@ def run_exact_training_pipeline(
     elif mdl_config.MODE == "AR LSTM":
         mdl = train_ar_lstm(trn_x, trn_y, val_x, val_y, mdl_config, socketio_callback=socketio_callback)
         
-    elif mdl_config.MODE == "SVR_dir":
-        mdl = train_svr_dir(trn_x, trn_y, mdl_config)
-        
-    elif mdl_config.MODE == "SVR_MIMO":
-        mdl = train_svr_mimo(trn_x, trn_y, mdl_config)
-        
-    elif mdl_config.MODE == "LIN":
-        mdl = train_linear_model(trn_x, trn_y)
-
-    elif mdl_config.MODE == "LGBMR":
-        mdl = train_lgbmr(trn_x, trn_y, mdl_config)
+    elif mdl_config.MODE in ("SVR_dir", "SVR_MIMO", "LIN", "LGBMR"):
+        mdl = train_non_keras_model(mdl_config, trn_x, trn_y, progress_tracker=progress_tracker)
 
     else:
         raise ValueError(f"Unknown model mode: {mdl_config.MODE}")

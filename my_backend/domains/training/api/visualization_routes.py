@@ -7,6 +7,9 @@ Contains 5 endpoints for plots and visualizations:
 - generate-plot
 - evaluation-tables/<session_id>
 - save-evaluation-tables/<session_id>
+
+W11-A T7: hardened with @limiter.limit, UUID guard, and the
+standardized error contract (shared.responses.errors.error_response).
 """
 
 from flask import Blueprint
@@ -19,6 +22,11 @@ from .common import (
     get_logger
 )
 
+from core.rate_limits import limiter, training_limit_string
+from shared.responses.errors import error_response as _err
+from shared.storage.errors import is_storage_not_found
+from shared.validators.uuid import validate_training_session_format
+
 from domains.training.services.visualization import Visualizer
 from domains.training.constants import calculate_time_deltas
 from shared.database.lifecycle import update_workflow_phase
@@ -29,9 +37,15 @@ logger = get_logger(__name__)
 
 
 @bp.route('/plot-variables/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_plot_variables(session_id):
     """Get available input and output variables for plotting."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         user_id = g.user_id
         visualizer = Visualizer()
@@ -45,25 +59,29 @@ def get_plot_variables(session_id):
             'time_components': variables.get('time_components', [])
         })
 
-    except PermissionError as e:
-        return jsonify({'success': False, 'error': str(e)}), 403
-    except Exception as e:
-        logger.error(f"Error getting plot variables for {session_id}: {str(e)}")
-        # Return error with empty arrays - no hardcoded fallbacks
-        return jsonify({
-            'success': False,
-            'session_id': session_id,
-            'error': f'Failed to retrieve plot variables: {str(e)}',
-            'input_variables': [],
-            'output_variables': [],
-            'time_components': []
-        }), 500
+    except PermissionError:
+        logger.warning("plot-variables: ownership violation", exc_info=True)
+        return _err('FORBIDDEN', 'You do not have access to this session', 403)
+    except Exception:
+        logger.exception("Failed to retrieve plot variables")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to retrieve plot variables',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/visualizations/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_training_visualizations(session_id):
     """Get training visualizations (violin plots) for a session."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         user_id = g.user_id
         visualizer = Visualizer()
@@ -77,16 +95,15 @@ def get_training_visualizations(session_id):
             session_response = supabase.table('sessions').select('n_dat').eq('id', uuid_session_id).single().execute()
             if session_response.data:
                 n_dat = session_response.data.get('n_dat', 0) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch n_dat for session {session_id}: {e}")
+        except Exception:
+            logger.warning("Could not fetch n_dat for session", exc_info=True)
 
         if not viz_data.get('plots'):
-            return jsonify({
-                'session_id': session_id,
-                'plots': {},
-                'n_dat': n_dat,
-                'message': viz_data.get('message', 'No visualizations found for this session')
-            }), 404
+            return _err(
+                'VISUALIZATION_NOT_FOUND',
+                'No visualizations found for this session',
+                404,
+            )
 
         return jsonify({
             'session_id': session_id,
@@ -97,25 +114,35 @@ def get_training_visualizations(session_id):
             'message': viz_data['message']
         })
 
-    except PermissionError as e:
-        return create_error_response(str(e), 403)
-    except Exception as e:
-        logger.error(f"Error retrieving visualizations for {session_id}: {str(e)}")
-        return create_error_response(f'Failed to retrieve training visualizations: {str(e)}', 500)
+    except PermissionError:
+        logger.warning("visualizations: ownership violation", exc_info=True)
+        return _err('FORBIDDEN', 'You do not have access to this session', 403)
+    except Exception:
+        logger.exception("Failed to retrieve training visualizations")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to retrieve training visualizations',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/generate-plot', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 def generate_plot():
     """Generate plot based on user selections."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('sessionId') or data.get('session_id')
+    if not session_id:
+        return _err('MISSING_BODY', 'sessionId is required', 400)
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
-        data = request.json
-        session_id = data.get('session_id')
-
-        if not session_id:
-            return create_error_response('Session ID is required', 400)
-
         plot_settings = data.get('plot_settings', {})
         df_plot_in = data.get('df_plot_in', {})
         df_plot_out = data.get('df_plot_out', {})
@@ -138,8 +165,8 @@ def generate_plot():
             uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
             update_workflow_phase(str(uuid_session_id), 'completed')
             logger.info(f"[WORKFLOW_DEBUG] generate_plot: workflow_phase updated to 'completed' for session {session_id}")
-        except Exception as wf_error:
-            logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to completed: {str(wf_error)}")
+        except Exception:
+            logger.exception("[WORKFLOW_DEBUG] Failed to update workflow_phase to completed")
 
         return jsonify({
             'success': True,
@@ -148,22 +175,29 @@ def generate_plot():
             'message': result['message']
         })
 
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
-    except Exception as e:
-        logger.error(f"Error in generate_plot endpoint: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return create_error_response(f'Failed to generate plot: {str(e)}', 500)
+    except ValueError:
+        logger.warning("generate-plot: invalid plot params", exc_info=True)
+        return _err('INVALID_PLOT_PARAMS', 'Invalid plot parameters', 400)
+    except Exception:
+        logger.exception("Failed to generate plot")
+        return _err(
+            'PLOT_GENERATION_ERROR',
+            'Failed to generate plot',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/evaluation-tables/<session_id>', methods=['GET'])
+@limiter.limit(training_limit_string)
 @require_auth
 def get_evaluation_tables(session_id):
     """Get evaluation metrics formatted as tables for display."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
     try:
         from utils.training_storage import download_training_results
         supabase = get_supabase_client(use_service_role=True)
@@ -172,7 +206,8 @@ def get_evaluation_tables(session_id):
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return jsonify({'success': False, 'error': 'forbidden'}), 403
+            logger.warning("evaluation-tables: ownership violation", exc_info=True)
+            return _err('FORBIDDEN', 'You do not have access to this session', 403)
 
         response = supabase.table('training_results') \
             .select('id, results_file_path, compressed, results') \
@@ -182,19 +217,29 @@ def get_evaluation_tables(session_id):
             .execute()
 
         if not response.data:
-            return jsonify({
-                'success': False,
-                'error': 'No training results found for this session',
-                'session_id': session_id
-            }), 404
+            return _err(
+                'EVALUATION_TABLES_NOT_FOUND',
+                'No training results found for this session',
+                404,
+            )
 
         record = response.data[0]
 
         if record.get('results_file_path'):
-            results = download_training_results(
-                file_path=record['results_file_path'],
-                decompress=record.get('compressed', False)
-            )
+            try:
+                results = download_training_results(
+                    file_path=record['results_file_path'],
+                    decompress=record.get('compressed', False)
+                )
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    logger.warning("evaluation-tables: results file missing in storage", exc_info=True)
+                    return _err(
+                        'EVALUATION_TABLES_NOT_FOUND',
+                        'Training results file not found in storage',
+                        404,
+                    )
+                raise
         else:
             results = record.get('results')
 
@@ -226,11 +271,11 @@ def get_evaluation_tables(session_id):
         if eval_metrics and eval_metrics.get('test_metrics_scaled'):
             pass
         elif not eval_metrics or (eval_metrics.get('error') and not eval_metrics.get('test_metrics_scaled')):
-            return jsonify({
-                'success': False,
-                'error': f"No valid evaluation metrics found. Metrics: {eval_metrics}",
-                'session_id': session_id
-            }), 404
+            return _err(
+                'EVALUATION_TABLES_NOT_FOUND',
+                'No valid evaluation metrics found',
+                404,
+            )
 
         # Get output_features from results or dynamically from files table
         output_features = results.get('output_features', [])
@@ -250,11 +295,11 @@ def get_evaluation_tables(session_id):
                         break
 
         if not output_features:
-            return jsonify({
-                'success': False,
-                'error': 'No output features found for this session',
-                'session_id': session_id
-            }), 404
+            return _err(
+                'EVALUATION_TABLES_NOT_FOUND',
+                'No output features found for this session',
+                404,
+            )
 
         df_eval = {}
         df_eval_ts = {}
@@ -338,45 +383,47 @@ def get_evaluation_tables(session_id):
             'model_type': eval_metrics.get('model_type', 'Unknown')
         })
 
-    except Exception as e:
-        logger.error(f"Error getting evaluation tables: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'session_id': session_id
-        }), 500
+    except Exception:
+        logger.exception("Failed to get evaluation tables")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to get evaluation tables',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
 
 
 @bp.route('/save-evaluation-tables/<session_id>', methods=['POST'])
+@limiter.limit(training_limit_string)
 @require_auth
 @require_subscription
 def save_evaluation_tables(session_id):
     """Save evaluation tables to database."""
+    # W11-BE2: validate session_id BEFORE auth-ed work.
+    err = validate_training_session_format(session_id)
+    if err:
+        return err
+
+    data = request.get_json(silent=True)
+    if not data:
+        return _err('MISSING_BODY', 'Request body is required', 400)
+
+    df_eval = data.get('df_eval', {})
+    df_eval_ts = data.get('df_eval_ts', {})
+    model_type = data.get('model_type', 'Unknown')
+
+    if not df_eval and not df_eval_ts:
+        return _err('BAD_REQUEST', 'No evaluation tables provided', 400)
+
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-
-        df_eval = data.get('df_eval', {})
-        df_eval_ts = data.get('df_eval_ts', {})
-        model_type = data.get('model_type', 'Unknown')
-
-        if not df_eval and not df_eval_ts:
-            return jsonify({
-                'success': False,
-                'error': 'No evaluation tables provided'
-            }), 400
-
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
         try:
             assert_session_ownership(uuid_session_id)
         except SessionOwnershipError:
-            return jsonify({'success': False, 'error': 'forbidden'}), 403
+            logger.warning("save-evaluation-tables: ownership violation", exc_info=True)
+            return _err('FORBIDDEN', 'You do not have access to this session', 403)
 
         evaluation_data = {
             'session_id': uuid_session_id,
@@ -397,15 +444,19 @@ def save_evaluation_tables(session_id):
                 'saved_at': evaluation_data['created_at']
             })
         else:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to save to database'
-            }), 500
+            logger.error("save-evaluation-tables: upsert returned empty data")
+            return _err(
+                'INTERNAL_ERROR',
+                'Failed to save evaluation tables to database',
+                500,
+                suggestion='Please try again. If the problem persists, contact support.',
+            )
 
-    except Exception as e:
-        logger.error(f"Error saving evaluation tables: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'session_id': session_id
-        }), 500
+    except Exception:
+        logger.exception("Failed to save evaluation tables")
+        return _err(
+            'INTERNAL_ERROR',
+            'Failed to save evaluation tables',
+            500,
+            suggestion='Please try again. If the problem persists, contact support.',
+        )
