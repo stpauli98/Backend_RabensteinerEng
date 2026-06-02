@@ -58,6 +58,34 @@ def get_supabase_client(use_service_role: bool = False) -> Client:
     return client
 
 
+# Substrings (matched case-insensitively) that mark a transient, retryable
+# database/network error. Beyond DNS timeouts these cover dropped keepalive
+# connections — Supabase (esp. Free tier) closes idle pooled connections, so the
+# first request after an idle period raises httpcore.RemoteProtocolError
+# ("Server disconnected"). Retrying re-establishes a fresh connection instead of
+# surfacing a 500 to the client.
+_TRANSIENT_DB_ERROR_MARKERS = (
+    "lookup timed out",
+    "timeout",
+    "server disconnected",
+    "remoteprotocolerror",
+    "connection reset",
+    "connection aborted",
+    "connection closed",
+    "connectionterminated",
+    "connection terminated",
+    "temporary failure in name resolution",
+    "max retries exceeded",
+)
+
+
+def _is_transient_db_error(error_msg: str) -> bool:
+    """True if the error message looks like a transient/retryable connection or
+    timeout failure (vs. a deterministic error like a constraint violation)."""
+    low = error_msg.lower()
+    return any(marker in low for marker in _TRANSIENT_DB_ERROR_MARKERS)
+
+
 def retry_database_operation(
     operation_func: Callable[[], T],
     max_retries: int = DatabaseConfig.DEFAULT_RETRY_ATTEMPTS,
@@ -84,7 +112,7 @@ def retry_database_operation(
         except Exception as e:
             last_error = e
             error_msg = str(e)
-            if "Lookup timed out" in error_msg or "timeout" in error_msg.lower():
+            if _is_transient_db_error(error_msg):
                 if attempt < max_retries:
                     delay = initial_delay * (2 ** attempt)
                     logger.warning(
@@ -101,7 +129,7 @@ def retry_database_operation(
                         f"Database operation failed after {max_retries + 1} attempts: {error_msg}"
                     )
             else:
-                logger.error(f"Database operation failed with non-timeout error: {error_msg}")
+                logger.error(f"Database operation failed with non-retryable error: {error_msg}")
                 raise DatabaseError(f"Database operation failed: {error_msg}")
 
     raise DatabaseError(f"Database operation failed: {last_error}")
