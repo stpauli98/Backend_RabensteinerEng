@@ -22,6 +22,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
+
 logger = logging.getLogger(__name__)
 
 UPLOAD_BASE_DIR = os.environ.get('UPLOAD_BASE_DIR', 'uploads/file_uploads')
@@ -869,6 +871,20 @@ def update_csv_file_record(file_id: str, file_data: Dict) -> Dict:
 
     supabase = get_supabase_client()
 
+    # IDOR guard: scope ownership transitively via files.session_id -> sessions.user_id.
+    # Service-role client bypasses RLS, so this manual check is required.
+    file_response = supabase.table('files').select('*').eq('id', file_id).execute()
+    if not file_response.data or len(file_response.data) == 0:
+        raise ValueError(f'File {file_id} not found')
+
+    file_record = file_response.data[0]
+    session_id = file_record.get('session_id')
+    try:
+        assert_session_ownership(session_id)
+    except SessionOwnershipError:
+        # Foreign-but-existing file behaves as not-found (no cross-tenant leak).
+        raise ValueError(f'File {file_id} not found')
+
     allowed_fields = [
         'file_name', 'bezeichnung', 'min', 'max', 'offset', 'datenpunkte',
         'numerische_datenpunkte', 'numerischer_anteil', 'datenform',
@@ -962,6 +978,16 @@ def delete_csv_file_record(file_id: str) -> Dict:
         raise ValueError(f'File {file_id} not found')
 
     file_record = file_response.data[0]
+
+    # IDOR guard: scope ownership transitively via files.session_id -> sessions.user_id.
+    # Service-role client bypasses RLS, so this manual check is required.
+    session_id = file_record.get('session_id')
+    try:
+        assert_session_ownership(session_id)
+    except SessionOwnershipError:
+        # Foreign-but-existing file behaves as not-found (no cross-tenant leak).
+        raise ValueError(f'File {file_id} not found')
+
     storage_path = file_record.get('storage_path', '')
     file_type = file_record.get('type', 'input')
 
