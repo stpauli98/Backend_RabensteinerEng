@@ -44,6 +44,12 @@ os.makedirs(CHUNK_DIR, exist_ok=True)
 # and rejects all path separators and traversal sequences.
 _SAFE_UPLOAD_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# Same safe character set is applied to file_id, which is used to build the
+# processed-results directory (_results/<file_id>/...). Without this, a client
+# supplied file_id containing path separators or '..' could escape _results/
+# and lead to arbitrary read / shutil.rmtree (path traversal).
+_SAFE_FILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 def _validate_upload_id(upload_id: str) -> None:
     """
@@ -58,6 +64,22 @@ def _validate_upload_id(upload_id: str) -> None:
             f"unsafe upload_id: {upload_id!r} contains disallowed characters "
             f"(only [A-Za-z0-9_-] allowed)"
         )
+
+
+def _validate_file_id(file_id: str) -> str:
+    """
+    Raise ValueError if file_id contains characters that could lead to path traversal
+    or other unexpected filesystem behavior. Only the safe character set [A-Za-z0-9_-]
+    is accepted. Returns the validated file_id for convenient inline use.
+    """
+    if not isinstance(file_id, str) or not file_id:
+        raise ValueError(f"invalid file_id: must be a non-empty string")
+    if not _SAFE_FILE_ID_RE.match(file_id):
+        raise ValueError(
+            f"unsafe file_id: {file_id!r} contains disallowed characters "
+            f"(only [A-Za-z0-9_-] allowed)"
+        )
+    return file_id
 
 
 class LocalChunkService:
@@ -455,6 +477,7 @@ class LocalChunkService:
         Returns:
             True if saved successfully
         """
+        _validate_file_id(file_id)
         try:
             result_dir = os.path.join(CHUNK_DIR, '_results', file_id)
             os.makedirs(result_dir, exist_ok=True)
@@ -488,6 +511,7 @@ class LocalChunkService:
         Returns:
             CSV content as string, or None if not found
         """
+        _validate_file_id(file_id)
         try:
             csv_path = os.path.join(CHUNK_DIR, '_results', file_id, 'result.csv')
             if not os.path.exists(csv_path):
@@ -510,6 +534,7 @@ class LocalChunkService:
         Returns:
             True if deleted successfully
         """
+        _validate_file_id(file_id)
         try:
             result_dir = os.path.join(CHUNK_DIR, '_results', file_id)
             if os.path.exists(result_dir):
