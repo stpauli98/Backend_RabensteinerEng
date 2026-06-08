@@ -19,6 +19,8 @@ class UploadManager:
 
     def __init__(self, max_size=MAX_ACTIVE_UPLOADS, ttl_hours=1):
         self.uploads = OrderedDict()
+        # Maps upload_id -> owning user_id (IDOR protection, Finding C-6).
+        self.owners = {}
         self.max_size = max_size
         self.ttl = timedelta(hours=ttl_hours)
         self.lock = Lock()
@@ -46,6 +48,7 @@ class UploadManager:
 
             if len(self.uploads) >= self.max_size and upload_id not in self.uploads:
                 oldest_id, oldest_data = self.uploads.popitem(last=False)
+                self.owners.pop(oldest_id, None)
                 logger.warning(f"Upload capacity reached. Removed oldest upload: {oldest_id}")
                 try:
                     chunk_dir = os.path.join(CHUNK_DIR, oldest_id)
@@ -74,11 +77,37 @@ class UploadManager:
         with self.lock:
             if upload_id in self.uploads:
                 del self.uploads[upload_id]
+            self.owners.pop(upload_id, None)
 
     def clear(self):
         """Clear all upload sessions."""
         with self.lock:
             self.uploads.clear()
+            self.owners.clear()
+
+    def set_owner(self, upload_id: str, user_id: str):
+        """Bind an upload session to its owning user (IDOR protection).
+
+        Called when a session is first created (first /upload-chunk). Only
+        records ownership if the session exists; re-binding the same owner is
+        idempotent.
+        """
+        with self.lock:
+            if upload_id in self.uploads:
+                self.owners[upload_id] = user_id
+
+    def is_owner(self, upload_id: str, user_id: str) -> bool:
+        """Return True only if the session exists and is owned by user_id.
+
+        Returns False for unknown sessions and for sessions owned by a
+        different user, so callers can use the same not-found-style rejection
+        without leaking which case occurred.
+        """
+        with self.lock:
+            self.cleanup_expired()
+            if upload_id not in self.uploads:
+                return False
+            return self.owners.get(upload_id) == user_id
 
     def contains(self, upload_id: str) -> bool:
         """Check if upload session exists."""
@@ -96,6 +125,7 @@ class UploadManager:
         for uid in expired:
             logger.info(f"Removing expired upload session: {uid}")
             del self.uploads[uid]
+            self.owners.pop(uid, None)
             try:
                 chunk_dir = os.path.join(CHUNK_DIR, uid)
                 if os.path.exists(chunk_dir):
