@@ -82,8 +82,19 @@ def generate_datasets(session_id):
         from domains.training.services.violin_tracker import ViolinProgressTracker
         from shared.database.lifecycle import finalize_session as db_finalize_session
 
-        # Get UUID for database persistence
-        uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+        # Get UUID for database persistence.
+        # C-2 (CRITICAL IDOR): enforce session ownership BEFORE loading or
+        # processing any CSV data. create_or_get_session_uuid returns raw
+        # UUIDs unchanged with NO ownership validation, so without this guard
+        # Bob can process Alice's session (billing his quota against her data).
+        # Mirrors the train_models handler below.
+        try:
+            uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
+            assert_session_ownership(uuid_session_id)
+        except SessionOwnershipError:
+            return _err('SESSION_NOT_FOUND', 'Session not found', 404)
+        except (ValueError, PermissionError):
+            return _err('SESSION_NOT_FOUND', 'Session not found', 404)
 
         socketio = current_app.extensions.get('socketio')
         # [WORKFLOW_DEBUG] Pass uuid_session_id for workflow_phase persistence

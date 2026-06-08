@@ -129,7 +129,7 @@ class TestSaveZeitschritte:
 
         result = save_zeitschritte(
             "b2be65df-ce96-4305-b4c7-6530c7bc7096",
-            {"eingabe": "test"}
+            {"eingabe": "96"}
         )
 
         assert result is True
@@ -151,7 +151,7 @@ class TestSaveZeitschritte:
 
         result = save_zeitschritte(
             "session_1234567890_abc123",
-            {"eingabe": "test"},
+            {"eingabe": "96"},
             user_id="user123"
         )
 

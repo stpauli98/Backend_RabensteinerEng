@@ -23,6 +23,41 @@ from .session import get_supabase_client, get_session_uuid, create_or_get_sessio
 logger = logging.getLogger(__name__)
 
 
+# Time-window bound (H-1, DoS / worker OOM):
+# eingabe/ausgabe become MTS.I_N/O_N and drive unbounded allocations downstream,
+# e.g. np.zeros((n_samples, n_points)) in domains/training/data/transformer.py and
+# pd.date_range(periods=N_IN) in domains/training/services/forecast_service.py.
+# An unbounded value (e.g. 999999999) triggers a multi-GB allocation that gets the
+# gunicorn worker OOM-killed. 4096 timesteps is a generous upper bound for any real
+# training/forecast configuration.
+_MAX_TIME_WINDOW = 4096
+
+
+def validate_zeitschritte_window(value) -> int:
+    """Validate and coerce a time-window value (eingabe/ausgabe) to a bounded int.
+
+    Args:
+        value: Candidate time-window value (str or int) for eingabe/ausgabe.
+
+    Returns:
+        int: The validated time-window in [1, _MAX_TIME_WINDOW].
+
+    Raises:
+        ValueError: If the value is non-numeric or outside [1, _MAX_TIME_WINDOW].
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"time-window must be an integer in [1, {_MAX_TIME_WINDOW}]"
+        )
+    if n < 1 or n > _MAX_TIME_WINDOW:
+        raise ValueError(
+            f"time-window must be in [1, {_MAX_TIME_WINDOW}]; got {value}"
+        )
+    return n
+
+
 def _calculate_color_index(supabase, session_id: str, file_type: str) -> int:
     """
     Calculate color_index for a new file based on existing files in session.
@@ -161,10 +196,19 @@ def save_zeitschritte(session_id: str, zeitschritte: dict, user_id: str = None) 
     def clean_value(value):
         return None if value == "" or value is None else str(value)
 
+    def clean_window(value):
+        # eingabe/ausgabe may legitimately be empty during partial session setup;
+        # only enforce the [1, _MAX_TIME_WINDOW] bound when a value is present so a
+        # malicious value (e.g. 999999999) is rejected with ValueError -> 400 at the
+        # API layer before it can drive an OOM allocation downstream (H-1).
+        if value == "" or value is None:
+            return None
+        return str(validate_zeitschritte_window(value))
+
     data = {
         "session_id": database_session_id,
-        "eingabe": clean_value(zeitschritte.get("eingabe", "")),
-        "ausgabe": clean_value(zeitschritte.get("ausgabe", "")),
+        "eingabe": clean_window(zeitschritte.get("eingabe", "")),
+        "ausgabe": clean_window(zeitschritte.get("ausgabe", "")),
         "zeitschrittweite": clean_value(zeitschritte.get("zeitschrittweite", "")),
         "offset": clean_value(offset_value)
     }
