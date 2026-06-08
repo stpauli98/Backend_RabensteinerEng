@@ -249,6 +249,50 @@ def test_prepare_stl_emits_progress_markers():
 
 
 # ---------------------------------------------------------------------------
+# Resource guards: an out-of-range period/neurons must fail fast with a
+# ValueError (-> 400), never reach STL/LSTM and OOM-kill the worker (DoS).
+# ---------------------------------------------------------------------------
+
+def _clean_df(n=48):
+    return pd.DataFrame({
+        "ts": pd.date_range("2024-01-01", periods=n, freq="1h"),
+        "value": np.sin(np.arange(n) * 2 * np.pi / 24) + 1.0,
+    })
+
+
+@pytest.mark.parametrize("bad_period", [10**9, 0, -5, "abc", None, 48])
+def test_prepare_stl_rejects_out_of_range_period(bad_period):
+    """Huge/zero/negative/non-numeric/too-large period -> ValueError, no STL."""
+    from domains.adjustments.services.anomaly_pipeline import prepare_stl
+    df = _clean_df(48)  # upper bound = 24; period 48 is too large
+    with pytest.raises(ValueError):
+        prepare_stl(df, period=bad_period, lang="de")
+
+
+def test_prepare_stl_accepts_period_at_upper_bound():
+    """period == n // 2 is the largest valid value and must still run."""
+    from domains.adjustments.services.anomaly_pipeline import prepare_stl
+    df = _clean_df(48)
+    result, _ = prepare_stl(df, period=24, lang="de")
+    assert result is not None
+
+
+def test_prepare_lstm_rejects_huge_neurons():
+    """Huge neuron count must be rejected before building the model (OOM guard)."""
+    from domains.adjustments.services.anomaly_pipeline import prepare_lstm
+    df = _clean_df(20)
+    with pytest.raises(ValueError):
+        prepare_lstm(df, period=4, neurons=10**9, epochs=1, batch_size=4, lang="de")
+
+
+def test_prepare_lstm_rejects_huge_epochs():
+    from domains.adjustments.services.anomaly_pipeline import prepare_lstm
+    df = _clean_df(20)
+    with pytest.raises(ValueError):
+        prepare_lstm(df, period=4, neurons=8, epochs=10**7, batch_size=4, lang="de")
+
+
+# ---------------------------------------------------------------------------
 # Plan T1: callbacks must additionally carry a stable i18n key (message_key)
 # and optional message_params (e.g. SBAD iteration counter).
 # ---------------------------------------------------------------------------

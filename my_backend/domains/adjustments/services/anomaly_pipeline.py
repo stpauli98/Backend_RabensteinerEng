@@ -596,6 +596,60 @@ def _nan_guard_message(algo_en: str, algo_de: str, lang: str) -> str:
     )
 
 
+# Bounds that keep a single STL/LSTM request from allocating unbounded memory.
+# STL's seasonal smoother scales with `period`, and the LSTM input/recurrent
+# matrices scale with `period` and `neurons`; an out-of-range value (e.g.
+# period=1e9) OOM-kills the gunicorn worker — a one-request DoS. Validate
+# BEFORE constructing the model so a bad value is a clean 400, not a crash.
+_MAX_LSTM_NEURONS = 1024
+_MAX_LSTM_EPOCHS = 1000
+
+
+def _validate_period(period, n_rows: int, lang: str) -> int:
+    """Coerce `period` to int and bound it to [2, n_rows // 2]."""
+    try:
+        p = int(period)
+    except (TypeError, ValueError):
+        p = -1
+    upper = max(2, n_rows // 2)
+    if p < 2 or p > upper:
+        raise ValueError(
+            tr(
+                f"The period must be a whole number between 2 and {upper} "
+                f"(at most half of the {n_rows} data points).",
+                f"Die Periode muss eine ganze Zahl zwischen 2 und {upper} sein "
+                f"(höchstens die Hälfte der {n_rows} Datenpunkte).",
+                lang,
+            )
+        )
+    return p
+
+
+def _validate_lstm_capacity(neurons, epochs, lang: str) -> Tuple[int, int]:
+    """Coerce and bound LSTM neurons/epochs to prevent OOM/runaway training."""
+    try:
+        nn, ep = int(neurons), int(epochs)
+    except (TypeError, ValueError):
+        nn, ep = -1, -1
+    if nn < 1 or nn > _MAX_LSTM_NEURONS:
+        raise ValueError(
+            tr(
+                f"The number of neurons must be between 1 and {_MAX_LSTM_NEURONS}.",
+                f"Die Anzahl der Neuronen muss zwischen 1 und {_MAX_LSTM_NEURONS} liegen.",
+                lang,
+            )
+        )
+    if ep < 1 or ep > _MAX_LSTM_EPOCHS:
+        raise ValueError(
+            tr(
+                f"The number of epochs must be between 1 and {_MAX_LSTM_EPOCHS}.",
+                f"Die Anzahl der Epochen muss zwischen 1 und {_MAX_LSTM_EPOCHS} liegen.",
+                lang,
+            )
+        )
+    return nn, ep
+
+
 @log_phase("stl_prep")
 def prepare_stl(
     df: pd.DataFrame,
@@ -621,10 +675,12 @@ def prepare_stl(
             )
         )
 
+    period = _validate_period(period, len(df), lang)
+
     stl_label = tr("STL decomposition", "STL-Zerlegung", lang)
     _emit_progress(progress_callback, stl_label, 0.0, message_key="anomaly_phase_stl_prep")
 
-    stl = STL(df.iloc[:, 1], period=int(period), robust=True)
+    stl = STL(df.iloc[:, 1], period=period, robust=True)
     result = stl.fit()
 
     _emit_progress(progress_callback, stl_label, 1.0, message_key="anomaly_phase_stl_prep")
@@ -690,6 +746,9 @@ def prepare_lstm(
                 lang,
             )
         )
+
+    period = _validate_period(period, len(df), lang)
+    neurons, epochs = _validate_lstm_capacity(neurons, epochs, lang)
 
     from keras.models import Sequential
     from keras.layers import Dense, Input, LSTM

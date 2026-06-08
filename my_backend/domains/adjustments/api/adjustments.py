@@ -49,6 +49,25 @@ logger = logging.getLogger(__name__)
 bp = Blueprint('adjustmentsOfData_bp', __name__)
 
 
+def _coerce_upload_id(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Tuple[Response, int]]]:
+    """
+    Pull `uploadId`/`upload_id` from the body as a string.
+
+    uploadId may legitimately be absent (some endpoints treat it as optional),
+    but if it IS present it must be a non-empty string. A JSON object/array/
+    number would otherwise reach a filesystem/state lookup and crash with a 500
+    (e.g. ``Path(...) / {dict}``). Returns ``(upload_id_or_None, error_or_None)``.
+    """
+    uid = data.get("uploadId") or data.get("upload_id")
+    if uid is not None and (not isinstance(uid, str) or not uid):
+        return None, (jsonify({
+            "success": False,
+            "code": "BAD_UPLOAD_ID",
+            "error": "uploadId must be a non-empty string",
+        }), 400)
+    return uid, None
+
+
 def _internal_error_message(e: Exception) -> str:
     """Return the exception message when EXPOSE_INTERNAL_ERRORS=true (dev/staging);
     otherwise return the sanitized generic string for production safety."""
@@ -892,7 +911,9 @@ def anomaly_load() -> Tuple[Response, int]:
 
     try:
         data = request.get_json(silent=True) or {}
-        upload_id = data.get("uploadId") or data.get("upload_id")
+        upload_id, _uid_err = _coerce_upload_id(data)
+        if _uid_err:
+            return _uid_err
         filename = data.get("filename")
         lang = _normalize_lang(data.get("lang"))
 
@@ -1000,7 +1021,9 @@ def anomaly_validate_param() -> Tuple[Response, int]:
         value = data.get("value")
         current = data.get("currentParams") or {}
         lang = _normalize_lang(data.get("lang"))
-        upload_id = data.get("uploadId") or data.get("upload_id")
+        upload_id, _uid_err = _coerce_upload_id(data)
+        if _uid_err:
+            return _uid_err
 
         if not name:
             return jsonify({"error": "Parameter 'name' is required"}), 400
@@ -1050,7 +1073,9 @@ def anomaly_start() -> Tuple[Response, int]:
 
     try:
         data = request.get_json(silent=True) or {}
-        upload_id = data.get("uploadId") or data.get("upload_id")
+        upload_id, _uid_err = _coerce_upload_id(data)
+        if _uid_err:
+            return _uid_err
         raw_params = data.get("params") or {}
         lang = _normalize_lang(data.get("lang"))
 
@@ -1273,7 +1298,9 @@ def anomaly_stl_threshold() -> Tuple[Response, int]:
     upload_id = None
     try:
         data = request.get_json(silent=True) or {}
-        upload_id = data.get("uploadId") or data.get("upload_id")
+        upload_id, _uid_err = _coerce_upload_id(data)
+        if _uid_err:
+            return _uid_err
         threshold = data.get("threshold")
         lang = _normalize_lang(data.get("lang"))
 
@@ -1431,7 +1458,9 @@ def anomaly_lstm_threshold() -> Tuple[Response, int]:
     upload_id = None
     try:
         data = request.get_json(silent=True) or {}
-        upload_id = data.get("uploadId") or data.get("upload_id")
+        upload_id, _uid_err = _coerce_upload_id(data)
+        if _uid_err:
+            return _uid_err
         threshold = data.get("threshold")
         lang = _normalize_lang(data.get("lang"))
 
@@ -1563,7 +1592,9 @@ def anomaly_use_processed() -> Tuple[Response, int]:
 
     try:
         data = request.get_json(silent=True) or {}
-        upload_id = data.get("uploadId") or data.get("upload_id")
+        upload_id, _uid_err = _coerce_upload_id(data)
+        if _uid_err:
+            return _uid_err
         lang = _normalize_lang(data.get("lang"))
 
         if not upload_id:
@@ -1616,7 +1647,7 @@ def cancel_pipeline():
     """
     data = request.get_json(silent=True) or {}
     upload_id = data.get('uploadId')
-    if not upload_id:
+    if not isinstance(upload_id, str) or not upload_id:
         return jsonify({'error': 'uploadId required'}), 400
 
     from domains.adjustments.services.state_manager import (
