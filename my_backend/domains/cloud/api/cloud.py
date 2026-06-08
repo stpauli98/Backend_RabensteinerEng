@@ -67,7 +67,12 @@ def upload_chunk():
         try:
             chunk_index = int(request.form.get('chunkIndex', 0))
             total_chunks = int(request.form.get('totalChunks', 1))
-        except Exception:
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'code': 'INVALID_CHUNK_INDEX', 'error': 'Invalid chunk index or total chunks'}), 400
+
+        # Guard against non-positive totalChunks: a 0 reaches the progress
+        # division below (len(...) / total_chunks) and raises ZeroDivisionError.
+        if total_chunks <= 0 or chunk_index < 0:
             return jsonify({'success': False, 'code': 'INVALID_CHUNK_INDEX', 'error': 'Invalid chunk index or total chunks'}), 400
 
         if not upload_id:
@@ -88,6 +93,11 @@ def upload_chunk():
             }), 400
         except ValueError as e:
             return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
+        except TypeError:
+            # Wrong-typed uploadId (e.g. dict/list) makes re.match raise
+            # TypeError. Treat as a malformed request, not a 500.
+            logger.warning("Rejected /upload-chunk: uploadId is not a string")
+            return jsonify({'success': False, 'code': 'INVALID_UPLOAD_ID', 'error': 'Invalid upload ID'}), 400
 
         chunk_dir = get_chunk_dir(upload_id)
 
@@ -192,6 +202,11 @@ def complete_redirect():
             }), 400
         except ValueError as e:
             return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
+        except TypeError:
+            # Wrong-typed uploadId (e.g. dict/list) makes re.match raise
+            # TypeError. Treat as a malformed request, not a 500.
+            logger.warning("Rejected /complete: uploadId is not a string")
+            return jsonify({'success': False, 'code': 'INVALID_UPLOAD_ID', 'error': 'Invalid upload ID'}), 400
 
         # IDOR protection (C-6): reject foreign/unknown sessions identically so
         # ownership is not leaked. Processing is billed to g.user_id.
@@ -525,6 +540,11 @@ def interpolate_chunked():
             }), 400
         except ValueError as e:
             return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
+        except TypeError:
+            # Wrong-typed uploadId (e.g. dict/list) makes re.match raise
+            # TypeError. Treat as a malformed request, not a 500.
+            logger.warning("Rejected /interpolate-chunked: uploadId is not a string")
+            return jsonify({'success': False, 'code': 'INVALID_UPLOAD_ID', 'error': 'Invalid upload ID'}), 400
 
         # IDOR protection (C-6): foreign and unknown uploadIds are rejected
         # identically (is_owner is False for both) so ownership is not leaked.
@@ -541,8 +561,10 @@ def interpolate_chunked():
         try:
             max_time_span = float(data.get('max_time_span', '60'))
             logger.info(f"Using max_time_span: {max_time_span}")
-        except ValueError as e:
-            logger.error(f"Invalid max_time_span value: {data.get('max_time_span')}")
+        except (ValueError, TypeError):
+            # Wrong-typed (dict/list/None) or non-numeric max_time_span:
+            # float(...) raises TypeError/ValueError. Return structured 400.
+            logger.error(f"Invalid max_time_span value: {data.get('max_time_span')!r}")
             tracker.emit('error', 0, 'cloud_invalid_params', force=True)
             return jsonify({'success': False, 'code': 'INVALID_PARAMS', 'error': 'Invalid max_time_span parameter'}), 400
 
