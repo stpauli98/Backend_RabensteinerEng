@@ -20,6 +20,24 @@ from domains.processing.config import STREAMING_CHUNK_SIZE, BACKPRESSURE_DELAY
 logger = logging.getLogger(__name__)
 
 
+# --- H-2 DoS guard: bound the time step size and the generated grid size ---
+# A tiny tss (e.g. 0.0001) over a non-trivial span builds billions of datetime
+# objects -> worker OOM -> SIGKILL. Bound tss to a sane range and cap the
+# number of grid points computed from the data span before building the grid.
+_TSS_MIN, _TSS_MAX = 1.0 / 60.0, 1440.0   # minutes: 1 second .. 1 day (sub-minute cadence allowed)
+_MAX_GRID_POINTS = 5_000_000  # the real OOM guard: caps grid points regardless of tss
+
+
+def validate_tss(value) -> float:
+    try:
+        t = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("time step (tss) must be a number")
+    if not (_TSS_MIN <= t <= _TSS_MAX):
+        raise ValueError(f"time step (tss) must be in [{_TSS_MIN}, {_TSS_MAX}] minutes")
+    return t
+
+
 def clean_for_json(obj):
     """Convert numpy and pandas types to Python native types. Handle NaN/Inf."""
     # First check NaN/None
@@ -88,6 +106,10 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             return round(float(value), int(decimal_precision))
         except (ValueError, TypeError):
             return value
+
+    # H-2: validate tss bound BEFORE any processing/allocation. Raises
+    # ValueError cleanly (propagated to the API as a 4xx) on out-of-range input.
+    tss = validate_tss(tss)
 
     try:
         # === PHASE 1: PARSING (10-25%) ===
@@ -244,6 +266,16 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                     i += 1
                 time_min = time_set + datetime.timedelta(minutes=i * tss)
             logger.debug(f"ofst_set=var; anchor={time_set} time_min_raw={time_min_raw} -> time_min={time_min}")
+
+        # H-2: cap the number of grid points BEFORE building the grid. tss is
+        # already bounded to [1, 1440] min, but a far time range can still
+        # produce an enormous grid. Use time_min (the value the loop actually
+        # starts from, possibly anchor-shifted) so the anchor branch is covered.
+        span_minutes = (time_max_raw - time_min).total_seconds() / 60.0
+        if span_minutes / tss > _MAX_GRID_POINTS:
+            raise ValueError(
+                "requested time grid is too large; increase the time step or reduce the range"
+            )
 
         # Generate continuous timestamp
         time_list = []
