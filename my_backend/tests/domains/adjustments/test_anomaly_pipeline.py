@@ -58,7 +58,29 @@ def test_prepare_lstm_raises_on_nan():
 
     with pytest.raises(ValueError) as exc:
         prepare_lstm(df, period=4, neurons=4, epochs=1, batch_size=4, lang="de")
-    assert "NaN im Datensatz vorhanden" in str(exc.value)
+    msg = str(exc.value)
+    assert "NaN im Datensatz vorhanden" in msg
+    # Error must be actionable: point the user at the interpolation gap setting.
+    assert "Maximal zulässige Lücke" in msg
+
+
+def test_prepare_stl_raises_on_nan_with_actionable_hint():
+    """STL must refuse NaN data and tell the user how to fix the gaps."""
+    from domains.adjustments.services.anomaly_pipeline import prepare_stl
+
+    times = pd.date_range("2025-01-01", periods=48, freq="1h")
+    values = [1.0] * 47 + [float("nan")]
+    df = pd.DataFrame({"UTC": times, "v": values})
+
+    with pytest.raises(ValueError) as exc:
+        prepare_stl(df, period=24, lang="de")
+    msg = str(exc.value)
+    assert "NaN im Datensatz vorhanden" in msg
+    assert "Maximal zulässige Lücke" in msg
+
+    with pytest.raises(ValueError) as exc_en:
+        prepare_stl(df, period=24, lang="en")
+    assert "Maximum allowed gap for linear interpolation" in str(exc_en.value)
 
 
 def test_build_par_dict_with_values():

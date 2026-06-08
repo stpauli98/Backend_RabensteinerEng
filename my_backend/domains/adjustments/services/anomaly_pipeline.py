@@ -575,6 +575,27 @@ def process_sbad(
     return df, count_an[-1]
 
 
+def _nan_guard_message(algo_en: str, algo_de: str, lang: str) -> str:
+    """
+    Build the NaN-guard error for STL/LSTM. The data still contains NaN —
+    almost always gaps left by removed anomalies that were never interpolated
+    (e.g. when re-running after 'use processed data' with no gap limit set).
+    Tell the user how to fix it rather than just stating the symptom.
+    """
+    return tr(
+        f"'{algo_en}' cannot be performed because the dataset contains NaN. "
+        "Set 'Maximum allowed gap for linear interpolation [min]' so the gaps "
+        "left by removed anomalies get interpolated, or close them in the Data "
+        "Adjustment step before retrying.",
+        f"'{algo_de}' kann nicht durchgeführt werden, weil NaN im Datensatz "
+        "vorhanden sind. Setzen Sie 'Maximal zulässige Lücke für lineare "
+        "Interpolation [min]', damit die durch entfernte Anomalien entstandenen "
+        "Lücken interpoliert werden, oder schließen Sie sie im Schritt "
+        "Datenanpassung, bevor Sie es erneut versuchen.",
+        lang,
+    )
+
+
 @log_phase("stl_prep")
 def prepare_stl(
     df: pd.DataFrame,
@@ -593,11 +614,9 @@ def prepare_stl(
 
     if int(df.iloc[:, 1].isna().sum()) > 0:
         raise ValueError(
-            tr(
-                "'Anomaly detection by seasonal-trend decomposition using LOESS (STL)' "
-                "cannot be performed because the dataset contains NaN.",
-                "'Anomalieerkennung durch saisonale Trendzerlegung mit LOESS (STL)' "
-                "kann nicht durchgeführt werden, weil NaN im Datensatz vorhanden sind.",
+            _nan_guard_message(
+                "Anomaly detection by seasonal-trend decomposition using LOESS (STL)",
+                "Anomalieerkennung durch saisonale Trendzerlegung mit LOESS (STL)",
                 lang,
             )
         )
@@ -665,11 +684,9 @@ def prepare_lstm(
     """
     if int(df.iloc[:, 1].isna().sum()) > 0:
         raise ValueError(
-            tr(
-                "'Anomaly detection by Long Short-Term Memory (LSTM)' "
-                "cannot be performed because the dataset contains NaN.",
-                "'Anomalieerkennung mit Long Short-Term Memory (LSTM)' "
-                "kann nicht durchgeführt werden, weil NaN im Datensatz vorhanden sind.",
+            _nan_guard_message(
+                "Anomaly detection by Long Short-Term Memory (LSTM)",
+                "Anomalieerkennung mit Long Short-Term Memory (LSTM)",
                 lang,
             )
         )
