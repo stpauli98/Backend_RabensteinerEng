@@ -97,6 +97,12 @@ def upload_chunk():
                 'load_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None},
                 'interpolate_file': {'total_chunks': 0, 'received_chunks': set(), 'filename': None}
             }
+            # IDOR protection (C-6): bind the session to its creator.
+            chunk_uploads.set_owner(upload_id, g.user_id)
+        elif not chunk_uploads.is_owner(upload_id, g.user_id):
+            # An in-progress upload owned by another user must not be hijacked.
+            logger.warning(f"Rejected /upload-chunk: {g.user_id} attempted access to upload owned by another user")
+            return jsonify({'success': False, 'code': 'UPLOAD_NOT_FOUND', 'error': 'Upload ID not found'}), 404
 
         chunk_uploads[upload_id][file_type]['total_chunks'] = total_chunks
         chunk_uploads[upload_id][file_type]['received_chunks'].add(chunk_index)
@@ -186,6 +192,12 @@ def complete_redirect():
             }), 400
         except ValueError as e:
             return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
+
+        # IDOR protection (C-6): reject foreign/unknown sessions identically so
+        # ownership is not leaked. Processing is billed to g.user_id.
+        if not chunk_uploads.is_owner(upload_id, g.user_id):
+            logger.warning(f"Rejected /complete: {g.user_id} attempted access to upload not owned by them")
+            return jsonify({'success': False, 'code': 'UPLOAD_NOT_FOUND', 'error': 'Upload ID not found'}), 404
 
         # Initialize progress tracker
         _compute_start = time.time()
@@ -513,6 +525,13 @@ def interpolate_chunked():
             }), 400
         except ValueError as e:
             return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(e)}), 400
+
+        # IDOR protection (C-6): foreign and unknown uploadIds are rejected
+        # identically (is_owner is False for both) so ownership is not leaked.
+        # Processing is billed to g.user_id.
+        if not chunk_uploads.is_owner(upload_id, g.user_id):
+            logger.warning(f"Rejected /interpolate-chunked: {g.user_id} attempted access to upload not owned by them")
+            return jsonify({'success': False, 'code': 'FORBIDDEN', 'error': 'Upload not found'}), 403
 
         # Initialize progress tracker
         _compute_start_interp = time.time()
