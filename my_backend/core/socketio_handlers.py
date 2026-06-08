@@ -1,26 +1,75 @@
 """SocketIO event handlers"""
 import logging
+from flask import request
 from flask_socketio import join_room, leave_room, emit
 from shared.database.operations import get_supabase_client, create_or_get_session_uuid
+from shared.auth.jwt import _verify_jwt_local
 from domains.training.services.training_events import build_active_training_progress_event
 from domains.training.services.training_tracker import STALE_THRESHOLD_SECONDS
 
 logger = logging.getLogger(__name__)
 
+# Maps a Socket.IO session id (request.sid) to the authenticated user_id.
+# Populated on connect (after JWT verification), cleared on disconnect.
+_sid_users = {}
+
+
+def _current_user_id():
+    """Return the authenticated user_id for the current Socket.IO connection."""
+    from flask import request
+    return _sid_users.get(request.sid)
+
+
 def register_socketio_handlers(socketio):
     """Register all SocketIO event handlers"""
-    
+
     @socketio.on('connect')
-    def handle_connect():
-        pass
+    def handle_connect(auth):
+        """Authenticate the Socket.IO connection.
+
+        The client sends the Supabase JWT via the socket.io `auth` payload
+        (``{'token': '<jwt>'}``); we fall back to the ``token`` query arg.
+        A missing/invalid token rejects the connection (return False).
+        On success the user_id (``sub`` claim) is stored keyed by request.sid.
+        """
+        try:
+            token = None
+            if isinstance(auth, dict):
+                token = auth.get('token')
+            if not token:
+                token = request.args.get('token')
+            if not token:
+                logger.warning("Socket.IO connect rejected: no auth token")
+                return False
+
+            payload = _verify_jwt_local(token)
+            user_id = payload.get('sub')
+            if not user_id:
+                logger.warning("Socket.IO connect rejected: token missing 'sub'")
+                return False
+
+            _sid_users[request.sid] = user_id
+            return True
+        except Exception as e:
+            logger.warning(f"Socket.IO connect rejected: token verification failed: {e}")
+            return False
 
     @socketio.on('disconnect')
     def handle_disconnect(*args, **kwargs):
+        _sid_users.pop(request.sid, None)
         return True
 
     @socketio.on('join_upload_room')
     def handle_join_upload_room(data):
-        """Client joins a room for upload progress tracking"""
+        """Client joins a room for upload progress tracking.
+
+        Upload/anomaly/cloud uploadIds are ephemeral and have no DB owner
+        table, so a per-upload ownership check isn't available here. The
+        current control is connect-time JWT auth (handle_connect) plus the
+        unguessability of the uploadId. Per-upload-room ownership is a
+        follow-up. We must NOT block this join or anomaly/cloud progress
+        bars break.
+        """
         try:
             upload_id = data.get('uploadId')
             if upload_id:
@@ -37,6 +86,32 @@ def register_socketio_handlers(socketio):
         try:
             session_id = data.get('session_id')
             if session_id:
+                # SECURITY: verify the authenticated user owns this session
+                # before joining its room. create_or_get_session_uuid raises
+                # PermissionError/ValueError when the session isn't owned by uid.
+                uid = _current_user_id()
+                try:
+                    uuid_session_id = create_or_get_session_uuid(
+                        session_id, user_id=uid, create_if_missing=False
+                    )
+                except (PermissionError, ValueError) as auth_err:
+                    logger.warning(
+                        f"Denied join_training_session for user={uid} "
+                        f"session={session_id}: {auth_err}"
+                    )
+                    emit('training_session_error', {
+                        'status': 'error',
+                        'message': 'Not authorized for this training session'
+                    })
+                    return
+
+                if not uuid_session_id:
+                    emit('training_session_error', {
+                        'status': 'error',
+                        'message': 'Session not found'
+                    })
+                    return
+
                 room = f"training_{session_id}"
                 join_room(room)
 
@@ -54,7 +129,7 @@ def register_socketio_handlers(socketio):
         except Exception as e:
             logger.error(f"Error joining training session: {str(e)}")
             emit('training_session_error', {
-                'status': 'error', 
+                'status': 'error',
                 'message': f'Failed to join session: {str(e)}'
             })
 
@@ -88,7 +163,19 @@ def register_socketio_handlers(socketio):
             session_id = data.get('session_id')
             if session_id:
                 supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None, create_if_missing=False)
+                uid = _current_user_id()
+                try:
+                    uuid_session_id = create_or_get_session_uuid(session_id, user_id=uid, create_if_missing=False)
+                except (PermissionError, ValueError) as auth_err:
+                    logger.warning(
+                        f"Denied request_training_status for user={uid} "
+                        f"session={session_id}: {auth_err}"
+                    )
+                    emit('training_status_error', {
+                        'session_id': session_id,
+                        'message': 'Not authorized for this training session'
+                    })
+                    return
                 room = f"training_{session_id}"
 
                 if uuid_session_id:
@@ -176,7 +263,13 @@ def register_socketio_handlers(socketio):
 
     @socketio.on('join')
     def handle_join(data):
-        """Client joins a room based on uploadId"""
+        """Client joins a room based on uploadId.
+
+        Same as join_upload_room: ephemeral uploadIds with no DB owner table.
+        Connect-time JWT auth + uploadId unguessability is the current
+        control; per-upload-room ownership is a follow-up. Do NOT block this
+        join (anomaly/cloud progress depends on it).
+        """
         try:
             if 'uploadId' in data:
                 upload_id = data['uploadId']
@@ -207,7 +300,19 @@ def register_socketio_handlers(socketio):
             session_id = data.get('session_id')
             if session_id:
                 supabase = get_supabase_client()
-                uuid_session_id = create_or_get_session_uuid(session_id, user_id=None, create_if_missing=False)
+                uid = _current_user_id()
+                try:
+                    uuid_session_id = create_or_get_session_uuid(session_id, user_id=uid, create_if_missing=False)
+                except (PermissionError, ValueError) as auth_err:
+                    logger.warning(
+                        f"Denied request_dataset_status for user={uid} "
+                        f"session={session_id}: {auth_err}"
+                    )
+                    emit('dataset_status_error', {
+                        'session_id': session_id,
+                        'message': 'Not authorized for this training session'
+                    })
+                    return
                 room = f"training_{session_id}"
 
                 if uuid_session_id:
