@@ -286,8 +286,10 @@ def download_training_results(
             if is_pickle:
                 # NEW FORMAT: Pickle
                 # SECURITY NOTE: pickle.load() can execute arbitrary code.
-                # This is safe here because results are only stored by authenticated users
-                # via our training pipeline and retrieved from trusted Supabase storage.
+                # Safe here because the 'training-results' bucket is
+                # service-role-write-only (RLS): authenticated clients cannot
+                # write or read it, so these blobs are server-minted and trusted.
+                # Never point this loader at a user-writable bucket.
                 if is_compressed:
                     with gzip.GzipFile(fileobj=io.BytesIO(response)) as gz_file:
                         results = pickle.load(gz_file)

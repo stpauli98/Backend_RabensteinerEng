@@ -125,8 +125,25 @@ def intrpl_timeline(utc_timeline: pd.Series, df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _download_user_csv(storage_path: str) -> pd.DataFrame:
-    """Download a User feature CSV from Supabase Storage."""
+def _download_user_csv(storage_path: str, session_id: str) -> pd.DataFrame:
+    """Download a User feature CSV from Supabase Storage.
+
+    Security (fix/forecast-storage-idor): the download uses the service-role
+    client, which bypasses Storage RLS. ``storage_path`` originates from a
+    ``files`` row whose value can be planted by the client (POST /csv-files →
+    persistence reads ``file_info["storagePath"]`` verbatim). Legit paths are
+    always server-minted as ``{session_id}/{filename}``. Enforce that prefix
+    here so a path pointing at another session's storage prefix cannot be read
+    cross-tenant — the calling session's ownership is already asserted upstream
+    in ``execute_forecast`` via ``assert_session_ownership``.
+    """
+    expected_prefix = f"{session_id}/"
+    if not storage_path or not storage_path.startswith(expected_prefix):
+        raise ValueError(
+            "storage_path does not belong to this session "
+            f"(expected prefix '{expected_prefix}')"
+        )
+
     from shared.database.operations import get_supabase_client
     supabase = get_supabase_client(use_service_role=True)
 
@@ -176,7 +193,7 @@ def run_forecast(
                 if not storage_path:
                     raise ValueError(f"No data for User feature: {name}. Provide user_data in request.")
                 logger.info(f"  → Downloading from storage: {storage_path}")
-                data_in[name] = _download_user_csv(storage_path)
+                data_in[name] = _download_user_csv(storage_path, session_id=session_id)
         elif src == 'Extern':
             api = feat['api_source']
             var = feat['fcst_var']
