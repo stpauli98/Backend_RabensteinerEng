@@ -80,6 +80,19 @@ def _error_response(error_code: str, message: str, status_code: int = 400) -> Tu
     return jsonify({"error": error_code, "message": message}), status_code
 
 
+def _file_id_owned_by_user(file_id, user_id) -> bool:
+    """Return True only when file_id is a clean, single-segment id owned by user_id.
+
+    file_ids are minted as ``f"{user_id}_{random}"``, so the owner is encoded
+    as the prefix. We require an exact prefix AND reject any path separator or
+    parent-directory segment so that a crafted id like ``"<me>_/../<victim>"``
+    cannot pass the ownership check (defence-in-depth against traversal/IDOR).
+    """
+    if not isinstance(file_id, str) or "/" in file_id or "\\" in file_id or ".." in file_id:
+        return False
+    return file_id.startswith(f"{user_id}_")
+
+
 def _check_upload_ownership(upload_id: str, user_id: str) -> bool:
     """
     Verify that an existing upload (identified by upload_id) was created
@@ -852,8 +865,17 @@ def merge_and_prepare() -> Tuple[Response, int]:
         file_ids = data.get('fileIds', [])
         file_name = data.get('fileName', 'merged_data.csv')
 
+        if not isinstance(file_ids, list):
+            return jsonify({"error": "fileIds must be a list"}), 400
+
         if not file_ids:
             return jsonify({"error": "No file IDs provided"}), 400
+
+        # IDOR guard: every source file_id must be owned by the caller. Reject
+        # before any read/merge (including the single-element short-circuit
+        # below) so a user cannot exfiltrate another user's CSV by merging it.
+        if any(not _file_id_owned_by_user(fid, g.user_id) for fid in file_ids):
+            return jsonify({"error": "forbidden"}), 403
 
         if len(file_ids) == 1:
             return jsonify({
@@ -943,13 +965,19 @@ def download_file(file_id: str) -> Response:
     """
     try:
         # IDOR guard: file_id is server-constructed and must be owned by the
-        # caller. Local-chunk format is "{user_id}_..." and Storage format is
-        # "{user_id}/...". Reject anything that does not start with the
-        # caller's user_id followed by the appropriate separator before
-        # touching any storage backend.
-        local_prefix = f"{g.user_id}_"
+        # caller. Local-chunk format is "{user_id}_..." (validated by the
+        # containment-safe _file_id_owned_by_user helper) and the legacy
+        # Storage format is "{user_id}/...". Reject anything that is neither a
+        # clean owned local id nor an owned storage path before touching any
+        # storage backend.
         storage_prefix = f"{g.user_id}/"
-        if not (file_id.startswith(local_prefix) or file_id.startswith(storage_prefix)):
+        is_owned_local = _file_id_owned_by_user(file_id, g.user_id)
+        is_owned_storage = (
+            isinstance(file_id, str)
+            and ".." not in file_id
+            and file_id.startswith(storage_prefix)
+        )
+        if not (is_owned_local or is_owned_storage):
             return jsonify({"error": "forbidden"}), 403
 
         # Try local storage first
@@ -1009,8 +1037,17 @@ def cleanup_files() -> Tuple[Response, int]:
 
         file_ids = data.get('fileIds', [])
 
+        if not isinstance(file_ids, list):
+            return jsonify({"error": "fileIds must be a list"}), 400
+
         if not file_ids:
             return jsonify({"message": "No files to delete", "deletedCount": 0}), 200
+
+        # IDOR guard: every file_id must be owned by the caller. Reject before
+        # touching any storage backend so a user cannot delete another user's
+        # results by passing a foreign "{victim}_..." id.
+        if any(not _file_id_owned_by_user(fid, g.user_id) for fid in file_ids):
+            return jsonify({"error": "forbidden"}), 403
 
         deleted_count = 0
         failed_ids = []
