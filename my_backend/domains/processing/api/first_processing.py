@@ -192,12 +192,14 @@ def upload_chunk():
                 pass  # TTL cleanup will handle it
             raise
 
-    except Exception as e:
-        error_msg = f"Unexpected error in upload_chunk: {str(e)}\nTraceback: {traceback.format_exc()}"
-        logger.error(error_msg)
+    except Exception:
+        # Log the full traceback server-side only; never return internal
+        # exception text or stack traces to the client (info-leak: file paths,
+        # library internals). Mirrors safe_error_response in data_processing.py.
+        logger.exception("Unexpected error in upload_chunk")
         return jsonify({
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "error": "An error occurred while processing the upload. "
+                     "Please check your input and try again."
         }), 400
 
 
