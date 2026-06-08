@@ -217,6 +217,10 @@ class ModernMiddlemanRunner:
             # ===================================================================
             zeitschritte = session_data.get('zeitschritte', {})
 
+            # eingabe/ausgabe are read from the persisted DB row, which is bounded to
+            # [1, _MAX_TIME_WINDOW] at the write boundary by
+            # shared.database.persistence.validate_zeitschritte_window (H-1). No raw
+            # client input reaches this int() coercion, so no re-validation is needed.
             mts_config = MTS()
             mts_config.I_N = int(zeitschritte.get('eingabe', mts_config.I_N))
             mts_config.O_N = int(zeitschritte.get('ausgabe', mts_config.O_N))

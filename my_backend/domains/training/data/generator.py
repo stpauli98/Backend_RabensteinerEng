@@ -89,6 +89,9 @@ def _prepare_processed_data(session_data: Dict, csv_data: Dict, progress_tracker
     try:
         # 1. Configure MTS from zeitschritte
         zeitschritte = session_data.get('zeitschritte', {})
+        # eingabe/ausgabe come from the persisted DB row, bounded to
+        # [1, _MAX_TIME_WINDOW] at the write boundary by
+        # shared.database.persistence.validate_zeitschritte_window (H-1).
         mts_config = MTS()
         mts_config.I_N = int(zeitschritte.get('eingabe', mts_config.I_N))
         mts_config.O_N = int(zeitschritte.get('ausgabe', mts_config.O_N))

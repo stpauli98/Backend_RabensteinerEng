@@ -150,6 +150,10 @@ def run_forecast(
     time_info = config['time_info']
     zeitschritte = config['zeitschritte']
 
+    # eingabe/ausgabe come from the persisted DB row, bounded to
+    # [1, _MAX_TIME_WINDOW] at the write boundary by
+    # shared.database.persistence.validate_zeitschritte_window (H-1). N_IN drives
+    # pd.date_range(periods=N_IN) below, so the bound prevents an OOM allocation.
     N_IN = int(zeitschritte['eingabe'])
     N_OUT = int(zeitschritte['ausgabe'])
     TZ = time_info.get('zeitzone', 'UTC')
