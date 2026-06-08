@@ -20,6 +20,7 @@ import pandas as pd
 from werkzeug.exceptions import BadRequest as WerkzeugBadRequest
 from shared.auth.api_key import allow_api_key
 from shared.auth.ownership import assert_session_ownership, SessionOwnershipError
+from shared.responses.errors import error_response as _err
 from core.rate_limits import limiter, forecast_limit_string
 
 from domains.training.services.forecast_service import run_forecast
@@ -186,11 +187,9 @@ def execute_forecast(session_id):
     except FileNotFoundError as e:
         return jsonify({'success': False, 'error': str(e), 'code': 'MODEL_NOT_FOUND'}), 404
 
-    except Exception as e:
-        logger.error(f"Forecast error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Forecast error")
+        return _err('INTERNAL_ERROR', 'Internal error', 500)
 
 
 @bp.route('/forecast-config/<session_id>', methods=['GET'])
@@ -238,9 +237,9 @@ def get_forecast_config(session_id):
             'session_id': session_id
         })
 
-    except Exception as e:
-        logger.error(f"Error getting forecast config: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Error getting forecast config")
+        return _err('INTERNAL_ERROR', 'Internal error', 500)
 
 
 @bp.route('/save-forecast-config/<session_id>', methods=['POST'])
@@ -265,7 +264,10 @@ def save_forecast_config(session_id):
         except SessionOwnershipError:
             return jsonify({'success': False, 'error': 'forbidden'}), 403
 
-        features = data['features']
+        features = data.get('features')
+        if not isinstance(features, list) or not all(isinstance(f, dict) for f in features):
+            return _err('INVALID_FEATURES', 'features must be a list of objects', 400)
+
         updated = 0
 
         for feat in features:
@@ -307,9 +309,9 @@ def save_forecast_config(session_id):
             'session_id': session_id
         })
 
-    except Exception as e:
-        logger.error(f"Error saving forecast config: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Error saving forecast config")
+        return _err('INTERNAL_ERROR', 'Internal error', 500)
 
 
 @bp.route('/api-parameters', methods=['GET'])
@@ -331,6 +333,6 @@ def get_api_parameters():
             'parameters': result.data
         })
 
-    except Exception as e:
-        logger.error(f"Error getting API parameters: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        logger.exception("Error getting API parameters")
+        return _err('INTERNAL_ERROR', 'Internal error', 500)
