@@ -961,3 +961,27 @@ def test_anomaly_progress_payload_carries_message_params(monkeypatch, app):
        message_params={"iter": 3})
 
     assert captured[0]["messageParams"] == {"iter": 3}
+
+
+def test_coerce_upload_id_rejects_non_string_types():
+    """Non-string uploadId (object/array/number) must be a 400, not a 500."""
+    app = Flask(__name__)
+    with app.app_context():
+        # Truthy non-string values would crash a path/state lookup → reject 400.
+        for bad in [{"x": 1}, ["a", "b"], 12345]:
+            uid, err = adj_module._coerce_upload_id({"uploadId": bad})
+            assert uid is None
+            assert err is not None and err[1] == 400
+
+        # Empty string short-circuits to None; the caller's own guard returns
+        # the 400. The helper must simply not blow up on it.
+        uid_empty, err_empty = adj_module._coerce_upload_id({"uploadId": ""})
+        assert uid_empty is None and err_empty is None
+
+        # Valid string passes through unchanged.
+        uid_ok, err_ok = adj_module._coerce_upload_id({"uploadId": "5bb0f144-x"})
+        assert uid_ok == "5bb0f144-x" and err_ok is None
+
+        # Absent uploadId is allowed (optional on some endpoints) — no error.
+        uid_none, err_none = adj_module._coerce_upload_id({})
+        assert uid_none is None and err_none is None
