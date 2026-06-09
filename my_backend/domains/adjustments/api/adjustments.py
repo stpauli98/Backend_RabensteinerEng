@@ -3,6 +3,7 @@ Adjustments API Routes
 Handles data adjustment operations including chunked uploads and data processing
 """
 import os
+import gzip
 import time
 import math
 import logging
@@ -47,6 +48,44 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('adjustmentsOfData_bp', __name__)
+
+# Anomaly plot payloads carry every datapoint at full resolution (no
+# decimation), so large CSVs produce multi-MB JSON. Cloud Run rejects any
+# non-streamed response > 32 MiB with a bare 500 (no CORS header → misleading
+# "CORS" error in the browser). Gzip the JSON on the wire: time-series JSON
+# compresses ~5-15x, which keeps realistic payloads well under the cap while
+# preserving every point. The browser decompresses transparently (Content-
+# Encoding: gzip), so no frontend change is needed.
+_GZIP_MIN_BYTES = 1024
+
+
+@bp.after_request
+def _gzip_json(response: Response) -> Response:
+    """Gzip large JSON responses when the client accepts it."""
+    try:
+        accept = request.headers.get('Accept-Encoding', '')
+        if (
+            'gzip' not in accept.lower()
+            or response.direct_passthrough
+            or response.status_code < 200
+            or response.status_code in (204, 304)
+            or response.headers.get('Content-Encoding')
+            or response.mimetype != 'application/json'
+        ):
+            return response
+
+        data = response.get_data()
+        if len(data) < _GZIP_MIN_BYTES:
+            return response
+
+        compressed = gzip.compress(data, compresslevel=6)
+        response.set_data(compressed)
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = str(len(compressed))
+        response.headers.add('Vary', 'Accept-Encoding')
+    except Exception:  # never let compression break a valid response
+        logger.exception("gzip after_request failed; returning uncompressed")
+    return response
 
 
 def _coerce_upload_id(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Tuple[Response, int]]]:

@@ -145,11 +145,9 @@ def test_anomaly_overlay_lstm_uses_original_value_label():
     assert plot["traces"][0]["label"] == "Original value"
 
 
-# --- Response-size guard: Cloud Run caps responses at 32 MiB. Large CSVs
-# produced multi-MB plot payloads (every row serialized x+y) → platform 500.
-# Plot traces must be down-sampled for transport. ---
-
-_CAP = 10_000  # MAX_PLOT_POINTS — keep in sync with plot_builder
+# --- Full-resolution transport: every datapoint is kept (no decimation).
+# Large responses are kept under Cloud Run's 32 MiB cap by gzip compression
+# (adjustments blueprint `_gzip_json` after_request), NOT by dropping points. ---
 
 
 def _big_df(n, y=None):
@@ -159,39 +157,41 @@ def _big_df(n, y=None):
     return pd.DataFrame({"UTC": times, "val": y})
 
 
-def test_build_line_plot_downsamples_large_series():
-    df = _big_df(200_000)
+def test_build_line_plot_keeps_full_resolution():
+    n = 200_000
+    df = _big_df(n)
     plot = build_line_plot(df, "UTC", "val", "t", "x", "y")
     xs, ys = plot["traces"][0]["x"], plot["traces"][0]["y"]
-    assert len(xs) == len(ys)
-    assert len(xs) <= _CAP + 2, f"trace not down-sampled: {len(xs)} points"
+    assert len(xs) == len(ys) == n, f"points dropped: {len(xs)} != {n}"
 
 
-def test_small_series_not_downsampled():
+def test_small_series_full_resolution():
     df = make_df()  # 5 rows
     plot = build_line_plot(df, "UTC", "Q_RGK [kW]", "t", "x", "y")
     assert len(plot["traces"][0]["x"]) == 5
 
 
-def test_downsample_preserves_extremes():
-    """Min/max bucketing must keep spikes so anomalies stay visible."""
+def test_full_resolution_preserves_extremes():
+    """All points are kept, so spikes/anomalies stay visible by construction."""
     n = 100_000
     y = np.zeros(n)
     y[12_345] = 999.0
     y[54_321] = -999.0
     df = _big_df(n, y=y)
     plot = build_line_plot(df, "UTC", "val", "t", "x", "y")
-    vals = [v for v in plot["traces"][0]["y"] if v is not None]
+    ys = plot["traces"][0]["y"]
+    vals = [v for v in ys if v is not None]
+    assert len(ys) == n
     assert max(vals) == 999.0
     assert min(vals) == -999.0
 
 
-def test_overlay_base_downsampled_but_markers_full_resolution():
+def test_overlay_base_and_markers_full_resolution():
     n = 100_000
     mask = np.zeros(n, dtype=bool)
     mask[[10, 99_999]] = True  # 2 sparse anomalies, incl. last row
     df = _big_df(n)
     plot = build_anomaly_overlay(df, "UTC", "val", mask, "t", "kW", lang="en")
     base, markers = plot["traces"][0], plot["traces"][1]
-    assert len(base["x"]) <= _CAP + 2          # base line down-sampled
+    assert len(base["x"]) == n                 # base line full resolution
     assert len(markers["x"]) == 2              # every anomaly kept

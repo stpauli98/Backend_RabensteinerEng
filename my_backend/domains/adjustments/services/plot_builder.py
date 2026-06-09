@@ -59,56 +59,19 @@ def _serialize_y(series: pd.Series) -> List:
     return out
 
 
-# Cloud Run rejects responses larger than 32 MiB with a platform-level 500
-# (no CORS headers, so the browser reports a misleading CORS error). A full-
-# resolution CSV serialized every row as x (ISO string) + y (float), which
-# blew past that cap on large files. Plot traces are decimated to this many
-# points for TRANSPORT only — the analysis still runs on the full DataFrame.
-# A line chart can't render more than a few thousand points on screen anyway.
-MAX_PLOT_POINTS = 10_000
-
-
-def _minmax_keep_indices(y: np.ndarray, max_points: int) -> np.ndarray:
+# Plot traces are serialized at FULL resolution — every datapoint is kept, even
+# for very large CSVs. Response size is held under Cloud Run's 32 MiB cap by
+# gzip-compressing the response (see the `_gzip_json` after_request hook on the
+# adjustments blueprint), NOT by dropping points. The analysis already runs on
+# the full DataFrame; transport is now full-fidelity too.
+def _serialize_xy(x_series: pd.Series, y_series: pd.Series) -> tuple[List, List]:
     """
-    Indices of a min/max bucket decimation of `y` down to ~`max_points`.
-
-    The series is split into equal buckets; the min and max of each bucket are
-    kept (plus the first and last points). Unlike uniform striding this
-    preserves vertical extremes, so spikes/anomalies stay visible.
-    """
-    n = int(y.shape[0])
-    if n <= max_points:
-        return np.arange(n)
-
-    n_buckets = max(1, max_points // 2)
-    bounds = np.linspace(0, n, n_buckets + 1, dtype=int)
-    keep = {0, n - 1}
-    for b in range(n_buckets):
-        lo, hi = int(bounds[b]), int(bounds[b + 1])
-        if hi <= lo:
-            continue
-        seg = y[lo:hi]
-        finite = np.nonzero(np.isfinite(seg))[0]
-        if finite.size == 0:
-            keep.add(lo)  # all-NaN bucket: keep one point to preserve the gap
-            continue
-        keep.add(lo + int(finite[np.argmin(seg[finite])]))
-        keep.add(lo + int(finite[np.argmax(seg[finite])]))
-    return np.array(sorted(keep), dtype=int)
-
-
-def _downsample_xy(x_series: pd.Series, y_series: pd.Series) -> tuple[List, List]:
-    """
-    Serialize an (x, y) pair for a trace, decimated to <= MAX_PLOT_POINTS so the
-    JSON response stays under Cloud Run's 32 MiB cap. Returns JSON-ready lists.
+    Serialize an (x, y) pair for a trace at full resolution (no decimation).
+    Returns JSON-ready lists: x as ISO strings, y as floats with NaN/Inf -> None.
     """
     x_series = pd.Series(x_series).reset_index(drop=True)
     y_series = pd.Series(y_series).reset_index(drop=True)
-    y_num = pd.to_numeric(y_series, errors="coerce").to_numpy(dtype=float)
-    keep = _minmax_keep_indices(y_num, MAX_PLOT_POINTS)
-    if keep.shape[0] == len(y_series):
-        return _serialize_x(x_series), _serialize_y(y_series)
-    return _serialize_x(x_series.iloc[keep]), _serialize_y(y_series.iloc[keep])
+    return _serialize_x(x_series), _serialize_y(y_series)
 
 
 def build_line_plot(
@@ -122,7 +85,7 @@ def build_line_plot(
     label: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Single-line plot — original or processed values over time."""
-    x_ser, y_ser = _downsample_xy(df[x_col], df[y_col])
+    x_ser, y_ser = _serialize_xy(df[x_col], df[y_col])
     return {
         "type": "line",
         "traces": [
@@ -167,14 +130,14 @@ def build_anomaly_overlay(
             )
         )
 
-    # Markers are sparse — index them from the FULL-resolution series so every
-    # anomaly is kept; only the dense base line is decimated for transport.
+    # Markers are sparse — index them from the full series so every anomaly is
+    # kept; the base line is also sent at full resolution.
     full_x = _serialize_x(df[x_col])
     full_y = _serialize_y(df[y_col])
     anomaly_indices = np.where(anomaly_mask)[0]
     anomaly_x = [full_x[i] for i in anomaly_indices]
     anomaly_y = [full_y[i] for i in anomaly_indices]
-    base_x, base_y = _downsample_xy(df[x_col], df[y_col])
+    base_x, base_y = _serialize_xy(df[x_col], df[y_col])
 
     series_label = base_label if base_label is not None else tr(
         "Original data", "Originaldaten", lang
@@ -221,7 +184,7 @@ def build_stl_decomposition(stl_result, time_values: pd.Series, lang: str = "en"
     base_title = tr("STL decomposition", "STL-Zerlegung", lang)
 
     for component_key, series, component_label in components:
-        x_ser, y_ser = _downsample_xy(time_values, pd.Series(series))
+        x_ser, y_ser = _serialize_xy(time_values, pd.Series(series))
         plots.append({
             "type": "line",
             "component": component_key,
@@ -248,7 +211,7 @@ def build_lstm_error(results_df: pd.DataFrame, lang: str = "en") -> Dict[str, An
 
     `results_df` must have columns: timestamp, absolute_error.
     """
-    x_ser, y_ser = _downsample_xy(results_df["timestamp"], results_df["absolute_error"])
+    x_ser, y_ser = _serialize_xy(results_df["timestamp"], results_df["absolute_error"])
     return {
         "type": "line",
         "traces": [
