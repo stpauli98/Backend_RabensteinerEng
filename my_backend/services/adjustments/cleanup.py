@@ -15,17 +15,23 @@ def cleanup_old_files():
     errors = []
     deleted_count = 0
     current_time = time.time()
-    EXPIRY_TIME = 60 * 60
+    EXPIRY_TIME = 60 * 60               # raw uploads / chunks: 60 minutes
+    PROCESSED_EXPIRY_TIME = 24 * 60 * 60  # processed result CSVs: 24 hours
+
+    def _expiry_for(name: str) -> int:
+        # Processed-result CSVs ("<stem>_1.csv") are the user's downloadable
+        # deliverable — keep them for repeat/later downloads. (#102)
+        return PROCESSED_EXPIRY_TIME if name.lower().endswith("_1.csv") else EXPIRY_TIME
 
     temp_dir = UPLOAD_FOLDER
-    
+
     try:
         for root, dirs, files in os.walk(temp_dir, topdown=False):
             for name in files:
                 file_path = os.path.join(root, name)
                 try:
                     file_age = current_time - os.path.getmtime(file_path)
-                    if file_age > EXPIRY_TIME:
+                    if file_age > _expiry_for(name):
                         os.remove(file_path)
                         deleted_count += 1
                 except Exception as e:
@@ -44,10 +50,10 @@ def cleanup_old_files():
             if not os.path.exists(file_info['path']):
                 del temp_files[file_id]
     
-        logger.info(f"Cleaned up {deleted_count} files older than 60 minutes")
+        logger.info(f"Cleaned up {deleted_count} expired files")
         return {
             "success": success,
-            "message": f"Cleaned up {deleted_count} files older than 60 minutes",
+            "message": f"Cleaned up {deleted_count} expired files",
             "deleted_count": deleted_count,
             "errors": errors if errors else None
         }
