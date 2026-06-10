@@ -81,13 +81,14 @@ def sanitize_filename(filename: str) -> str:
     return safe_filename
 
 
-def analyse_data(file_path: str, upload_id: Optional[str] = None) -> Dict[str, Any]:
+def analyse_data(file_path: str, upload_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Analyze CSV file and extract relevant information
 
     Args:
         file_path: Path to the CSV file to analyze
         upload_id: ID of the upload if this is part of a chunked upload
+        user_id: Owner of the upload session (binds plain-adjustment state to a user)
     """
     try:
         global stored_data, info_df
@@ -125,7 +126,7 @@ def analyse_data(file_path: str, upload_id: Optional[str] = None) -> Dict[str, A
 
         if upload_id:
             if upload_id not in adjustment_chunks:
-                adjustment_chunks[upload_id] = {'chunks': {}, 'params': {}, 'dataframes': {}}
+                adjustment_chunks[upload_id] = {'chunks': {}, 'params': {}, 'dataframes': {}, 'user_id': user_id}
                 adjustment_chunks_timestamps[upload_id] = time.time()
             adjustment_chunks[upload_id]['dataframes'][filename] = df
 

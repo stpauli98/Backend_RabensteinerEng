@@ -26,7 +26,8 @@ from domains.adjustments.services.state_manager import (
     chunk_buffer_timestamps,
     cleanup_all_expired_data,
     get_file_info_from_cache,
-    check_files_need_methods
+    check_files_need_methods,
+    is_adjustment_owner
 )
 from domains.adjustments.services.progress import (
     ProgressStages,
@@ -179,7 +180,7 @@ def upload_chunk() -> Tuple[Response, int]:
                 del chunk_buffer_timestamps[file_key]
 
             try:
-                result = analyse_data(final_path, upload_id)
+                result = analyse_data(final_path, upload_id, g.user_id)
 
                 try:
                     file_size_bytes = len(combined_content.encode('utf-8'))
@@ -235,7 +236,7 @@ def adjust_data() -> Tuple[Response, int]:
         if not upload_id:
             return jsonify({"error": "upload_id is required"}), 400
 
-        if upload_id not in adjustment_chunks:
+        if not is_adjustment_owner(upload_id, g.user_id):
             return jsonify({"error": f"No data found for upload ID: {upload_id}"}), 404
 
         dataframes = adjustment_chunks[upload_id]['dataframes']
@@ -267,6 +268,7 @@ def adjust_data() -> Tuple[Response, int]:
 
         if upload_id not in adjustment_chunks:
             adjustment_chunks[upload_id] = {
+                'user_id': g.user_id,
                 'params': {
                     'startTime': start_time,
                     'endTime': end_time,
@@ -366,7 +368,7 @@ def complete_adjustment() -> Tuple[Response, int]:
         if not upload_id:
             return jsonify({"error": "Missing uploadId"}), 400
 
-        if upload_id not in adjustment_chunks:
+        if not is_adjustment_owner(upload_id, g.user_id):
             return jsonify({"error": "Upload ID not found"}), 404
 
         if 'methods' in data and data['methods']:
