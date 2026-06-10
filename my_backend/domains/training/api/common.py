@@ -48,6 +48,10 @@ def get_logger(name: str) -> logging.Logger:
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         ))
         logger.addHandler(handler)
+        # Stop propagation to the root logger: app_factory's basicConfig adds a
+        # root StreamHandler with the SAME format, so without this every line
+        # from these loggers was emitted twice (own handler + root handler).
+        logger.propagate = False
     # Level is inherited from root logger configured in app_factory.py
     return logger
 
