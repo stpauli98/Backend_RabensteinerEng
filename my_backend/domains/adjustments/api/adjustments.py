@@ -3,7 +3,6 @@ Adjustments API Routes
 Handles data adjustment operations including chunked uploads and data processing
 """
 import os
-import gzip
 import time
 import math
 import logging
@@ -17,6 +16,7 @@ from shared.auth.jwt import require_auth
 from shared.auth.subscription import require_subscription, check_processing_limit
 from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 from shared.exceptions.errors import AnomalyException, ThresholdOutOfRangeError
+from shared.responses.gzip import gzip_json_response
 
 from domains.adjustments.config import UPLOAD_FOLDER, VALID_METHODS
 from domains.adjustments.services.state_manager import (
@@ -56,37 +56,12 @@ bp = Blueprint('adjustmentsOfData_bp', __name__)
 # "CORS" error in the browser). Gzip the JSON on the wire: time-series JSON
 # compresses ~5-15x, which keeps realistic payloads well under the cap while
 # preserving every point. The browser decompresses transparently (Content-
-# Encoding: gzip), so no frontend change is needed.
-_GZIP_MIN_BYTES = 1024
-
-
+# Encoding: gzip), so no frontend change is needed. The actual logic lives in
+# shared/responses/gzip.py so the cloud blueprint can reuse the same guard.
 @bp.after_request
 def _gzip_json(response: Response) -> Response:
     """Gzip large JSON responses when the client accepts it."""
-    try:
-        accept = request.headers.get('Accept-Encoding', '')
-        if (
-            'gzip' not in accept.lower()
-            or response.direct_passthrough
-            or response.status_code < 200
-            or response.status_code in (204, 304)
-            or response.headers.get('Content-Encoding')
-            or response.mimetype != 'application/json'
-        ):
-            return response
-
-        data = response.get_data()
-        if len(data) < _GZIP_MIN_BYTES:
-            return response
-
-        compressed = gzip.compress(data, compresslevel=6)
-        response.set_data(compressed)
-        response.headers['Content-Encoding'] = 'gzip'
-        response.headers['Content-Length'] = str(len(compressed))
-        response.headers.add('Vary', 'Accept-Encoding')
-    except Exception:  # never let compression break a valid response
-        logger.exception("gzip after_request failed; returning uncompressed")
-    return response
+    return gzip_json_response(response)
 
 
 def _coerce_upload_id(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Tuple[Response, int]]]:

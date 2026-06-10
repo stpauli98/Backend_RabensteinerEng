@@ -20,6 +20,7 @@ from shared.auth.subscription import require_subscription, check_processing_limi
 from shared.tracking.usage import increment_processing_count, log_compute_duration
 from shared.exceptions.errors import CloudException
 from shared.validators.uuid import validate_uuid_format
+from shared.responses.gzip import gzip_json_response
 from core.rate_limits import limiter, cloud_limit_string
 
 from domains.cloud.config import (
@@ -46,6 +47,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('cloud', __name__)
+
+
+# Cloud regression/interpolation endpoints return large JSON/plot payloads.
+# Cloud Run rejects any non-streamed response > 32 MiB with a bare 500 (no CORS
+# header → misleading "CORS" error in the browser). Gzip the JSON on the wire so
+# realistic payloads stay under the cap; the browser decompresses transparently.
+# Shared logic lives in shared/responses/gzip.py (also used by the adjustments
+# blueprint). Streaming NDJSON responses set direct_passthrough and are skipped.
+@bp.after_request
+def _gzip_json(response):
+    return gzip_json_response(response)
 
 
 @bp.route('/upload-chunk', methods=['POST'])
