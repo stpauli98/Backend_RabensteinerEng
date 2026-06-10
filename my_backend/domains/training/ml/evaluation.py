@@ -134,13 +134,13 @@ def calculate_evaluation_with_averaging(
         - df_eval: DataFrame per feature with metrics at each averaging level
         - df_eval_ts: Per-timestep metrics for each feature and delta
     """
-    logger.info(f"Starting evaluation with averaging: n_max={n_max}, O_N={O_N}")
+    logger.debug(f"Starting evaluation with averaging: n_max={n_max}, O_N={O_N}")
 
     n_tst = tst_y_orig.shape[0]
     num_feat = tst_y_orig.shape[2]
     n_ft_o = num_feat
 
-    logger.info(f"Evaluation dimensions: n_tst={n_tst}, num_feat={num_feat}")
+    logger.debug(f"Evaluation dimensions: n_tst={n_tst}, num_feat={num_feat}")
 
     # =========================================================================
     # MITTELWERTBILDUNG (Averaging) - Lines 3323-3359
@@ -186,7 +186,7 @@ def calculate_evaluation_with_averaging(
 
         dat_eval[n_avg] = dat_eval_int
 
-    logger.info("Averaging complete. Calculating overall metrics...")
+    logger.debug("Averaging complete. Calculating overall metrics...")
 
     # =========================================================================
     # FEHLERBERECHNUNG - GESAMT (Overall metrics) - Lines 3365-3418
@@ -227,7 +227,7 @@ def calculate_evaluation_with_averaging(
         dat_eval[i + 1]["sMAPE"] = np.array(smape_int)
         dat_eval[i + 1]["MASE"] = np.array(mase_int)
 
-    logger.info("Overall metrics complete. Calculating per-timestep metrics...")
+    logger.debug("Overall metrics complete. Calculating per-timestep metrics...")
 
     # =========================================================================
     # FEHLERBERECHNUNG - ZEITSCHRITTE (Per-timestep metrics) - Lines 3420-3467
@@ -276,7 +276,7 @@ def calculate_evaluation_with_averaging(
         dat_eval[i + 1]["sMAPE_TS"] = np.array(smape_ts)
         dat_eval[i + 1]["MASE_TS"] = np.array(mase_ts)
 
-    logger.info("Per-timestep metrics complete. Generating df_eval...")
+    logger.debug("Per-timestep metrics complete. Generating df_eval...")
 
     # =========================================================================
     # df_eval GENERISANJE - Lines 3479-3514
@@ -320,7 +320,7 @@ def calculate_evaluation_with_averaging(
         feature_name = feature_names[i_feat] if i_feat < len(feature_names) else f"Feature_{i_feat}"
         df_eval[feature_name] = df_eval_int
 
-    logger.info("df_eval complete. Generating df_eval_ts...")
+    logger.debug("df_eval complete. Generating df_eval_ts...")
 
     # =========================================================================
     # df_eval_ts GENERISANJE - Lines 3517-3546
@@ -353,7 +353,7 @@ def calculate_evaluation_with_averaging(
         rmse_1 = df['RMSE'].iloc[0]
         logger.info(f"📊 EVALUATION RESULTS [{feature_name}] n_avg=1: MAE={mae_1:.2f}, MAPE={mape_1:.2f}%, RMSE={rmse_1:.2f}")
 
-    logger.info(f"Evaluation complete. Generated {len(df_eval)} features with {n_max} averaging levels each.")
+    logger.debug(f"Evaluation complete. Generated {len(df_eval)} features with {n_max} averaging levels each.")
 
     return dat_eval, df_eval, df_eval_ts
 

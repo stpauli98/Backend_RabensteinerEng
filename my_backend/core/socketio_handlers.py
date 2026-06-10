@@ -199,7 +199,7 @@ def register_socketio_handlers(socketio):
                                     now = datetime.now(timezone.utc)
                                     age_seconds = (now - updated_at).total_seconds()
                                     is_fresh = age_seconds < STALE_THRESHOLD_SECONDS  # match tracker cleanup window
-                                    logger.info(f"[WORKFLOW_DEBUG] request_training_status: Training age={age_seconds:.1f}s, is_fresh={is_fresh}")
+                                    logger.debug(f"[WORKFLOW_DEBUG] request_training_status: Training age={age_seconds:.1f}s, is_fresh={is_fresh}")
                                 except Exception as parse_error:
                                     logger.warning(f"[WORKFLOW_DEBUG] Could not parse updated_at: {parse_error}")
                                     is_fresh = False
@@ -216,18 +216,18 @@ def register_socketio_handlers(socketio):
 
                                 if is_dataset_generation:
                                     # This is dataset generation - let request_dataset_status handle it
-                                    logger.info(f"[WORKFLOW_DEBUG] request_training_status: Skipping dataset generation (handled by request_dataset_status)")
+                                    logger.debug(f"[WORKFLOW_DEBUG] request_training_status: Skipping dataset generation (handled by request_dataset_status)")
                                 else:
                                     # This is actual model training - emit training_progress
                                     model_progress = progress.get('model_progress', {}) or {}
-                                    logger.info(f"[WORKFLOW_DEBUG] request_training_status: Active MODEL training found, progress={progress.get('overall_progress')}%")
+                                    logger.debug(f"[WORKFLOW_DEBUG] request_training_status: Active MODEL training found, progress={progress.get('overall_progress')}%")
 
                                     emit('training_progress',
                                          build_active_training_progress_event(progress, session_id),
                                          room=room)
                                     return
                             else:
-                                logger.info(f"[WORKFLOW_DEBUG] request_training_status: Training found but stale (updated_at={updated_at_str})")
+                                logger.debug(f"[WORKFLOW_DEBUG] request_training_status: Training found but stale (updated_at={updated_at_str})")
                     except Exception as e:
                         # No active training in progress, continue to check training_results
                         logger.debug(f"[WORKFLOW_DEBUG] request_training_status: No active training found: {e}")

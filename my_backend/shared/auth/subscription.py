@@ -68,7 +68,7 @@ def get_user_usage(user_id: str, access_token: str) -> dict:
         if response and response.data and len(response.data) > 0:
             return response.data[0]
 
-        logger.info(f"No usage record for user {user_id} in current period")
+        logger.debug(f"No usage record for user {user_id} in current period")
         return {
             'uploads_count': 0,
             'processing_jobs_count': 0,
@@ -348,7 +348,7 @@ def check_training_limit(f):
         training_limit = g.plan.get('max_training_runs_per_month', 0)
 
         if training_limit == -1:
-            logger.info(f"Unlimited training for {g.user_email}")
+            logger.debug(f"Unlimited training for {g.user_email}")
             g.usage = usage
             return f(*args, **kwargs)
 

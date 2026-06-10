@@ -243,7 +243,7 @@ def update_workflow_phase(database_session_id: str, workflow_phase: str) -> bool
         logger.error(f"[WORKFLOW_DEBUG] Invalid workflow_phase: {workflow_phase}. Must be one of {valid_phases}")
         raise ValidationError(f"Invalid workflow_phase: {workflow_phase}. Must be one of {valid_phases}")
 
-    logger.info(f"[WORKFLOW_DEBUG] Updating workflow_phase to '{workflow_phase}' for session {database_session_id}")
+    logger.debug(f"[WORKFLOW_DEBUG] Updating workflow_phase to '{workflow_phase}' for session {database_session_id}")
 
     supabase = get_supabase_client()
 
@@ -260,7 +260,7 @@ def update_workflow_phase(database_session_id: str, workflow_phase: str) -> bool
             logger.error(f"[WORKFLOW_DEBUG] Database error updating workflow_phase: {response.error}")
             raise DatabaseError(f"Error updating workflow_phase: {response.error}")
 
-        logger.info(f"[WORKFLOW_DEBUG] Successfully updated workflow_phase to '{workflow_phase}' for session {database_session_id}")
+        logger.debug(f"[WORKFLOW_DEBUG] Successfully updated workflow_phase to '{workflow_phase}' for session {database_session_id}")
         return True
 
     except DatabaseError:

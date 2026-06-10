@@ -151,14 +151,14 @@ class ViolinProgressTracker:
         [WORKFLOW_DEBUG] Marks the start of dataset generation phase.
         """
         if DEBUG_WORKFLOW:
-            logger.info(f"[WORKFLOW_DEBUG] ViolinProgressTracker.start() called for session {self.session_id}")
+            logger.debug(f"[WORKFLOW_DEBUG] ViolinProgressTracker.start() called for session {self.session_id}")
 
         # [WORKFLOW_DEBUG] Update workflow_phase to 'phase1' (dataset generation started)
         if self.uuid_session_id:
             try:
                 update_workflow_phase(str(self.uuid_session_id), 'phase1')
                 if DEBUG_WORKFLOW:
-                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase1' for session {self.session_id}")
+                    logger.debug(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase1' for session {self.session_id}")
             except Exception as e:
                 logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to phase1: {str(e)}")
 
@@ -258,14 +258,14 @@ class ViolinProgressTracker:
         [WORKFLOW_DEBUG] Persists workflow_phase to 'phase2' before cleanup for session restoration.
         """
         if DEBUG_WORKFLOW:
-            logger.info(f"[WORKFLOW_DEBUG] ViolinProgressTracker.complete() called for session {self.session_id}")
+            logger.debug(f"[WORKFLOW_DEBUG] ViolinProgressTracker.complete() called for session {self.session_id}")
 
         # [WORKFLOW_DEBUG] Update workflow_phase BEFORE cleanup so state persists
         if self.uuid_session_id:
             try:
                 update_workflow_phase(str(self.uuid_session_id), 'phase2')
                 if DEBUG_WORKFLOW:
-                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase2' for session {self.session_id}")
+                    logger.debug(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase2' for session {self.session_id}")
             except Exception as e:
                 logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase: {str(e)}")
 
@@ -274,7 +274,7 @@ class ViolinProgressTracker:
         self.cleanup_database_entry()
 
         if DEBUG_WORKFLOW:
-            logger.info(f"[WORKFLOW_DEBUG] ViolinProgressTracker cleanup complete for session {self.session_id}")
+            logger.debug(f"[WORKFLOW_DEBUG] ViolinProgressTracker cleanup complete for session {self.session_id}")
 
     def error(self, message: str):
         """

@@ -660,8 +660,12 @@ def get_time_info_endpoint(session_id):
         })
 
     except ValueError:
-        logger.warning("get-time-info: not found", exc_info=True)
-        return _err('SESSION_NOT_FOUND', 'Session or time info not found', 404)
+        # A session may legitimately have no time-info configured — that is an
+        # empty state, not an error. Return 200 with empty data so the frontend
+        # (which polls this endpoint) doesn't spam the browser console with 404s
+        # and the backend log stays quiet (single debug line, no traceback).
+        logger.debug("get-time-info: none for session %s", session_id)
+        return jsonify({'success': True, 'data': {}})
     except Exception:
         logger.exception("Failed to get time info")
         return _err(

@@ -195,10 +195,10 @@ def emit_post_training_progress(
             event_data['details'] = details
 
         if DEBUG_TRAINING_PROGRESS:
-            logger.info(f"[DEBUG_PROGRESS] 📤 EMIT training_progress: step={step}, progress={progress}%, room={room}")
+            logger.debug(f"[DEBUG_PROGRESS] 📤 EMIT training_progress: step={step}, progress={progress}%, room={room}")
 
         socketio_instance.emit('training_progress', event_data, room=room)
-        logger.info(f"📊 Post-training progress: {progress}% - {message}")
+        logger.debug(f"📊 Post-training progress: {progress}% - {message}")
 
 
 def save_training_results(
@@ -235,10 +235,10 @@ def save_training_results(
     from shared.database.client import get_supabase_admin_client
     from utils.training_storage import upload_training_results
 
-    logger.info(f"[SAVE_RESULTS] Starting save_training_results for session {session_id}, uuid: {uuid_session_id}")
+    logger.debug(f"[SAVE_RESULTS] Starting save_training_results for session {session_id}, uuid: {uuid_session_id}")
 
     supabase = get_supabase_admin_client()
-    logger.info(f"[SAVE_RESULTS] Supabase client obtained successfully")
+    logger.debug(f"[SAVE_RESULTS] Supabase client obtained successfully")
 
     if not uuid_session_id:
         logger.error(f"Failed to get UUID for session {session_id}")
@@ -258,7 +258,7 @@ def save_training_results(
 
     # CHANGE: Use prepare_for_pickle instead of clean_for_json
     # This keeps numpy arrays as-is (no .tolist() conversion) - saves ~16 min and ~2.5GB RAM
-    logger.info(f"🔍 DEBUG: Preparing results for pickle (no numpy conversion)")
+    logger.debug(f"🔍 DEBUG: Preparing results for pickle (no numpy conversion)")
     import time
     start_prep = time.time()
 
@@ -278,7 +278,7 @@ def save_training_results(
         'output_features': training_results.get('metadata', {}).get('output_features', [])
     })
 
-    logger.info(f"🔍 DEBUG: Pickle preparation complete in {time.time() - start_prep:.2f}s")
+    logger.debug(f"🔍 DEBUG: Pickle preparation complete in {time.time() - start_prep:.2f}s")
 
     try:
         # Progress: Uploading results to storage
@@ -288,7 +288,7 @@ def save_training_results(
         def upload_progress_callback(step: str, percent: int, message: str, details: dict = None):
             emit_post_training_progress(socketio_instance, session_id, step, percent, message, details)
 
-        logger.info(f"📤 Uploading training results to storage for session {uuid_session_id}...")
+        logger.debug(f"📤 Uploading training results to storage for session {uuid_session_id}...")
         storage_result = upload_training_results(
             session_id=uuid_session_id,
             results=pickle_results,
@@ -333,7 +333,7 @@ def save_training_results(
                 storage_mb = storage_result['file_size'] / (1024 * 1024)  # Convert bytes to MB
 
                 update_storage_usage(user_id, storage_mb)
-                logger.info(f"✅ Storage usage tracked: {storage_mb:.2f}MB for user {user_id}")
+                logger.debug(f"✅ Storage usage tracked: {storage_mb:.2f}MB for user {user_id}")
             else:
                 logger.warning(f"⚠️ Could not track storage: No user_id found for session {uuid_session_id}")
         except Exception as storage_tracking_error:
@@ -398,7 +398,7 @@ def save_training_results(
                         'session_id', uuid_session_id
                     ).eq('plot_name', plot_name).execute()
                     supabase.table('training_visualizations').insert(viz_data).execute()
-                logger.info(f"Violin plots saved for session {uuid_session_id}")
+                logger.debug(f"Violin plots saved for session {uuid_session_id}")
             else:
                 logger.warning(f"Violin plots not in expected format: {type(violin_plots)}")
         except Exception as viz_error:
@@ -413,7 +413,7 @@ def save_training_results(
     try:
         from domains.training.ml.models import save_models_to_storage
 
-        logger.info(f"🤖 Auto-saving trained models to storage for session {uuid_session_id}...")
+        logger.debug(f"🤖 Auto-saving trained models to storage for session {uuid_session_id}...")
         models_result = save_models_to_storage(session_id, user_id=None)
 
         # Split the count: model artifacts vs scaler artifacts.
@@ -490,7 +490,7 @@ def run_model_training_async(
     progress_tracker = None
 
     try:
-        logger.info(f"🚀 TRAINING THREAD STARTED for session {session_id}")
+        logger.debug(f"🚀 TRAINING THREAD STARTED for session {session_id}")
         logger.info(f"Model config: {model_config}")
 
         # Get UUID for database operations
@@ -505,7 +505,7 @@ def run_model_training_async(
                 total_epochs=model_config.get('EP', 100),
                 model_name=model_config.get('MODE', 'Dense')
             )
-            logger.info(f"[TRAINING_TRACKER] Created for post-training phases, session {session_id}")
+            logger.debug(f"[TRAINING_TRACKER] Created for post-training phases, session {session_id}")
 
         # IMMEDIATE: Emit training_starting event so frontend shows progress tracker right away
         # This happens BEFORE data loading which can take 5-30 seconds
@@ -520,7 +520,7 @@ def run_model_training_async(
                 'model_name': model_config.get('MODE', 'Dense'),
                 'total_epochs': model_config.get('EP', 100)
             }, room=room)
-            logger.info(f"[TRAINING_TRACKER] Emitted immediate training_starting event for session {session_id}")
+            logger.debug(f"[TRAINING_TRACKER] Emitted immediate training_starting event for session {session_id}")
 
             # Also persist to database immediately for page refresh recovery
             if progress_tracker:
@@ -532,19 +532,19 @@ def run_model_training_async(
             runner.set_socketio(socketio_instance)
 
         if DEBUG_TRAINING_PROGRESS:
-            logger.info(f"[DEBUG_PROGRESS] 🏃 Starting runner.run_training_script for session {session_id}")
+            logger.debug(f"[DEBUG_PROGRESS] 🏃 Starting runner.run_training_script for session {session_id}")
 
         result = runner.run_training_script(session_id, model_config)
 
         if DEBUG_TRAINING_PROGRESS:
-            logger.info(f"[DEBUG_PROGRESS] ✅ runner.run_training_script RETURNED with success={result.get('success')}")
-            logger.info(f"[DEBUG_PROGRESS] 🔄 NOW STARTING POST-TRAINING PHASES...")
+            logger.debug(f"[DEBUG_PROGRESS] ✅ runner.run_training_script RETURNED with success={result.get('success')}")
+            logger.debug(f"[DEBUG_PROGRESS] 🔄 NOW STARTING POST-TRAINING PHASES...")
 
         if result['success']:
             try:
                 if DEBUG_TRAINING_PROGRESS:
-                    logger.info(f"[DEBUG_PROGRESS] ⏰ ENTERING POST-TRAINING SUCCESS BRANCH")
-                    logger.info(f"[DEBUG_PROGRESS] 📊 Step 1: Evaluating model (50-55%)")
+                    logger.debug(f"[DEBUG_PROGRESS] ⏰ ENTERING POST-TRAINING SUCCESS BRANCH")
+                    logger.debug(f"[DEBUG_PROGRESS] 📊 Step 1: Evaluating model (50-55%)")
 
                 # Progress: Evaluating model (50-55%)
                 if progress_tracker:
@@ -611,7 +611,7 @@ def run_model_training_async(
                     'success': True,
                     'message': 'Training completed successfully'
                 }, room=room)
-                logger.info(f"✅ Training completed event emitted for session {session_id}")
+                logger.debug(f"✅ Training completed event emitted for session {session_id}")
         else:
             logger.error(f"Training failed: {result.get('error')}")
             if progress_tracker:

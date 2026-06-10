@@ -328,7 +328,7 @@ def save_models_to_storage(session_id: str, user_id: str = None) -> Dict:
                         'file_format': 'keras'
                     })
 
-                    logger.info(f"✅ Uploaded raw Keras model: {storage_result['file_path']}")
+                    logger.debug(f"✅ Uploaded raw Keras model: {storage_result['file_path']}")
 
                 finally:
                     if os.path.exists(temp_file_path):

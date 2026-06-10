@@ -85,7 +85,7 @@ def _build_input_feature_names(i_dat_inf, i_dat) -> list:
     if T.H.IMP:
         feature_names.append('H')
 
-    logger.info(f"Built input feature names: {feature_names}")
+    logger.debug(f"Built input feature names: {feature_names}")
     return feature_names
 
 
@@ -421,7 +421,7 @@ def run_exact_training_pipeline(
 
     # No fixed seeds - matches original training.py which has natural variation each run
 
-    logger.info(f"   Pipeline Step 1: Creating training arrays from {utc_strt} to {utc_end}")
+    logger.debug(f"   Pipeline Step 1: Creating training arrays from {utc_strt} to {utc_end}")
     try:
         (i_array_3D, o_array_3D,
          i_combined_array, o_combined_array,
@@ -431,7 +431,7 @@ def run_exact_training_pipeline(
             session_id=session_id,
             mts_config=mts_config
         )
-        logger.info(f"   Pipeline Step 1 complete: Created arrays with shape {i_array_3D.shape if hasattr(i_array_3D, 'shape') else 'unknown'}")
+        logger.debug(f"   Pipeline Step 1 complete: Created arrays with shape {i_array_3D.shape if hasattr(i_array_3D, 'shape') else 'unknown'}")
     except Exception as e:
         logger.error(f"   ❌ Pipeline Step 1 FAILED: {str(e)}")
         import traceback
@@ -443,10 +443,10 @@ def run_exact_training_pipeline(
     n_features_in = i_array_3D.shape[2]
     n_features_out = o_array_3D.shape[2]
 
-    logger.info(f"=== ARRAY SHAPES BEFORE SCALING ===")
-    logger.info(f"Input:  n_dat={n_dat}, n_timesteps={n_timesteps}, n_features={n_features_in}")
-    logger.info(f"Output: n_dat={n_dat}, n_timesteps={o_array_3D.shape[1]}, n_features={n_features_out}")
-    logger.info(f"=== END ARRAY SHAPES ===")
+    logger.debug(f"=== ARRAY SHAPES BEFORE SCALING ===")
+    logger.debug(f"Input:  n_dat={n_dat}, n_timesteps={n_timesteps}, n_features={n_features_in}")
+    logger.debug(f"Output: n_dat={n_dat}, n_timesteps={o_array_3D.shape[1]}, n_features={n_features_out}")
+    logger.debug(f"=== END ARRAY SHAPES ===")
 
     scaling_result = process_and_scale_data(
         i_array_3D, o_array_3D,
@@ -519,7 +519,7 @@ def run_exact_training_pipeline(
                 total_epochs=total_epochs,
                 model_name=mdl_config.MODE
             )
-            logger.info(f"   [TRAINING_TRACKER] Created for session {session_id}")
+            logger.debug(f"   [TRAINING_TRACKER] Created for session {session_id}")
 
             # Create SocketIO callback with progress tracker
             socketio_callback = SocketIOProgressCallback(
@@ -529,7 +529,7 @@ def run_exact_training_pipeline(
                 model_name=mdl_config.MODE,
                 progress_tracker=progress_tracker
             )
-            logger.info(f"   SocketIO callback created for session {session_id}")
+            logger.debug(f"   SocketIO callback created for session {session_id}")
         except Exception as e:
             logger.warning(f"   Failed to create SocketIO callback: {e}")
     
@@ -558,15 +558,15 @@ def run_exact_training_pipeline(
         raise ValueError(f"Unknown model mode: {mdl_config.MODE}")
 
     if DEBUG_EXACT_PIPELINE:
-        logger.info(f"[DEBUG_EXACT] 🏁 MODEL TRAINING RETURNED - model type: {mdl_config.MODE}")
-        logger.info(f"[DEBUG_EXACT] 🔄 Starting evaluation phase...")
+        logger.debug(f"[DEBUG_EXACT] 🏁 MODEL TRAINING RETURNED - model type: {mdl_config.MODE}")
+        logger.debug(f"[DEBUG_EXACT] 🔄 Starting evaluation phase...")
 
     evaluation_metrics = {}
 
     try:
         if mdl is not None:
             if DEBUG_EXACT_PIPELINE:
-                logger.info(f"[DEBUG_EXACT] 📊 Running model.predict on test set ({tst_x.shape[0]} samples)...")
+                logger.debug(f"[DEBUG_EXACT] 📊 Running model.predict on test set ({tst_x.shape[0]} samples)...")
             if mdl_config.MODE in ["Dense", "CNN", "LSTM", "AR LSTM"]:
                 test_predictions = mdl.predict(tst_x, verbose=0)
             elif mdl_config.MODE == "SVR_dir":
@@ -703,7 +703,7 @@ def run_exact_training_pipeline(
                 # This matches training_original.py lines 2313-2331 RE-SCALING section
                 if o_scalers is not None and len(o_scalers) > 0:
                     eval_fcst = inverse_scale_predictions(test_predictions, o_scalers)
-                    logger.info(f"Predictions inverse scaled. Range: [{np.min(test_predictions):.4f}, {np.max(test_predictions):.4f}] -> [{np.min(eval_fcst):.2f}, {np.max(eval_fcst):.2f}]")
+                    logger.debug(f"Predictions inverse scaled. Range: [{np.min(test_predictions):.4f}, {np.max(test_predictions):.4f}] -> [{np.min(eval_fcst):.2f}, {np.max(eval_fcst):.2f}]")
                 else:
                     eval_fcst = test_predictions
                     logger.warning("No output scalers available - using scaled predictions for evaluation")
@@ -766,8 +766,8 @@ def run_exact_training_pipeline(
     gc.collect()
 
     if DEBUG_EXACT_PIPELINE:
-        logger.info(f"[DEBUG_EXACT] ✅ run_exact_training_pipeline RETURNING to middleman")
-        logger.info(f"[DEBUG_EXACT] 🔄 Control will now go back to orchestrator for post-training phases...")
+        logger.debug(f"[DEBUG_EXACT] ✅ run_exact_training_pipeline RETURNING to middleman")
+        logger.debug(f"[DEBUG_EXACT] 🔄 Control will now go back to orchestrator for post-training phases...")
 
     return {
         'trained_model': mdl,

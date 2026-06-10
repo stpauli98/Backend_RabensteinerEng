@@ -164,7 +164,7 @@ def generate_plot():
         try:
             uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
             update_workflow_phase(str(uuid_session_id), 'completed')
-            logger.info(f"[WORKFLOW_DEBUG] generate_plot: workflow_phase updated to 'completed' for session {session_id}")
+            logger.debug(f"[WORKFLOW_DEBUG] generate_plot: workflow_phase updated to 'completed' for session {session_id}")
         except Exception:
             logger.exception("[WORKFLOW_DEBUG] Failed to update workflow_phase to completed")
 
