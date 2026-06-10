@@ -199,7 +199,7 @@ def get_evaluation_tables(session_id):
         return err
 
     try:
-        from utils.training_storage import download_training_results
+        from utils.training_storage import download_training_results_metrics_only
         supabase = get_supabase_client(use_service_role=True)
         uuid_session_id = create_or_get_session_uuid(session_id, g.user_id)
 
@@ -227,10 +227,10 @@ def get_evaluation_tables(session_id):
 
         if record.get('results_file_path'):
             try:
-                results = download_training_results(
-                    file_path=record['results_file_path'],
-                    decompress=record.get('compressed', False)
-                )
+                # #112: metrics-only download — skip Keras model reconstruction so a
+                # model version-skew deserialization failure cannot hide df_eval, which
+                # lives in the same pickle and is all this endpoint needs.
+                results = download_training_results_metrics_only(record['results_file_path'])
             except Exception as exc:
                 if is_storage_not_found(exc):
                     logger.warning("evaluation-tables: results file missing in storage", exc_info=True)
