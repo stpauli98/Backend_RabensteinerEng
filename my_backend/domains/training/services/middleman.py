@@ -360,7 +360,7 @@ class ModernMiddlemanRunner:
 
             try:
                 if DEBUG_MIDDLEMAN:
-                    logger.info(f"[DEBUG_MIDDLEMAN] 🚀 Calling run_exact_training_pipeline...")
+                    logger.debug(f"[DEBUG_MIDDLEMAN] 🚀 Calling run_exact_training_pipeline...")
                 results = run_exact_training_pipeline(
                     i_dat=i_dat,
                     o_dat=o_dat,
@@ -375,8 +375,8 @@ class ModernMiddlemanRunner:
                     session_id=session_id
                 )
                 if DEBUG_MIDDLEMAN:
-                    logger.info(f"[DEBUG_MIDDLEMAN] ✅ run_exact_training_pipeline RETURNED")
-                    logger.info(f"[DEBUG_MIDDLEMAN] 🔄 Preparing return dict for orchestrator...")
+                    logger.debug(f"[DEBUG_MIDDLEMAN] ✅ run_exact_training_pipeline RETURNED")
+                    logger.debug(f"[DEBUG_MIDDLEMAN] 🔄 Preparing return dict for orchestrator...")
                 logger.info(f"Training pipeline completed for session {session_id}")
             except Exception as e:
                 error_msg = f"Training pipeline failed: {str(e)}"
@@ -403,7 +403,7 @@ class ModernMiddlemanRunner:
             metrics = results.get('metrics', evaluation_metrics)
             
             if DEBUG_MIDDLEMAN:
-                logger.info(f"[DEBUG_MIDDLEMAN] 📦 RETURNING success=True to orchestrator")
+                logger.debug(f"[DEBUG_MIDDLEMAN] 📦 RETURNING success=True to orchestrator")
             return {
                 'success': True,
                 'session_id': session_id,

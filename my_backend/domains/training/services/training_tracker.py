@@ -55,7 +55,7 @@ def cleanup_stale_training_progress():
             .execute()
 
         if result.data:
-            logger.info(f"[HEARTBEAT] Found {len(result.data)} stale training_progress entries")
+            logger.debug(f"[HEARTBEAT] Found {len(result.data)} stale training_progress entries")
             for entry in result.data:
                 session_id = entry.get('session_id')
                 updated_at = entry.get('updated_at')
@@ -71,9 +71,9 @@ def cleanup_stale_training_progress():
                     'session_id', session_id
                 ).execute()
 
-            logger.info(f"[HEARTBEAT] Cleaned up {len(result.data)} orphaned training entries")
+            logger.debug(f"[HEARTBEAT] Cleaned up {len(result.data)} orphaned training entries")
         else:
-            logger.info("[HEARTBEAT] No stale training_progress entries found")
+            logger.debug("[HEARTBEAT] No stale training_progress entries found")
 
     except Exception as e:
         logger.error(f"[HEARTBEAT] Failed to cleanup stale entries: {str(e)}")
@@ -143,7 +143,7 @@ class TrainingProgressTracker:
             name=f"heartbeat_{self.session_id[:8]}"
         )
         self._heartbeat_thread.start()
-        logger.info(f"[HEARTBEAT] Started heartbeat for session {self.session_id}")
+        logger.debug(f"[HEARTBEAT] Started heartbeat for session {self.session_id}")
 
     def stop_heartbeat(self):
         """Stop the heartbeat thread."""
@@ -154,7 +154,7 @@ class TrainingProgressTracker:
             self._heartbeat_thread.join(timeout=2)
             self._heartbeat_thread = None
 
-        logger.info(f"[HEARTBEAT] Stopped heartbeat for session {self.session_id}")
+        logger.debug(f"[HEARTBEAT] Stopped heartbeat for session {self.session_id}")
 
     def _heartbeat_loop(self):
         """Background thread that sends heartbeats to database."""
@@ -236,7 +236,7 @@ class TrainingProgressTracker:
                     event_data.update(extra_data)
 
                 if DEBUG_TRACKER:
-                    logger.info(f"[DEBUG_TRACKER] 📤 EMIT training_progress: progress={progress}%, status={status}, step={step[:50]}, room={self.room}")
+                    logger.debug(f"[DEBUG_TRACKER] 📤 EMIT training_progress: progress={progress}%, status={status}, step={step[:50]}, room={self.room}")
 
                 self.socketio.emit('training_progress', event_data, room=self.room)
             except Exception as e:
@@ -341,14 +341,14 @@ class TrainingProgressTracker:
         Emit when training starts. Also starts heartbeat.
         [WORKFLOW_DEBUG] Updates workflow_phase to 'phase3' (model training).
         """
-        logger.info(f"[TRAINING_TRACKER] Training started for session {self.session_id}")
+        logger.debug(f"[TRAINING_TRACKER] Training started for session {self.session_id}")
 
         # [WORKFLOW_DEBUG] Update workflow_phase to phase3 (model training)
         if self.uuid_session_id:
             try:
                 update_workflow_phase(str(self.uuid_session_id), 'phase3')
                 if DEBUG_WORKFLOW:
-                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase3' for session {self.session_id}")
+                    logger.debug(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase3' for session {self.session_id}")
             except Exception as e:
                 logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to phase3: {str(e)}")
 
@@ -406,7 +406,7 @@ class TrainingProgressTracker:
     def training_complete(self):
         """Emit when Keras training is done (before post-training phases)."""
         if DEBUG_TRACKER:
-            logger.info(f"[DEBUG_TRACKER] 🏁 training_complete() called - Keras training finished, starting post-training")
+            logger.debug(f"[DEBUG_TRACKER] 🏁 training_complete() called - Keras training finished, starting post-training")
         logger.info(
             f"[TRAINING_TRACKER] Keras training completed for session {self.session_id}"
         )
@@ -423,19 +423,19 @@ class TrainingProgressTracker:
     def evaluating_model(self):
         """Emit when evaluating model performance."""
         if DEBUG_TRACKER:
-            logger.info(f"[DEBUG_TRACKER] 📊 evaluating_model() called - 55%")
+            logger.debug(f"[DEBUG_TRACKER] 📊 evaluating_model() called - 55%")
         self.emit(55, "Evaluating model performance...")
 
     def preparing_results(self):
         """Emit when preparing results for storage."""
         if DEBUG_TRACKER:
-            logger.info(f"[DEBUG_TRACKER] 📦 preparing_results() called - 60%")
+            logger.debug(f"[DEBUG_TRACKER] 📦 preparing_results() called - 60%")
         self.emit(60, "Preparing results for storage...")
 
     def uploading_results(self):
         """Emit when uploading training results to storage."""
         if DEBUG_TRACKER:
-            logger.info(f"[DEBUG_TRACKER] ⬆️ uploading_results() called - 65%")
+            logger.debug(f"[DEBUG_TRACKER] ⬆️ uploading_results() called - 65%")
         self.emit(65, "Uploading training results...")
 
     def upload_progress(self, sub_progress: int, message: str):
@@ -476,7 +476,7 @@ class TrainingProgressTracker:
         [WORKFLOW_DEBUG] Persists workflow_phase to 'phase4' (plotting interface) before cleanup.
         NOTE: 'phase4' = Plotting Interface. 'completed' is set later when user finishes.
         """
-        logger.info(f"[TRAINING_TRACKER] Training completed for session {self.session_id}")
+        logger.debug(f"[TRAINING_TRACKER] Training completed for session {self.session_id}")
 
         # [WORKFLOW_DEBUG] Update workflow_phase to 'phase4' (Plotting Interface)
         # NOT 'completed' - that's set when user finishes viewing plots
@@ -484,7 +484,7 @@ class TrainingProgressTracker:
             try:
                 update_workflow_phase(str(self.uuid_session_id), 'phase4')
                 if DEBUG_WORKFLOW:
-                    logger.info(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase4' (Plotting Interface) for session {self.session_id}")
+                    logger.debug(f"[WORKFLOW_DEBUG] workflow_phase updated to 'phase4' (Plotting Interface) for session {self.session_id}")
             except Exception as e:
                 logger.error(f"[WORKFLOW_DEBUG] Failed to update workflow_phase to phase4: {str(e)}")
 
@@ -493,7 +493,7 @@ class TrainingProgressTracker:
         self.cleanup_database_entry()
 
         if DEBUG_WORKFLOW:
-            logger.info(f"[WORKFLOW_DEBUG] TrainingProgressTracker cleanup complete for session {self.session_id}")
+            logger.debug(f"[WORKFLOW_DEBUG] TrainingProgressTracker cleanup complete for session {self.session_id}")
 
     def error(self, message: str):
         """

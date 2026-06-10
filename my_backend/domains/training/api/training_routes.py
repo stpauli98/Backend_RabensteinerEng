@@ -443,7 +443,7 @@ def get_results_summary(session_id):
             if session_response.data:
                 n_dat = session_response.data.get('n_dat', 0) or 0
                 workflow_phase = session_response.data.get('workflow_phase', 'upload') or 'upload'
-                logger.info(f"[WORKFLOW_DEBUG] get_results_summary for {session_id}: n_dat={n_dat}, workflow_phase={workflow_phase}")
+                logger.debug(f"[WORKFLOW_DEBUG] get_results_summary for {session_id}: n_dat={n_dat}, workflow_phase={workflow_phase}")
         except Exception:
             logger.exception("[WORKFLOW_DEBUG] Failed to get session data for results summary")
 

@@ -194,7 +194,7 @@ if TENSORFLOW_AVAILABLE:
                         'epoch_duration': round(epoch_duration, 2)
                     }, room=self.room)
 
-                    logger.info(
+                    logger.debug(
                         f"📊 Epoch {epoch + 1}/{self.total_epochs} - "
                         f"loss: {logs.get('loss', 0):.4f}, "
                         f"val_loss: {logs.get('val_loss', 0):.4f}, "
@@ -206,7 +206,7 @@ if TENSORFLOW_AVAILABLE:
         def on_train_end(self, logs=None):
             """Emit training completed event."""
             if DEBUG_SOCKETIO:
-                logger.info(f"[DEBUG_SOCKETIO] 🏁 on_train_end() CALLED - Keras training finished!")
+                logger.debug(f"[DEBUG_SOCKETIO] 🏁 on_train_end() CALLED - Keras training finished!")
 
             total_duration = time.time() - self.training_start_time if self.training_start_time else 0
 
@@ -219,15 +219,15 @@ if TENSORFLOW_AVAILABLE:
                 duration_formatted = f"{int(total_duration)}s"
 
             if DEBUG_SOCKETIO:
-                logger.info(f"[DEBUG_SOCKETIO] ⏱️ Training duration: {duration_formatted}")
-                logger.info(f"[DEBUG_SOCKETIO] 🔄 Calling progress_tracker.training_complete()...")
+                logger.debug(f"[DEBUG_SOCKETIO] ⏱️ Training duration: {duration_formatted}")
+                logger.debug(f"[DEBUG_SOCKETIO] 🔄 Calling progress_tracker.training_complete()...")
 
             # Notify tracker that Keras training is complete (post-training phases follow)
             if self.progress_tracker:
                 self.progress_tracker.training_complete()
 
             if DEBUG_SOCKETIO:
-                logger.info(f"[DEBUG_SOCKETIO] 📤 Emitting 'model_training_completed' status...")
+                logger.debug(f"[DEBUG_SOCKETIO] 📤 Emitting 'model_training_completed' status...")
 
             if self.socketio:
                 try:
@@ -246,8 +246,8 @@ if TENSORFLOW_AVAILABLE:
                     logger.info(f"✅ {self.model_name} training completed in {duration_formatted} ({len(self.epoch_times)} epochs)")
 
                     if DEBUG_SOCKETIO:
-                        logger.info(f"[DEBUG_SOCKETIO] ✅ 'model_training_completed' emitted successfully")
-                        logger.info(f"[DEBUG_SOCKETIO] ⏰ on_train_end() RETURNING - control goes back to runner...")
+                        logger.debug(f"[DEBUG_SOCKETIO] ✅ 'model_training_completed' emitted successfully")
+                        logger.debug(f"[DEBUG_SOCKETIO] ⏰ on_train_end() RETURNING - control goes back to runner...")
                 except Exception as e:
                     logger.error(f"Failed to emit training_completed: {e}")
 
