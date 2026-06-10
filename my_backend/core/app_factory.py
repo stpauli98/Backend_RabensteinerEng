@@ -172,7 +172,7 @@ def create_app():
     @app.route('/')
     def index():
         try:
-            logger.info("Handling request to index endpoint")
+            logger.debug("Handling request to index endpoint")
             return jsonify({
                 'status': 'online',
                 'message': 'Backend service is running',
@@ -193,7 +193,7 @@ def create_app():
         with app.app_context():
             try:
                 result = cleanup_old_files()
-                logger.info(f"Scheduled cleanup completed: {result.get('message', 'No message')}")
+                logger.debug(f"Scheduled cleanup completed: {result.get('message', 'No message')}")
             except Exception as e:
                 logger.error(f"Error in scheduled cleanup: {str(e)}")
 
@@ -203,7 +203,7 @@ def create_app():
             from domains.processing.services.local_chunk_service import local_chunk_service
             deleted = local_chunk_service.cleanup_all_expired()
             if deleted > 0:
-                logger.info(f"Cleaned up {deleted} expired chunk uploads from local filesystem")
+                logger.debug(f"Cleaned up {deleted} expired chunk uploads from local filesystem")
         except Exception as e:
             logger.error(f"Error in chunk cleanup: {str(e)}")
 
@@ -213,7 +213,7 @@ def create_app():
             from shared.storage.service import storage_service
             deleted = storage_service.cleanup_all_old_files(max_age_hours=24)
             if deleted > 0:
-                logger.info(f"Cleaned up {deleted} old processed files from Supabase Storage")
+                logger.debug(f"Cleaned up {deleted} old processed files from Supabase Storage")
         except Exception as e:
             logger.error(f"Error in processed files cleanup: {str(e)}")
 
@@ -223,7 +223,7 @@ def create_app():
             from domains.processing.services.local_chunk_service import local_chunk_service
             deleted = local_chunk_service.cleanup_old_processed_results(max_age_hours=24)
             if deleted > 0:
-                logger.info(f"Cleaned up {deleted} old processed results from local filesystem")
+                logger.debug(f"Cleaned up {deleted} old processed results from local filesystem")
         except Exception as e:
             logger.error(f"Error in local processed results cleanup: {str(e)}")
 

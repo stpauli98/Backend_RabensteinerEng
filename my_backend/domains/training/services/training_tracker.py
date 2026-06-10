@@ -407,7 +407,7 @@ class TrainingProgressTracker:
         """Emit when Keras training is done (before post-training phases)."""
         if DEBUG_TRACKER:
             logger.debug(f"[DEBUG_TRACKER] 🏁 training_complete() called - Keras training finished, starting post-training")
-        logger.info(
+        logger.debug(
             f"[TRAINING_TRACKER] Keras training completed for session {self.session_id}"
         )
         self.emit(

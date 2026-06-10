@@ -575,7 +575,7 @@ def cleanup_old_training_results(
 
         if result['deleted_storage_files'] > 0:
             freed_mb = result['freed_bytes'] / 1024 / 1024
-            logger.info(f"Cleanup: deleted {result['deleted_storage_files']} old results, freed {freed_mb:.1f} MB")
+            logger.debug(f"Cleanup: deleted {result['deleted_storage_files']} old results, freed {freed_mb:.1f} MB")
 
     except Exception as e:
         logger.error(f"Cleanup failed for session {session_id}: {e}")

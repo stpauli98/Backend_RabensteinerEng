@@ -288,7 +288,7 @@ def save_training_results(
         def upload_progress_callback(step: str, percent: int, message: str, details: dict = None):
             emit_post_training_progress(socketio_instance, session_id, step, percent, message, details)
 
-        logger.info(f"📤 Uploading training results to storage for session {uuid_session_id}...")
+        logger.debug(f"📤 Uploading training results to storage for session {uuid_session_id}...")
         storage_result = upload_training_results(
             session_id=uuid_session_id,
             results=pickle_results,
@@ -333,7 +333,7 @@ def save_training_results(
                 storage_mb = storage_result['file_size'] / (1024 * 1024)  # Convert bytes to MB
 
                 update_storage_usage(user_id, storage_mb)
-                logger.info(f"✅ Storage usage tracked: {storage_mb:.2f}MB for user {user_id}")
+                logger.debug(f"✅ Storage usage tracked: {storage_mb:.2f}MB for user {user_id}")
             else:
                 logger.warning(f"⚠️ Could not track storage: No user_id found for session {uuid_session_id}")
         except Exception as storage_tracking_error:
@@ -398,7 +398,7 @@ def save_training_results(
                         'session_id', uuid_session_id
                     ).eq('plot_name', plot_name).execute()
                     supabase.table('training_visualizations').insert(viz_data).execute()
-                logger.info(f"Violin plots saved for session {uuid_session_id}")
+                logger.debug(f"Violin plots saved for session {uuid_session_id}")
             else:
                 logger.warning(f"Violin plots not in expected format: {type(violin_plots)}")
         except Exception as viz_error:
@@ -413,7 +413,7 @@ def save_training_results(
     try:
         from domains.training.ml.models import save_models_to_storage
 
-        logger.info(f"🤖 Auto-saving trained models to storage for session {uuid_session_id}...")
+        logger.debug(f"🤖 Auto-saving trained models to storage for session {uuid_session_id}...")
         models_result = save_models_to_storage(session_id, user_id=None)
 
         # Split the count: model artifacts vs scaler artifacts.
@@ -490,7 +490,7 @@ def run_model_training_async(
     progress_tracker = None
 
     try:
-        logger.info(f"🚀 TRAINING THREAD STARTED for session {session_id}")
+        logger.debug(f"🚀 TRAINING THREAD STARTED for session {session_id}")
         logger.info(f"Model config: {model_config}")
 
         # Get UUID for database operations
@@ -611,7 +611,7 @@ def run_model_training_async(
                     'success': True,
                     'message': 'Training completed successfully'
                 }, room=room)
-                logger.info(f"✅ Training completed event emitted for session {session_id}")
+                logger.debug(f"✅ Training completed event emitted for session {session_id}")
         else:
             logger.error(f"Training failed: {result.get('error')}")
             if progress_tracker:

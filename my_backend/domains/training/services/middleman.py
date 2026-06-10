@@ -71,7 +71,7 @@ class ModernMiddlemanRunner:
             Dict containing training results and status
         """
         try:
-            logger.info(f"Training started for session {session_id}")
+            logger.debug(f"Training started for session {session_id}")
 
             import glob
             temp_dir = "temp_training_data"
@@ -377,7 +377,7 @@ class ModernMiddlemanRunner:
                 if DEBUG_MIDDLEMAN:
                     logger.debug(f"[DEBUG_MIDDLEMAN] ✅ run_exact_training_pipeline RETURNED")
                     logger.debug(f"[DEBUG_MIDDLEMAN] 🔄 Preparing return dict for orchestrator...")
-                logger.info(f"Training pipeline completed for session {session_id}")
+                logger.debug(f"Training pipeline completed for session {session_id}")
             except Exception as e:
                 error_msg = f"Training pipeline failed: {str(e)}"
                 logger.error(f"Training pipeline failed: {error_msg}")
@@ -397,7 +397,7 @@ class ModernMiddlemanRunner:
             # We skip this and return empty violin_plots - the ones from dataset generation
             # are already saved in the database.
             violin_plots = {}
-            logger.info("Skipping violin plot creation (already done during dataset generation)")
+            logger.debug("Skipping violin plot creation (already done during dataset generation)")
             
             evaluation_metrics = results.get('evaluation_metrics', {})
             metrics = results.get('metrics', evaluation_metrics)

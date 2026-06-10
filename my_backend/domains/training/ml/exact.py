@@ -703,7 +703,7 @@ def run_exact_training_pipeline(
                 # This matches training_original.py lines 2313-2331 RE-SCALING section
                 if o_scalers is not None and len(o_scalers) > 0:
                     eval_fcst = inverse_scale_predictions(test_predictions, o_scalers)
-                    logger.info(f"Predictions inverse scaled. Range: [{np.min(test_predictions):.4f}, {np.max(test_predictions):.4f}] -> [{np.min(eval_fcst):.2f}, {np.max(eval_fcst):.2f}]")
+                    logger.debug(f"Predictions inverse scaled. Range: [{np.min(test_predictions):.4f}, {np.max(test_predictions):.4f}] -> [{np.min(eval_fcst):.2f}, {np.max(eval_fcst):.2f}]")
                 else:
                     eval_fcst = test_predictions
                     logger.warning("No output scalers available - using scaled predictions for evaluation")

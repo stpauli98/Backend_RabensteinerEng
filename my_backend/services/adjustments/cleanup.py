@@ -50,7 +50,7 @@ def cleanup_old_files():
             if not os.path.exists(file_info['path']):
                 del temp_files[file_id]
     
-        logger.info(f"Cleaned up {deleted_count} expired files")
+        logger.debug(f"Cleaned up {deleted_count} expired files")
         return {
             "success": success,
             "message": f"Cleaned up {deleted_count} expired files",

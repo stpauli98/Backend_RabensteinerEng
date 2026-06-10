@@ -45,7 +45,7 @@ def increment_upload_count(user_id: str) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... upload {current_count}->{current_count + 1}")
+            logger.debug(f"Usage: {user_id[:8]}... upload {current_count}->{current_count + 1}")
         else:
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
@@ -63,7 +63,7 @@ def increment_upload_count(user_id: str) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... new tracking record (upload)")
+            logger.debug(f"Usage: {user_id[:8]}... new tracking record (upload)")
 
         return True
 
@@ -103,7 +103,7 @@ def increment_processing_count(user_id: str) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... processing {current_count}->{current_count + 1}")
+            logger.debug(f"Usage: {user_id[:8]}... processing {current_count}->{current_count + 1}")
         else:
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
@@ -121,7 +121,7 @@ def increment_processing_count(user_id: str) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... new tracking record (processing)")
+            logger.debug(f"Usage: {user_id[:8]}... new tracking record (processing)")
 
         return True
 
@@ -159,7 +159,7 @@ def increment_training_count(user_id: str) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... training {current_count}->{current_count + 1}")
+            logger.debug(f"Usage: {user_id[:8]}... training {current_count}->{current_count + 1}")
         else:
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
                                              year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
@@ -177,7 +177,7 @@ def increment_training_count(user_id: str) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... new tracking record (training)")
+            logger.debug(f"Usage: {user_id[:8]}... new tracking record (training)")
 
         return True
 
@@ -218,7 +218,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
                 .eq('id', usage_id) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... storage {current_storage_gb:.2f}->{new_storage_gb:.2f} GB (+{storage_mb:.1f}MB)")
+            logger.debug(f"Usage: {user_id[:8]}... storage {current_storage_gb:.2f}->{new_storage_gb:.2f} GB (+{storage_mb:.1f}MB)")
         else:
             storage_gb = storage_mb / 1024
             period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
@@ -237,7 +237,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
                 }) \
                 .execute()
 
-            logger.info(f"Usage: {user_id[:8]}... new tracking record (storage: {storage_gb:.2f} GB)")
+            logger.debug(f"Usage: {user_id[:8]}... new tracking record (storage: {storage_gb:.2f} GB)")
 
         return True
 
@@ -335,7 +335,7 @@ def atomic_increment_with_check(user_id: str, resource_type: str) -> tuple:
             }
 
             if allowed:
-                logger.info(f"Atomic quota check passed for user {user_id}, resource {resource_type}: {details['current']}/{details['limit']}")
+                logger.debug(f"Atomic quota check passed for user {user_id}, resource {resource_type}: {details['current']}/{details['limit']}")
             else:
                 logger.warning(f"Atomic quota check failed for user {user_id}, resource {resource_type}: {details['message']}")
 
@@ -374,7 +374,7 @@ def log_compute_duration(user_id: str, duration_seconds: float, resource_type: s
             'processing_duration_sec': max(1, round(duration_seconds)),
             'metadata': metadata or {}
         }).execute()
-        logger.info(f"Compute duration: {user_id[:8]}... {resource_type} {duration_seconds:.1f}s")
+        logger.debug(f"Compute duration: {user_id[:8]}... {resource_type} {duration_seconds:.1f}s")
         return True
     except Exception as e:
         logger.error(f"Error logging compute duration: {str(e)}")

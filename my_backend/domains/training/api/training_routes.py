@@ -117,7 +117,7 @@ def generate_datasets(session_id):
             # This is necessary because the new structure has different names
             deleted_count = delete_old_violin_plots(session_id)
             if deleted_count > 0:
-                logger.info(f"Deleted {deleted_count} old violin plots for session {session_id}")
+                logger.debug(f"Deleted {deleted_count} old violin plots for session {session_id}")
 
             for plot_name, plot_data in violin_plots.items():
                 try:
@@ -138,7 +138,7 @@ def generate_datasets(session_id):
 
         increment_processing_count(g.user_id)
         log_compute_duration(g.user_id, time.time() - _compute_start, 'dataset-generation', {'session_id': session_id})
-        logger.info(f"Tracked dataset generation for user {g.user_id}")
+        logger.debug(f"Tracked dataset generation for user {g.user_id}")
 
         return jsonify({
             'success': True,
@@ -248,7 +248,7 @@ def train_models(session_id):
         try:
             string_session_id = get_string_session_id(session_id)
             if string_session_id != session_id:
-                logger.info(f"Converted UUID session {session_id} to string session {string_session_id}")
+                logger.debug(f"Converted UUID session {session_id} to string session {string_session_id}")
             session_id = string_session_id
         except ValueError:
             pass  # Zadrži originalni session_id ako nije UUID
@@ -282,7 +282,7 @@ def train_models(session_id):
             return _err('INVALID_MODEL_PARAMS', config_error, 400)
 
         increment_training_count(g.user_id)
-        logger.info(f"Tracked training run for user {g.user_id}")
+        logger.debug(f"Tracked training run for user {g.user_id}")
 
         # NOTE: Old results are now cleaned up AFTER successful training in orchestrator.py
         # This prevents orphan storage files when training fails
