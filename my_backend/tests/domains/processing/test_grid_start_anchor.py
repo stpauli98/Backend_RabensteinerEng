@@ -36,3 +36,25 @@ def test_anchor_before_raw_uses_last_aligned_le_raw():
 def test_anchor_equals_raw():
     assert cp._anchor_grid_start(_ts("2025-04-03 22:01:00"), _ts("2025-04-03 22:01:00"), 7) \
         == _ts("2025-04-03 22:01:00")
+
+
+def test_process_csv_first_output_timestamp_matches_anchor():
+    """End-to-end: process_csv must emit its FIRST grid timestamp at the anchor."""
+    import json
+    csv_content = (
+        "UTC;Value\n"
+        "2025-04-03 22:01:00;1.0\n"
+        "2025-04-03 23:00:00;2.0\n"
+    )
+    resp = cp.process_csv(
+        csv_content,
+        tss=7,
+        offset=0,
+        mode_input="intrpl",
+        intrpl_max=60,
+        anchor_time="2025-04-03 22:02:00",
+    )
+    body = "".join(s.decode() if isinstance(s, (bytes, bytearray)) else s for s in resp.response)
+    records = [json.loads(line) for line in body.splitlines() if line.strip()]
+    first = next(r for r in records if "UTC" in r)
+    assert first["UTC"] == "2025-04-03 22:02:00", f"grid started at {first['UTC']}, expected 22:02:00"
