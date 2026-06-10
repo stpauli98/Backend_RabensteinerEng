@@ -8,8 +8,9 @@ lookups before the limit fires.
 Limits (per SEC-W12-1 plan):
 - forecast_limit: 60 req/min per IP on /forecast/* (matches GeoSphere
   240/h hint at the strictest end).
-- auth_strict_limit: 10 invalid auth attempts/min per IP before a 5-min
-  block. Applied inside the auth decorator on the failed path.
+- Auth brute-force protection is handled by Supabase Auth (login / signup /
+  password reset run browser->Supabase, not through this backend), so no
+  backend auth rate limit is defined here.
 
 In testing (FLASK_ENV=testing or pytest), limits default to 1000/min so
 test runs don't get throttled.
@@ -39,13 +40,6 @@ def forecast_limit_string() -> str:
     if _is_testing():
         return "1000 per minute"
     return "60 per minute"
-
-
-def auth_strict_limit_string() -> str:
-    """Rate limit for failed-auth attempts (brute force defense)."""
-    if _is_testing():
-        return "1000 per minute"
-    return "10 per minute"
 
 
 def cloud_limit_string() -> str:
