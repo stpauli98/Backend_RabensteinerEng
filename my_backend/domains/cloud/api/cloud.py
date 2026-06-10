@@ -746,15 +746,6 @@ def interpolate_chunked():
         max_gap = time_diffs.max() if len(time_diffs) > 0 else 0
         logger.info(f"Maximum time gap in data: {max_gap} minutes")
 
-        total_minutes = (df_load.index[-1] - df_load.index[0]).total_seconds() / 60
-
-        if total_minutes > 10000:
-            resample_interval = '5min'
-            logger.info(f"Large time span detected ({total_minutes} minutes), using 5-minute intervals")
-        else:
-            resample_interval = '1min'
-            logger.info(f"Using standard 1-minute intervals")
-
         if not pd.api.types.is_numeric_dtype(df_load['load']):
             logger.info("Converting load column to numeric before interpolation")
             df_load['load'] = pd.to_numeric(df_load['load'], errors='coerce')
