@@ -77,6 +77,36 @@ def is_numeric(value):
         return False
 
 
+def _anchor_grid_start(time_set, time_min_raw, tss):
+    """
+    First processed-grid timestamp, aligned to `time_set` (the anchor / "point in
+    time that must appear on the grid") at step `tss` minutes, chosen as the
+    aligned point nearest to `time_min_raw` (the raw start):
+
+      - anchor >= raw start: the LOWEST aligned point that is still >= raw start
+      - anchor <  raw start: the LAST aligned point that is <= raw start
+
+    Fixes the start-timestamp off-by-one (#60): the first branch previously
+    subtracted one step too many (`i - 2`), starting the grid one `tss` late
+    (e.g. 22:09 instead of 22:02 for anchor 22:02 / raw 22:01 / tss 7).
+    """
+    if time_set >= time_min_raw:
+        i = 0
+        while True:
+            if time_set - datetime.timedelta(minutes=i * tss) < time_min_raw:
+                i -= 1
+                break
+            i += 1
+        return time_set - datetime.timedelta(minutes=i * tss)
+    i = 0
+    while True:
+        if time_set + datetime.timedelta(minutes=i * tss) >= time_min_raw:
+            i -= 1
+            break
+        i += 1
+    return time_set + datetime.timedelta(minutes=i * tss)
+
+
 def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=None, tracker=None, decimal_precision='full', anchor_time=None):
     """
     Process CSV content and return result as gzip-compressed JSON response.
@@ -240,31 +270,13 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
                 time_min += datetime.timedelta(minutes=normalized_offset)
             logger.debug(f"ofst_set=const; applied offset {normalized_offset} min to {time_min_raw} -> {time_min}")
         else:
-            # Anchor-time branch ported from Trello card spec
+            # Anchor-time branch (Trello card spec). Default the anchor to the
+            # first raw timestamp when the frontend didn't send one.
             if anchor_time:
                 time_set = pd.to_datetime(anchor_time, format="%Y-%m-%d %H:%M:%S")
             else:
-                # Default anchor to first raw timestamp when frontend didn't send one
                 time_set = time_min_raw
-
-            if time_set >= time_min_raw:
-                i = 0
-                while True:
-                    a = datetime.timedelta(minutes=i * tss)
-                    if time_set - a < time_min_raw:
-                        i = i - 2
-                        break
-                    i += 1
-                time_min = time_set - datetime.timedelta(minutes=i * tss)
-            else:
-                i = 0
-                while True:
-                    a = datetime.timedelta(minutes=i * tss)
-                    if time_set + a >= time_min_raw:
-                        i = i - 1
-                        break
-                    i += 1
-                time_min = time_set + datetime.timedelta(minutes=i * tss)
+            time_min = _anchor_grid_start(time_set, time_min_raw, tss)
             logger.debug(f"ofst_set=var; anchor={time_set} time_min_raw={time_min_raw} -> time_min={time_min}")
 
         # H-2: cap the number of grid points BEFORE building the grid. tss is
