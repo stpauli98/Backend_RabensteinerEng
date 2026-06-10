@@ -86,9 +86,32 @@ def get_or_create_stripe_customer(user_id: str, email: str) -> str:
             .execute()
 
         # Get first result if exists
-        if response.data and len(response.data) > 0 and response.data[0].get('stripe_customer_id'):
-            logger.info(f"Found existing Stripe customer: {response.data[0]['stripe_customer_id']}")
-            return response.data[0]['stripe_customer_id']
+        existing_customer_id = (
+            response.data[0].get('stripe_customer_id')
+            if response.data and len(response.data) > 0 else None
+        )
+        if existing_customer_id:
+            # Validate the stored customer still exists in the CURRENT Stripe
+            # account before reusing it. After a sandbox->live cutover, stored
+            # sandbox customer IDs (cus_...) no longer exist in live mode and
+            # every reuse would 500 with "No such customer". Recreate
+            # transparently instead of failing checkout/portal.
+            try:
+                cust = stripe.Customer.retrieve(existing_customer_id)
+                if not getattr(cust, 'deleted', False):
+                    logger.info(f"Found existing Stripe customer: {existing_customer_id}")
+                    return existing_customer_id
+                logger.warning(
+                    f"Stored Stripe customer {existing_customer_id} is deleted; creating a fresh one"
+                )
+            except stripe.error.InvalidRequestError as e:
+                if 'No such customer' not in str(e):
+                    raise
+                logger.warning(
+                    f"Stored Stripe customer {existing_customer_id} not found in current account "
+                    f"(likely sandbox->live cutover); creating a fresh one"
+                )
+            # fall through to create a new customer and persist it below
 
         # Create new Stripe customer
         customer = stripe.Customer.create(
