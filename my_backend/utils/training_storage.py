@@ -319,6 +319,106 @@ def download_training_results(
             raise
 
 
+class _SkippedKerasObject:
+    """Placeholder substituted for Keras/TensorFlow objects during metrics-only unpickling.
+
+    Keras pickles a model via ``getattr(ModelClass, '_unpickle_model')(buffer)``.
+    By returning this class for any keras/tensorflow global, the reduce path calls
+    our no-op ``_unpickle_model`` (returns None) instead of Keras' real loader, so the
+    model is never reconstructed. ``__init__``/``__setstate__`` absorb any other
+    reduce/BUILD shape defensively.
+    """
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __setstate__(self, state):
+        pass
+
+    @staticmethod
+    def _unpickle_model(*args, **kwargs):
+        return None
+
+
+class _SkipModelsUnpickler(pickle.Unpickler):
+    """Unpickler that does not reconstruct Keras/TensorFlow objects.
+
+    The training-results pickle stores the trained Keras model alongside the numeric
+    evaluation metrics. Consumers that only need the metrics (the evaluation-tables
+    endpoint, #112) must not depend on Keras deserialization: it can fail outright when
+    the Keras version that wrote the model differs from the one reading it (version skew
+    across deploys), which would abort the whole ``pickle.load`` and hide the metrics
+    sitting in the same blob. Replacing every keras/tensorflow global with a no-op
+    placeholder skips model reconstruction entirely while leaving numpy arrays, sklearn
+    scalers and plain dicts intact.
+    """
+    def find_class(self, module, name):
+        if module == 'keras' or module.startswith('keras.') \
+                or module == 'tensorflow' or module.startswith('tensorflow.'):
+            return _SkippedKerasObject
+        return super().find_class(module, name)
+
+
+# Metrics-only cache, kept separate from _results_cache so model-stripped results
+# never poison the full-results cache used by inference/prediction consumers.
+_metrics_cache: Dict[str, Tuple[dict, float]] = {}
+
+
+def download_training_results_metrics_only(file_path: str) -> dict:
+    """Download training results WITHOUT reconstructing the trained Keras model.
+
+    Same dict shape as :func:`download_training_results`, but any Keras/TensorFlow model
+    object is replaced with a placeholder. Use this for metrics-only consumers so a model
+    deserialization failure (Keras version skew) cannot hide the evaluation metrics that
+    live in the same pickle. See #112.
+
+    JSON-format (legacy) blobs hold no model object, so they fall back to the normal loader.
+
+    Args:
+        file_path: Path to file in storage bucket (e.g. "session_id/training_results_*.pkl.gz")
+
+    Returns:
+        dict: Training results dictionary with the model slot replaced by a placeholder.
+    """
+    is_pickle = file_path.endswith('.pkl.gz') or file_path.endswith('.pkl')
+    if not is_pickle:
+        # Legacy JSON blobs contain no Keras objects; the normal loader is safe.
+        return download_training_results(file_path)
+
+    # A full (model-bearing) cache entry is a superset of what we need — reuse it.
+    cached = _get_cached_results(file_path)
+    if cached is not None:
+        return cached
+
+    with _cache_lock:
+        entry = _metrics_cache.get(file_path)
+        if entry is not None and (time.time() - entry[1]) < _CACHE_TTL:
+            return entry[0]
+
+    try:
+        supabase = get_supabase_admin_client()
+        response = supabase.storage.from_('training-results').download(file_path)
+
+        if file_path.endswith('.gz'):
+            with gzip.GzipFile(fileobj=io.BytesIO(response)) as gz_file:
+                results = _SkipModelsUnpickler(gz_file).load()
+        else:
+            results = _SkipModelsUnpickler(io.BytesIO(response)).load()
+
+        with _cache_lock:
+            if len(_metrics_cache) >= _MAX_CACHE_SIZE:
+                oldest_key = min(_metrics_cache, key=lambda k: _metrics_cache[k][1])
+                del _metrics_cache[oldest_key]
+            _metrics_cache[file_path] = (results, time.time())
+
+        return results
+
+    except Exception as e:
+        logger.error(f"❌ Failed to download metrics-only training results from {file_path}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
+
+
 def delete_training_results(file_path: str) -> bool:
     """
     Delete training results from storage
