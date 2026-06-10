@@ -138,7 +138,7 @@ my_backend/
 - `POST /finalize-upload` - Finalize upload
 - `POST /cancel-upload` - Cancel upload
 
-### Processing (`/api/firstProcessing`, `/api/dataProcessingMain`)
+### Processing (`/api/firstProcessing`)
 - `POST /upload_chunk` - Process data chunks
 - `POST /process` - Main processing
 
