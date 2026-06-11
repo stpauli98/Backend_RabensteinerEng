@@ -118,14 +118,14 @@ def create_app():
         logger.error(f"Bad request (400): {error}")
         if hasattr(error, 'response') and error.response:
             return error.response
-        return jsonify({'error': 'Bad Request', 'message': str(error)}), 400
+        return jsonify({'success': False, 'code': 'BAD_REQUEST', 'error': str(error)}), 400
 
     @app.errorhandler(413)
     def payload_too_large(error):
         logger.error(f"Payload too large (413): {error}")
         if hasattr(error, 'response') and error.response:
             return error.response
-        return jsonify({'error': 'Payload Too Large', 'message': 'Request entity is too large'}), 413
+        return jsonify({'success': False, 'code': 'PAYLOAD_TOO_LARGE', 'error': 'Request entity is too large'}), 413
 
     # W11-ADV-4: global JSON handlers for 404/405/500 to keep the error
     # contract consistent. Flask's defaults return HTML for these, which

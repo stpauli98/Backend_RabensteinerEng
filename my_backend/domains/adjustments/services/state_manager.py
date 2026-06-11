@@ -214,6 +214,12 @@ def get_anomaly_state(upload_id: str, user_id: str) -> Optional[Dict[str, Any]]:
         return anomaly
 
 
+def is_adjustment_owner(upload_id: str, user_id: str) -> bool:
+    """True iff the plain-adjustment session exists and is owned by user_id."""
+    session = adjustment_chunks.get(upload_id)
+    return session is not None and session.get("user_id") == user_id
+
+
 def set_pipeline_status(upload_id: str, user_id: str, status: str) -> bool:
     """Update pipeline status; returns False if session unknown / not owned."""
     with _anomaly_state_lock:

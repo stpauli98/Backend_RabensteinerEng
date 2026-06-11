@@ -41,7 +41,7 @@ Each domain follows the pattern: `api/` (endpoints) + `services/` (business logi
 | Domain | Prefix | Purpose |
 |--------|--------|---------|
 | `training/` | `/api/training` | ML model training, 36 endpoints |
-| `processing/` | `/api/firstProcessing`, `/api/dataProcessingMain` | CSV data processing |
+| `processing/` | `/api/firstProcessing` | CSV data processing |
 | `upload/` | `/api/loadRowData` | Chunked file upload |
 | `adjustments/` | `/api/adjustmentsOfData` | Data adjustments |
 | `cloud/` | `/api/cloud` | Cloud analysis, interpolation |

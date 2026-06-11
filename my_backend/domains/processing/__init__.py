@@ -10,6 +10,6 @@
 #   - chunk_handler.py: Chunked upload handling
 # - config.py: Processing configuration constants
 
-from domains.processing.api import first_processing_bp, data_processing_bp
+from domains.processing.api import first_processing_bp
 
-__all__ = ['first_processing_bp', 'data_processing_bp']
+__all__ = ['first_processing_bp']

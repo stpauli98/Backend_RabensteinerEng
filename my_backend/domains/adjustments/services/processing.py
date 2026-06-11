@@ -409,51 +409,6 @@ def apply_processing_method(
         max_gap = intrpl_max if intrpl_max is not None else 60
         values = _method_nearest_max_delta_vectorized(utc_values, col_values, t_list_int, max_gap)
 
-    elif method == 'max':
-        # MAX method - uses sliding window like mean, but takes max
-        logger.info(f"[apply_processing_method] Applying MAX (sliding window)...")
-        half_window = int(tss * 30)
-        n = len(t_list_int)
-        values = np.full(n, np.nan, dtype=np.float64)
-
-        sorted_idx = np.argsort(utc_values)
-        utc_sorted = utc_values[sorted_idx]
-        col_sorted = col_values[sorted_idx]
-
-        for i in range(n):
-            t = t_list_int[i]
-            t_min = t - half_window
-            t_max = t + half_window
-            idx_start = np.searchsorted(utc_sorted, t_min, side='left')
-            idx_end = np.searchsorted(utc_sorted, t_max, side='right')
-            if idx_start < idx_end:
-                window_values = col_sorted[idx_start:idx_end]
-                valid = window_values[~np.isnan(window_values)]
-                if len(valid) > 0:
-                    values[i] = np.max(valid)
-
-    elif method == 'min':
-        # MIN method - uses sliding window like mean, but takes min
-        logger.info(f"[apply_processing_method] Applying MIN (sliding window)...")
-        half_window = int(tss * 30)
-        n = len(t_list_int)
-        values = np.full(n, np.nan, dtype=np.float64)
-
-        sorted_idx = np.argsort(utc_values)
-        utc_sorted = utc_values[sorted_idx]
-        col_sorted = col_values[sorted_idx]
-
-        for i in range(n):
-            t = t_list_int[i]
-            t_min = t - half_window
-            t_max = t + half_window
-            idx_start = np.searchsorted(utc_sorted, t_min, side='left')
-            idx_end = np.searchsorted(utc_sorted, t_max, side='right')
-            if idx_start < idx_end:
-                window_values = col_sorted[idx_start:idx_end]
-                valid = window_values[~np.isnan(window_values)]
-                if len(valid) > 0:
-                    values[i] = np.min(valid)
     else:
         logger.warning(f"[apply_processing_method] Unknown method: {method}, returning original data")
         return df[['UTC', col]].copy()
