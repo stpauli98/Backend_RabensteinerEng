@@ -1109,6 +1109,7 @@ def anomaly_start() -> Tuple[Response, int]:
         try:
             _validate_par_dict(par, dt_avg=state.get("dt_avg"), lang=lang)
         except ValueError as e:
+            logger.info("adjustmentsOfData/start rejected (param validation) for upload %s: %s", upload_id, e)
             return jsonify({"error": str(e)}), 400
 
         # Atomic claim — refuses concurrent /start for the same upload.
@@ -1128,6 +1129,7 @@ def anomaly_start() -> Tuple[Response, int]:
             _run_preprocess_and_sbad(state, par, lang, progress_cb)
         except ValueError as e:
             state["pipeline_status"] = _PipelineStatus.ERROR
+            logger.info("adjustmentsOfData/start rejected (preprocess/SBAD) for upload %s: %s", upload_id, e)
             return jsonify({"error": str(e)}), 400
 
         plots = state.get("plots", {})
@@ -1144,6 +1146,7 @@ def anomaly_start() -> Tuple[Response, int]:
                 )
             except ValueError as e:
                 state["pipeline_status"] = _PipelineStatus.ERROR
+                logger.info("adjustmentsOfData/start rejected (STL) for upload %s: %s", upload_id, e)
                 return jsonify({"error": str(e)}), 400
 
             state["intermediate"]["stl_result"] = stl_result

@@ -700,7 +700,11 @@ def get_zeitschritte_endpoint(session_id):
         return create_success_response(zeitschritte)
 
     except ValueError:
-        logger.warning("get-zeitschritte: not found", exc_info=True)
+        # Expected empty state: a freshly created session has no zeitschritte
+        # yet and the frontend optimistically fetches it. This is a normal 404,
+        # not a failure — log at debug without a traceback so it doesn't look
+        # like a crash on every new session (cf. get-time-info in PR #41).
+        logger.debug("get-zeitschritte: not found for session %s", session_id)
         return _err('SESSION_NOT_FOUND', 'Session or zeitschritte not found', 404)
     except Exception:
         logger.exception("Failed to get zeitschritte")
