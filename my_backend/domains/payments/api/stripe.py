@@ -27,6 +27,15 @@ logger = logging.getLogger(__name__)
 
 bp = Blueprint('stripe', __name__)
 
+# Webhook event types Stripe sends that we receive but intentionally do not
+# act on, because the corresponding state change is already handled by another
+# event. Logged at debug instead of warning to keep the logs clean.
+#   - customer.subscription.created: subscription is activated via
+#     checkout.session.completed, so this event is redundant.
+IGNORED_WEBHOOK_EVENTS = frozenset({
+    'customer.subscription.created',
+})
+
 
 @bp.route('/create-checkout-session', methods=['POST'])
 @limiter.limit(training_limit_string)
@@ -349,6 +358,15 @@ def stripe_webhook():
             elif event_type == 'charge.refunded':
                 charge = event['data']['object']
                 handle_charge_refunded(charge)
+
+            # Events Stripe emits that we intentionally don't act on because
+            # the relevant state change is already handled elsewhere (e.g.
+            # subscription activation happens via checkout.session.completed,
+            # so customer.subscription.created is redundant). Log at debug so
+            # they don't pollute the logs as warnings; genuinely unexpected
+            # event types still surface as warnings below.
+            elif event_type in IGNORED_WEBHOOK_EVENTS:
+                logger.debug(f"Ignored (no-op) webhook type: {event_type}")
 
             else:
                 logger.warning(f"Unhandled webhook type: {event_type}")
