@@ -125,7 +125,6 @@ docker run -p 8080:8080 --env-file .env rabensteiner-backend
 
 ### Data Processing
 - `POST /api/firstProcessing/upload_chunk` - Initial processing
-- `POST /api/dataProcessingMain/upload-chunk` - Main processing
 - `POST /api/adjustmentsOfData/process` - Data adjustments
 
 ### Training
