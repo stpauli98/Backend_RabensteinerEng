@@ -25,6 +25,7 @@ import pandas as pd
 
 from domains.adjustments.services.anomaly_helpers import tr
 from domains.adjustments.debug_log import dlog
+from shared.exceptions.errors import AnomalyException
 
 logger = logging.getLogger(__name__)
 
@@ -206,14 +207,30 @@ def load_and_validate_csv(
     dlog("TIME_GRID_CHECK", dt_avg_s=dt_avg.total_seconds(), n_samples=len(dt_series))
     if (dt_dev > 0.001).any():
         dlog("TIME_GRID_FAIL", dt_dev_max=float(dt_dev.max()), threshold=0.001)
-        raise ValueError(
+        # Raise as an AnomalyException with a code so the route returns
+        # `error_code: TIME_GRID_REQUIRED`. The frontend keys off that code to
+        # (a) keep the error persistent instead of auto-dismissing, and
+        # (b) show the "configure the time grid first / open Data Adjustments"
+        # hint. A plain ValueError would be returned without a code and the UI
+        # would silently reset to the upload step.
+        raise AnomalyException(
             tr(
                 "Time step deviates by more than 0.1% from the mean. "
                 "Please configure the time grid first!",
                 "Die Zeitschrittweite weicht um mehr als 0,1 % vom Mittelwert "
                 "ab. Bitte definieren Sie zuerst das Zeitraster!",
                 lang,
-            )
+            ),
+            error_code="TIME_GRID_REQUIRED",
+            suggestions=[
+                tr(
+                    "Open the Data Adjustments page, create a uniform time grid, "
+                    "then return here.",
+                    "Öffnen Sie die Seite „Datenanpassung“, erstellen Sie ein "
+                    "einheitliches Zeitraster und kehren Sie dann hierher zurück.",
+                    lang,
+                )
+            ],
         )
     dlog("TIME_GRID_OK")
 
