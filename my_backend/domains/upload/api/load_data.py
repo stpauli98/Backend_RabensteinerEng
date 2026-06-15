@@ -932,16 +932,9 @@ def merge_and_prepare() -> Tuple[Response, int]:
         ):
             return jsonify({"error": "Failed to save merged file"}), 500
 
-        # Clean up source files (try local first, then Supabase)
-        deleted_count = 0
-        for file_id in file_ids:
-            try:
-                if local_chunk_service.delete_processed_result(file_id):
-                    deleted_count += 1
-                elif storage_service.delete_file(file_id):
-                    deleted_count += 1
-            except Exception:
-                pass
+        # Source files are intentionally NOT deleted here. They live until the
+        # user leaves the step (frontend cleanup-files) or the 24h scheduler
+        # backstop runs. This keeps re-download and re-merge working.
 
         return jsonify({
             "message": "Files merged successfully",
@@ -949,7 +942,7 @@ def merge_and_prepare() -> Tuple[Response, int]:
             "downloadFileId": merged_file_id,
             "totalRows": len(merged_df),
             "sourceFilesCount": len(file_ids),
-            "deletedSourceFiles": deleted_count
+            "deletedSourceFiles": 0
         }), 200
 
     except Exception as e:
