@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from domains.adjustments.data.loader import load_and_validate_csv
+from shared.exceptions.errors import AnomalyException
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TEST2_CSV = REPO_ROOT / "test2" / "test2.csv"
@@ -115,9 +116,10 @@ def test_time_step_drift_en():
     rows.append("2025-01-01 00:06:00;3.0")
     rows.append("2025-01-01 01:06:00;4.0")  # 60 min skip
     p = write_csv("\n".join(rows))
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(AnomalyException) as exc:
         load_and_validate_csv(p, lang="en")
     assert "Time step deviates by more than 0.1%" in str(exc.value)
+    assert exc.value.error_code == "TIME_GRID_REQUIRED"
 
 
 def test_path_traversal_rejected():
