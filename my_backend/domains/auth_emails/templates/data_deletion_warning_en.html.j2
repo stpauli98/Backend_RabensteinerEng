@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body style="font-family: Arial, sans-serif; color: #1a1a1a;">
+    {% if is_final %}
+      <h2>Final warning: your data will be deleted in 24 hours</h2>
+    {% else %}
+      <h2>Your data will be deleted in 7 days</h2>
+    {% endif %}
+    <p>Your subscription has expired. On <strong>{{ deletion_date }}</strong> we will
+       permanently delete your stored data: training sessions, uploaded and processed
+       CSV files, trained models and training results.</p>
+    <p>To keep your data, log in and re-subscribe:</p>
+    <p><a href="{{ login_url }}"
+          style="background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;">
+       Log in &amp; re-subscribe</a></p>
+    <p style="color:#666;font-size:12px;">If you do nothing, your data will be deleted on {{ deletion_date }}.</p>
+  </body>
+</html>
