@@ -231,6 +231,21 @@ def create_app():
     scheduler.add_job(run_chunk_cleanup, 'interval', minutes=30, id='chunk_cleanup_job')
     scheduler.add_job(run_processed_files_cleanup, 'interval', hours=6, id='processed_files_cleanup_job')
     scheduler.add_job(run_local_processed_results_cleanup, 'interval', hours=6, id='local_processed_cleanup_job')
+
+    def run_data_retention_sweep():
+        """Daily: warn + delete data of users whose subscription lapsed >30 days ago."""
+        try:
+            from domains.retention.constants import sweep_enabled, dry_run
+            if not sweep_enabled():
+                return
+            from domains.retention.sweep import run_sweep
+            from shared.database.client import get_supabase_admin_client
+            result = run_sweep(get_supabase_admin_client(), dry_run=dry_run())
+            logger.info(f"Retention sweep result: {result}")
+        except Exception as e:
+            logger.error(f"Error in data retention sweep: {str(e)}")
+
+    scheduler.add_job(run_data_retention_sweep, 'interval', hours=24, id='data_retention_sweep_job')
     scheduler.start()
 
     # Clean up orphaned training progress entries on startup
