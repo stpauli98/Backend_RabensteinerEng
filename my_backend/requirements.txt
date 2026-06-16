@@ -6,7 +6,7 @@ Flask-Limiter==3.5.0
 Werkzeug==3.1.6
 flask-socketio>=5.4.0,<6.0
 gunicorn==22.0.0
-python-dotenv==1.0.1
+python-dotenv==1.2.2  # security: CVE-2026-28684
 requests>=2.31.0,<3.0
 pytz==2024.1
 APScheduler==3.10.4
@@ -29,7 +29,7 @@ statsmodels>=0.14.1,<1.0
 # Heavy packages
 seaborn>=0.13.1,<1.0
 tensorflow==2.19.0
-keras==3.12.0  # Pin to match consumer env (TF 2.20/Keras 3.12) for model file compatibility
+keras==3.12.1  # Pin to TF 2.20/Keras 3.12 line for model file compatibility; 3.12.1 patches CVE-2026-1669/1462 + PYSEC-2026-73 (stays within 3.12.x)
 lightgbm>=4.3.0,<5.0
 
 # Testing packages
@@ -40,3 +40,6 @@ pytest-mock==3.14.0
 
 # Stripe
 stripe==7.4.0
+
+# Build tooling (security-pinned)
+wheel>=0.46.2  # security: CVE-2026-24049 (build-time only)
