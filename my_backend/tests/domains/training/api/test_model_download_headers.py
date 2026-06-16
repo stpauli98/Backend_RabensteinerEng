@@ -13,20 +13,29 @@ def _make_client():
 
 
 def _auth_patch():
-    mock_supabase = MagicMock()
-    mock_supabase.auth.get_user.return_value = MagicMock(user=MagicMock(
-        id='test-user', email='t@e.com', user_metadata={}
-    ))
-    return patch('shared.auth.jwt.get_supabase_client', return_value=mock_supabase)
+    # require_auth now verifies the JWT locally via _verify_jwt_local (no Supabase
+    # network call). Patch it to return a valid claims dict so the decorator passes.
+    fake_claims = {
+        'sub': 'test-user',
+        'email': 't@e.com',
+        'user_metadata': {},
+        'role': 'authenticated',
+    }
+    return patch('shared.auth.jwt._verify_jwt_local', return_value=fake_claims)
 
 
 def test_download_response_has_env_headers():
     client = _make_client()
+    # Use a valid UUID as session_id so validate_training_session_format passes.
+    # Also patch _resolve_and_assert_ownership to bypass DB lookup and ownership check.
+    valid_session_id = 'b2be65df-ce96-4305-b4c7-6530c7bc7096'
     with _auth_patch(), \
+         patch('domains.training.api.model_routes._resolve_and_assert_ownership',
+               return_value=(valid_session_id, None)), \
          patch('domains.training.api.model_routes.download_model_file',
                return_value=(b'fake-bytes', 'fake.keras')):
         resp = client.get(
-            '/api/training/download-model-h5/test-session?filename=fake.keras',
+            f'/api/training/download-model-h5/{valid_session_id}?filename=fake.keras',
             headers={'Authorization': 'Bearer fake'}
         )
     assert resp.status_code == 200, resp.get_data(as_text=True)

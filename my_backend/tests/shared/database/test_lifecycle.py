@@ -376,7 +376,9 @@ class TestSaveSessionToSupabase:
     ):
         """Test continues with finalization even if file save fails."""
         mock_get_uuid.return_value = "uuid-123"
-        mock_load.return_value = {}
+        # Must be a truthy (non-empty) dict so save_session_to_supabase doesn't
+        # raise SessionNotFoundError before reaching the file-save path under test.
+        mock_load.return_value = {"files": []}
         mock_save_files.side_effect = Exception("File error")
 
         result = save_session_to_supabase("session-123")

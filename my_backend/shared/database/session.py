@@ -130,6 +130,11 @@ def retry_database_operation(
                     )
             else:
                 logger.error(f"Database operation failed with non-retryable error: {error_msg}")
+                # Security/control-flow exceptions must propagate unwrapped so
+                # callers (e.g. the API layer) can map them to correct HTTP status
+                # codes (403 for PermissionError, not 500 from DatabaseError).
+                if isinstance(e, PermissionError):
+                    raise
                 raise DatabaseError(f"Database operation failed: {error_msg}")
 
     raise DatabaseError(f"Database operation failed: {last_error}")
