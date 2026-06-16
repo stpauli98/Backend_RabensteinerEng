@@ -580,6 +580,20 @@ def interpolate_chunked():
             tracker.emit('error', 0, 'cloud_invalid_params', force=True)
             return jsonify({'success': False, 'code': 'INVALID_PARAMS', 'error': 'Invalid max_time_span parameter'}), 400
 
+        # Decimal precision for interpolated values — matches the regression
+        # contract (apply_decimal_precision): 'full' (default) leaves values
+        # untouched; a non-negative integer rounds to that many decimals;
+        # anything else is silently ignored (no rounding).
+        decimal_precision = data.get('decimalPrecision', 'full')
+        precision_int = None
+        if decimal_precision != 'full':
+            try:
+                parsed_precision = int(decimal_precision)
+                precision_int = parsed_precision if parsed_precision >= 0 else None
+            except (ValueError, TypeError):
+                precision_int = None
+        logger.info(f"Using decimalPrecision: {decimal_precision} (rounding={precision_int})")
+
         if upload_id not in chunk_uploads:
             logger.error(f"Upload ID not found: {upload_id}")
             return jsonify({'success': False, 'code': 'UPLOAD_NOT_FOUND', 'error': 'Upload ID not found'}), 404
@@ -778,6 +792,11 @@ def interpolate_chunked():
         # Vectorized chart data creation (much faster than iterating)
         valid_mask = ~df2_resampled['UTC'].isna()
         valid_df = df2_resampled[valid_mask].copy()
+
+        # Apply decimal precision before serialization. round() on a float
+        # Series preserves NaN, so the NaN→'NaN' step below still works.
+        if precision_int is not None:
+            valid_df['load'] = valid_df['load'].round(precision_int)
 
         valid_df['load'] = valid_df['load'].apply(lambda x: 'NaN' if pd.isna(x) else x)
         valid_df['UTC'] = valid_df['UTC'].dt.strftime("%Y-%m-%d %H:%M:%S")
