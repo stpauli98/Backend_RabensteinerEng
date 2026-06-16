@@ -218,8 +218,8 @@ class TestBatchUpsertFiles:
         assert "new-uuid-1" in result
         mock_client.table.return_value.insert.assert_called_once()
 
-    def test_updates_existing_files_by_bezeichnung(self):
-        """Test existing files are updated by bezeichnung match."""
+    def test_updates_existing_files_by_id(self):
+        """Test existing files are updated by ID match (not bezeichnung)."""
         mock_client = Mock()
         mock_existing_response = Mock()
         mock_existing_response.data = [
@@ -231,7 +231,8 @@ class TestBatchUpsertFiles:
         mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = mock_existing_response
         mock_client.table.return_value.update.return_value.eq.return_value.execute.return_value = mock_update_response
 
-        batch_data = [{"id": "new-uuid", "bezeichnung": "Existing File", "file_name": "update.csv"}]
+        # batch_data id matches the existing file id — this is the UPDATE path
+        batch_data = [{"id": "existing-uuid", "bezeichnung": "Existing File", "file_name": "update.csv"}]
 
         result = batch_upsert_files(mock_client, "session-123", batch_data)
 

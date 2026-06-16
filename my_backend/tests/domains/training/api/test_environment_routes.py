@@ -9,13 +9,15 @@ def test_environment_info_returns_versions():
     app.register_blueprint(bp, url_prefix='/api/training')
     client = app.test_client()
 
-    # require_auth reads request header then calls supabase.auth.get_user
-    # Patch get_supabase_client to return a mock where get_user returns a valid user
-    mock_supabase = MagicMock()
-    mock_supabase.auth.get_user.return_value = MagicMock(user=MagicMock(
-        id='test-user', email='t@e.com', user_metadata={}
-    ))
-    with patch('shared.auth.jwt.get_supabase_client', return_value=mock_supabase):
+    # require_auth now verifies the JWT locally via _verify_jwt_local (no Supabase
+    # network call). Patch it to return a valid claims dict so the decorator passes.
+    fake_claims = {
+        'sub': 'test-user',
+        'email': 't@e.com',
+        'user_metadata': {},
+        'role': 'authenticated',
+    }
+    with patch('shared.auth.jwt._verify_jwt_local', return_value=fake_claims):
         resp = client.get('/api/training/environment-info',
                           headers={'Authorization': 'Bearer fake'})
 
