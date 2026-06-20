@@ -102,6 +102,24 @@ def test_load_returns_plots_and_metadata(app, staged_test2):
     assert body["status"] == PipelineStatus.LOADED
 
 
+def test_load_returns_detected_timestep_and_offset(app, tmp_path):
+    # Self-contained: 15-min grid starting at 14:05 → timestep 15, offset 5%15=5.
+    upload_id = "ts-off-1"
+    upload_dir = tmp_path / upload_id
+    upload_dir.mkdir(parents=True)
+    rows = "\n".join(
+        f"2026-02-09 {14 + (5 + i * 15) // 60:02d}:{(5 + i * 15) % 60:02d}:00;{i}"
+        for i in range(6)
+    )
+    (upload_dir / "grid.csv").write_text("UTC;value [kW]\n" + rows, encoding="utf-8")
+    r = _post_json(app, adj_module.anomaly_load, "/api/adjustmentsOfData/load",
+                   {"uploadId": upload_id, "filename": "grid.csv", "lang": "en"})
+    assert _status(r) == 200
+    body = _body(r)
+    assert body["timestepMin"] == 15.0
+    assert body["offsetMin"] == 5.0
+
+
 def test_load_de_titles(app, staged_test2):
     upload_id, _ = staged_test2
     r = _post_json(app, adj_module.anomaly_load, "/api/adjustmentsOfData/load",

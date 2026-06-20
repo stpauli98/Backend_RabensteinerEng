@@ -671,6 +671,7 @@ from pathlib import Path as _Path  # local alias to avoid clobbering existing re
 
 from core.app_factory import socketio as _socketio
 from domains.adjustments.data.loader import load_and_validate_csv as _load_csv
+from domains.adjustments.services.timestep_detection import detect_timestep_offset_minutes
 from domains.adjustments.services.state_manager import (
     PipelineStatus as _PipelineStatus,
     init_anomaly_state as _init_anomaly,
@@ -990,10 +991,16 @@ def anomaly_load() -> Tuple[Response, int]:
         df_slope = _slope_calc(df)
         slope_plot = _build_slope_plot(df_slope, lang=lang)
 
+        # Detected time step + offset (minutes) for the read-only info line the
+        # frontend shows above the original-data plot once a file is loaded.
+        timestep_min, offset_min = detect_timestep_offset_minutes(df)
+
         return jsonify({
             "plots": {"original": original_plot, "slope": slope_plot},
             "columnName": str(df.columns[1]),
             "dtAvgH": dt_avg.total_seconds() / 3600.0,
+            "timestepMin": timestep_min,
+            "offsetMin": offset_min,
             "rowCount": int(len(df)),
             "status": _PipelineStatus.LOADED,
         }), 200
