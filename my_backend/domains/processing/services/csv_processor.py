@@ -268,6 +268,14 @@ def process_csv(file_content, tss, offset, mode_input, intrpl_max, upload_id=Non
             time_min = time_min_raw - offset_strt
             if normalized_offset > 0:
                 time_min += datetime.timedelta(minutes=normalized_offset)
+            # Don't emit grid points before the first raw sample: flooring to the
+            # top of the hour can place the start up to one hour before raw start
+            # (e.g. raw 14:45, tss 15 -> 14:00), and those leading points have no
+            # left neighbour so they come out as 'nan'. Advance by whole steps to
+            # the first aligned point >= raw start (preserves offset alignment and
+            # matches the anchor/'var' branch, which never starts before raw).
+            while time_min < time_min_raw:
+                time_min += datetime.timedelta(minutes=tss)
             logger.debug(f"ofst_set=const; applied offset {normalized_offset} min to {time_min_raw} -> {time_min}")
         else:
             # Anchor-time branch (Trello card spec). Default the anchor to the
