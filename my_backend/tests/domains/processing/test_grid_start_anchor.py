@@ -38,6 +38,39 @@ def test_anchor_equals_raw():
         == _ts("2025-04-03 22:01:00")
 
 
+def test_const_branch_grid_does_not_start_before_raw():
+    """Owner report: raw start 2026-02-09 14:45:00, tss=15, offset=0, intrpl.
+
+    Because 60/15 is integer the 'const' branch runs (no anchor_time). The grid
+    must NOT emit points before the first raw sample: those have no left
+    neighbour and come out as 'nan'. result.csv showed 3 leading 'nan'
+    (14:00/14:15/14:30) because the grid floored to the top of the hour.
+    """
+    import json
+    csv_content = (
+        "UTC;load_grid [kW]\n"
+        "2026-02-09 14:45:00;0\n"
+        "2026-02-09 15:00:00;0\n"
+        "2026-02-09 15:15:00;5\n"
+    )
+    resp = cp.process_csv(
+        csv_content,
+        tss=15,
+        offset=0,
+        mode_input="intrpl",
+        intrpl_max=60,
+    )
+    body = "".join(s.decode() if isinstance(s, (bytes, bytearray)) else s for s in resp.response)
+    records = [json.loads(line) for line in body.splitlines() if line.strip()]
+    rows = [r for r in records if "UTC" in r]
+    # First output timestamp must be the first aligned point >= raw start (14:45),
+    # not 14:00.
+    assert rows[0]["UTC"] == "2026-02-09 14:45:00", f"grid started at {rows[0]['UTC']}"
+    # No leading nan: the value column must be present (not None) for the first row.
+    value_key = next(k for k in rows[0] if k != "UTC")
+    assert rows[0][value_key] is not None, "first row is nan -> grid started before raw data"
+
+
 def test_process_csv_first_output_timestamp_matches_anchor():
     """End-to-end: process_csv must emit its FIRST grid timestamp at the anchor."""
     import json
