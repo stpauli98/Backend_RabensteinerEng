@@ -9,7 +9,7 @@ if os.getenv("DEBUG_ANOMALY", "false").lower() == "true":
     # Make sure root handlers also pass DEBUG through
     for _h in logging.getLogger().handlers:
         _h.setLevel(logging.DEBUG)
-from datetime import datetime as dat
+from datetime import datetime as dat, timedelta
 from flask import Flask, jsonify, request
 from flask_socketio import SocketIO
 from flask_cors import CORS
@@ -236,6 +236,9 @@ def create_app():
         """Daily: warn + delete data of users whose subscription lapsed >30 days ago."""
         try:
             from domains.retention.constants import sweep_enabled, dry_run
+            # Log every tick so the startup-fire trigger is observable in Cloud Run
+            # logs even when the sweep is disabled or the daily lock is already held.
+            logger.info(f"Retention sweep tick (enabled={sweep_enabled()}, dry_run={dry_run()})")
             if not sweep_enabled():
                 return
             from domains.retention.sweep import run_sweep
@@ -245,7 +248,16 @@ def create_app():
         except Exception as e:
             logger.error(f"Error in data retention sweep: {str(e)}")
 
-    scheduler.add_job(run_data_retention_sweep, 'interval', hours=24, id='data_retention_sweep_job')
+    # Cloud Run scales to zero, so a bare 'interval hours=24' job almost never
+    # reaches its first fire before the instance is recycled. Fire ~30s after each
+    # boot instead; the 23h _claim_daily_lock in run_sweep() dedupes so the sweep
+    # still runs at most once per day across many cold starts. The 24h interval is
+    # kept as a fallback for long-lived instances.
+    scheduler.add_job(
+        run_data_retention_sweep, 'interval', hours=24,
+        next_run_time=dat.now() + timedelta(seconds=30),
+        id='data_retention_sweep_job',
+    )
     scheduler.start()
 
     # Clean up orphaned training progress entries on startup
