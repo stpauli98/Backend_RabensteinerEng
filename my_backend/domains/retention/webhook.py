@@ -5,9 +5,12 @@ import hmac
 
 
 def verify_svix(secret: str, headers: dict, body: str) -> bool:
-    msg_id = headers.get("svix-id")
-    timestamp = headers.get("svix-timestamp")
-    sig_header = headers.get("svix-signature")
+    # HTTP header names are case-insensitive; Flask/Werkzeug yields title-cased
+    # keys ("Svix-Id") via dict(request.headers), so normalize before lookup.
+    h = {k.lower(): v for k, v in headers.items()}
+    msg_id = h.get("svix-id")
+    timestamp = h.get("svix-timestamp")
+    sig_header = h.get("svix-signature")
     if not (msg_id and timestamp and sig_header and secret):
         return False
     raw = secret.split("_", 1)[1] if secret.startswith("whsec_") else secret
