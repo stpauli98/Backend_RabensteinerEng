@@ -87,7 +87,9 @@ def _handle(supabase, action: RetentionAction, row: dict, now: datetime) -> None
         if action.action == "warn1":
             _stamp_scheduled_deletion(supabase, action.subscription_id, row, now)
     else:  # delete
-        delete_user_data(supabase, action.user_id)
+        outcome = delete_user_data(supabase, action.user_id)
+        if outcome["errors"]:
+            raise RuntimeError(f"deletion incomplete for {action.user_id}: {outcome['errors']}")
         _stamp(supabase, action.subscription_id, "data_deleted_at", now)
 
 

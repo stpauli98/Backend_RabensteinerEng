@@ -67,7 +67,8 @@ def test_delete_action_purges_then_stamps():
     with patch('domains.retention.sweep._claim_daily_lock', return_value=True), \
          patch('domains.retention.sweep._fetch_subscriptions', return_value=[row]), \
          patch('domains.retention.sweep.compute_actions', return_value=[action]), \
-         patch('domains.retention.sweep.delete_user_data') as delet, \
+         patch('domains.retention.sweep.delete_user_data',
+               return_value={"errors": [], "storage_files_remaining": 0}) as delet, \
          patch('domains.retention.sweep.send_warning') as send:
         sweep_mod.run_sweep(sb, now=NOW, dry_run=False)
     delet.assert_called_once_with(sb, 'u1')
@@ -86,7 +87,7 @@ def test_one_user_error_does_not_block_others():
          patch('domains.retention.sweep._fetch_subscriptions', return_value=rows), \
          patch('domains.retention.sweep.compute_actions', return_value=[a1, a2]), \
          patch('domains.retention.sweep.delete_user_data',
-               side_effect=[RuntimeError('boom'), None]) as delet:
+               side_effect=[RuntimeError('boom'), {"errors": [], "storage_files_remaining": 0}]) as delet:
         result = sweep_mod.run_sweep(sb, now=NOW, dry_run=False)
     assert delet.call_count == 2
     assert result['errors'] == 1
