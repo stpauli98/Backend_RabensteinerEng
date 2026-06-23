@@ -12,23 +12,37 @@ gcloud logging metrics create retention_sweep_ran --project "$PROJECT" \
 
 # 2) Notification channel (email).
 CH=$(gcloud beta monitoring channels list --project "$PROJECT" \
-      --filter="type=email AND labels.email_address=$EMAIL" --format='value(name)' | head -1)
+      --filter="type='email' AND labels.email_address='$EMAIL'" --format='value(name)' | head -1)
 if [ -z "$CH" ]; then
   CH=$(gcloud beta monitoring channels create --project "$PROJECT" \
         --display-name="Retention alerts" --type=email \
         --channel-labels="email_address=$EMAIL" --format='value(name)')
 fi
 
-# 3) Alert policy: metric absent for 36h.
-gcloud alpha monitoring policies list --project "$PROJECT" \
-  --filter='displayName="Retention sweep stale"' --format='value(name)' | grep -q . || \
-gcloud alpha monitoring policies create --project "$PROJECT" \
-  --display-name="Retention sweep stale" \
-  --notification-channels="$CH" \
-  --condition-display-name="No sweep result in 36h" \
-  --condition-filter='metric.type="logging.googleapis.com/user/retention_sweep_ran" AND resource.type="cloud_run_revision"' \
-  --condition-threshold-comparison=COMPARISON_LT \
-  --condition-threshold-value=1 \
-  --condition-threshold-duration=129600s \
-  --aggregation='{"alignmentPeriod":"3600s","perSeriesAligner":"ALIGN_COUNT"}'
+# 3) Alert policy: fire when the sweep metric is ABSENT for 24h (Cloud Monitoring
+#    caps absence duration at 1 day; the sweep logs a result on every boot-tick,
+#    so a full day with no result is genuinely anomalous). Created from a JSON
+#    policy file for gcloud-version stability.
+if ! gcloud alpha monitoring policies list --project "$PROJECT" \
+      --filter="displayName='Retention sweep stale'" --format='value(name)' | grep -q .; then
+  POLICY_FILE=$(mktemp)
+  cat > "$POLICY_FILE" <<JSON
+{
+  "displayName": "Retention sweep stale",
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "No sweep result in 23h30m",
+    "conditionAbsent": {
+      "filter": "metric.type=\"logging.googleapis.com/user/retention_sweep_ran\" AND resource.type=\"cloud_run_revision\"",
+      "duration": "84600s",
+      "aggregations": [{"alignmentPeriod": "3600s", "perSeriesAligner": "ALIGN_COUNT"}]
+    }
+  }],
+  "notificationChannels": ["$CH"],
+  "enabled": true
+}
+JSON
+  gcloud alpha monitoring policies create --project "$PROJECT" --policy-from-file="$POLICY_FILE"
+  rm -f "$POLICY_FILE"
+fi
 echo "Provisioned retention staleness alert."
