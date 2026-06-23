@@ -4,6 +4,7 @@ import os
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from domains.auth_emails.services.resend_client import send_email
+from domains.retention.constants import RETENTION_DEFAULT_LANG
 
 _TEMPLATES_DIR = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "auth_emails", "templates"
@@ -12,7 +13,6 @@ _env = Environment(
     loader=FileSystemLoader(_TEMPLATES_DIR),
     autoescape=select_autoescape(["html", "j2"]),
 )
-_DEFAULT_LANG = "de"
 _SUPPORTED = {"de", "en"}
 
 _SUBJECTS = {
@@ -24,7 +24,7 @@ _SUBJECTS = {
 
 
 def _lang(lang: str) -> str:
-    return lang if lang in _SUPPORTED else _DEFAULT_LANG
+    return lang if lang in _SUPPORTED else RETENTION_DEFAULT_LANG
 
 
 def render_warning_html(*, lang: str, deletion_date: str, login_url: str, is_final: bool) -> str:

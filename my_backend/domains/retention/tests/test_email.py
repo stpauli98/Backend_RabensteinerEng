@@ -30,3 +30,11 @@ def test_send_warning_calls_resend_with_rendered_html():
     assert kwargs['to'] == 'u@x'
     assert 'Final warning' in kwargs['html']
     assert kwargs['subject'] == retention_subject('en', is_final=True)
+
+
+def test_lang_falls_back_to_configured_default(monkeypatch):
+    monkeypatch.setenv("RETENTION_DEFAULT_LANG", "en")
+    import importlib
+    from domains.retention import constants, email
+    importlib.reload(constants); importlib.reload(email)
+    assert email._lang("fr") == "en"
