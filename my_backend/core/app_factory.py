@@ -245,6 +245,9 @@ def create_app():
             from shared.database.client import get_supabase_admin_client
             result = run_sweep(get_supabase_admin_client(), dry_run=dry_run())
             logger.info(f"Retention sweep result: {result}")
+            from domains.retention.unsubscribed import sweep_unsubscribed
+            unsub = sweep_unsubscribed(get_supabase_admin_client(), dry_run=dry_run())
+            logger.info(f"Unsubscribed cleanup result: {unsub}")
         except Exception as e:
             logger.error(f"Error in data retention sweep: {str(e)}")
 
