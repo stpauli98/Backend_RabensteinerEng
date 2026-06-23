@@ -4,12 +4,12 @@ Given all user_subscriptions rows, retention notices, and `now`, return the
 single next action per lapsed user. No I/O — fully unit-testable.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from shared.datetime_utils import parse_iso_datetime
 from domains.retention.constants import (
-    DELETE_AFTER, WARN1_BEFORE, WARN2_BEFORE, MIN_GAP, WARN1_WINDOW,
+    DELETE_AFTER, WARN1_BEFORE, WARN2_BEFORE, MIN_GAP,
     PROTECTED_STATUSES,
 )
 
@@ -33,7 +33,7 @@ def _latest_notice(notices, subscription_id, kind):
             if n.get("subscription_id") == subscription_id and n.get("kind") == kind]
     if not rows:
         return None
-    return max(rows, key=lambda n: _dt(n.get("sent_at")) or datetime.min.replace(tzinfo=None))
+    return max(rows, key=lambda n: _dt(n.get("sent_at")) or datetime.min.replace(tzinfo=timezone.utc))
 
 
 def compute_actions(subscriptions: List[Dict[str, Any]], notices: List[Dict[str, Any]], now: datetime) -> List[RetentionAction]:
