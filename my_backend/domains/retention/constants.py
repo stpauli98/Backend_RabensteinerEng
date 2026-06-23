@@ -24,3 +24,26 @@ def dry_run() -> bool:
 def login_redirect_url() -> str:
     base = os.environ.get("FRONTEND_URL", "").rstrip("/")
     return f"{base}/login?redirect=/pricing"
+
+
+# Subscription statuses that protect a user from deletion (#5).
+PROTECTED_STATUSES = frozenset({"active", "trialing", "past_due"})
+
+# Post-warn1 guaranteed notice window (#1): deletion is always >= this after warn1.
+WARN1_WINDOW = timedelta(days=7)
+
+# Email language fallback when user_metadata.lang is missing/unsupported (#8).
+RETENTION_DEFAULT_LANG = os.environ.get("RETENTION_DEFAULT_LANG", "de")
+
+
+def admin_alert_email() -> str:
+    """Where bounce/complaint alerts go."""
+    return os.environ.get("RETENTION_ADMIN_EMAIL", "")
+
+
+def resend_webhook_secret() -> str:
+    return os.environ.get("RESEND_WEBHOOK_SECRET", "")
+
+
+def admin_secret() -> str:
+    return os.environ.get("RETENTION_ADMIN_SECRET", "")
