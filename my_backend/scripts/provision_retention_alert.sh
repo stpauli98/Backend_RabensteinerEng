@@ -23,6 +23,12 @@ fi
 #    caps absence duration at 1 day; the sweep logs a result on every boot-tick,
 #    so a full day with no result is genuinely anomalous). Created from a JSON
 #    policy file for gcloud-version stability.
+#
+#    The aggregation REDUCEs across Cloud Run revisions (group by service_name),
+#    so the condition tracks ONE per-service series. Without this, each revision
+#    is its own time series; a revision goes silent the moment a newer one takes
+#    traffic, and its series trips the 24h-absence condition ~a day after every
+#    deploy — a false alarm even though the live revision keeps sweeping.
 if ! gcloud alpha monitoring policies list --project "$PROJECT" \
       --filter="displayName='Retention sweep stale'" --format='value(name)' | grep -q .; then
   POLICY_FILE=$(mktemp)
@@ -35,7 +41,7 @@ if ! gcloud alpha monitoring policies list --project "$PROJECT" \
     "conditionAbsent": {
       "filter": "metric.type=\"logging.googleapis.com/user/retention_sweep_ran\" AND resource.type=\"cloud_run_revision\"",
       "duration": "84600s",
-      "aggregations": [{"alignmentPeriod": "3600s", "perSeriesAligner": "ALIGN_COUNT"}]
+      "aggregations": [{"alignmentPeriod": "3600s", "perSeriesAligner": "ALIGN_COUNT", "crossSeriesReducer": "REDUCE_SUM", "groupByFields": ["resource.label.service_name"]}]
     }
   }],
   "notificationChannels": ["$CH"],
