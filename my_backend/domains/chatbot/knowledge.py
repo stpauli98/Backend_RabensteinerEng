@@ -80,8 +80,8 @@ Forecast Engine offers several architectures; train more than one and compare me
   Valid ranges: C positive number; epsilon 0–1.
   Reference values: C typically 0.1–10 (default 1; reduce for overfitting, increase for
   coarse predictions); epsilon 0.01–0.1 (higher for noisy data, lower for accurate data).
-  Kernel choices: rbf (standard, most applications), linear (simple / quick start),
-  poly (known curved relationships), sigmoid (rare).
+  Kernel choices: poly (default — good for known curved relationships), rbf (common
+  general-purpose alternative), linear (simple / quick start), sigmoid (rare).
 - LGBMR (LightGBM gradient boosting) — strong general-purpose tabular model; handles many
   input variables well and is a good default when you have rich feature/driver data.
   Default hyperparameters: n_estimators 100, learning_rate 0.1, max_depth -1 (unlimited).
