@@ -13,6 +13,7 @@ APScheduler==3.10.4
 supabase>=2.7.0,<3.0  # 2.7+ fixes proxy parameter issues (gotrue/httpx pins no longer needed)
 PyJWT>=2.8.0  # Local HS256 verification of Supabase-issued JWTs
 marshmallow>=3.20.0  # JSON schema validation for upload endpoints
+anthropic>=0.39,<1.0  # Claude SDK for the in-app assistant chatbot
 
 
 # Basic data handling (lightweight)
