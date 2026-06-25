@@ -84,3 +84,96 @@ def test_generate_reply_wraps_anthropic_errors():
             assert False, "expected ChatUnavailable"
         except chat_service.ChatUnavailable:
             pass
+
+
+import importlib
+import json
+from functools import wraps
+
+import pytest
+from flask import Flask, g
+
+
+def _stub_require_auth(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        g.user_id = "user-id-123"
+        g.user_email = "test@example.com"
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def _build_app():
+    with patch("shared.auth.jwt.require_auth", side_effect=_stub_require_auth):
+        import domains.chatbot.api as chatbot_api
+        importlib.reload(chatbot_api)
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.register_blueprint(chatbot_api.chatbot_bp, url_prefix="/api/chatbot")
+    import domains.chatbot.api as chatbot_api
+    importlib.reload(chatbot_api)
+    return app
+
+
+@pytest.fixture
+def client():
+    app = _build_app()
+    with app.test_client() as c:
+        yield c
+
+
+def _post(client, body):
+    return client.post("/api/chatbot/message", data=json.dumps(body),
+                       content_type="application/json",
+                       headers={"Authorization": "Bearer test-token"})
+
+
+def test_requires_auth():
+    # Build an app WITHOUT the auth stub → the real decorator should 401.
+    import domains.chatbot.api as chatbot_api
+    importlib.reload(chatbot_api)
+    app = Flask(__name__)
+    app.register_blueprint(chatbot_api.chatbot_bp, url_prefix="/api/chatbot")
+    with app.test_client() as c:
+        r = c.post("/api/chatbot/message", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 401
+
+
+def test_rejects_oversized_message(client, monkeypatch):
+    from domains.chatbot.services import rate_limit
+    monkeypatch.setattr(rate_limit, "_calls", {})
+    r = _post(client, {"messages": [{"role": "user", "content": "x" * 1501}], "lang": "en"})
+    assert r.status_code == 400
+
+
+def test_rejects_empty_messages(client, monkeypatch):
+    from domains.chatbot.services import rate_limit
+    monkeypatch.setattr(rate_limit, "_calls", {})
+    r = _post(client, {"messages": [], "lang": "en"})
+    assert r.status_code == 400
+
+
+def test_returns_reply_on_success(client, monkeypatch):
+    from domains.chatbot.services import rate_limit
+    monkeypatch.setattr(rate_limit, "_calls", {})
+    with patch("domains.chatbot.api.generate_reply", return_value="Try LGBMR first."):
+        r = _post(client, {"messages": [{"role": "user", "content": "Which model?"}],
+                           "step": "training", "lang": "en"})
+    assert r.status_code == 200
+    assert r.get_json()["reply"] == "Try LGBMR first."
+
+
+def test_returns_429_when_rate_limited(client, monkeypatch):
+    from domains.chatbot.services import rate_limit
+    monkeypatch.setattr(rate_limit, "check_and_record", lambda uid: False)
+    r = _post(client, {"messages": [{"role": "user", "content": "hi"}], "lang": "en"})
+    assert r.status_code == 429
+
+
+def test_returns_503_when_service_unavailable(client, monkeypatch):
+    from domains.chatbot.services import rate_limit
+    from domains.chatbot.services.chat_service import ChatUnavailable
+    monkeypatch.setattr(rate_limit, "_calls", {})
+    with patch("domains.chatbot.api.generate_reply", side_effect=ChatUnavailable("x")):
+        r = _post(client, {"messages": [{"role": "user", "content": "hi"}], "lang": "en"})
+    assert r.status_code == 503
