@@ -106,7 +106,7 @@ def create_checkout_session():
         if plan_row.data and plan_row.data.get('is_upgrade_only') \
                 and not has_trained_model(sb, user_id):
             logger.info(
-                f"Rejecting API-Only checkout for user {user_id}: no trained model"
+                f"Rejecting upgrade-only checkout for user {user_id}: no trained model"
             )
             return _err(
                 'ELIGIBILITY_NOT_MET',

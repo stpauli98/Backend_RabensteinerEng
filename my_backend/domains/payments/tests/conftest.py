@@ -5,7 +5,6 @@ HS256 Supabase-style JWT (require_auth verifies locally), and provides a
 configurable fake Supabase that honors the queries the routes make.
 """
 import time
-from types import SimpleNamespace
 
 import jwt as pyjwt
 import pytest
