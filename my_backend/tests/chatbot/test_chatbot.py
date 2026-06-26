@@ -39,6 +39,9 @@ def test_system_blocks_cache_stable_and_carry_step_and_lang():
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
     assert "Forecast Engine" in blocks[0]["text"]
     assert "info@forecast-engine.com" in blocks[0]["text"]
+    # response-style guidelines are part of the cached preamble
+    assert "Markdown" in blocks[0]["text"]
+    assert "large headings" in blocks[0]["text"]
     # last block is the volatile tail with step + language, NOT cached
     tail = blocks[-1]
     assert "cache_control" not in tail
