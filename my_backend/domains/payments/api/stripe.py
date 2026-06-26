@@ -21,6 +21,7 @@ from shared.payments.stripe import (
     mark_webhook_processed,
 )
 from shared.responses.errors import error_response as _err
+from domains.payments.services.eligibility import has_trained_model
 from core.rate_limits import limiter, training_limit_string
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,28 @@ def create_checkout_session():
                 suggestion='Call POST /api/stripe/customer-portal to manage your plan.',
             )
 
+        # #131: API-Only (and any is_upgrade_only plan) requires the user to
+        # already have a successfully trained model — otherwise serving a
+        # model via the API makes no sense. This is the security boundary;
+        # the frontend also locks the card, but clients can call this
+        # endpoint directly.
+        plan_row = sb.table('subscription_plans') \
+            .select('slug, is_upgrade_only') \
+            .eq('id', plan_id) \
+            .single() \
+            .execute()
+        if plan_row.data and plan_row.data.get('is_upgrade_only') \
+                and not has_trained_model(sb, user_id):
+            logger.info(
+                f"Rejecting API-Only checkout for user {user_id}: no trained model"
+            )
+            return _err(
+                'ELIGIBILITY_NOT_MET',
+                'The API-Only plan requires at least one trained model. '
+                'Train a model on a training plan first, then switch to API-Only.',
+                403,
+            )
+
         # Get or create Stripe customer
         customer_id = get_or_create_stripe_customer(user_id, user_email)
 
@@ -129,6 +152,18 @@ def create_checkout_session():
     except Exception as e:
         logger.error(f"Error creating checkout session: {str(e)}")
         return jsonify({'error': 'Failed to create checkout session. Please try again or contact support.'}), 500
+
+
+@bp.route('/api-only-eligibility', methods=['GET'])
+@require_auth
+def api_only_eligibility():
+    """Whether the current user may purchase the API-Only plan.
+
+    Eligible iff the user has at least one completed trained model. Used by
+    the pricing page to lock/unlock the API-Only card.
+    """
+    sb = get_supabase_admin_client()
+    return jsonify({'eligible': has_trained_model(sb, g.user_id)}), 200
 
 
 @bp.route('/verify-session', methods=['POST'])
