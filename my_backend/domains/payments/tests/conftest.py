@@ -14,7 +14,7 @@ import shared.auth.jwt as jwt_mod
 from core.rate_limits import limiter
 from domains.payments.api.stripe import bp
 
-_JWT_SECRET = "test-jwt-secret-for-payments"
+_JWT_SECRET = "test-jwt-secret-for-payments-0123456789abcdef"  # >=32 bytes (HS256)
 
 
 @pytest.fixture(autouse=True)
