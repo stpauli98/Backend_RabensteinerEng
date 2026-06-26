@@ -127,6 +127,19 @@ CASES = [
     dict(id="time_info", kind="quality", lang="en", step="training",
          prompt="Which time information is relevant for an electricity load forecast?",
          checks=[under_words(260)]),
+    # PARAMETER-AWARE (context passed in)
+    dict(id="ctx_timestep_mismatch", kind="accuracy", lang="en", step="training",
+         context={"fields": [{"label": "Zeitschrittweite", "value": "60 min"}],
+                  "dataProfile": {"rowCount": 5000, "columns": ["time", "load"],
+                                  "timeColumn": {"resolutionMinutes": 15,
+                                                 "rangeStart": "2024-01-01", "rangeEnd": "2024-03-01"}}},
+         prompt="Is my time step setting appropriate?",
+         checks=[mentions_at_least(["15", "mismatch", "resolution", "doesn't match", "does not match"], 1)]),
+    dict(id="ctx_zeros_column", kind="quality", lang="en", step="anomaly-detection",
+         context={"dataProfile": {"rowCount": 4000, "columns": ["time", "load", "temp"],
+                                  "columnQuality": [{"column": "temp", "missingPct": 0, "zerosPct": 45}]}},
+         prompt="Anything I should clean up in my data before training?",
+         checks=[mentions_at_least(["temp", "zero", "45"], 1)]),
 ]
 
 
@@ -154,10 +167,19 @@ JUDGE_SYSTEM = (
 )
 
 
-def judge(client, model, user_prompt, lang, answer):
+def judge(client, model, user_prompt, lang, answer, context=None):
+    ctx_note = ""
+    if context:
+        ctx_note = (
+            "\nThe assistant was given the following context about the user's current "
+            "settings and loaded-data profile. Treat every value here as a FACT the "
+            "assistant legitimately knows — do NOT mark it as invented:\n"
+            f"{json.dumps(context)}\n"
+        )
     msg = (
         f"User language: {lang}\n"
-        f"User question:\n{user_prompt}\n\n"
+        f"User question:\n{user_prompt}\n"
+        f"{ctx_note}\n"
         f"Assistant answer:\n{answer}\n\n"
         "Grade it. Return only the JSON object."
     )
@@ -191,7 +213,7 @@ def main():
     for c in CASES:
         reply = generate_reply(
             messages=[{"role": "user", "content": c["prompt"]}],
-            step=c["step"], lang=c["lang"])
+            step=c["step"], lang=c["lang"], context=c.get("context"))
         print(f"\n[{c['id']}] ({c['kind']}, lang={c['lang']}) {c['prompt']}")
         print("  reply:", " ".join(reply.split())[:240])
         for chk in c["checks"]:
@@ -202,7 +224,7 @@ def main():
             if not ok and c["kind"] == "guardrail":
                 hard_failures.append((c["id"], detail))
         try:
-            g = judge(client, judge_model, c["prompt"], c["lang"], reply)
+            g = judge(client, judge_model, c["prompt"], c["lang"], reply, c.get("context"))
             quality.append(g)
             print(f"    judge: acc={g.get('accuracy')} rel={g.get('relevance')} "
                   f"fmt={g.get('format')} lang_ok={g.get('language_ok')} "
