@@ -6,6 +6,7 @@ from flask import Blueprint, g, jsonify, request
 from shared.auth.jwt import require_auth
 from domains.chatbot.services import rate_limit
 from domains.chatbot.services.chat_service import ChatUnavailable, generate_reply
+from domains.chatbot.services.context_format import sanitize_context
 
 logger = logging.getLogger(__name__)
 chatbot_bp = Blueprint("chatbot", __name__)
@@ -44,9 +45,10 @@ def message():
     step = body.get("step")
     if not isinstance(step, str):
         step = None
+    context = sanitize_context(body.get("context"))
 
     try:
-        reply = generate_reply(messages=messages, step=step, lang=lang)
+        reply = generate_reply(messages=messages, step=step, lang=lang, context=context)
     except ChatUnavailable:
         return jsonify({"error": "assistant temporarily unavailable"}), 503
 

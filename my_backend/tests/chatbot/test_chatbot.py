@@ -180,3 +180,45 @@ def test_returns_503_when_service_unavailable(client, monkeypatch):
     with patch("domains.chatbot.api.generate_reply", side_effect=ChatUnavailable("x")):
         r = _post(client, {"messages": [{"role": "user", "content": "hi"}], "lang": "en"})
     assert r.status_code == 503
+
+
+def test_sanitize_context_caps_and_drops_invalid():
+    from domains.chatbot.services import context_format
+    raw = {
+        "fields": [{"label": "Modell", "value": "LSTM"}, {"bad": 1},
+                   *[{"label": f"l{i}", "value": "v"} for i in range(30)]],
+        "dataProfile": {"rowCount": 100, "columns": ["time", "load"],
+                        "timeColumn": {"resolutionMinutes": 60, "rangeStart": "a", "rangeEnd": "b"},
+                        "columnQuality": [{"column": "load", "missingPct": 5, "zerosPct": 10}]},
+    }
+    c = context_format.sanitize_context(raw)
+    assert len(c["fields"]) == 20  # capped
+    assert c["fields"][0] == {"label": "Modell", "value": "LSTM"}
+    assert c["dataProfile"]["rowCount"] == 100
+    assert context_format.sanitize_context("nope") is None
+    assert context_format.sanitize_context({}) is None
+
+
+def test_format_context_renders_settings_and_profile():
+    from domains.chatbot.services import context_format
+    text = context_format.format_context({
+        "fields": [{"label": "Zeitschrittweite", "value": "15 min"}],
+        "dataProfile": {"rowCount": 100, "columns": ["time", "load"],
+                        "timeColumn": {"resolutionMinutes": 60, "rangeStart": "a", "rangeEnd": "b"},
+                        "columnQuality": [{"column": "load", "missingPct": 0, "zerosPct": 40}]},
+    })
+    assert "Zeitschrittweite: 15 min" in text
+    assert "100 rows" in text and "60 min" in text
+    assert "load 0% missing / 40% zeros" in text
+
+
+def test_system_blocks_append_context_to_volatile_tail_only():
+    from domains.chatbot.services import chat_service
+    ctx = {"fields": [{"label": "Modell", "value": "LSTM"}]}
+    blocks = chat_service.build_system_blocks(step="training", lang="en", context=ctx)
+    assert "cache_control" not in blocks[-1]           # tail stays uncached
+    assert "Modell: LSTM" in blocks[-1]["text"]
+    assert "Modell: LSTM" not in blocks[0]["text"]     # cached block unchanged
+    # no context → no settings section
+    plain = chat_service.build_system_blocks(step="training", lang="en")
+    assert "current settings" not in plain[-1]["text"]
