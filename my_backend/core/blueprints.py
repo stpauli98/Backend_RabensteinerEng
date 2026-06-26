@@ -12,6 +12,7 @@ def register_blueprints(app):
     from domains.keepalive import keepalive_bp
     from domains.auth_emails import auth_emails_bp
     from domains.retention.api import retention_bp
+    from domains.chatbot import chatbot_bp
 
     app.register_blueprint(first_processing_bp, url_prefix='/api/firstProcessing')
     app.register_blueprint(training_bp, url_prefix='/api/training')
@@ -22,3 +23,4 @@ def register_blueprints(app):
     app.register_blueprint(keepalive_bp, url_prefix='/api/keepalive')
     app.register_blueprint(auth_emails_bp, url_prefix='/api/auth')
     app.register_blueprint(retention_bp, url_prefix='/api/retention')
+    app.register_blueprint(chatbot_bp, url_prefix='/api/chatbot')
