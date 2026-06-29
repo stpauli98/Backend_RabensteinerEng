@@ -37,6 +37,25 @@ IGNORED_WEBHOOK_EVENTS = frozenset({
     'customer.subscription.created',
 })
 
+# Locales the app + Stripe pages support. We pass the app's current language
+# explicitly to Stripe Checkout / Billing Portal so the hosted pages match the
+# UI the user was on. Without it, Stripe auto-detects from the customer's
+# preferred_locales / browser and may render German (#127).
+_SUPPORTED_LOCALES = frozenset({'en', 'de'})
+
+
+def _normalize_locale(raw) -> str:
+    """Map a client-supplied language tag to a Stripe locale we support.
+
+    Defaults to 'en' so a missing or unknown value never falls back to
+    Stripe's auto-detected (often German) page.
+    """
+    if isinstance(raw, str):
+        code = raw.strip().lower()[:2]
+        if code in _SUPPORTED_LOCALES:
+            return code
+    return 'en'
+
 
 @bp.route('/create-checkout-session', methods=['POST'])
 @limiter.limit(training_limit_string)
@@ -59,6 +78,7 @@ def create_checkout_session():
         data = request.get_json()
         plan_id = data.get('plan_id')
         billing_cycle = data.get('billing_cycle', 'monthly')
+        locale = _normalize_locale(data.get('locale'))
 
         if not plan_id:
             return jsonify({'error': 'plan_id is required'}), 400
@@ -140,6 +160,7 @@ def create_checkout_session():
             },
             allow_promotion_codes=True,
             billing_address_collection='required',
+            locale=locale,
         )
 
         logger.info(f"Created checkout session: {session.id} for user {user_id}")
@@ -468,6 +489,8 @@ def customer_portal():
     try:
         user_id = g.user_id
         user_email = g.user_email
+        data = request.get_json(silent=True) or {}
+        locale = _normalize_locale(data.get('locale'))
 
         logger.info(f"Creating portal session for user {user_id}")
 
@@ -482,6 +505,7 @@ def customer_portal():
         portal_session = stripe.billing_portal.Session.create(
             customer=customer_id,
             return_url=f'{frontend_url}/pricing',
+            locale=locale,
         )
 
         logger.info(f"Created portal session for user {user_id}: {portal_session.url}")
