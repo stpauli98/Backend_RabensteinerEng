@@ -41,59 +41,6 @@ def get_period_start_for_user(user_id: str) -> date:
     return datetime.now(timezone.utc).date().replace(day=1)
 
 
-def increment_upload_count(user_id: str) -> bool:
-    """
-    Increment upload count for user in current period
-
-    Args:
-        user_id: User ID
-
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        supabase = get_supabase_admin_client()
-        period_start = get_period_start_for_user(user_id)
-
-        response = supabase.table('usage_tracking') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .eq('period_start', period_start.isoformat()) \
-            .execute()
-
-        if response.data and len(response.data) > 0:
-            usage_id = response.data[0]['id']
-            current_count = response.data[0].get('uploads_count', 0)
-
-            supabase.table('usage_tracking') \
-                .update({'uploads_count': current_count + 1}) \
-                .eq('id', usage_id) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... upload {current_count}->{current_count + 1}")
-        else:
-            period_end = anniversary_period_end(period_start)
-
-            supabase.table('usage_tracking') \
-                .insert({
-                    'user_id': user_id,
-                    'period_start': period_start.isoformat(),
-                    'period_end': period_end.isoformat(),
-                    'uploads_count': 1,
-                    'processing_jobs_count': 0,
-                    'training_runs_count': 0,
-                    'storage_used_gb': 0
-                }) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... new tracking record (upload)")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"Error incrementing upload count: {str(e)}")
-        return False
-
 
 def increment_processing_count(user_id: str) -> bool:
     """
@@ -108,44 +55,12 @@ def increment_processing_count(user_id: str) -> bool:
     try:
         supabase = get_supabase_admin_client()
         period_start = get_period_start_for_user(user_id)
-
-        response = supabase.table('usage_tracking') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .eq('period_start', period_start.isoformat()) \
-            .execute()
-
-        if response.data and len(response.data) > 0:
-            usage_id = response.data[0]['id']
-            current_count = response.data[0].get('processing_jobs_count', 0)
-
-            supabase.table('usage_tracking') \
-                .update({
-                    'processing_jobs_count': current_count + 1
-                }) \
-                .eq('id', usage_id) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... processing {current_count}->{current_count + 1}")
-        else:
-            period_end = anniversary_period_end(period_start)
-
-            supabase.table('usage_tracking') \
-                .insert({
-                    'user_id': user_id,
-                    'period_start': period_start.isoformat(),
-                    'period_end': period_end.isoformat(),
-                    'uploads_count': 0,
-                    'processing_jobs_count': 1,
-                    'training_runs_count': 0,
-                    'storage_used_gb': 0
-                }) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... new tracking record (processing)")
-
+        supabase.rpc('increment_usage', {
+            'p_user_id': user_id,
+            'p_period_start': period_start.isoformat(),
+            'p_field': 'processing_jobs_count',
+        }).execute()
         return True
-
     except Exception as e:
         logger.error(f"Error incrementing processing count: {str(e)}")
         return False
@@ -164,42 +79,12 @@ def increment_training_count(user_id: str) -> bool:
     try:
         supabase = get_supabase_admin_client()
         period_start = get_period_start_for_user(user_id)
-
-        response = supabase.table('usage_tracking') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .eq('period_start', period_start.isoformat()) \
-            .execute()
-
-        if response.data and len(response.data) > 0:
-            usage_id = response.data[0]['id']
-            current_count = response.data[0].get('training_runs_count', 0)
-
-            supabase.table('usage_tracking') \
-                .update({'training_runs_count': current_count + 1}) \
-                .eq('id', usage_id) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... training {current_count}->{current_count + 1}")
-        else:
-            period_end = anniversary_period_end(period_start)
-
-            supabase.table('usage_tracking') \
-                .insert({
-                    'user_id': user_id,
-                    'period_start': period_start.isoformat(),
-                    'period_end': period_end.isoformat(),
-                    'uploads_count': 0,
-                    'processing_jobs_count': 0,
-                    'training_runs_count': 1,
-                    'storage_used_gb': 0
-                }) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... new tracking record (training)")
-
+        supabase.rpc('increment_usage', {
+            'p_user_id': user_id,
+            'p_period_start': period_start.isoformat(),
+            'p_field': 'training_runs_count',
+        }).execute()
         return True
-
     except Exception as e:
         logger.error(f"Error incrementing training count: {str(e)}")
         return False
@@ -207,11 +92,11 @@ def increment_training_count(user_id: str) -> bool:
 
 def update_storage_usage(user_id: str, storage_mb: float) -> bool:
     """
-    Update storage usage for user in current period
+    Update storage usage for user in current period (additive).
 
     Args:
         user_id: User ID
-        storage_mb: Storage used in MB
+        storage_mb: Storage used in MB (added atomically to current period total)
 
     Returns:
         bool: True if successful, False otherwise
@@ -219,45 +104,12 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
     try:
         supabase = get_supabase_admin_client()
         period_start = get_period_start_for_user(user_id)
-
-        response = supabase.table('usage_tracking') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .eq('period_start', period_start.isoformat()) \
-            .execute()
-
-        if response.data and len(response.data) > 0:
-            usage_id = response.data[0]['id']
-            current_storage_gb = response.data[0].get('storage_used_gb', 0)
-            storage_gb = storage_mb / 1024
-            new_storage_gb = current_storage_gb + storage_gb
-
-            supabase.table('usage_tracking') \
-                .update({'storage_used_gb': new_storage_gb}) \
-                .eq('id', usage_id) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... storage {current_storage_gb:.2f}->{new_storage_gb:.2f} GB (+{storage_mb:.1f}MB)")
-        else:
-            storage_gb = storage_mb / 1024
-            period_end = anniversary_period_end(period_start)
-
-            supabase.table('usage_tracking') \
-                .insert({
-                    'user_id': user_id,
-                    'period_start': period_start.isoformat(),
-                    'period_end': period_end.isoformat(),
-                    'uploads_count': 0,
-                    'processing_jobs_count': 0,
-                    'training_runs_count': 0,
-                    'storage_used_gb': storage_gb
-                }) \
-                .execute()
-
-            logger.debug(f"Usage: {user_id[:8]}... new tracking record (storage: {storage_gb:.2f} GB)")
-
+        supabase.rpc('increment_storage_usage', {
+            'p_user_id': user_id,
+            'p_period_start': period_start.isoformat(),
+            'p_storage_gb': storage_mb / 1024.0,
+        }).execute()
         return True
-
     except Exception as e:
         logger.error(f"Error updating storage usage: {str(e)}")
         return False
