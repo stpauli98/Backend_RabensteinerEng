@@ -30,3 +30,45 @@ BEGIN
   ASSERT compute_next_period_start('2026-01-31 12:00:00+00','2026-03-10 00:00:00+00') = DATE '2026-03-31', 'N3';
   RAISE NOTICE 'ALL PERIOD ASSERTIONS PASSED';
 END $$;
+
+-- ============================================================
+-- Task 2: user-facing period functions (overload + no-arg via auth.uid + next reset)
+-- ============================================================
+DO $$
+DECLARE
+  v_uid uuid := '00000000-0000-0000-0000-0000000000a2';
+  v_plan uuid;
+  v_expected date;
+  v_noarg date;
+BEGIN
+  SELECT id INTO v_plan FROM subscription_plans WHERE slug='standard' LIMIT 1;
+  DELETE FROM user_subscriptions WHERE user_id = v_uid;
+  -- active sub anchored on the 15th, two-ish months ago, not yet expired
+  INSERT INTO user_subscriptions (user_id, plan_id, billing_cycle, status, started_at, expires_at, created_at)
+  VALUES (v_uid, v_plan, 'yearly', 'active',
+          (date_trunc('month', now()) - INTERVAL '2 months' + INTERVAL '14 days'),
+          now() + INTERVAL '300 days', now() - INTERVAL '2 months');
+
+  v_expected := compute_period_start(
+    (date_trunc('month', now()) - INTERVAL '2 months' + INTERVAL '14 days')::timestamptz, now());
+
+  -- overload (service-role path) matches the pure function
+  ASSERT get_current_period_start(v_uid) = v_expected, 'OVERLOAD_MATCHES_COMPUTE';
+
+  -- no-arg version resolves the same value when auth.uid() is the caller
+  PERFORM set_config('request.jwt.claim.sub', v_uid::text, true);
+  v_noarg := get_current_period_start();
+  ASSERT v_noarg = v_expected, format('NOARG_MATCHES_OVERLOAD expected %s got %s', v_expected, v_noarg);
+
+  -- next reset is exactly one anniversary step after the current period start
+  ASSERT get_next_period_reset() = compute_next_period_start(
+    (date_trunc('month', now()) - INTERVAL '2 months' + INTERVAL '14 days')::timestamptz, now()),
+    'NEXT_RESET_MATCHES';
+
+  -- fallback: unknown caller -> 1st of current month (unchanged behavior)
+  PERFORM set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000ff', true);
+  ASSERT get_current_period_start() = date_trunc('month', (now() AT TIME ZONE 'UTC'))::date, 'NOSUB_FALLBACK';
+
+  DELETE FROM user_subscriptions WHERE user_id = v_uid;
+  RAISE NOTICE 'PERIOD FUNCTION ASSERTIONS PASSED';
+END $$;
