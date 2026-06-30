@@ -49,5 +49,19 @@ BEGIN
 END;
 $$;
 
--- Run the cutover once at deploy.
-SELECT public._seed_anniversary_usage_once();
+-- One-shot: only run at the original cutover. On any later replay (e.g. an
+-- accidental `supabase db push`) this is a NO-OP, because by then the app has
+-- written anniversary-keyed rows and re-running the DO UPDATE would clobber live
+-- counts with stale calendar values. Prod already ran this and DROPPED the
+-- function (20260630_135). See MIGRATION_NOTES_anniversary.md.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM usage_tracking ut
+    JOIN user_subscriptions us
+      ON us.user_id = ut.user_id AND us.status = 'active' AND us.expires_at > now()
+    WHERE ut.period_start = compute_period_start(us.started_at, now())
+  ) THEN
+    PERFORM public._seed_anniversary_usage_once();
+  END IF;
+END $$;
