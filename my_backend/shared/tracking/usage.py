@@ -1,9 +1,23 @@
 """Usage tracking utilities for Supabase"""
 import logging
+from calendar import monthrange
 from datetime import datetime, date, timezone, timedelta
 from shared.database.client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
+
+
+def anniversary_period_end(period_start: date) -> date:
+    """Last day of the anniversary window starting at period_start.
+
+    Matches the SQL convention used by increment_usage / update_storage_usage
+    (period_start + INTERVAL '1 month' - INTERVAL '1 day'), with month-end
+    clamping. e.g. 2026-06-15 -> 2026-07-14; 2026-01-31 -> 2026-02-27.
+    """
+    y = period_start.year + (1 if period_start.month == 12 else 0)
+    m = 1 if period_start.month == 12 else period_start.month + 1
+    day = min(period_start.day, monthrange(y, m)[1])
+    return date(y, m, day) - timedelta(days=1)
 
 def get_current_period_start() -> datetime:
     """DEPRECATED calendar-month fallback. Use get_period_start_for_user(user_id)."""
@@ -58,7 +72,7 @@ def increment_upload_count(user_id: str) -> bool:
 
             logger.debug(f"Usage: {user_id[:8]}... upload {current_count}->{current_count + 1}")
         else:
-            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            period_end = anniversary_period_end(period_start)
 
             supabase.table('usage_tracking') \
                 .insert({
@@ -114,7 +128,7 @@ def increment_processing_count(user_id: str) -> bool:
 
             logger.debug(f"Usage: {user_id[:8]}... processing {current_count}->{current_count + 1}")
         else:
-            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            period_end = anniversary_period_end(period_start)
 
             supabase.table('usage_tracking') \
                 .insert({
@@ -168,7 +182,7 @@ def increment_training_count(user_id: str) -> bool:
 
             logger.debug(f"Usage: {user_id[:8]}... training {current_count}->{current_count + 1}")
         else:
-            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            period_end = anniversary_period_end(period_start)
 
             supabase.table('usage_tracking') \
                 .insert({
@@ -226,7 +240,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
             logger.debug(f"Usage: {user_id[:8]}... storage {current_storage_gb:.2f}->{new_storage_gb:.2f} GB (+{storage_mb:.1f}MB)")
         else:
             storage_gb = storage_mb / 1024
-            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            period_end = anniversary_period_end(period_start)
 
             supabase.table('usage_tracking') \
                 .insert({

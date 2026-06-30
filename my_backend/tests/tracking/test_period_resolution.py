@@ -27,3 +27,16 @@ def test_get_period_start_for_user_falls_back_on_error():
 
     today = datetime.datetime.now(datetime.timezone.utc).date()
     assert result == today.replace(day=1)
+
+
+def test_anniversary_period_end_matches_sql_convention():
+    from shared.tracking.usage import anniversary_period_end
+    from datetime import date
+    # mid-month anchor -> day before next anniversary
+    assert anniversary_period_end(date(2026, 6, 15)) == date(2026, 7, 14)
+    # month-end clamp (Jan 31 -> Feb has 28): + 1 month clamped (Feb 28) - 1 day
+    assert anniversary_period_end(date(2026, 1, 31)) == date(2026, 2, 27)
+    # leap year (Feb 29) clamp
+    assert anniversary_period_end(date(2024, 1, 31)) == date(2024, 2, 28)
+    # December -> January year rollover
+    assert anniversary_period_end(date(2026, 12, 10)) == date(2027, 1, 9)
