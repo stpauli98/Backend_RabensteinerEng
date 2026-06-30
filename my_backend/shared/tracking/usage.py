@@ -1,6 +1,6 @@
 """Usage tracking utilities for Supabase"""
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 from shared.database.client import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
@@ -11,13 +11,12 @@ def get_current_period_start() -> datetime:
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def get_period_start_for_user(user_id: str) -> "date":
+def get_period_start_for_user(user_id: str) -> date:
     """Resolve the user's current anniversary period start via the SQL source of truth.
 
     Falls back to the 1st of the current UTC month if the RPC is unavailable, so
     writes never crash on a transient DB issue.
     """
-    from datetime import date
     try:
         supabase = get_supabase_admin_client()
         resp = supabase.rpc('get_current_period_start', {'p_user_id': user_id}).execute()
