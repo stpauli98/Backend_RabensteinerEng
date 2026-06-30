@@ -6,14 +6,26 @@ from shared.database.client import get_supabase_admin_client
 logger = logging.getLogger(__name__)
 
 def get_current_period_start() -> datetime:
-    """
-    Get the start of current billing period (first day of current month)
-
-    Returns:
-        datetime: Start of current period in UTC
-    """
+    """DEPRECATED calendar-month fallback. Use get_period_start_for_user(user_id)."""
     now = datetime.now(timezone.utc)
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def get_period_start_for_user(user_id: str) -> "date":
+    """Resolve the user's current anniversary period start via the SQL source of truth.
+
+    Falls back to the 1st of the current UTC month if the RPC is unavailable, so
+    writes never crash on a transient DB issue.
+    """
+    from datetime import date
+    try:
+        supabase = get_supabase_admin_client()
+        resp = supabase.rpc('get_current_period_start', {'p_user_id': user_id}).execute()
+        if resp and resp.data:
+            return date.fromisoformat(str(resp.data))
+    except Exception as e:
+        logger.error(f"get_period_start_for_user RPC failed for {user_id[:8]}...: {e}")
+    return datetime.now(timezone.utc).date().replace(day=1)
 
 
 def increment_upload_count(user_id: str) -> bool:
@@ -28,7 +40,7 @@ def increment_upload_count(user_id: str) -> bool:
     """
     try:
         supabase = get_supabase_admin_client()
-        period_start = get_current_period_start()
+        period_start = get_period_start_for_user(user_id)
 
         response = supabase.table('usage_tracking') \
             .select('*') \
@@ -47,9 +59,7 @@ def increment_upload_count(user_id: str) -> bool:
 
             logger.debug(f"Usage: {user_id[:8]}... upload {current_count}->{current_count + 1}")
         else:
-            period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
-                                             year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
-                                      .replace(day=1) - timedelta(days=1)
+            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
 
             supabase.table('usage_tracking') \
                 .insert({
@@ -84,7 +94,7 @@ def increment_processing_count(user_id: str) -> bool:
     """
     try:
         supabase = get_supabase_admin_client()
-        period_start = get_current_period_start()
+        period_start = get_period_start_for_user(user_id)
 
         response = supabase.table('usage_tracking') \
             .select('*') \
@@ -105,9 +115,7 @@ def increment_processing_count(user_id: str) -> bool:
 
             logger.debug(f"Usage: {user_id[:8]}... processing {current_count}->{current_count + 1}")
         else:
-            period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
-                                             year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
-                                      .replace(day=1) - timedelta(days=1)
+            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
 
             supabase.table('usage_tracking') \
                 .insert({
@@ -142,7 +150,7 @@ def increment_training_count(user_id: str) -> bool:
     """
     try:
         supabase = get_supabase_admin_client()
-        period_start = get_current_period_start()
+        period_start = get_period_start_for_user(user_id)
 
         response = supabase.table('usage_tracking') \
             .select('*') \
@@ -161,9 +169,7 @@ def increment_training_count(user_id: str) -> bool:
 
             logger.debug(f"Usage: {user_id[:8]}... training {current_count}->{current_count + 1}")
         else:
-            period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
-                                             year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
-                                      .replace(day=1) - timedelta(days=1)
+            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
 
             supabase.table('usage_tracking') \
                 .insert({
@@ -199,7 +205,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
     """
     try:
         supabase = get_supabase_admin_client()
-        period_start = get_current_period_start()
+        period_start = get_period_start_for_user(user_id)
 
         response = supabase.table('usage_tracking') \
             .select('*') \
@@ -221,9 +227,7 @@ def update_storage_usage(user_id: str, storage_mb: float) -> bool:
             logger.debug(f"Usage: {user_id[:8]}... storage {current_storage_gb:.2f}->{new_storage_gb:.2f} GB (+{storage_mb:.1f}MB)")
         else:
             storage_gb = storage_mb / 1024
-            period_end = period_start.replace(month=period_start.month + 1 if period_start.month < 12 else 1,
-                                             year=period_start.year + 1 if period_start.month == 12 else period_start.year) \
-                                      .replace(day=1) - timedelta(days=1)
+            period_end = (period_start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
 
             supabase.table('usage_tracking') \
                 .insert({
@@ -256,7 +260,7 @@ def get_usage_stats(user_id: str) -> dict:
     Returns:
         dict: Usage statistics with uploads, processing, storage
     """
-    period_start = get_current_period_start()
+    period_start = get_period_start_for_user(user_id)
     try:
         supabase = get_supabase_admin_client()
 
@@ -317,12 +321,12 @@ def atomic_increment_with_check(user_id: str, resource_type: str) -> tuple:
     """
     try:
         supabase = get_supabase_admin_client()
-        period_start = get_current_period_start()
+        period_start = get_period_start_for_user(user_id)
 
         result = supabase.rpc('atomic_check_and_increment_quota', {
             'p_user_id': user_id,
             'p_resource_type': resource_type,
-            'p_period_start': period_start.date().isoformat()
+            'p_period_start': period_start.isoformat()
         }).execute()
 
         if result.data and len(result.data) > 0:
