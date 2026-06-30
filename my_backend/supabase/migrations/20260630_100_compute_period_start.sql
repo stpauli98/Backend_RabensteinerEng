@@ -6,7 +6,7 @@ CREATE OR REPLACE FUNCTION public.compute_period_start(
   p_now timestamptz
 ) RETURNS date
 LANGUAGE plpgsql
-IMMUTABLE
+STABLE
 SET search_path TO 'public', 'pg_temp'
 AS $$
 DECLARE
@@ -31,7 +31,7 @@ CREATE OR REPLACE FUNCTION public.compute_next_period_start(
   p_now timestamptz
 ) RETURNS date
 LANGUAGE plpgsql
-IMMUTABLE
+STABLE
 SET search_path TO 'public', 'pg_temp'
 AS $$
 DECLARE

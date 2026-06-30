@@ -3,8 +3,9 @@
 CREATE OR REPLACE FUNCTION public.get_total_compute_seconds(p_user_id uuid)
 RETURNS bigint
 LANGUAGE plpgsql
+STABLE
 SECURITY DEFINER
-SET search_path TO 'public'
+SET search_path TO 'public', 'pg_temp'
 AS $$
 DECLARE
   total BIGINT;
@@ -36,3 +37,10 @@ BEGIN
   RETURN total;
 END;
 $$;
+
+-- Make grants explicit & version-controlled (CREATE OR REPLACE otherwise silently
+-- preserves whatever the live object had). The frontend calls this with the user's
+-- own p_user_id as `authenticated`; the backend calls it as `service_role`. Both
+-- need EXECUTE — this matches the existing production grant.
+REVOKE ALL ON FUNCTION public.get_total_compute_seconds(uuid) FROM public;
+GRANT EXECUTE ON FUNCTION public.get_total_compute_seconds(uuid) TO authenticated, service_role;
