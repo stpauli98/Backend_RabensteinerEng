@@ -72,3 +72,35 @@ BEGIN
   DELETE FROM user_subscriptions WHERE user_id = v_uid;
   RAISE NOTICE 'PERIOD FUNCTION ASSERTIONS PASSED';
 END $$;
+
+-- ============================================================
+-- Task 3: compute hours window = since current anniversary
+-- ============================================================
+DO $$
+DECLARE
+  v_uid uuid := '00000000-0000-0000-0000-0000000000aa';
+  v_plan uuid;
+  v_total bigint;
+BEGIN
+  SELECT id INTO v_plan FROM subscription_plans WHERE slug='standard' LIMIT 1;
+  DELETE FROM usage_events WHERE user_id = v_uid;
+  DELETE FROM user_subscriptions WHERE user_id = v_uid;
+
+  -- started_at 2 months + 5 days before "now" so the current window opened recently
+  INSERT INTO user_subscriptions (user_id, plan_id, billing_cycle, status, started_at, expires_at, created_at)
+  VALUES (v_uid, v_plan, 'monthly', 'active', now() - INTERVAL '2 months 5 days', now() + INTERVAL '25 days', now() - INTERVAL '2 months 5 days');
+
+  -- 100s logged BEFORE the current anniversary (should be excluded)
+  INSERT INTO usage_events (user_id, event_type, resource_type, processing_duration_sec, created_at)
+  VALUES (v_uid, 'processing', 'training', 100, now() - INTERVAL '40 days');
+  -- 60s logged AFTER the current anniversary (should be counted)
+  INSERT INTO usage_events (user_id, event_type, resource_type, processing_duration_sec, created_at)
+  VALUES (v_uid, 'processing', 'training', 60, now() - INTERVAL '2 days');
+
+  SELECT get_total_compute_seconds(v_uid) INTO v_total;
+  ASSERT v_total = 60, format('Expected 60, got %s', v_total);
+
+  DELETE FROM usage_events WHERE user_id = v_uid;
+  DELETE FROM user_subscriptions WHERE user_id = v_uid;
+  RAISE NOTICE 'COMPUTE WINDOW ASSERTION PASSED';
+END $$;
