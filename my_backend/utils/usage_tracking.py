@@ -7,7 +7,6 @@ from the canonical shared.tracking.usage module.
 import warnings
 from shared.tracking.usage import (
     get_current_period_start,
-    increment_upload_count,
     increment_processing_count,
     increment_training_count,
     update_storage_usage,
@@ -23,7 +22,6 @@ warnings.warn(
 
 __all__ = [
     'get_current_period_start',
-    'increment_upload_count',
     'increment_processing_count',
     'increment_training_count',
     'update_storage_usage',

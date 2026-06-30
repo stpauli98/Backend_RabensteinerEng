@@ -26,11 +26,13 @@ def get_user_subscription(user_id: str, access_token: str) -> Optional[dict]:
             .select('*, subscription_plans(*)') \
             .eq('user_id', user_id) \
             .eq('status', 'active') \
-            .single() \
+            .gt('expires_at', datetime.now(timezone.utc).isoformat()) \
+            .order('created_at', desc=True) \
+            .limit(1) \
             .execute()
 
         if response.data:
-            return response.data
+            return response.data[0]
 
         logger.warning(f"No active subscription found for user {user_id}")
         return None
@@ -66,8 +68,7 @@ def get_user_usage(user_id: str, access_token: str) -> dict:
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
-            .gte('period_start', period_start_iso) \
-            .order('period_start', desc=True) \
+            .eq('period_start', period_start_iso) \
             .limit(1) \
             .execute()
 
@@ -134,49 +135,6 @@ def require_subscription(f):
 
     return decorated_function
 
-
-def check_upload_limit(f):
-    """
-    Decorator to check upload limit before processing
-
-    Must be used AFTER @require_auth and @require_subscription decorators
-
-    Usage:
-        @require_auth
-        @require_subscription
-        @check_upload_limit
-        def upload_route():
-            # Upload will only proceed if under limit
-            return jsonify({'message': 'Upload successful'})
-    """
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not hasattr(g, 'user_id') or not hasattr(g, 'plan'):
-            logger.error("check_upload_limit used without require_auth and require_subscription")
-            return jsonify({'error': 'Authentication and subscription required'}), 401
-
-        usage = get_user_usage(g.user_id, g.access_token)
-        uploads_used = usage.get('uploads_count', 0)
-        uploads_limit = g.plan.get('max_uploads_per_month', 0)
-
-        if uploads_used >= uploads_limit:
-            logger.warning(f"Upload limit reached for user {g.user_email}: {uploads_used}/{uploads_limit}")
-            return jsonify({
-                'error': 'Upload limit reached',
-                'message': f'You have reached your monthly upload limit of {uploads_limit}',
-                'current_usage': uploads_used,
-                'limit': uploads_limit,
-                'plan': g.plan.get('name')
-            }), 403
-
-        g.usage = usage
-        g.uploads_remaining = uploads_limit - uploads_used
-
-
-
-        return f(*args, **kwargs)
-
-    return decorated_function
 
 
 def check_processing_limit(f):
