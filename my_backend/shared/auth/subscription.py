@@ -54,13 +54,19 @@ def get_user_usage(user_id: str, access_token: str) -> dict:
     try:
         supabase = get_supabase_user_client(access_token)
 
-        now = datetime.now(timezone.utc)
-        period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        try:
+            period_resp = supabase.rpc('get_current_period_start').execute()
+            period_start_iso = str(period_resp.data) if period_resp and period_resp.data else None
+        except Exception as e:
+            logger.error(f"get_current_period_start RPC failed: {e}")
+            period_start_iso = None
+        if not period_start_iso:
+            period_start_iso = datetime.now(timezone.utc).date().replace(day=1).isoformat()
 
         response = supabase.table('usage_tracking') \
             .select('*') \
             .eq('user_id', user_id) \
-            .gte('period_start', period_start.date().isoformat()) \
+            .gte('period_start', period_start_iso) \
             .order('period_start', desc=True) \
             .limit(1) \
             .execute()
