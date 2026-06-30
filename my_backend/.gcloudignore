@@ -1,0 +1,15 @@
+# gcloud source-upload ignore (used instead of .gitignore, which excludes **/Dockerfile).
+# Keep the Dockerfile so `gcloud run deploy --source` can build it.
+.git/
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.superpowers/
+chunk_uploads/
+temp_uploads/
+uploads/
+*.log
+venv/
+.venv/
