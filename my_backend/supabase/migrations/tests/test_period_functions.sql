@@ -104,3 +104,42 @@ BEGIN
   DELETE FROM user_subscriptions WHERE user_id = v_uid;
   RAISE NOTICE 'COMPUTE WINDOW ASSERTION PASSED';
 END $$;
+
+-- ============================================================
+-- Task 4: cutover seed carries existing counts into the anniversary row
+-- ============================================================
+DO $$
+DECLARE
+  v_uid uuid := '00000000-0000-0000-0000-0000000000bb';
+  v_plan uuid;
+  v_cal date := date_trunc('month', (now() AT TIME ZONE 'UTC'))::date;
+  v_anchor timestamptz := (v_cal + INTERVAL '14 days');   -- anchor day = 15th
+  v_anniv date;
+  v_seeded int;
+BEGIN
+  SELECT id INTO v_plan FROM subscription_plans WHERE slug='standard' LIMIT 1;
+  DELETE FROM usage_tracking WHERE user_id = v_uid;
+  DELETE FROM user_subscriptions WHERE user_id = v_uid;
+
+  INSERT INTO user_subscriptions (user_id, plan_id, billing_cycle, status, started_at, expires_at, created_at)
+  VALUES (v_uid, v_plan, 'monthly', 'active', v_anchor, now() + INTERVAL '20 days', now());
+  v_anniv := compute_period_start(v_anchor, now());
+
+  -- existing calendar-month usage row with real counts
+  INSERT INTO usage_tracking (user_id, period_start, period_end, training_runs_count, processing_jobs_count, uploads_count, storage_used_gb)
+  VALUES (v_uid, v_cal, (v_cal + INTERVAL '1 month' - INTERVAL '1 day')::date, 3, 2, 1, 0.5);
+
+  PERFORM public._seed_anniversary_usage_once();
+
+  SELECT training_runs_count INTO v_seeded
+  FROM usage_tracking WHERE user_id = v_uid AND period_start = v_anniv;
+  ASSERT v_seeded = 3, format('Expected seeded training=3 at anniversary %s, got %s', v_anniv, v_seeded);
+
+  -- idempotency: a second run must not duplicate or alter
+  PERFORM public._seed_anniversary_usage_once();
+  ASSERT (SELECT count(*) FROM usage_tracking WHERE user_id = v_uid AND period_start = v_anniv) = 1, 'SEED_IDEMPOTENT';
+
+  DELETE FROM usage_tracking WHERE user_id = v_uid;
+  DELETE FROM user_subscriptions WHERE user_id = v_uid;
+  RAISE NOTICE 'SEED ASSERTION PASSED';
+END $$;
