@@ -87,8 +87,8 @@ def test_compute_hours_exhausted_returns_403_with_error_code(client):
     body = json.loads(resp.data)
     assert body['error_code'] == 'compute_hours_exhausted'
     assert body['redirect_to'] == '/pricing'
-    assert body['limit_hours'] == 50
-    assert body['used_hours'] == pytest.approx(50.5, abs=0.01)
+    assert body['limit_minutes'] == 3000  # 50h * 60
+    assert body['used_minutes'] == pytest.approx(3030, abs=1)  # 50.5h * 60
     fake_supabase.rpc.assert_called_with(
         'get_total_compute_seconds',
         {'p_user_id': '4633c88e-36fb-446d-a17e-90374359875c'},

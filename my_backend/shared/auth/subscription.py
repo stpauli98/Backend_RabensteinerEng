@@ -196,22 +196,23 @@ def check_processing_limit(f):
                 return f(*args, **kwargs)
 
             limit_seconds = total_compute_hours * 3600
-            used_hours = used_seconds / 3600
+            used_minutes = used_seconds / 60
+            limit_minutes = total_compute_hours * 60
 
             if used_seconds >= limit_seconds:
                 logger.warning(
-                    f"Compute hours exhausted for user {g.user_email}: "
-                    f"{used_hours:.2f}/{total_compute_hours}h"
+                    f"Compute time exhausted for user {g.user_email}: "
+                    f"{used_minutes:.0f}/{limit_minutes} min"
                 )
                 return jsonify({
                     'error': (
-                        f"Compute hours exhausted. Your {plan.get('name', 'current')} plan "
-                        f"includes {total_compute_hours}h. You've used {used_hours:.2f}h. "
+                        f"Compute time exhausted. Your {plan.get('name', 'current')} plan "
+                        f"includes {limit_minutes} min. You've used {used_minutes:.0f} min. "
                         f"Upgrade your plan or wait for the next billing period."
                     ),
                     'error_code': 'compute_hours_exhausted',
-                    'used_hours': round(used_hours, 2),
-                    'limit_hours': total_compute_hours,
+                    'used_minutes': round(used_minutes, 1),
+                    'limit_minutes': limit_minutes,
                     'plan': plan.get('name'),
                     'redirect_to': '/pricing',
                 }), 403
