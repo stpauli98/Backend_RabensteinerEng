@@ -16,7 +16,7 @@ from flask import request, jsonify, Blueprint, Response, g
 
 # Authentication and authorization
 from shared.auth.jwt import require_auth
-from shared.auth.subscription import require_subscription, check_processing_limit
+from shared.auth.subscription import require_subscription, check_processing_limit, plan_file_size_bytes
 from shared.tracking.usage import increment_processing_count, log_compute_duration
 from shared.exceptions.errors import CloudException
 from shared.validators.uuid import validate_uuid_format
@@ -295,8 +295,9 @@ def complete_redirect():
         # Validate file sizes
         try:
             tracker.emit('validating', 25, 'cloud_validating_size')
-            validate_csv_size(temp_file_path)
-            validate_csv_size(load_file_path)
+            _max_bytes = plan_file_size_bytes(g.plan or {})
+            validate_csv_size(temp_file_path, _max_bytes)
+            validate_csv_size(load_file_path, _max_bytes)
             tracker.emit('validating', 28, 'cloud_size_validated')
         except CloudException as exc:
             logger.warning(f"Cloud validation rejected in /complete (size): {exc.error_code} — {exc.message}")
@@ -620,7 +621,8 @@ def interpolate_chunked():
 
         try:
             tracker.emit('validating', 18, 'cloud_validating_size')
-            validate_csv_size(combined_file_path)
+            _max_bytes = plan_file_size_bytes(g.plan or {})
+            validate_csv_size(combined_file_path, _max_bytes)
             tracker.emit('validating', 20, 'cloud_size_validated')
         except CloudException as exc:
             logger.warning(f"Cloud validation rejected in /interpolate-chunked (size): {exc.error_code} — {exc.message}")

@@ -8,7 +8,6 @@ import pandas as pd
 
 from domains.cloud.config import (
     UPLOAD_ID_PATTERN,
-    MAX_FILE_SIZE,
     MAX_ROWS,
     MAX_COLUMNS,
     FILE_BUFFER_SIZE,
@@ -53,12 +52,15 @@ def sanitize_upload_id(upload_id: str) -> str:
     return upload_id
 
 
-def validate_csv_size(file_path: str):
+def validate_csv_size(file_path: str, max_size_bytes=None):
     """
     Validate CSV file size to prevent resource exhaustion.
 
     Args:
         file_path: Path to the CSV file
+        max_size_bytes: Maximum allowed file size in bytes, derived from the
+            caller's plan (see shared.auth.subscription.plan_file_size_bytes).
+            `None` means unlimited — the check is skipped.
 
     Raises:
         CSVParsingError: If file does not exist
@@ -67,12 +69,15 @@ def validate_csv_size(file_path: str):
     if not os.path.exists(file_path):
         raise CSVParsingError(f"File not found: {file_path}")
 
+    if max_size_bytes is None:
+        return
+
     size = os.path.getsize(file_path)
-    if size > MAX_FILE_SIZE:
+    if size > max_size_bytes:
         raise CloudException(
-            f"File too large: {size / FILE_BUFFER_SIZE:.2f}MB (max {MAX_FILE_SIZE / FILE_BUFFER_SIZE:.0f}MB)",
+            f"File too large: {size / FILE_BUFFER_SIZE:.2f}MB (max {max_size_bytes / FILE_BUFFER_SIZE:.0f}MB)",
             error_code='FILE_TOO_LARGE',
-            details={'size_mb': size / FILE_BUFFER_SIZE, 'max_mb': MAX_FILE_SIZE / FILE_BUFFER_SIZE},
+            details={'size_mb': size / FILE_BUFFER_SIZE, 'max_mb': max_size_bytes / FILE_BUFFER_SIZE},
         )
 
 
