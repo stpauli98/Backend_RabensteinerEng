@@ -8,6 +8,18 @@ from shared.database.client import get_supabase_user_client
 
 logger = logging.getLogger(__name__)
 
+def plan_file_size_bytes(plan: dict) -> Optional[int]:
+    """Resolve a plan's max upload size to bytes.
+
+    Sentinels: -1 => unlimited (None, skip the check); 0 => uploads blocked
+    (0 bytes); n>0 => n MB. A missing value fails open to unlimited to match
+    the module's fail-open posture on transient plan-read gaps.
+    """
+    raw = plan.get('max_file_size_mb')
+    if raw is None or raw < 0:
+        return None
+    return int(raw) * 1024 * 1024
+
 def get_user_subscription(user_id: str, access_token: str) -> Optional[dict]:
     """
     Get active subscription for user
