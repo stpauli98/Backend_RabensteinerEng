@@ -13,7 +13,7 @@ from flask import Blueprint, request, jsonify, g, Response
 import pandas as pd
 
 from shared.auth.jwt import require_auth
-from shared.auth.subscription import require_subscription, check_processing_limit
+from shared.auth.subscription import require_subscription, check_processing_limit, plan_file_size_bytes
 from shared.tracking.usage import increment_processing_count, update_storage_usage, log_compute_duration
 from shared.exceptions.errors import AnomalyException, ThresholdOutOfRangeError
 from shared.responses.gzip import gzip_json_response
@@ -962,6 +962,7 @@ def anomaly_load() -> Tuple[Response, int]:
             df, dt_avg = _load_csv(
                 file_path,
                 lang=lang,
+                max_size_bytes=plan_file_size_bytes(getattr(g, "plan", None) or {}),
                 allowed_root=_Path(UPLOAD_FOLDER),
             )
         except ValueError as e:

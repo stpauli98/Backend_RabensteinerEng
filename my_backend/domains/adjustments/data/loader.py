@@ -51,7 +51,7 @@ def load_and_validate_csv(
     file_path: Path | str,
     lang: str = "en",
     *,
-    max_size_bytes: int = 200 * 1024 * 1024,  # 200 MB hard cap to prevent OOM
+    max_size_bytes: Optional[int] = 200 * 1024 * 1024,  # 200 MB hard cap to prevent OOM; None=unlimited
     allowed_root: Optional[Path] = None,
 ) -> Tuple[pd.DataFrame, pd.Timedelta]:
     """
@@ -62,7 +62,8 @@ def load_and_validate_csv(
 
     Security guards:
       - `max_size_bytes`: rejects files larger than 200 MB (configurable). Prevents
-        an attacker from triggering an OOM kill via crafted upload.
+        an attacker from triggering an OOM kill via crafted upload. `None` disables
+        the cap entirely (used for unlimited plans).
       - `allowed_root`: if provided, path must resolve under this directory; blocks
         path traversal (`../etc/passwd`).
     """
@@ -80,7 +81,7 @@ def load_and_validate_csv(
                 )
             )
 
-    if path.stat().st_size > max_size_bytes:
+    if max_size_bytes is not None and path.stat().st_size > max_size_bytes:
         raise ValueError(
             tr(
                 f"File too large ({path.stat().st_size} bytes). Limit: {max_size_bytes} bytes.",
