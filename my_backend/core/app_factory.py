@@ -70,7 +70,9 @@ def create_app():
     """Application factory function"""
     app = Flask(__name__)
 
-    app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
+    # Absolute per-request ceiling (DoS backstop). Real per-file size limits are
+    # enforced per-plan at reassembly (see shared.auth.subscription.plan_file_size_bytes).
+    app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2 GB
 
     # CORS origins resolved via fail-closed helper.
     # Production requires CORS_ORIGINS env var; dev falls back to localhost.

@@ -12,7 +12,7 @@ import os
 import tempfile
 import threading
 import logging
-from domains.processing.config import MAX_FILE_SIZE, MAX_CHUNK_SIZE, ALLOWED_EXTENSIONS
+from domains.processing.config import MAX_CHUNK_SIZE, ALLOWED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +85,12 @@ def validate_file_upload(file_chunk, filename):
     return chunk_data
 
 
-def combine_chunks_efficiently(upload_dir, total_chunks):
-    """Memory-efficient chunk combination using temporary file streaming"""
+def combine_chunks_efficiently(upload_dir, total_chunks, max_size_bytes=None):
+    """Memory-efficient chunk combination using temporary file streaming.
+
+    max_size_bytes: plan-aware cap on the combined file size. None = unlimited
+    (skip the check).
+    """
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     total_size = 0
 
@@ -106,10 +110,10 @@ def combine_chunks_efficiently(upload_dir, total_chunks):
                     temp_file.write(block)
                     total_size += len(block)
 
-                    if total_size > MAX_FILE_SIZE:
+                    if max_size_bytes is not None and total_size > max_size_bytes:
                         temp_file.close()
                         os.unlink(temp_file.name)
-                        raise ValueError(f"Combined file size exceeds {MAX_FILE_SIZE} bytes")
+                        raise ValueError(f"Combined file size exceeds {max_size_bytes} bytes")
 
         temp_file.close()
         return temp_file.name, total_size
