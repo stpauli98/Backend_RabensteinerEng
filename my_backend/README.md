@@ -15,33 +15,38 @@ The backend provides:
 
 ## Installation
 
-### Prerequisites
-- Python 3.9+
-- Docker (recommended)
+> **Docker-only.** This backend is developed, tested, and deployed exclusively via
+> Docker. Do not run it against a host Python/virtualenv — the container pins the
+> Python version and system deps, and tests must run inside it.
 
-### Docker (Recommended)
+### Prerequisites
+- Docker (required)
+- A `.env` file at `Bekend/my_backend/.env` (see Environment Variables below)
+
+### Build & run
 
 ```bash
-# Build
-docker build --build-arg ENV_FILE=.env -t my_backend .
+# From Bekend/ (docker-compose.yml lives there)
+docker compose up --build          # builds with .env, serves on :8080
+```
 
-# Run
+Or without Compose, from `Bekend/my_backend/`:
+
+```bash
+docker build --build-arg ENV_FILE=.env -t my_backend .
 docker run -p 8080:8080 --env-file .env my_backend
 ```
 
-### Local Development
+Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
+
+### Tests (Docker-only)
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run
-python app.py
+# From Bekend/
+docker compose run --rm backend pytest -q            # full suite
+docker compose run --rm backend pytest tests/<path> -v
 ```
+Rebuild the image (`docker compose build backend`) only after `requirements.txt` changes.
 
 ## Environment Variables
 
@@ -170,22 +175,18 @@ my_backend/
 
 ## Running
 
-### Development
-```bash
-python app.py
-# Server at http://localhost:8080
-```
+All execution is via Docker (see Installation above). Quick reference:
 
-### Production (Docker)
 ```bash
+# Local dev (from Bekend/)
+docker compose up --build            # http://localhost:8080
+
+# Standalone container (from Bekend/my_backend/)
 docker build --build-arg ENV_FILE=.env -t my_backend .
 docker run -p 8080:8080 --env-file .env my_backend
 ```
 
-### Docker Compose
-```bash
-docker-compose up --build
-```
+For production deploy (Cloud Run) see the deploy runbook in `docs/ONBOARDING.md`.
 
 ## Common Issues
 
