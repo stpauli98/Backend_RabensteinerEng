@@ -64,7 +64,9 @@ class TestFlaskApp:
     def test_max_content_length_configured(self):
         from core.app_factory import create_app
         app, _ = create_app()
-        assert app.config['MAX_CONTENT_LENGTH'] == 100 * 1024 * 1024
+        # Raised to a 2 GB DoS backstop; real per-file limits are enforced
+        # per-plan at reassembly (see plan_file_size_bytes). Trello #139.
+        assert app.config['MAX_CONTENT_LENGTH'] == 2 * 1024 * 1024 * 1024
 
 
 # ============================================================
