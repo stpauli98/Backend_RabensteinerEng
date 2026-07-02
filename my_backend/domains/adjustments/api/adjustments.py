@@ -91,6 +91,23 @@ def _internal_error_message(e: Exception) -> str:
     return 'Internal server error'
 
 
+def _result_size_mb(frames) -> float:
+    """Sum the in-memory size of result dataframes, in MB.
+
+    Must be called BEFORE the frames are deleted/removed from their source
+    dict. `complete_adjustment()` frees each processed file's dataframe as
+    soon as it streams the result (to keep memory bounded), so storage usage
+    has to be captured up front from a snapshot of the still-live
+    dataframes -- computing it afterwards would read an already-emptied
+    dict and always report ~0 bytes of storage used.
+    """
+    total = 0
+    for df in frames:
+        if df is not None:
+            total += int(df.memory_usage(deep=True).sum())
+    return total / (1024 * 1024)
+
+
 @bp.route('/upload-chunk', methods=['POST'])
 @require_auth
 @require_subscription
@@ -377,6 +394,12 @@ def complete_adjustment() -> Tuple[Response, int]:
         total_rows = sum(len(df) for df in dataframes.values())
         file_rows_dict = {filename: len(df) for filename, df in dataframes.items()}
 
+        # Snapshot storage usage now, before per-file processing below frees
+        # each dataframe as soon as its result is streamed out. Measuring
+        # after that cleanup would sum an already-emptied dict (see
+        # _result_size_mb docstring).
+        file_size_mb = _result_size_mb(dataframes.values())
+
         tracker = ProgressTracker(
             upload_id=upload_id,
             total_files=len(filenames),
@@ -634,11 +657,6 @@ def complete_adjustment() -> Tuple[Response, int]:
             increment_processing_count(g.user_id)
             logger.info(f"Tracked processing for user {g.user_id}")
 
-            total_size_bytes = sum(
-                df.memory_usage(deep=True).sum()
-                for df in dataframes.values()
-            )
-            file_size_mb = total_size_bytes / (1024 * 1024)
             update_storage_usage(g.user_id, file_size_mb)
             logger.info(f"Tracked storage for user {g.user_id}: {file_size_mb:.2f} MB")
 
