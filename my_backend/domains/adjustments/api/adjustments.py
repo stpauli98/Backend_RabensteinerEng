@@ -91,15 +91,21 @@ def _internal_error_message(e: Exception) -> str:
     return 'Internal server error'
 
 
-def _result_size_mb(frames) -> float:
-    """Sum the in-memory size of result dataframes, in MB.
+def _input_frames_size_mb(frames) -> float:
+    """Sum the in-memory size of the input dataframes, in MB.
 
-    Must be called BEFORE the frames are deleted/removed from their source
-    dict. `complete_adjustment()` frees each processed file's dataframe as
-    soon as it streams the result (to keep memory bounded), so storage usage
-    has to be captured up front from a snapshot of the still-live
-    dataframes -- computing it afterwards would read an already-emptied
-    dict and always report ~0 bytes of storage used.
+    This measures a snapshot of the *input* dataframes (`adjustment_chunks[...]
+    ['dataframes']`) taken before per-file processing runs. Must be called
+    BEFORE the frames are deleted/removed from their source dict:
+    `complete_adjustment()` frees each processed file's dataframe as soon as
+    it streams the result (to keep memory bounded), so storage usage has to
+    be captured up front from a snapshot of the still-live dataframes --
+    computing it afterwards would read an already-emptied dict and always
+    report ~0 bytes of storage used.
+
+    Because the snapshot is taken up front, it may over-count on a partial
+    mid-loop failure: it reflects the full input set even if only some files
+    were actually processed before the failure occurred.
     """
     total = 0
     for df in frames:
@@ -397,8 +403,8 @@ def complete_adjustment() -> Tuple[Response, int]:
         # Snapshot storage usage now, before per-file processing below frees
         # each dataframe as soon as its result is streamed out. Measuring
         # after that cleanup would sum an already-emptied dict (see
-        # _result_size_mb docstring).
-        file_size_mb = _result_size_mb(dataframes.values())
+        # _input_frames_size_mb docstring).
+        file_size_mb = _input_frames_size_mb(dataframes.values())
 
         tracker = ProgressTracker(
             upload_id=upload_id,
