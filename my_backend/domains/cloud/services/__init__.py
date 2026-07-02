@@ -11,7 +11,6 @@ from domains.cloud.services.validation import (
     validate_csv_size,
     validate_dataframe,
     validate_csv_columns,
-    count_csv_rows,
     get_chunk_dir
 )
 from domains.cloud.services.regression import (
@@ -26,7 +25,6 @@ from domains.cloud.services.regression import (
     chunked_merge_and_sample,
     perform_streaming_regression
 )
-from domains.cloud.services.interpolation import interpolate_data
 
 __all__ = [
     # Progress tracking
@@ -42,7 +40,6 @@ __all__ = [
     'validate_csv_size',
     'validate_dataframe',
     'validate_csv_columns',
-    'count_csv_rows',
     'get_chunk_dir',
 
     # Regression
@@ -56,7 +53,4 @@ __all__ = [
     'quick_minmax',
     'chunked_merge_and_sample',
     'perform_streaming_regression',
-
-    # Interpolation
-    'interpolate_data'
 ]

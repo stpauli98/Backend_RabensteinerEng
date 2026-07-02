@@ -160,20 +160,6 @@ def validate_csv_columns(file_path: str, name: str = "File"):
     return columns, sep
 
 
-def count_csv_rows(file_path: str) -> int:
-    """
-    Count rows in a CSV file without loading into memory.
-
-    Returns:
-        Number of data rows (excludes header)
-    """
-    count = -1  # Subtract header line
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for _ in f:
-            count += 1
-    return max(count, 0)
-
-
 def get_chunk_dir(upload_id: str) -> str:
     """
     Create and return a directory path for storing chunks of a specific upload.
