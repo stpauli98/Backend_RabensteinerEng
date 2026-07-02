@@ -1173,11 +1173,10 @@ def anomaly_start() -> Tuple[Response, int]:
 
         # Else branch: LSTM pause if enabled (without STL).
         if par["LSTM"]["run"]:
-            from domains.adjustments.services.anomaly_pipeline import prepare_lstm as _prep_lstm
             try:
                 # validate_par_dict guarantees PERIOD is populated for LSTM.run=true.
                 period = int(par["LSTM"]["var"]["PERIOD"]["value"])
-                results_df, _model = _prep_lstm(
+                results_df, _model = _prepare_lstm(
                     state["processed_df"],
                     period,
                     par["LSTM"]["var"]["NEURONS"]["value"],
