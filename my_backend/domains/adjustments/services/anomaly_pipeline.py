@@ -602,7 +602,9 @@ def _nan_guard_message(algo_en: str, algo_de: str, lang: str) -> str:
 # period=1e9) OOM-kills the gunicorn worker — a one-request DoS. Validate
 # BEFORE constructing the model so a bad value is a clean 400, not a crash.
 _MAX_LSTM_NEURONS = 1024
-_MAX_LSTM_EPOCHS = 1000
+# Keep in sync with anomaly_validators.py upper_bounds["EPOCHS"] — the
+# validator rejects >500 first, so a higher cap here was unreachable.
+_MAX_LSTM_EPOCHS = 500
 
 
 def _validate_period(period, n_rows: int, lang: str) -> int:
